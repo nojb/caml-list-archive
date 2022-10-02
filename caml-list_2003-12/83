@@ -1,0 +1,129 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA21339; Mon, 8 Dec 2003 17:28:43 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA20494 for <caml-list@pauillac.inria.fr>; Mon, 8 Dec 2003 17:28:41 +0100 (MET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hB8GSer06973
+	for <caml-list@inria.fr>; Mon, 8 Dec 2003 17:28:40 +0100 (MET)
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id hB8GSQC21393;
+	Mon, 8 Dec 2003 10:28:28 -0600 (CST)
+Date: Mon, 8 Dec 2003 11:29:08 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Abdulaziz Ghuloum <aghuloum@cs.indiana.edu>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Object-oriented access bottleneck
+In-Reply-To: <3FD3BCB2.3090506@cs.indiana.edu>
+Message-ID: <Pine.LNX.4.44.0312081048200.5009-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 bottleneck:01 inlining:01 benchmarked:01 slower:01 misses:01 inlining:01 misses:01 todays:99 latency:01 preload:01 latency:01 avoiding:01 inlined:01 accessor:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 7 Dec 2003, Abdulaziz Ghuloum wrote:
+
+> Brian Hurt wrote:
+> 
+> >I actually question the value of inlining as a performance improvement, 
+> >unless it leads to other signifigant optimizations.  Function calls simply 
+> >aren't that expensive anymore, on today's OOO super-scalar 
+> >speculative-execution CPUs.  A direct call, i.e. one not through a 
+> >function pointer, I benchmarked out at about 1.5 clocks on an AMD K6-3.  
+> >Probably less on a more advanced CPU.  Indirect calls, i.e. through a 
+> >function pointer, are slower only due to the load to use penalty.  If the 
+> >pointer is in L1 cache, an indirect call is probably only 3-8 clocks.
+> >
+> >Cache misses are the big cost.  Hitting L1 cache, the cheapest memory 
+> >access, is generally 2-4 clocks.  L2 cache is generally 6-30 clocks.  
+> >Missing cache entirely and having to go to main memory is 100-300+ clocks.  
+> >Inlining expands the code size, and thus means you're likely having more 
+> >expensive cache misses.  At 300 clocks/cache miss, it doesn't take all 
+> >that many cache misses to totally overwhealm the small advantages gained 
+> >by inlining functions.
+> >  
+> >
+> 
+> Hello,
+> 
+> Do you happen to have a pointer to a document listing the (approximate) 
+> timing of the various instructions on todays hardware?  You have listed 
+> a few and I was wondering if you have a more comprehensive study.
+
+Not really, because the biggest cost (accessing main memory) is too 
+dependent upon specific system costs.  For example, switching from DDR233 
+to DDR333 will greatly reduce the latency costs of accessing main memory.  
+Which Northbridge chipset you're using can also change things.  Also, the 
+pattern to the memory accesses can change things- for example, of the P4, 
+accessing memory in a linear fasion that the CPU can predict allows the 
+CPU to preload cache lines, lowering the cost of a cache miss to ~100 
+clocks.  But if you're accessing things randomly, or in a way the CPU 
+can't predict, a cache miss is ~300 clocks.  Also, since I'm measuring 
+everything in clocks, changing the clock rate of your CPU changes the 
+measurement.
+
+Where I get this information is a couple of years of reading Ace's 
+Hardware (http://www.aceshardware.com/).  Google the site for "memory 
+latency".
+
+> 
+> You say "Inlining expands the code size and thus you're likely having 
+> more expensive cache misses".  I wonder how true that is.  For example, 
+> consider a simple expression such as {if p() e0 e1}.  If the compiler 
+> decides to inline p (in case p is small enough, leaf node, etc ...), 
+> then in addition to the benefits of inlining (no need to save your live 
+> variable, or restore them later, constant folding, copy propagation, 
+> ...), you're also avoiding the jump to p.  Since p can be anywhere in 
+> memory, a cache miss is very probable.  If p was inlined, its location 
+> is now close and is less likely to cause a cache miss.  Not inlining 
+> causes the PC to be all over the place cauing more cache misses.  Am I 
+> missing something?
+
+Yes:
+
+A) The function p being small enough to not cause code size increases by 
+inlining it is very small.  p needs to be really trivial.  On the x86 
+(32-bit) a direct call is 5 bytes worth of instruction.  p() needs to be 
+at more 2-3 small instructions after inlining to fit.  Going through a 
+virtual function table increases the size of the call, but not by huge 
+amounts.  The only place where you are likely to win on a regular basis is 
+accessor functions.  IIRC, Ocaml allows you to have member variables be 
+public.  If accessor functions are a problem, consider using public 
+variables.
+
+B) Most of the time your code is executing in a loop.  So the first time 
+through the loop you load all your code into cache and then execute from 
+cache from there on out.  The only problem is when the total size of the 
+code is larger than cache.  Not inlining code makes the total code size of 
+the loop smaller (generally)- but even if the non-inlined version of the 
+code still doesn't fit into cache, it's often better performance.  Imagine 
+a whole bunch of straight line code that doesn't fit into cache, but calls 
+p() multiple times.  If there is only a single (non-inlined) copy of p(), 
+then p() is likely to remain in cache because it keeps being used.  If 
+there are instead multiple different copies of p(), executing on copy of 
+p() is likely to push another copy of p() out of cache.
+
+C) More programming sins are committed in the name of performance than any 
+other reason, including stupidity.  Get the code working first, then 
+benchmark, then profile.  That will tell you where your performance 
+problems are.  Then go back and improve your algorithms.  We are down to 
+worrying about clock cycles here (even hundreds of clock cycles)- the 
+point at which you start wondering if the code should be written in C or 
+assembler.  I love Ocaml not because it's efficient on the clock cycle 
+level, but because it makes it easier for me to see and work with the high 
+level stuff- algorithms and design issues.  Which is where the big savings 
+are to be found.
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,93 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA13753 for caml-red; Thu, 18 May 2000 19:17:34 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA18155 for <caml-list@pauillac.inria.fr>; Thu, 18 May 2000 18:17:21 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e4IGG8114574;
+	Thu, 18 May 2000 18:16:08 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA17080; Thu, 18 May 2000 18:16:08 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200005181616.SAA17080@pauillac.inria.fr>
+Subject: Re: reference initialization
+To: hwxi@ECECS.UC.EDU (Hongwei Xi)
+Date: Thu, 18 May 2000 18:16:08 +0200 (MET DST)
+Cc: caml-list@inria.fr
+In-Reply-To: <Pine.GSO.4.21.0005152159450.13064-100000@gatekeeper.ececs.uc.edu> from "Hongwei  Xi" at mai 15, 2000 10:53:26 
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Lines: 71
+Sender: weis
+
+Finally I think I've done the ``Further work part'' I mentioned for
+vector initialization!
+
+We end up with a new initialization function for arrays that ensures
+the proper and unique initialisation of each element of the array, but
+is simpler to use and understand:
+
+(*
+val initialize :
+ int -> 'a -> ((int -> 'a) -> (int -> 'a -> unit) -> unit) -> 'a array
+ [initialize n x f] returns a fresh array of length [n],
+ with elements initialized by function [f].
+ All the elements of the new array must be assigned once and only
+ once by the function [f]. [f] received two functions as arguments,
+ one to access elements of the new array, and the other to set the
+ elements of the new array. [f] can access to element [i] of the new
+ array provided [f] has already properly initialized element [i].
+ Raise [Not_yet_initialized i] if element [i] is accessed before being
+ assigned.
+ Raise [Already_initialized i] if element [i] is assigned twice.
+ Raise [Never_initialized i] if element [i] has never been assigned at
+ the end of initialization.
+ [Array.initialize n x f] uses [2 n] words of heap space.
+*)
+exception Not_yet_initialized of int;;
+exception Already_initialized of int;;
+exception Never_initialized of int;;
+
+let initialize n x0 f =
+ if n = 0 then [||] else
+ let init_v = Array.make n false in
+ let v = Array.make n x0 in
+ let get i = if init_v.(i) then v.(i) else raise (Not_yet_initialized i) in
+ let set i ei =
+   if not init_v.(i) then (v.(i) <- ei; init_v.(i) <- true) else
+   raise (Already_initialized i) in
+ (f get set : unit);
+ for i = 0 to n - 1 do if not init_v.(i) then raise (Never_initialized i) done;
+ v;;
+
+The examples can now be written more naturally, with a minimum of
+modification (beside correction of original bugs in chooses) :
+
+let fibs n =
+ let init_fibs get set =
+   set 0 1; set 1 1;
+   for i = 2 to n - 1 do
+    set i (get (i - 1) + get (i - 2))
+   done in
+ initialize n 0 init_fibs;;
+
+let chooses n =
+ let init_chooses get set =
+  let set_ei i ei =
+    set i ei;
+    if n - i <> i then set (n - i) ei in
+  set_ei 0 1;
+  for i = 1 to n / 2 do
+   set_ei i (get (i - 1) * (n - i + 1) / i)
+  done in
+ initialize (n + 1) 0 init_chooses;;
+
+let invs f n =
+ let init_inv get set =
+  for i = 0 to n - 1 do set (f i) i done in
+ initialize n 0 init_inv;;
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

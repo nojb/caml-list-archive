@@ -1,0 +1,133 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA19141; Tue, 3 Aug 2004 13:49:05 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA19246 for <caml-list@pauillac.inria.fr>; Tue, 3 Aug 2004 13:49:04 +0200 (MET DST)
+Received: from invasion.mail.pas.earthlink.net (invasion.mail.pas.earthlink.net [207.217.120.254])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i73Bn2SH017077
+	for <caml-list@inria.fr>; Tue, 3 Aug 2004 13:49:03 +0200
+Received: from 168-103-58-16.tcsn.qwest.net ([168.103.58.16] helo=dylan)
+	by invasion.mail.pas.earthlink.net with asmtp (Exim 4.34)
+	id 1Brxmw-0003Nw-2s
+	for caml-list@inria.fr; Tue, 03 Aug 2004 04:49:02 -0700
+Message-ID: <000c01c47950$071a1170$0201a8c0@dylan>
+From: "David McClain" <dmcclain1@mindspring.com>
+To: "caml" <caml-list@inria.fr>
+Subject: [Caml-list] BigArray extensions
+Date: Tue, 3 Aug 2004 04:50:02 -0700
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="Windows-1252"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 6.00.2800.1437
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2800.1441
+X-ELNK-Trace: 7a0ab3eafc8cf994b22988ad1c62733440683398e744b8a4fdc3fdb4ad5c69e0e37c8d0423c117bf666fa475841a1c7a350badd9bab72f9c350badd9bab72f9c
+X-Originating-IP: 168.103.58.16
+X-Miltered: at concorde with ID 410F7BAE.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; mcclain:01 dmcclain:01 flags:01 accountant:99 elide:01 eff:99 eff:99 chunks:01 chunks:01 slower:01 fread:01 outset:99 alignment:01 buffered:01 buffer:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+After close examination of the BigArray library code, I see that you are
+already paying the price of discriminating between C and Fortran modes.
+Adding Scientist mode requires only one more bit in the flags. The required
+code change from Accountant mode to Scientist mode is simply to elide the
+bounds checking and compute an effective offset for any one index given as
+
+eff_index = index[i] % b->dim[i];
+if(eff_index < 0)
+  eff_index += b->dim[i];
+
+then in computing the total offset for this index,
+
+offset = offset * b->dim[i] + eff_index;
+
+Fortran mode is similarly accommodated by decrementing the index[i] value by
+1 before computing the modulo.
+
+Accommodating windowed file mapping requires a slight extension of a proxy
+object which can remain transparent to most of the rest of the code. What
+does change are the mass copying and filling operations, serialization, and
+of course the need to ensure that the memory in question is currently mapped
+into memory. That last operation can occur in a simple check at the tail end
+of bigarray_offset. But mass copying and filling must take care to work in
+chunks limited by the remaining mapped memory in the current mapping, then
+remapping additional chunks as needed.
+
+Since the memmapped files are slower than normal memory operations anyway,
+yet hundreds of times faster than fread and fwrite access, this extra cost
+is still worthwhile as long as we discriminate between normal memory arrays
+and memmapped arrays at the outset and don't force every single access of
+both kinds to go through the map checking code.
+
+As for memory alignment issues, you have those whether you use memmaped
+files or simple buffered I/O. The moment you read any portion of a file into
+a buffer you have potential alignment issues. You then have to rely on the
+underlying file representation to respect alignment requirements, which most
+modern file formats already do. There is still the issue of endianness,
+which is generally already accommodated using XDR standard representation.
+Again, this is only an issue for memmapped files and the endianness could be
+accommodated with yet another flag and another subtype in the declaration of
+the mapping.
+
+I also added some quick checks in bigarray_compare to escape quickly on
+identity, and when two bigarrays match in dimensions and have the same
+underlying data address.
+
+These are all trivial changes to the library code.
+
+The question is, if I make these changes, will I get the same performance
+improvements from the %labeled external declarations in the OCaml modules?
+And if so, just what performance improvement is made possible in this case
+with such labeling?
+
+I have examined the compiler code generation, but I am not yet able to tell
+whether or not the compiler makes a call to the C glue code in any event, or
+whether it performs some in-line get-set expansion. If it does the inline
+get-set, then obviously this won't work for mmapped files. But if it just
+performs a quick call to the C glue, then it will.
+
+Given that the code must work already for either C or Fortran modes, it
+seems too much to expect that the compiler will inline any memory accessing,
+but instead will just perform some kind of "quick" call to the C glue layer.
+
+There is a distinct difference between mmapped arrays and normal BigArrays.
+While a memory bound BigArray can have subarrays and slices placed on it,
+akin to Lisp displaced arrays, a memory bound normal BigArray cannot validly
+mutate the underlying data representation. However, a memmapped file can and
+must permit mutated declarations of the element types, since a file is
+typically heterogeneous in content.
+
+Handling multiple arrays into the memmapped array is easily accomplished
+within the existing code by first permitting this mutation and secondly by
+using the proxy mappings already in place.
+
+Using memmapped access implies the use of kernel provided resources that are
+relatively scarce. Leaving it to the finalization code to unmap these files
+when no longer used might imply a situation of exhausted resources even
+though none are currently in use, simply because it takes too long for the
+GC to reap the dead objects for finalization.
+
+Finally, it appears that the bulk of the data array area, the so-called
+Arena, is allocated with malloc in the external heap. Hence it should be
+safe to make a call to a routine called arena() which on normal OCaml double
+arrays is identity, and on BigArrays it simply returns the data pointer.
+This allows uniform access to both kinds of arrays from trusted (i.e.,
+not-bounds checked) code using declared unsafe-access methods.
+
+David McClain
+Senior Corporate Scientist
+Avisere, Inc.
+
++1.520.390.7738 (USA)
+david.mcclain@avisere.com
+
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

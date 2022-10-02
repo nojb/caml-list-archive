@@ -1,0 +1,284 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA31163 for caml-redistribution; Mon, 12 Apr 1999 08:42:23 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA25295 for <caml-list@pauillac.inria.fr>; Fri, 9 Apr 1999 22:13:02 +0200 (MET DST)
+Received: from zaphod.in.tu-clausthal.de (zaphod.in.tu-clausthal.de [139.174.100.142])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id WAA28562
+	for <caml-list@inria.fr>; Fri, 9 Apr 1999 22:13:01 +0200 (MET DST)
+Received: from eressea.in.tu-clausthal.de (370e5f4bc4d57@eressea.in.tu-clausthal.de [139.174.100.9])
+	by zaphod.in.tu-clausthal.de (8.8.7/8.8.7) with SMTP
+	id WAA30072;
+	Fri, 9 Apr 1999 22:12:59 +0200 (MET DST)
+From: Joerg Czeranski <jc@joerch.org>
+To: caml-list@inria.fr
+Date: Fri, 9 Apr 1999 22:12:33 +0200 (MET DST)
+Message-ID: <5tVPkmDNe$09F$1@joerch.org>
+Subject: [LONG] misc. patches against ocaml-2.02
+Sender: weis
+
+Hi.
+
+I ported O'Caml 2.02 to NetBSD/alpha 1.3.3 and OpenBSD/alpha 2.4
+and in the process discovered a problem with Digital Unix 4.0D.
+
+1.05 and 1.07 worked on 4.0A, but both 1.07 and 2.02 segfault:
+cd stdlib; make COMPILER=../boot/ocamlc all
+../boot/ocamlrun ../boot/ocamlc -g -nopervasives -c pervasives.mli
+*** Segmentation fault - core dumped
+
+That is the first call of ocamlrun, and it's the same symptom
+described for gcc-2.7.2.1 on x86.  I wasn't able to reproduce the
+latter with gcc-2.7.2.1 on FreeBSD/x86 or SuSE Linux/x86 BTW.
+
+I'm not sure whether it's a bug in DEC C, as the wording of the
+standards isn't very clear regarding setjmp/sigsetjmp/longjmp/siglongjmp.
+I'll report it in a DEC newsgroup anyway.
+But the patch (making initial_local_roots volatile in interp.c)
+shouldn't hurt and makes it quite clear to the compiler that it
+can't be optimized away.
+
+The casts in intern.c prevent undefined behavior.  They probably don't
+make a difference on most machines, but I patched it anyway while
+searching for a bug, and Digital Unix 4.0D's cc.alt warned about
+the shifts.
+
+And finally there's another patch that makes LC_CTYPE work on
+Digital Unix: LC_CTYPE can't be set to iso8859_1 but must be set
+to <language>_<country>.ISO8859-1
+
+patched file           | NetBSD | OpenBSD | Dec Unix | misc.
+-----------------------+--------+---------+----------+------
+configure              |   X    |    X    |          |
+asmrun/alpha.S         |        |    X    |          |
+asmcomp/alpha/emit.mlp |   X    |    X    |          |
+byterun/interp.c       |        |         |    X     |
+byterun/intern.c       |        |         |          |   X
+byterun/str.c          |        |         |    X     |
+
+It would be nice if these patches (or something to the same effect)
+could make it into the next O'Caml release.
+
+happy Caml'ing
+joerch
+
+==================== patches follow ====================
+*** configure.orig	Wed Nov 18 19:10:51 1998
+--- configure	Sat Apr  3 01:18:52 1999
+***************
+*** 262,267 ****
+--- 262,269 ----
+  case "$host" in
+    alpha-*-osf*)                 arch=alpha; system=digital;;
+    alpha-*-linux*)               arch=alpha; system=linux;;
++   alpha-*-netbsd*)              arch=alpha; system=netbsd;;
++   alpha-*-openbsd*)             arch=alpha; system=openbsd;;
+    sparc-*-sunos4.*)             arch=sparc; system=sunos;;
+    sparc-*-solaris2.*)           arch=sparc; system=solaris;;
+    sparc-*-*bsd*)                arch=sparc; system=bsd;;
+***************
+*** 311,316 ****
+--- 313,320 ----
+    alpha,*,digital)  asflags='-O2'; asppflags='-O2 -DSYS_$(SYSTEM)';
+                      asppprofflags='-pg -DPROFILING';;
+    alpha,*,linux)    aspp='gcc'; asppflags='-c -DSYS_$(SYSTEM)';;
++   alpha,*,netbsd)   aspp='gcc'; asppflags='-c -DSYS_$(SYSTEM)';;
++   alpha,*,openbsd)  aspp='gcc'; asppflags='-c -DSYS_$(SYSTEM)';;
+    mips,*,irix)      asflags='-n32 -O2'; asppflags="$asflags";;
+    sparc,*,bsd)      aspp='gcc'; asppflags='-c -DSYS_$(SYSTEM)';;
+    sparc,*,linux)    aspp='gcc'; asppflags='-c -DSYS_$(SYSTEM)';;
+*** asmrun/alpha.S.orig	Sun Feb 14 17:48:23 1999
+--- asmrun/alpha.S	Sat Apr  3 01:26:29 1999
+***************
+*** 422,428 ****
+          br      caml_c_call             /* never returns */
+          .end    caml_array_bound_error
+  
+! #ifdef SYS_digital	
+          .rdata
+  #else
+          .section .rodata
+--- 422,428 ----
+          br      caml_c_call             /* never returns */
+          .end    caml_array_bound_error
+  
+! #if defined(SYS_digital) || defined(SYS_openbsd)
+          .rdata
+  #else
+          .section .rodata
+*** asmcomp/alpha/emit.mlp.orig	Thu Nov 12 17:53:07 1998
+--- asmcomp/alpha/emit.mlp	Sat Apr  3 01:29:36 1999
+***************
+*** 272,279 ****
+  
+  let rdata_section =
+    match Config.system with
+!     "digital" -> ".rdata"
+!   | "linux"   -> ".section .rodata"
+    | _         -> assert false
+  
+  (* Names of various instructions *)
+--- 272,279 ----
+  
+  let rdata_section =
+    match Config.system with
+!     "digital" | "openbsd" -> ".rdata"
+!   | "linux" | "netbsd" -> ".section .rodata"
+    | _         -> assert false
+  
+  (* Names of various instructions *)
+***************
+*** 714,727 ****
+    end;
+    `	.end	{emit_symbol fundecl.fun_name}\n`;
+    if !bigint_constants <> [] then begin
+!     `	.section .rodata\n`;
+      `	.align	3\n`;
+      List.iter
+        (fun (lbl, n) -> `{emit_label lbl}:	.quad	{emit_string(Nativeint.to_hexa_string n)}\n`)
+        !bigint_constants
+    end;
+    if !float_constants <> [] then begin
+!     `	.section .rodata\n`;
+      `	.align	3\n`;
+      List.iter
+        (fun (lbl, s) -> `{emit_label lbl}:	.t_floating {emit_string s}\n`)
+--- 714,727 ----
+    end;
+    `	.end	{emit_symbol fundecl.fun_name}\n`;
+    if !bigint_constants <> [] then begin
+!     `	{emit_string rdata_section}\n`;
+      `	.align	3\n`;
+      List.iter
+        (fun (lbl, n) -> `{emit_label lbl}:	.quad	{emit_string(Nativeint.to_hexa_string n)}\n`)
+        !bigint_constants
+    end;
+    if !float_constants <> [] then begin
+!     `	{emit_string rdata_section}\n`;
+      `	.align	3\n`;
+      List.iter
+        (fun (lbl, s) -> `{emit_label lbl}:	.t_floating {emit_string s}\n`)
+*** byterun/interp.c.orig	Sun Feb 14 17:48:23 1999
+--- byterun/interp.c	Fri Apr  9 02:19:59 1999
+***************
+*** 170,176 ****
+    long extra_args;
+    struct longjmp_buffer * initial_external_raise;
+    int initial_sp_offset;
+!   struct caml__roots_block *initial_local_roots;
+    struct longjmp_buffer raise_buf;
+    value * modify_dest, modify_newval;
+  #ifndef THREADED_CODE
+--- 170,178 ----
+    long extra_args;
+    struct longjmp_buffer * initial_external_raise;
+    int initial_sp_offset;
+!   /* volatile prevents collapsing initial_local_roots with another
+!      local variable; sigsetjmp fools DEC C's liveness analysis */
+!   struct caml__roots_block * volatile initial_local_roots;
+    struct longjmp_buffer raise_buf;
+    value * modify_dest, modify_newval;
+  #ifndef THREADED_CODE
+*** byterun/intern.c.orig	Mon Oct 26 20:18:00 1998
+--- byterun/intern.c	Fri Apr  9 02:21:27 1999
+***************
+*** 65,82 ****
+  #define read8s() Sign_extend(*intern_src++)
+  #define read16u() \
+    (intern_src += 2, \
+!    (intern_src[-2] << 8) + intern_src[-1])
+  #define read16s() \
+    (intern_src += 2, \
+!    (Sign_extend(intern_src[-2]) << 8) + intern_src[-1])
+  #define read32u() \
+    (intern_src += 4, \
+!    (intern_src[-4] << 24) + (intern_src[-3] << 16) + \
+!    (intern_src[-2] << 8) + intern_src[-1])
+  #define read32s() \
+    (intern_src += 4, \
+!    (Sign_extend(intern_src[-4]) << 24) + (intern_src[-3] << 16) + \
+!    (intern_src[-2] << 8) + intern_src[-1])
+  
+  #ifdef ARCH_SIXTYFOUR
+  static long read64s(void)
+--- 65,82 ----
+  #define read8s() Sign_extend(*intern_src++)
+  #define read16u() \
+    (intern_src += 2, \
+!    ((unsigned long)intern_src[-2] << 8) + (unsigned long)intern_src[-1])
+  #define read16s() \
+    (intern_src += 2, \
+!    (Sign_extend(intern_src[-2]) << 8) + (long)intern_src[-1])
+  #define read32u() \
+    (intern_src += 4, \
+!    ((unsigned long)intern_src[-4] << 24) + ((unsigned long)intern_src[-3] << 16) + \
+!    ((unsigned long)intern_src[-2] << 8) + (unsigned long)intern_src[-1])
+  #define read32s() \
+    (intern_src += 4, \
+!    (Sign_extend(intern_src[-4]) << 24) + ((long)intern_src[-3] << 16) + \
+!    ((long)intern_src[-2] << 8) + (long)intern_src[-1])
+  
+  #ifdef ARCH_SIXTYFOUR
+  static long read64s(void)
+*** byterun/str.c.orig	Tue Jun 23 18:47:02 1998
+--- byterun/str.c	Fri Apr  9 02:32:34 1999
+***************
+*** 14,19 ****
+--- 14,21 ----
+  /* Operations on strings */
+  
+  #include <string.h>
++ #include <ctype.h>
++ #include <locale.h>
+  #include "alloc.h"
+  #include "fail.h"
+  #include "mlvalues.h"
+***************
+*** 108,127 ****
+  value is_printable(value chr) /* ML */
+  {
+    int c;
+-   unsigned char * printable_chars;
+  
+  #ifdef _WIN32
+    printable_chars = printable_chars_iso;
+  #else
+!   static int iso_charset = -1;
+!   if (iso_charset == -1) {
+!     char * lc_ctype = (char *) getenv("LC_CTYPE");
+!     iso_charset = (lc_ctype != 0 && strcmp(lc_ctype, "iso_8859_1") == 0);
+    }
+!   printable_chars = iso_charset ? printable_chars_iso : printable_chars_ascii;
+! #endif
+    c = Int_val(chr);
+!   return Val_bool(printable_chars[c >> 3] & (1 << (c & 7)));
+  }
+  
+  value bitvect_test(value bv, value n)       /* ML */
+--- 110,134 ----
+  value is_printable(value chr) /* ML */
+  {
+    int c;
+  
+  #ifdef _WIN32
++   unsigned char * printable_chars;
++ 
+    printable_chars = printable_chars_iso;
++   c = Int_val(chr);
++ 
++   return Val_bool(printable_chars[c >> 3] & (1 << (c & 7)));
+  #else
+!   static int locale_is_set = 0;
+! 
+!   if (!locale_is_set) {
+!     setlocale(LC_CTYPE, "");
+!     locale_is_set = 1;
+    }
+! 
+    c = Int_val(chr);
+!   return Val_bool(isprint(c));
+! #endif
+  }
+  
+  value bitvect_test(value bv, value n)       /* ML */
+==================== end of patches ====================
+
+
+

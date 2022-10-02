@@ -1,0 +1,153 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 31A98BC0A
+	for <caml-list@yquem.inria.fr>; Fri, 18 May 2007 15:48:50 +0200 (CEST)
+Received: from ipmail01.adl2.internode.on.net (ipmail01.adl2.internode.on.net [203.16.214.140])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4IDmlJ5031147
+	for <caml-list@inria.fr>; Fri, 18 May 2007 15:48:49 +0200
+X-IronPort-AV: E=Sophos;i="4.14,552,1170595800"; 
+   d="scan'208";a="130730197"
+Received: from ppp59-172.lns2.syd6.internode.on.net (HELO [192.168.1.201]) ([121.44.59.172])
+  by ipmail01.adl2.internode.on.net with ESMTP; 18 May 2007 23:18:45 +0930
+Subject: Re: [Caml-list] Error messages with dypgen
+From: skaller <skaller@users.sourceforge.net>
+To: Joel Reymont <joelr1@gmail.com>
+Cc: OCaml List <caml-list@inria.fr>,
+	Emmanuel Onzon <emmanuel.onzon@ens-lyon.fr>
+In-Reply-To: <F57F48B5-6005-4F22-AFB7-896986EECA50@gmail.com>
+References: <66D9A385-E61C-4AA2-81AA-B352FB941A57@gmail.com>
+	 <1179477743.17322.10.camel@rosella.wigram>
+	 <F57F48B5-6005-4F22-AFB7-896986EECA50@gmail.com>
+Content-Type: text/plain
+Date: Fri, 18 May 2007 23:48:43 +1000
+Message-Id: <1179496123.6151.25.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 464DAEBF.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; 0100,:01 parser:01 semicolon:01 parser:01 lexbuf:01 lexer:01 tokens:01 lexer:01 lexbuf:01 syntax:01 functor:01 parametric:01 parsers:01 point':01 threads:01 
+
+On Fri, 2007-05-18 at 12:36 +0100, Joel Reymont wrote:
+> John,
+> 
+> There should at least be a textual message embedded in the exception.
+> 
+> This is what I have right now:
+> 
+> input_declarations:
+>    | INPUT COLON input_decs { `InputDecls (List.rev $3) }
+>    | INPUT COLON input_decs error {
+>        parser_error "Missing semicolon" $startpos($4) $endpos($4)
+>      }
+>    | INPUT COLON error {
+>        parser_error "Error after INPUT:" $startpos($3) $endpos($3)
+>      }
+>    | INPUT error {
+>        parser_error "Missing ':' after INPUT" $startpos($2) $endpos($2)
+>      }
+> 
+> I clearly know why the error is happening here. Positions  
+> notwithstanding, wow do I rewrite this for dypgen?
+
+There are two issues here. 
+
+First, the above code will
+"work" in dypgen already, assuming you supply a 
+parser_error function. This code would not work for me,
+because my lexbuf is a dummy: the lexer has already run
+and made a list of tokens, and the lexer function is bound
+to the list. It ignores, totally, the lexbuf. In my system
+the positional information is stored in every token.
+
+So my extant parser is an example that 'proves' that
+dypgen *must not* standardise the format of source
+reference information and certainly must not raise
+a syntax error exception encoding that information.
+
+One solution to this may be to use an abstract type
+and a functor to make the 'source' information 
+parametric.
+
+Second: this style of error handling CANNOT work with a GLR
+parser, because GLR parsers can simultaneously try multiple
+alternatives. The only time you can be sure you have an error
+is at a 'cut point', that is, a point where all threads 
+join, and none of them proceed.
+
+A conclusion: dypgen may need to be modified so that there
+is a way to 'return' an error. At present you can 
+raise Giveup to indicate a parse thread failed,
+however your technique above is to *successfully* 
+parse an error.
+
+A more advanced conclusion: Ocamlyacc parser interface
+is seriously broken, and should be supported only
+for compatibility.
+
+There are two proper parser interfaces, IMHO:
+one for input iterators (mutable streams) and
+one for forward iterators (functional streams).
+
+The mutable interface looks like:
+
+	lexer: state -> info
+	get_loc: info -> srcloc
+	get_token: info -> token
+
+The functional interface looks like:
+
+	lexer: state -> state * info
+
+instead. With this interface, backtracking to
+an old 'state' value is possible.
+
+Input and forward iterators are interconvertible.
+
+A forward iterator can be made into an input
+iterator by simply using a reference to the state,
+that is, use a state variable to record the current
+state.
+
+An input iterator can be converted to a forward
+iterator by 'buffering' tokens in a list. Doing
+this efficiently is slightly tricky, that is,
+only buffering enough tokens to satisfy a possible
+backtrack (usually done with cut points).
+
+In both these interfaces the srcloc type is supplied
+by the user. Ideally, the token type would be too.
+in that case another function is needed:
+
+	get_token_code: token -> int
+
+which is what the parser uses: that's the tag
+of a variant constructor or whatever.
+
+These interfaces should be standardised for ALL
+parsers so we have 'plugin' ability. Of course,
+the semantics may depend on the kind of parser
+and grammar.
+
+Ocamlyacc itself could be easily modified to fit
+this design by the lexer simply returning its lexbuf
+with the token.
+
+in summary: the key problem with what you want
+to do is that it is makes no sense semantically.
+You want to return information that the parser
+cannot in principle obtain. The fact it appears
+visible is actually a design bug in Ocamlyacc
+which has been duplicated by Dypgen in compatibility
+mode.
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

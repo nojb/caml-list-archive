@@ -1,0 +1,85 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA03765; Fri, 15 Oct 2004 17:04:15 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA03866 for <caml-list@pauillac.inria.fr>; Fri, 15 Oct 2004 17:04:14 +0200 (MET DST)
+Received: from yquem.inria.fr (yquem.inria.fr [128.93.8.37])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id i9FF4C5U009985;
+	Fri, 15 Oct 2004 17:04:12 +0200
+Received: by yquem.inria.fr (Postfix, from userid 18180)
+	id 1B069BC3F; Fri, 15 Oct 2004 17:04:12 +0200 (CEST)
+Date: Fri, 15 Oct 2004 17:04:12 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: "Bauer, Christoph" <Christoph.Bauer@lms-gmbh.de>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] OCaml-3.08.1/MinGW: alloc_tuple fails
+Message-ID: <20041015150412.GA9521@yquem.inria.fr>
+References: <D981925B4F2CD611870300E0184CEE9B0157F303@kaiserslautern1.lms-gmbh.de>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <D981925B4F2CD611870300E0184CEE9B0157F303@kaiserslautern1.lms-gmbh.de>
+User-Agent: Mutt/1.3.28i
+X-Miltered: at concorde with ID 416FE6EC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 mingw:01 alloc:01 ocam'ole:01 segfaults:01 alloc:01 ocamlopt:01 gcc:01 -mno-cygwin:01 -shared:01 ocamlmgw:01 gcc:01 -shared:01 -mno-cygwin:01 ocamlmgw:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 2198
+Lines: 55
+
+> A program (from the OCam'Ole package) segfaults in a alloc_tuple call.
+> This behavior is shown only with native compilation.
+
+There have been many theories on what could be wrong in the C
+function you showed.  However, I believe the problem comes from the
+way you link it with the native code produced by ocamlopt:
+
+> gcc -mno-cygwin -c -shared -O  -mms-bitfields -DCAML_DLL -DDLL=1 -I
+> c:/ocamlmgw/lib test.cpp -D_DEBUG -g
+> gcc -shared -mno-cygwin -mms-bitfields -I C:/ocamlmgw/lib -o dlltest.dll
+> -Wl,--out-implib,libtest.a test.o c:/ocamlmgw/lib/ocamlrun.a
+
+By linking with the import library ocamlrun.a, you bind your C code to
+the bytecode Caml runtime system.  Any program that links with
+dlltest.dll will cause ocamlrun.dll to be loaded, and your test.c code
+will use the alloc_tuple() function from ocamlrun.dll.
+
+This is fine if you later use dlltest.dll with an ocamlc-compiled
+program, since the latter also uses ocamlrun.dll as its runtime
+system.
+
+This is wrong if you use dlltest.dll with an ocamlopt-compiled
+program, as in
+
+    ocamlopt -ccopt dlltest.dll -ccopt -g -o test_it.exe test_it.ml
+
+since the latter is statically linked with a different runtime system
+(libasmrun.a, the native-code runtime system).  You get two different
+runtime systems that don't "speak" to each other.
+
+So, there is no way you can use the same DLL with both bytecode and
+native-code.  
+
+You should however be able to compile your test.c code to a static
+library (libtest.a).  This static lib is not pre-bound to a particular
+version of the runtime system.  So,
+
+   ocamlc -custom .... libtest.a
+
+will link everything with the bytecode runtime system, and
+
+   ocamlopt ... libtest.a
+
+will link everything with the native-code runtime system.
+
+More generally speaking, given the way Windows DLLs work, I don't
+think it is possible at all to put Caml-C stub code in a DLL and pass
+that DLL to ocamlopt.  Static linking is your friend here.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

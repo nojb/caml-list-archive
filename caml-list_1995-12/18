@@ -1,0 +1,495 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id QAA02694 for caml-redistribution; Thu, 28 Dec 1995 16:44:35 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id QAA02589 for <caml-list@pauillac.inria.fr>; Thu, 28 Dec 1995 16:38:40 +0100
+Received: from simon.cs.cornell.edu (SIMON.CS.CORNELL.EDU [128.84.154.10]) by concorde.inria.fr (8.7.1/8.7.1) with SMTP id QAA17525 for <caml-list@pauillac.inria.fr>; Thu, 28 Dec 1995 16:37:31 +0100 (MET)
+Received: from cloyd.cs.cornell.edu (CLOYD.CS.CORNELL.EDU [128.84.227.15]) by simon.cs.cornell.edu (8.6.10/R1.4) with ESMTP id KAA13192 for <caml-list@pauillac.inria.fr>; Thu, 28 Dec 1995 10:37:22 -0500
+Received: from bolverk.cs.cornell.edu (BOLVERK.CS.CORNELL.EDU [128.84.254.213]) by cloyd.cs.cornell.edu (8.6.10/M1.8) with ESMTP id KAA25985; Thu, 28 Dec 1995 10:37:20 -0500
+Received: (hayden@localhost) by bolverk.cs.cornell.edu (8.6.10/C1.3) id KAA01396; Thu, 28 Dec 1995 10:37:19 -0500
+Date: Thu, 28 Dec 1995 10:37:19 -0500
+Message-Id: <199512281537.KAA01396@bolverk.cs.cornell.edu>
+From: Mark Hayden <hayden@cs.cornell.edu>
+To: caml-list@pauillac.inria.fr
+cc: hayden@cs.cornell.edu
+Subject: Another time profiler for Caml Light
+Sender: weis
+Status: O
+
+
+
+I thought this profiler might be helpful to others using
+Caml Light.  Please email me if you have any problems
+with it.  --Mark
+
+
+Another time profiler for Caml Light
+Author: Mark Hayden, 11/95, hayden@cs.cornell.edu
+
+This library is a time-based profiling package (as opposed to the
+call-count profiler included with Caml Light).  It is intended to be
+similar in design and output to the time-based parts of the gprof package
+for C.  This library only works with Unix because it requires Unix
+profiling timer signals.
+
+This libary is very similar to the time-profiler distributed recently by
+Christophe Raffalli.  It differs in that it uses signals to avoid making
+calls to unix__times on every call to a profiled function.  So potentially
+this library does not affect application performance as much.  Also, after
+initialization, this profiler is designed to (I believe) not cause any
+additional memory allocation.
+
+Functions are registered with the profiler through calls to [profile_N
+"function" function], where N is the number of arguments to the function,
+from 1 to 3.  The first argument is a string name of the function and the
+second argument is the function itself.  Returned is a wrapped version of
+the function.  For example, if 'f' is a one argument function:
+
+  let f arg = .... ;;
+
+  let f = profile_1 "f" f ;;
+
+The profiler is started with a call to [profile_start()] and is ended with
+a call to [profile_end()].  The call to profile_end causes profiling
+information to be dumped to stdout.  The output is similar to the gprof
+package for C: refer to that documentation for a description.
+
+The source file profile.ml contains a test example, "testprof", which is
+compiled by the included Makefile.
+
+Notes: 
+
+ * Caml Special Light does not (currently) support signal handling so
+   this package only works on Caml Light.
+
+ * With some library support from Caml Light to access debugging
+   information and to scan the call-stack, functions would not have to be
+   explicitly registered with the profiler.
+
+#! /bin/sh
+# This is a shell archive, meaning:
+# 1. Remove everything above the #! /bin/sh line.
+# 2. Save the resulting text in a file.
+# 3. Execute the file with /bin/sh (not csh) to create the files:
+#	profile.ml
+#	profile.mli
+#	setitimer.c
+#	setitimer.mli
+#	Makefile
+#	README
+# This archive created: Thu Dec 28 10:29:27 1995
+export PATH; PATH=/bin:$PATH
+if test -f 'profile.ml'
+then
+	echo shar: will not over-write existing file "'profile.ml'"
+else
+cat << \SHAR_EOF > 'profile.ml'
+(**************************************************************)
+(* PROFILE.ML *)
+(* Author: Mark Hayden *)
+(* based on the gprof package for C *)
+(**************************************************************)
+#open "setitimer" ;;
+#open "unix" ;;
+#open "printf" ;;
+(**************************************************************)
+
+type 'a option = None | Some of 'a ;;
+
+type prof_info = {
+  name			: string ;
+  mutable live 		: bool ;
+  mutable self_ctr 	: int ;
+  mutable total_ctr 	: int ;
+  mutable ncalls 	: int
+} ;;
+
+let funcs = ref [] ;;
+
+let alloc_info name =
+  let info = {
+    name	= name ;
+    live	= false ;
+    self_ctr	= 0 ;
+    total_ctr	= 0 ;
+    ncalls	= 0
+  } in	
+  funcs := info :: !funcs ;
+  info
+;;
+
+(**************************************************************)
+
+let stack = make_vect 1000 
+  {name="";live=false;self_ctr=0;total_ctr=0;ncalls=0}
+and sp = ref 0 
+and ticks = ref 0 ;;
+
+let profile_1 name f =
+  let info = alloc_info name in
+  fun a1 ->
+    info.ncalls <- succ info.ncalls ;
+    if info.live then (
+      f a1
+    ) else (
+      stack.(!sp) <- info ;
+      info.live <- true ;
+      incr sp ;
+      let res = try f a1 with x -> (
+	decr sp ;
+	info.live <- false ;
+	raise x 
+      ) in
+      decr sp ;
+      info.live <- false ;
+      res
+    )
+;;
+
+let profile_2 name f =
+  let info = alloc_info name in
+  fun a1 a2 ->
+    info.ncalls <- succ info.ncalls ;
+    if info.live then (
+      f a1 a2
+    ) else (
+      stack.(!sp) <- info ;
+      info.live <- true ;
+      incr sp ;
+      let res = try f a1 a2 with x -> (
+	decr sp ;
+	info.live <- false ;
+	raise x
+      ) in
+      decr sp ;
+      info.live <- false ;
+      res
+    )
+;;
+
+let profile_3 name f =
+  let info = alloc_info name in
+  fun a1 a2 a3 ->
+    info.ncalls <- succ info.ncalls ;
+    if info.live then (
+      f a1 a2 a3
+    ) else (
+      stack.(!sp) <- info ;
+      info.live <- true ;
+      incr sp ;
+      let res = try f a1 a2 a3 with x -> (
+	decr sp ;
+	info.live <- false ;
+	raise x
+      ) in
+      decr sp ;
+      info.live <- false ;
+      res
+    )
+;;
+
+let handler () =
+  incr ticks ;
+
+  let top = pred !sp in
+  if top >= 0 then
+    stack.(top).self_ctr <- 
+      succ stack.(top).self_ctr ;
+
+  for i = 0 to top do
+    stack.(i).total_ctr <- 
+      succ stack.(i).total_ctr
+  done 	
+;;
+
+(**************************************************************)
+
+let start_time = ref None
+and end_time   = ref None
+and started    = ref false ;;
+
+let profile_start () =
+  if !started then 
+    failwith "profiler started more than once" ;
+  started := true ;
+  start_time := Some (times()) ;
+  signal SIGPROF (Signal_handle handler) ;
+  setitimer ITIMER_PROF {it_interval=0.001 ; it_value=0.001} ;
+  ()
+;;
+  
+let profile_end () =
+  if not !started then 
+    failwith "profile_end:profiler not started" ;
+  started := false ;
+  end_time := Some (times()) ;
+  setitimer ITIMER_PROF {it_interval=0.0 ; it_value=0.0} ;
+  signal SIGPROF (Signal_default) ;
+
+  let cmp i1 i2 = i1.self_ctr > i2.self_ctr in
+  
+  match !start_time, !end_time with
+  | Some{tms_utime=start_user}, Some{tms_utime=end_user}-> (
+      let foi = float_of_int in
+      let time = end_user -. start_user in
+      let sample = time /. foi !ticks in
+      printf "  Number of samples is %d\n" !ticks ;
+      printf "  Each sample counts as %.2f seconds.\n\n" sample ;
+      printf "  %%      self    self&            self     total\n" ;          
+      printf " time   seconds childen    calls ms/call  ms/call  name\n" ;
+
+      do_list (fun info ->
+	printf "%5.2f %8.3f %8.3f %8d %7.3f %7.3f   %s\n" 
+	  (foi info.self_ctr /. foi !ticks *. 100.0)
+	  (foi info.self_ctr *. sample)
+	  (foi info.total_ctr *. sample)
+	  (info.ncalls)
+	  (foi info.self_ctr *. sample /. foi info.ncalls)
+	  (foi info.total_ctr *. sample /. foi info.ncalls)
+	  (info.name)
+      ) (sort__sort cmp !funcs) ;
+      printf "\n" ; flush std_out
+    )
+
+  | _ -> failwith "sanity" 
+;;
+
+(**************************************************************)
+
+let testprof () =
+  let f () = for i = 1 to 1000 do () done in
+  let f = profile_1 "f" f in
+
+  let g () = for i = 1 to 100 do () done in
+  let g = profile_1 "g" g in
+
+  let h () = for i = 1 to 1000 do f () ; g () done in
+  let h = profile_1 "h" h in
+
+  profile_start () ;
+
+  h () ;
+
+  profile_end () 
+;;
+
+if filename__basename (sys__command_line.(0)) = "testprof" then
+  testprof () 
+;;
+
+(**************************************************************)
+SHAR_EOF
+fi # end of overwriting check
+if test -f 'profile.mli'
+then
+	echo shar: will not over-write existing file "'profile.mli'"
+else
+cat << \SHAR_EOF > 'profile.mli'
+(**************************************************************)
+(* PROFILE.MLI *)
+(* Author: Mark Hayden *)
+(**************************************************************)
+
+value profile_start : unit -> unit 
+  and profile_end   : unit -> unit
+  and profile_1 : string -> ('a -> 'b) -> ('a -> 'b)
+  and profile_2 : string -> ('a -> 'b -> 'c) -> ('a -> 'b -> 'c)
+  and profile_3 : string -> ('a -> 'b -> 'c -> 'd) -> ('a -> 'b -> 'c -> 'd)
+;;
+
+(**************************************************************)
+SHAR_EOF
+fi # end of overwriting check
+if test -f 'setitimer.c'
+then
+	echo shar: will not over-write existing file "'setitimer.c'"
+else
+cat << \SHAR_EOF > 'setitimer.c'
+#include <mlvalues.h>
+#include <alloc.h>
+#include <memory.h>
+#include "signals.h"
+#include "fail.h"
+#include "str.h"
+#include "errno.h"
+#include <unix.h>
+
+#ifdef HAS_SELECT		/* is this right? */
+
+#include <sys/types.h>
+#include <sys/time.h>
+
+int setitimer(
+  int which,
+  struct itimerval *value,
+  struct itimerval *ovalue
+) ;
+
+value unix_setitimer(
+        value which_v, 
+        value itvalue_v
+) {				/* ML */
+  int which ;
+  double tmp ;
+  struct itimerval itvalue ;
+  struct itimerval itovalue ;
+  value ret ;
+
+  Push_roots(roots,1) ;
+#define res roots[0]
+
+  switch (Tag_val(which_v)) {
+    case 0:
+      which = ITIMER_REAL ;
+      break ;
+    case 1:
+      which = ITIMER_VIRTUAL ;
+      break ;
+    case 2:
+      which = ITIMER_PROF ;
+      break ;
+    default: 
+      abort() ;
+  }
+  
+  tmp = Double_val(Field(itvalue_v,0)) ;
+  itvalue.it_interval.tv_sec = tmp ;
+  itvalue.it_interval.tv_usec = (long)(tmp * (double)1E6) % (long)1E6 ;
+
+  tmp = Double_val(Field(itvalue_v,1)) ;
+  itvalue.it_value.tv_sec = tmp ;
+  itvalue.it_value.tv_usec = (long)(tmp * (double)1E6) % (long)1E6 ;
+
+  ret = setitimer(which, &itvalue, &itovalue) ;
+  if (ret == -1) uerror("setitimer", Nothing);
+
+  res = alloc_tuple(2) ;
+  Field(res, 0) = Val_unit ;
+  Field(res, 1) = Val_unit ;
+
+  tmp = 
+    itovalue.it_interval.tv_sec +
+    ((double)itovalue.it_interval.tv_usec/(double)1E6) ;
+  modify(&Field(res,0), copy_double(tmp)) ;
+
+  tmp = 
+    itovalue.it_value.tv_sec +
+    ((double)itovalue.it_value.tv_usec/(double)1E6) ;
+  modify(&Field(res,1), copy_double(tmp)) ;
+
+  Pop_roots() ;
+  return res ;
+}
+  
+#else
+
+value unix_setitimer() { invalid_argument("setitimer not implemented"); }
+
+#endif
+SHAR_EOF
+fi # end of overwriting check
+if test -f 'setitimer.mli'
+then
+	echo shar: will not over-write existing file "'setitimer.mli'"
+else
+cat << \SHAR_EOF > 'setitimer.mli'
+(* Perhaps this should be added to the Unix library? *)
+
+type itimerval = {
+  it_interval : float ;
+  it_value : float
+} ;;
+
+type timer =
+  | ITIMER_REAL
+  | ITIMER_VIRTUAL
+  | ITIMER_PROF
+;;
+ 
+value setitimer : timer -> itimerval -> itimerval = 2 "unix_setitimer" ;;
+value getitimer : timer -> itimerval -> itimerval = 2 "unix_getitimer" ;;
+
+SHAR_EOF
+fi # end of overwriting check
+if test -f 'Makefile'
+then
+	echo shar: will not over-write existing file "'Makefile'"
+else
+cat << \SHAR_EOF > 'Makefile'
+CAML		= /home/hayden/caml/70
+CAML_RUNTIME	= $(CAML)/src/runtime
+CAML_LIBUNIX	= $(CAML)/contrib/libunix
+CFLAGS		= -g -O -Wall -I$(CAML_RUNTIME) -I$(CAML_LIBUNIX)
+CC		= gcc
+
+CAMLCOMP	= camlc
+COMPFLAGS	= -W -g -c
+
+.SUFFIXES :
+.SUFFIXES : .ml .mli .zi .zo .o .c
+
+.mli.zi:
+	$(CAMLCOMP) $(COMPFLAGS) $<
+.ml.zo:
+	$(CAMLCOMP) $(COMPFLAGS) $<
+
+testprof: profile.zo setitimer.o
+	camlc -custom -o testprof unix.zo profile.zo setitimer.o -lunix
+
+profile.zo: profile.zi setitimer.zi
+
+shar:
+	shar profile.ml profile.mli setitimer.c setitimer.mli Makefile README >profile.shar
+SHAR_EOF
+fi # end of overwriting check
+if test -f 'README'
+then
+	echo shar: will not over-write existing file "'README'"
+else
+cat << \SHAR_EOF > 'README'
+A profiler for Caml Light
+Author: Mark Hayden, 11/95, hayden@cs.cornell.edu
+
+This library is a simple time-based profiling package (as opposed to the
+call-count profiler included with Caml Light).  It is intended to be
+similar in design and output to the time-based parts of the gprof package
+for C.  This library only works with Unix because it requires Unix
+profiling timer signals.
+
+This libary is very similar to the time-profiler distributed recently by
+Christophe Raffalli.  It differs in that it uses signals to avoid making
+calls to unix__times on every call to a profiled function.  So potentially
+this library does not affect application performance as much.  Also, after
+initialization, this profiler is designed to (I believe) not cause any
+additional memory allocation.
+
+Functions are registered with the profiler through calls to [profile_N
+"function" function], where N is the number of arguments to the function,
+from 1 to 3.  The first argument is a string name of the function and the
+second argument is the function itself.  Returned is a wrapped version of
+the function.  For example, if 'f' is a one argument function:
+
+  let f arg = .... ;;
+
+  let f = profile_1 "f" f ;;
+
+The profiler is started with a call to [profile_start()] and is ended with
+a call to [profile_end()].  The call to profile_end causes profiling
+information to be dumped to stdout.  The output is similar to the gprof
+package for C: refer to that documentation for a description.
+
+The source file profile.ml contains a test example, "testprof", which is
+compiled by the included Makefile.
+
+Notes: 
+
+ * Caml Special Light does not (currently) support signal handling so
+   this package only works on Caml Light.
+
+ * With some library support from Caml Light to access debugging
+   information and to scan the call-stack, functions would not have to be
+   explicitly registered with the profiler.
+SHAR_EOF
+fi # end of overwriting check
+#	End of shell archive
+exit 0
+
+
+

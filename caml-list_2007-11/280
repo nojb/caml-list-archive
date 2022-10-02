@@ -1,0 +1,140 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.5 required=5.0 tests=AWL,NO_REAL_NAME,SPF_SOFTFAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 3F672BC69
+	for <caml-list@yquem.inria.fr>; Wed, 14 Nov 2007 09:39:26 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAC9DOkfAXQImh2dsb2JhbACOCXcBCAop
+X-IronPort-AV: E=Sophos;i="4.21,414,1188770400"; 
+   d="scan'208";a="19264909"
+Received: from discorde.inria.fr ([192.93.2.38])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 14 Nov 2007 09:39:26 +0100
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id lAE8dP12015686
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Wed, 14 Nov 2007 09:39:25 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAHpCOkfAEKcgh2dsb2JhbACOCXcBCAop
+X-IronPort-AV: E=Sophos;i="4.21,414,1188770400"; 
+   d="scan'208";a="5776408"
+Received: from selenite.metnet.navy.mil ([192.16.167.32])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 14 Nov 2007 09:39:26 +0100
+Received: (qmail 19635 invoked by uid 107); 14 Nov 2007 08:39:22 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 14 Nov 2007 08:39:22 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id CBCF5A99F; Wed, 14 Nov 2007 00:37:10 -0800 (PST)
+To: peng.zang@gmail.com, caml-list@inria.fr
+Subject: Eliminating existentials, finally
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20071114083710.CBCF5A99F@Adric.metnet.fnmoc.navy.mil>
+Date: Wed, 14 Nov 2007 00:37:10 -0800 (PST)
+X-Miltered: at discorde with ID 473AB43D.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; oleg:01 typeclass:01 inference:01 non-trivial:01 bool:01 bool:01 haskell:01 haskell:01 forall:01 existential:01 computations:01 sig:01 val:01 val:01 iter:01 
+
+
+Peng Zang wrote:
+> Is there a way to create lists in which the elements may be of
+> differing types but which all have some set of operations defined
+> (eg. tostr) in common?  One can then imagine mapping over such lists
+> with "generic" versions of those common operations.
+
+First of all, if simple type classes, mentioned during the discussion,
+are desired, they can be easily obtained
+	http://okmij.org/ftp/ML/ML.html#typeclass
+
+(alas, modulo the convenient inference and automatic dictionary
+construction). That is not the topic of this message however. We would
+like to show that in some (many?) circumstances, existentials can be
+just eliminated.
+
+Peng Zang continued:
+> Essentially we have ints, floats and bools.  All these types can be
+> shown.  It would be nice to be able to create a list of them [1; 2.0;
+> false] that you can then map a generalized show over.
+
+So, we want abstract values with the only non-trivial operation of
+converting them to strings. One may immediately ask: 
+why not to convert them to strings to start with? So, instead of writing
+	 [`Int 1; `Float 2.0; `Bool false]
+we can just
+	[string_of_int 1; string_of_float 2.0; string_of_bool false]
+That idea looks better in Haskell: first of all, since polymorphic
+equality is absent in Haskell, nothing breaks parametricity in
+safe Haskell and we lose nothing in expressiveness if we treat
+	forall a. Show a => a
+as Strings. Also, because of the default laziness of Haskell, the
+conversions to string are not performed unless needed. OTH, ML
+programmers have never been scared of thunks. Thus the idea is to
+represent an existential by a tuple of its observations, using thunks
+to delay computations. 
+
+Here is a more complex example, of a counter, whose interface could be
+described as follows.
+
+module type COUNTER = sig
+  type t
+  val init : unit -> t
+  val observe : t -> int
+  val step : t -> t
+end;;
+
+We see the producer, consumer/observer, and the transformer. Of course
+we cannot use modules of the above signature for our purposes
+since we cannot put modules into a list (cf: MoscowML and AliceML have
+first-class modules). We do note however that the above is equivalent
+to the following
+
+type counter = C of (unit -> int) * (unit -> counter);;
+
+Here are two different `constructors', with two different
+representations of the internal state (a pair of int, or a float).
+
+let counter1 = 
+  (* internal function, unavailable outside *)
+  let rec make seed upper = 
+    C ((fun () -> seed),(fun () -> 
+      let seed = if seed >= upper then 0 else succ seed in make seed upper))
+  in make 0 5;;
+
+(* use FP seed *)
+let counter2 = 
+  (* internal function, unavailable outside *)
+  let observe seed = int_of_float (10.0 *. seed) in
+  let step seed = cos seed in
+  let rec make seed = C ((fun () -> observe seed),
+			 (fun () -> make (step seed)))
+  in make 0.0;;
+
+
+We can place them into a list
+
+let lst = [counter1; counter2];;
+
+
+and iterate over:
+
+let advance_all = List.map (function C (_,adv) -> adv ());;
+let show_all = List.iter (function C (s,_) -> Printf.printf "%d\n" (s()));;
+
+let test = let () = show_all lst in
+           let () = show_all (advance_all (advance_all lst))
+	   in ();;
+
+
+We thus demonstrated a very old idea (whose realization in 1976 was
+the birth of Scheme) that closures are poor-man objects
+
+http://www.cs.cmu.edu/afs/cs/project/ai-repository/ai/lang/scheme/oop/yasos/swob.txt
+
+The title betrays my hunch that co-algebraic implementations (using
+functions) typically require simpler types than the corresponding
+algebraic, data-type based implementations.
+

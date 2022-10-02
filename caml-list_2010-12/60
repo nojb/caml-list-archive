@@ -1,0 +1,95 @@
+Return-Path: <basile@starynkevitch.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 7844FBBAF
+	for <caml-list@yquem.inria.fr>; Sun,  5 Dec 2010 17:13:25 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkcWAJ9I+0w+BBFkWmdsb2JhbACjOgEWCA0GAhADH7x4hUkEhTeKUA
+X-IronPort-AV: E=Sophos;i="4.59,302,1288566000"; 
+   d="scan'208";a="91557052"
+Received: from smtp-100-sunday.noc.nerim.net (HELO mallaury.nerim.net) ([62.4.17.100])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 05 Dec 2010 17:13:25 +0100
+Received: from hector.lesours (ours.starynkevitch.net [213.41.244.95])
+	by mallaury.nerim.net (Postfix) with ESMTPS id C060A15341B;
+	Sun,  5 Dec 2010 17:13:24 +0100 (CET)
+Received: from glinka.lesours ([192.168.0.1])
+	by hector.lesours with smtp (Exim 4.72)
+	(envelope-from <basile@starynkevitch.net>)
+	id 1PPHDH-0005ab-Op; Sun, 05 Dec 2010 17:13:23 +0100
+Date: Sun, 5 Dec 2010 17:13:11 +0100
+From: Basile Starynkevitch <basile@starynkevitch.net>
+To: "CUOQ Pascal" <Pascal.CUOQ@cea.fr>
+Cc: <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] Modify macro and caml_initialize function
+Message-Id: <20101205171311.ff7cc923.basile@starynkevitch.net>
+In-Reply-To: <5EFD4D7AC6265F4D9D3A849CEA92191902182AD6@LAXA.intra.cea.fr>
+References: <20101204110006.A6F91BC57@yquem.inria.fr>
+	<5EFD4D7AC6265F4D9D3A849CEA92191902182AD6@LAXA.intra.cea.fr>
+X-Mailer: Sylpheed 3.0.2 (GTK+ 2.20.1; x86_64-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; basile:01 basile:01 cuoq:01 cuoq:01 iirc:01 gcc:01 gcc:01 val:01 val:01 cheers:01 faiencerie:01 92340:01 reine:01 wrote:01 wrote:01 
+
+On Sun, 5 Dec 2010 17:02:37 +0100
+"CUOQ Pascal" <Pascal.CUOQ@cea.fr> wrote:
+
+> ygrek wrote:
+> 
+> > BTW, while we are on this topic, why the following is not in upstream yet?
+> >
+> > http://eigenclass.org/R2/writings/optimizing-caml_modify
+> >
+> > Looks like a clear win-win without drawbacks (increased code size shouldn't be significant
+> > cause Modify is only used in a couple of places). What do you think?
+> 
+> This is very interesting. Thanks for pointing it out.
+
+
+Sorry to be nitpicking, but...
+
+IIRC, there might be some rare occasions where the Modify macro could
+be called several times in a C routine. And then you've got several
+caml_modify_maybe_add_to_ref_table labels in the same C routine.
+
+With GCC, you could use a local __label__
+http://gcc.gnu.org/onlinedocs/gcc/Local-Labels.html but if you want to
+be portable to non GCC compilers, you'll need a Modify macro which
+generates a unique label (perhaps using __LINE__ for that purpose).
+
+I am thinking of something like [UNTESTED CODE]
+
+#define Modify(fp, val) Modify_at(fp, val, __LINE__)
+
+#define Modify_at(fp, val, lin) do{                                         \
+  value in_heap = 0;                                                        \
+  value _old_ = *(fp);                                                      \
+  *(fp) = (val);                                                            \
+  if (caml_gc_phase == Phase_mark) {                                        \
+    if (Is_in_heap (fp)) {                                                  \
+      caml_darken (_old_, NULL);                                            \
+      in_heap = 1;                                                          \
+      goto caml_modify_maybe_add_to_ref_table##Lin;                         \
+    }                                                                       \
+  } else {                                                                  \
+      caml_modify_maybe_add_to_ref_table##Lin:                              \
+      if (Is_block (val) && Is_young (val)                                  \
+          && ! (Is_block (_old_) && Is_young (_old_)) &&                    \
+          (in_heap || Is_in_heap (fp)) ){                                   \
+        if (caml_ref_table.ptr >= caml_ref_table.limit){                    \
+          CAMLassert (caml_ref_table.ptr == caml_ref_table.limit);          \
+          caml_realloc_ref_table (&caml_ref_table);                         \
+        }                                                                   \
+        *caml_ref_table.ptr++ = (fp);                                       \
+      }                                                                     \
+  }                                                                         \
+}while(0)
+
+Cheers.
+-- 
+Basile STARYNKEVITCH         http://starynkevitch.net/Basile/
+email: basile<at>starynkevitch<dot>net mobile: +33 6 8501 2359
+8, rue de la Faiencerie, 92340 Bourg La Reine, France
+*** opinions {are only mine, sont seulement les miennes} ***
+

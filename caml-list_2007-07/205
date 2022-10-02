@@ -1,0 +1,93 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id A4A04BC69
+	for <caml-list@yquem.inria.fr>; Mon, 16 Jul 2007 08:07:29 +0200 (CEST)
+Received: from ipmail03.adl2.internode.on.net (ipmail03.adl2.internode.on.net [203.16.214.135])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l6G67RV6005297
+	for <caml-list@yquem.inria.fr>; Mon, 16 Jul 2007 08:07:28 +0200
+X-IronPort-AV: E=Sophos;i="4.16,540,1175437800"; 
+   d="scan'208";a="116622566"
+Received: from ppp121-44-3-31.lns4.syd7.internode.on.net (HELO [192.168.1.201]) ([121.44.3.31])
+  by ipmail03.adl2.internode.on.net with ESMTP; 16 Jul 2007 15:37:24 +0930
+Subject: Re: [Caml-list] CallCC using fork (and garbage collected processes)
+From: skaller <skaller@users.sourceforge.net>
+To: Jon Harrop <jon@ffconsultancy.com>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <200707160630.23737.jon@ffconsultancy.com>
+References: <200707160630.23737.jon@ffconsultancy.com>
+Content-Type: text/plain
+Date: Mon, 16 Jul 2007 16:07:23 +1000
+Message-Id: <1184566043.8152.55.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 469B0B1F.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; 0100,:01 oleg's:01 ocaml:01 ocaml:01 bytecode:01 stack:01 parsers:01 native-code:01 stack:01 finalizer:01 pointer:01 setjmp:01 bounded:01 threads:01 threads:01 
+
+On Mon, 2007-07-16 at 06:30 +0100, Jon Harrop wrote:
+> Just another crazy idea. So Oleg's callcc for OCaml works by copying the OCaml 
+> bytecode stack and its rather nifty because you can trivially control invert 
+> parsers and so forth.
+> 
+> You can replicate the native-code stack using fork. What if you wrap the 
+> forked process in an object and set the finalizer to pass it a message 
+> telling it to die. Then you could invoke the process (continuation) to 
+> propagate computation. Maybe you can pass your child the pipe from your 
+> parent so that it can respond directly and then die yourself (a tail call!).
+> 
+> I know this is really silly because you've got the OCaml GC collecting 
+> processes (which is even worse than GCing OpenGL textures) but my machine can 
+> fork processes pretty quickly and I'm just wondering if anyone's tried it?
+
+A much reduced version of this idea has been tried
+in C, swapping the C stack pointer and registers using
+setjmp/longjmp and some assembler.
+
+This is, of course, much faster than forking.
+
+However the C method doesn't work, because Unix uses
+linear bounded stacks, and there isn't enough address 
+space to create enough stacks.
+
+The forking idea has some interest because this problem
+might go away. However it isn't necessary if you COPY
+the stack, because the copy isn't executing so doesn't
+need a bound. Of course, forking copies the stack
+lazily (because it copies everything lazily) so it
+actually might be quite efficient compared to copying.
+
+Note the Fork idea will NOT work in ML anyhow, since
+ML (including Ocaml) is a procedural programming language.
+Fork won't support writing to shared memory (eg ref types).
+
+Ultimately though, the only viable way to do this properly
+is to use a spaghetti stack on the heap as Felix does.
+If you're going to run with user space threads, you want
+to be able to run millions of them and context switch
+very quickly .. otherwise you can just use Threads
+and the Event module for communications.
+
+Felix has no trouble with a million threads on an AMD64 with
+1G of RAM ..somehow I doubt your box has enough process
+handles to spawn that many forked processes .. :)
+
+MLton solves this problem by mmap()ing the stacks:
+fast context switching AND solves the bound problem.
+Stacks grow linearly and then get compacted .. its very cute!
+
+The bottom line here is that programming language execution
+models have to STOP using the stack except for very temporary
+storage -- but even that isn't going to work, if you're calling
+C code which calls back into your language.
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

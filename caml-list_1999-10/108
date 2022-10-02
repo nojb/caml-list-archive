@@ -1,0 +1,156 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA23674 for caml-redistribution; Tue, 12 Oct 1999 15:51:13 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA26719 for <caml-list@pauillac.inria.fr>; Tue, 12 Oct 1999 03:43:57 +0200 (MET DST)
+Received: from ns.euro.ge.com (ns.euro.ge.com [204.90.182.10])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id DAA03837
+	for <caml-list@inria.fr>; Tue, 12 Oct 1999 03:43:56 +0200 (MET DST)
+Received: from smtp.euro.ge.com (smtp.euro.ge.com [205.173.90.6])
+	by ns.euro.ge.com (8.9.2/8.9.2) with ESMTP id BAA22463
+	for <caml-list@inria.fr>; Tue, 12 Oct 1999 01:43:54 GMT
+Received: from thomas.ge.com (thomas.ge.com [3.47.28.21])
+	by smtp.euro.ge.com (8.9.2/8.9.2) with ESMTP id BAA02875
+	for <caml-list@inria.fr>; Tue, 12 Oct 1999 01:43:33 GMT
+Received: from gemed.med.ge.com (gemed.med.ge.com [3.7.12.4])
+	by thomas.ge.com (8.9.3/8.9.3) with ESMTP id VAA17218
+	for <caml-list@inria.fr>; Mon, 11 Oct 1999 21:43:28 -0400 (EDT)
+Received: from mrs.med.ge.com (pop [3.57.196.18])
+	by gemed.med.ge.com (8.9.3/8.9.0) with SMTP id UAA19481
+	for <caml-list@inria.fr>; Mon, 11 Oct 1999 20:43:26 -0500 (CDT)
+Received: from swag.med.ge.com by mrs.med.ge.com (SMI-8.6/SMI-SVR4)
+	id SAA01559; Mon, 11 Oct 1999 18:44:01 -0700
+Received: by swag.med.ge.com (SMI-8.6/SMI-SVR4)
+	id SAA01669; Mon, 11 Oct 1999 18:47:25 -0700
+Date: Mon, 11 Oct 1999 18:47:25 -0700
+From: gurr@pop.mrs.med.ge.com (David Gurr)
+Message-Id: <199910120147.SAA01669@swag.med.ge.com>
+To: caml-list@inria.fr
+Subject: the null pointer and subtyping
+Cc: gurr@pop.mrs.med.ge.com
+X-Sun-Charset: ISO-8859-1
+Sender: weis
+
+(Sorry no French version.  OK to reply to me in French for revenge.)
+
+I've been playing with François Pottier's Wallace
+<http://pauillac.inria.fr/~fpottier/> and considering the virtues of
+subtyping in practice.  I thought that the following might be of interest.
+
+# type a = { data : float option };;
+type a = { data: float option }
+# exception Uninit;;
+exception Uninit
+# let deref = function Some v -> v | None -> Uninit;;
+val deref : exn option -> exn = <fun>
+ 
+But we want "val deref : 'a option -> 'a". So:
+
+# let deref = function Some v -> v ;;
+Warning: this pattern-matching is not exhaustive.
+val deref : 'a option -> 'a = <fun>
+# deref { data = Some 99.9 }.data;;
+- : float = 99.9
+# deref { data = None }.data;;
+Uncaught exception: Match_failure("", 12, 29)
+
+So:
+
+# let deref = try (function Some v -> v) with Match_failure _ -> Uninit;;
+Warning: this pattern-matching is not exhaustive.
+This expression has type exn but is here used with type 'a option -> 'a
+
+Back to where we started. OK, try Wallace.  Wallace infers type 
+declarations so we skip them.
+
+?let deref = function Some v -> v | None -> raise Uninit;;
+
+Variable deref defined with type [ None: Pre unit; Some: Pre %d; Abs ] -> 
+%d raises [ Uninit: Pre unit; Abs ] | { 0 < %d < 1 }
+Executing... deref = <prim>
+
+?let x = { data = None };;
+
+Variable x defined with type { data: Pre [ None: Pre unit; Abs ]; Abs }
+Executing... x = { data = None () }
+
+?deref (x.data);;
+
+Variable _unnamed defined with type 0
+Executing... Uncaught user exception: Uninit ()
+
+?deref ((x.data <- (Some 99.9)).data);;
+
+Variable _unnamed defined with type float
+Executing... _unnamed = 99.9
+
+But suppose that instead we define deref without testing for None:
+
+let deref = function Some v -> v ;;
+
+Variable deref defined with type [ Some: Pre %d; Abs ] -> 
+%d raises 0 | { 0 < %d < 1 }
+Executing... deref = <fun>
+
+?let x = { data = None };;
+
+Variable x defined with type { data: Pre [ None: Pre unit; Abs ]; Abs }
+Executing... x = { data = None () }
+
+?deref (x.data);;
+
+Inconsistent constraint:
+'d < 'c -> 'b raises 'a
+'g -> 'f raises 'e < 'c -> 'b raises 'a
+'c < 'g
+[ Some: 'k; None: 'l; 'm ] < [ Some: 'h; None: 'i; 'j ]
+'l < 'i
+Pre 'n < Abs
+
+Since Java does not distinguish between Objects and null pointers, if
+one looks at Java code, one finds lots of testing for null pointers
+(and null pointer bombs when one runs Java).  MLJ is a SML compiler
+that compiles to Java bytecode.  For this reason MLJ's option type
+constructor combined with its array constructor have the semantics
+Skaller is asking for.  Since this conflicts with the usual SML
+tastes,  MLJ has a mixed policy towards option types (methods lenient;
+functions not) but the programmer has no choice in the matter.
+
+By moving to subtyping, Wallace can "allow null pointers".  But Wallace
+lets the programmer choose when and where to allow them and Wallace will
+enforce the choice at compile time.  Wallace *might* be a design sweet
+spot.  I should add, a) in practice I find the addtional constraints
+that Ocaml makes are usually what I want, so usually Wallace is harder
+to use than Ocaml, b) making a good Wallace compiler is not simple.
+
+I've written a good number of "improvements" to various Caml releases,
+and found them to be mistakes.  The above is not a criticism of Ocaml.
+I do want to point out this alternative that was not covered in the 
+discussion so far.  Best of all since Wallace is implemented and since
+its syntax is close to Ocaml, you can test it in practice and come to
+your own conclusions.
+
+-D
+
+
+PS As for variable length arrays and type systems, I think there are
+bigger problems than $. I've tried hand transliteration from Fortran to
+Ocaml and not been satisfied with the results astheticly.  In contrast
+APL2, J, and Nial are often quite nice.  Ocaml is a better C than C,
+but IMHO, Ocaml is not a better Fortran than Fortran.  Arrays are still an
+"open research topic", for example DML, Fish, and NESL.  (Yes, Ocaml is
+a better C than C, but Ocaml is not a better asm than C.  A better asm
+than C is also a "open research topic" ergo Talc & C--)
+
+PPS.
+
+> Assignment to array element can be very ineffictive in O'Caml due to the
+> following reasons:
+> 
+> 1)O'Caml uses generational GC. 
+
+False, generational does not imply copy-collect.  Dont alloc long lived 
+mutables in the minor heap.  In fact, dont alloc any long lived anything in 
+the minor heap :).
+
+    
+
+
+

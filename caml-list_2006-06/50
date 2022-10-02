@@ -1,0 +1,123 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 76F91BB84
+	for <caml-list@yquem.inria.fr>; Thu, 15 Jun 2006 01:02:20 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k5EN2JoT002030
+	for <caml-list@yquem.inria.fr>; Thu, 15 Jun 2006 01:02:19 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA20105 for <caml-list@pauillac.inria.fr>; Thu, 15 Jun 2006 01:02:19 +0200 (MET DST)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k5EN2HRL002025
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Thu, 15 Jun 2006 01:02:18 +0200
+Received: (qmail 602 invoked by uid 107); 14 Jun 2006 22:55:35 -0000
+Received: from vwmetnet.metnet.navy.mil (192.16.167.21)
+  by selenite.metnet.navy.mil with SMTP; 14 Jun 2006 22:55:35 -0000
+Received: from Adric.metnet.fnmoc.navy.mil ([10.100.105.102])
+ by vwmetnet.metnet.navy.mil (NAVGW 2.5.2.9) with SMTP id M2006061423063718170
+ for <caml-list@inria.fr>; Wed, 14 Jun 2006 23:06:37 GMT
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id 69F73AC97; Wed, 14 Jun 2006 15:54:03 -0700 (PDT)
+To: caml-list@inria.fr
+Subject: Resumable exceptions in plain OCaml
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20060614225403.69F73AC97@Adric.metnet.fnmoc.navy.mil>
+Date: Wed, 14 Jun 2006 15:54:03 -0700 (PDT)
+X-Miltered: at nez-perce with ID 4490957B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 44909579.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 oleg:01 handler:01 node:01 ocaml:01 translated:01 sml:01 handler:01 trivial:01 hosc:01 oleg:01 exn:01 exn:01 unpack:01 foo:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.0.3
+
+
+Resumable exceptions are the strict generalization of regular exceptions,
+which lets the exception raising form return a value and so the
+computation may continue. It's the exception handler that decides
+either to abort the exceptional computation or to resume it with a
+particular value. Resumable exceptions are made popular by Common
+Lisp, where they are widely used: http://lambda-the-ultimate.org/node/1544
+
+We show a conservative and elementary implementation of resumable
+exceptions in OCaml: the implementation is a self-contained 100% pure
+OCaml library; makes no changes to the OCaml system; supports the
+existing style of defining exceptions; is compatible with the ordinary
+exceptions; works in byte- or natively-compiled code; uses the most
+basic facilities of ML and so can easily be translated to SML.
+
+We impose no extra restrictions on the resumable exception raising and
+handling forms. Like with ordinary exceptions, resumable ones may
+encapsulate values of arbitrary types; the same exception handler may
+process exceptions of many types -- and send resumption replies of
+many types. The raise form may appear within the guarded code at many
+places; different raise forms may resume with values of different
+types. Furthermore, resumable exceptions are declared just like the
+ordinary ones, with the `exception' keyword. If the resumable
+exception handler never resumes, resumable exceptions act and feel
+precisely as the regular ones.
+
+The control aspect of resumable exceptions is quite trivial: as first
+pointed out by Luc Moreau (HOSC1998), invoking a resumable expression
+is sort of a regular function call, where the name of the function,
+the handler, is obtained via dynamic binding. It is the typing aspect
+of resumable exceptions -- imposing no restrictions on how and when
+exceptions can be raised and resumed -- that took most of the
+work. The resulting implementation involves less than common ways of
+invoking functions and passing their results.
+
+The implementation and illustration code is available at
+	http://pobox.com/~oleg/ftp/ML/resumable.ml
+
+The following is an excerpt from the above file, illustrating
+resumable exceptions. As regular exceptions, resumable exceptions must
+be declared, with the ordinary keyword 'exception'. A resumable
+exception amounts to two (or more) ordinary exceptions. The first is
+what used to raise the (resumable) exception.  The second is to
+encapsulate the returned result. The function [rhandle] is equivalent to
+the [try] form; it receives the exception handler and the thunk. The
+function [rraise : exn -> (exn -> 'a) -> 'a] raises the resumable
+exception. Its second argument receives the resumable exception,
+should unpack it and return the resumption result, with which to
+continue the computation.
+
+
+(* Declare the first resumable exception. It has resumptions of two types *)
+exception Foo of int
+exception Foo_r1 of bool
+exception Foo_r2 of string
+
+(* Declare the second resumable exception *)
+exception Bar of char
+exception Bar_r of int
+
+let handler v = try raise v with
+  | Foo x -> Printf.printf "Got Foo of %d\n" x; 
+      if x < 100 then resume (Foo_r1 (x < 4)) else resume (Foo_r2 "xxx")
+  | Bar c -> Printf.printf "Got Bar of %c\n" c;
+      if c < 'E' then resume (Bar_r (int_of_char c + 1))
+      else 42.0                                          (* aborting *)
+
+let () =
+  let r = rhandle handler 
+   (fun () ->
+     for i = 1 to 5 do
+       let v = rraise (Foo i) (fun e -> try raise e with Foo_r1 x -> x) in
+       let () = Printf.printf "Resumed Foo1 with %b\n" v in
+       let v = rraise (Foo (100 +i)) (fun e -> try raise e with Foo_r2 x -> x)
+       in Printf.printf "Resumed Foo2 with %s\n" v
+     done;
+     for i = 65 to 100 do
+       let v = rraise (Bar (char_of_int i)) 
+               (fun e -> try raise e with Bar_r x -> x)
+       in Printf.printf "Resumed Bar with %d\n" v
+     done;
+     assert false
+   ) in
+  Printf.printf "\nFinal result %g\n" r
+;;
+

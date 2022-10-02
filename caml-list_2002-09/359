@@ -1,0 +1,122 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA29502; Thu, 26 Sep 2002 09:10:20 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA29498 for <caml-list@pauillac.inria.fr>; Thu, 26 Sep 2002 09:10:19 +0200 (MET DST)
+Received: from grisu.bik-gmbh.de (In-Planung---------X.BIK-GmbH.de [212.12.55.66] (may be forged))
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g8Q7AID08863
+	for <caml-list@inria.fr>; Thu, 26 Sep 2002 09:10:18 +0200 (MET DST)
+Received: from hars.de (prony.bik-gmbh.de [194.233.237.133])
+	by grisu.bik-gmbh.de (8.12.3/8.12.3) with ESMTP id g8Q7AGU8019064;
+	Thu, 26 Sep 2002 09:10:17 +0200 (CEST)
+	(envelope-from florian@hars.de)
+Message-ID: <3D92B2D3.3090201@hars.de>
+Date: Thu, 26 Sep 2002 09:10:11 +0200
+From: Florian Hars <florian@hars.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; de-AT; rv:1.1) Gecko/20020826
+X-Accept-Language: de-de, en-us, en
+MIME-Version: 1.0
+To: Brian Hurt <brian.hurt@qlogic.com>
+CC: Markus Mottl <markus@oefai.at>, Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Probably FAQ: Why is list-append (list :: elem) so
+ expensive?
+References: <Pine.LNX.4.33.0209251315440.1974-100000@eagle.ancor.com>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Brian Hurt wrote:
+> Consider the following Ocaml code:
+> 
+>     let dup_list lst =
+>         let rec reverse_list l accum =
+>             match l with
+>                 [] -> accum
+>                 | head :: tail -> reverse_list tail (head :: accum)
+>         in
+>             reverse_list (reverse_list lst)
+
+This should probably be reverse_list (reverse_list lst []) []
+
+>     ;;
+[...]
+> So why not reuse the cells from l to form the accum?  
+
+To optimize reverse_list in the way you propose, the compiler would have to be 
+smart enough to see that reverse_list is only ever called twice, so as to 
+return (a list that is equivalent to) the original list. (If reverse_list were 
+called in any other context, the optimazition would be illegal, since it 
+destroys the original list). But then the compiler would know enough to perform 
+the correct optimization of your code to
+
+let dup_list lst = lst
+
+and then eliminate all calls to dup_list entirely. But since the same effect 
+can be had by not introducing the function in the first place, it would be a 
+royal waste of ressources to make the compiler detect this case.
+
+> Yes, I know this violates the immutability of l.  But it seems to me that, 
+> with the exception of garbage creation rates, the two are identical.
+
+Yes, of course. Your dup_list is one of the most expensive no-ops you can 
+perform on a list.
+
+The point is: unlike in languages of the Fortran heritage (C, Java...), 
+variables in functional languges designate values and are not names for 
+physical storage locations. To add to the confusion, ocaml blurs this by 
+supporting both physical (==, !=) and value (=, <>) comparisions:
+
+$ ledit ocaml
+         Objective Caml version 3.06
+
+# let dup_list lst =
+   let rec reverse_list l accum =
+     match l with
+           [] -> accum
+       | head :: tail -> reverse_list tail (head :: accum)
+     in
+     reverse_list (reverse_list lst []) []
+     ;;
+val dup_list : 'a list -> 'a list = <fun>
+# let l = [1; 2; 3];;
+val l : int list = [1; 2; 3]
+# let l' = dup_list l;;
+val l' : int list = [1; 2; 3]
+# l = l';;
+- : bool = true
+# l == l';;
+- : bool = false
+
+This last inequality is the *only* difference between using
+
+let l' = dup_list l
+
+and using
+
+let l' = l
+
+and it would disappear if your optimazation were performed (since then dup_list 
+would just return its argument restored to its original state). So there is no 
+reason not to use the second, simpler and more efficient version.
+
+Even with your dup_list, the contents of the two list are physically the same:
+
+# let m = [ref 1; ref 2; ref 3];;
+val m : int ref list = [{contents = 1}; {contents = 2}; {contents = 3}]
+# let m' = dup_list m;;
+val m' : int ref list = [{contents = 1}; {contents = 2}; {contents = 3}]
+# m == m';;
+- : bool = false
+# List.hd m == List.hd m';;
+- : bool = true
+# List.hd m := 42;;
+- : unit = ()
+# m';;
+- : int ref list = [{contents = 42}; {contents = 2}; {contents = 3}]
+
+Yours, Florian.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,162 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q0TKGjC9024613
+	for <caml-list@sympa-roc.inria.fr>; Sun, 29 Jan 2012 21:16:45 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AugCAJ+oJU/U4xEIk2dsb2JhbABDhQupTSIBAQEBCQkLCRQDIoFyAQEEASNWBQsLGgImAgJXBhMJh3MDBqZxkGeBL4cOAQkHAQsJAQIDBDCEIgQBBAgCBAMOAgEGFIIVgRYEjSyNRIx8
+X-IronPort-AV: E=Sophos;i="4.71,588,1320620400"; 
+   d="scan'208";a="141940187"
+Received: from moutng.kundenserver.de ([212.227.17.8])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 29 Jan 2012 21:16:21 +0100
+Received: from office1.lan.sumadev.de (dslb-188-097-002-117.pools.arcor-ip.net [188.97.2.117])
+	by mrelayeu.kundenserver.de (node=mreu0) with ESMTP (Nemesis)
+	id 0M6RTj-1SpDAd3Y1j-00y11L; Sun, 29 Jan 2012 21:16:21 +0100
+Received: from [192.168.0.31] (dslb-084-058-002-228.pools.arcor-ip.net [84.58.2.228])
+	by office1.lan.sumadev.de (Postfix) with ESMTPSA id 308CFC0714;
+	Sun, 29 Jan 2012 21:16:20 +0100 (CET)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Diego Olivier Fernandez Pons <dofp.ocaml@gmail.com>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <CAHqiZ-LCQFKuuMVtL_WAbUOMVKfBg4vg45OCVZoSmryi5+Az6g@mail.gmail.com>
+References: 
+	 <CAHqiZ-Jra20HXK2ma-Sqzrw2srUcY61mHSkH3TufYtB9_0yM4A@mail.gmail.com>
+	 <1327835747.19516.23.camel@samsung>
+	 <CAHqiZ-LCQFKuuMVtL_WAbUOMVKfBg4vg45OCVZoSmryi5+Az6g@mail.gmail.com>
+Content-Type: text/plain; charset="UTF-8"
+Date: Sun, 29 Jan 2012 21:16:17 +0100
+Message-ID: <1327868178.19516.60.camel@samsung>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.32.2 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:Az48WPB9u4QLJOcGoMMsdIeNh0Mh+Aj91cuB1EMt69d
+ moA8ylDiDuotd33McQcAk7/xzmI2Vtmh6pWfU1fAC4wyP2mzq8
+ HhZXtd2eqtS2TtZCoUi+Tz++urgBQ12nfSaShOaFG4kMvohlRG
+ uE+JpSz44CJgIzdvPQqGYNOVFXCvbcctslBv0B6IuK4el+5orT
+ 5y5tHWfgv/m6zqIJQZZip3nhshMBGHAjM/rOmFEXuEcXOAF6yl
+ ZWj1+gxIlsBAcaOkleANaPy6Fw3QUQVNBdhBjt9AKnVYM1KCoN
+ gpVbNsJgevf+HW+G5NPknEabtq9zXNFrwVjVru9x/TO4xcL5vx
+ ZYM9iSNrzv8N2nuYMSs8EJpcZrzjKuNuIGE7+M2tu
+Subject: Re: [Caml-list] SQL engine in OCaml with client side cache
+
+Am Sonntag, den 29.01.2012, 19:29 +0100 schrieb Diego Olivier Fernandez
+Pons:
+> Caml-list,
+> 
+> [Gerd Stolpmann wrote]
+> > I think this is not possible. SQL always needs access to the complete
+> > table for executing queries (including the complete indexes).
+
+"Not possible" in the sense of: yielding a result with a performance
+that is better than without cache. Also I was assuming the general case.
+
+> I am surprised by your comments. Many systems have two-layer data
+> storage (massive but slow one, fast but limited one), and that doesn't
+> affect their semantics. 
+
+The problem is to define locality here. Imagine you have a table with
+two indexes, and the indexes are pretty independent of each other in
+terms of locality (i.e. when y is the direct successor of x in one
+index, the distance in the other index is large). How do you order the
+rows of the table? For efficient caching it is essential that you can
+guess which other data items will be accessed next. If you have
+multi-dimensional locality as in this example, though, it will be
+difficult to guess.
+
+The SQL server "solves" this by deciding on a query strategy beforehand.
+E.g. for an inner join involving two indexes it is usually possible to
+iterate over one index, and then do lookups over the other one. This is
+slow enough on a local disk - if you add more latency for the lookups on
+the second index (because they are not in the cache), performance will
+even be worse.
+
+Note that there are also join algorithms that really need complete
+tables, like sort-and-merge.
+
+> Consider a compiler (heap/ registers), an
+> operating system (swap files, RAM) or even a typical SQL database that
+> keeps tables in memory for fast access.
+
+This works on page level only (i.e. databases either rely on the page
+cache of the OS, or implement their own page cache following a similar
+design). So, it is pretty low-level.
+
+If you try to have a cache on a higher level, you run into the problem
+how to get the data via SQL statements. The following simple strategy
+does not work: If the statement cannot be fully responded from the
+cache, just send it to the server, and put the response rows into the
+cache. Because: You don't know which rows have been omitted. You would
+not be able to respond range queries from the cache.
+
+So, to have a working cache you need quite direct access to the data,
+e.g. like "retrieve all data from this position to that position", both
+for tables and indexes. There are SQL cursors, but, so far I know, they
+are not precise enough for this. I think this is probably solvable if
+you know the data definition.
+
+> This is the same but the hard drive is on the server side, the RAM on
+> the client side and they communicate by Internet.
+> 
+> I am not saying that implementing a generic cache / swapping system
+> for an SQL database is easy.
+
+I think if you solved the generic case, you'd be a candidate for the
+Turing award.
+
+(Just as I side note: Missing scalability has always been a problem for
+SQL databases. Currently, many companies go away from this technology
+for their giant data warehouses just because of this. Of course, these
+are not read-only, but read-write, but even having read-only scalability
+would be a big achievement.)
+
+>  That's why I added that for this specific
+> application I can easily compute a superset of the data the user will
+> need. Lets take an example : say my database contains sales history
+> data for a convenience store chain for all stores in France, all
+> products for last 5 years. If my user is the Coca-Cola replenishment
+> manager in Paris, he only needs sales of Coca-Cola products for the
+> last 5 similar days for each store in Paris. Thereafter I can generate
+> a query on the server that sends that superset of data to the client
+> and let the SQL client engine work on that.
+
+This approach could in deed work. Basically, you define the locality
+directly.
+
+> I may have underestimated the amount of work to be done, because I
+> thought this would be on the easier side.
+> My idea was the following
+> 
+> Server side
+> - 3rd part SQL database
+> - OCaml bindings
+> - Web communication interface
+> 
+> Client side
+> - SQL parser written in OCaml + interpreter
+> - control system to guess superset of data and request from server
+> - Web communication interface
+> - output to JavaScript widget toolkit
+> 
+> I was expecting to find most of the pieces already done and only
+> having to glue them. I was actually more afraid of the JavaScript part
+> than the SQL one... You can even find SQL engines written in
+> JavaScript out there, to run in a web browser like Jade
+> http://jacwright.com/489/in-memory-javascript-database/ or JOrder
+> (JSON) https://github.com/danstocker/jorder
+> 
+> At the end that's nothing but arrays and for loops.
+
+And an ugly parser :-(
+
+If you can define the superset in a way so that it only depends on the
+client but not on the client's queries, an option would be to use an
+existing in-memory SQL database as cache. Sqlite has such a mode (use
+":memory:" as filename), and AFAIK MySql, too.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Darmstadt, Germany    gerd@gerd-stolpmann.de
+Creator of GODI and camlcity.org.
+Contact details:        http://www.camlcity.org/contact.html
+Company homepage:       http://www.gerd-stolpmann.de
+------------------------------------------------------------
+

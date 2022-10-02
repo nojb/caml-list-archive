@@ -1,0 +1,202 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id BB33BBC74
+	for <caml-list@yquem.inria.fr>; Tue, 22 Aug 2006 10:15:22 +0200 (CEST)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k7M8FKwB032022
+	for <caml-list@yquem.inria.fr>; Tue, 22 Aug 2006 10:15:21 +0200
+Received: from rosella (ppp14-47.lns2.syd7.internode.on.net [59.167.14.47])
+	by smtp1.adl2.internode.on.net (8.13.6/8.13.5) with ESMTP id k7M8F7C1035827;
+	Tue, 22 Aug 2006 17:45:08 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] Re: Select on channels (again)
+From: skaller <skaller@users.sourceforge.net>
+To: Jonathan Roewen <jonathan.roewen@gmail.com>
+Cc: Nathaniel Gray <n8gray@gmail.com>,
+	Caml Mailing List <caml-list@yquem.inria.fr>
+In-Reply-To: <ad8cfe7e0608212341l148f194cj36b433827a9bcef8@mail.gmail.com>
+References: <aee06c9e0608141746t41757650qe8e030a6a1a19875@mail.gmail.com>
+	 <aee06c9e0608211547o6130050aq70a265cc1f50611d@mail.gmail.com>
+	 <ad8cfe7e0608211742g6bb29ad6i9d13d5f07abafe27@mail.gmail.com>
+	 <aee06c9e0608212327y25e87a11wa52b40a1653a2d55@mail.gmail.com>
+	 <ad8cfe7e0608212341l148f194cj36b433827a9bcef8@mail.gmail.com>
+Content-Type: text/plain
+Date: Tue, 22 Aug 2006 18:15:07 +1000
+Message-Id: <1156234507.5707.47.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.6.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 44EABD18.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; buffer:01 pervasives:01 unix:01 unix:01 ocaml:01 ocaml:01 buffered:01 buffer:01 byte:01 descriptors:01 callbacks:01 callbacks:01 scheduler:01 programmatic:01 non-blocking:01 
+
+On Tue, 2006-08-22 at 18:41 +1200, Jonathan Roewen wrote:
+> > It sounds simple but doesn't work.  If select tells you a file
+> > descriptor doesn't have data waiting you can't be sure there isn't
+> > still data in the corresponding channel's buffer.  See the thread that
+> > I referenced for a good discussion of why this is annoying.  For one
+> > thing, it makes it impossible to use Marshal.from_channel without
+> > potentially blocking.
+> 
+> Either one of us is misunderstanding the other....
+
+You missed the first half of the discussion:
+
+> Instead of using Pervasives.open_xxx, use Unix.openfile which returns
+> Unix.file_descr, and also doesn't use internal ocaml buffering.
+> 
+> Then, presumably, Unix.select would do what you expect, and then you
+> can use Unix.in_channel_of_descr to get an ocaml in_channel to read
+> from.
+> 
+> And if I'm misunderstanding you, then perhaps the problem isn't really
+> Unix.select...
+
+The problem is that this defeats the use of all the formatting
+and buffering functions that work on buffered I/O channels.
+
+What's required is something that tells:
+
+(a) there is some data in the buffer OR
+(b) there is some data on the descriptor
+
+so that in either case some progress can be made.
+
+Unfortunately .. there's a reason this makes no sense:
+
+For raw byte streams .. you can just use the file descriptors
+already with select.
+
+Otherwise, there's no way to predict if an input will block,
+whether or not there is data in the buffer, and whether
+or not the file descriptor is ready, because the input
+operation can read some data THEN block.
+
+The same argument applies to output.
+
+Therefore .. there is no choice but to replace all the
+buffering anyhow, and in general the whole programming
+paradigm needs to be replaced.
+
+Felix demux system already does this I think, for
+both read/write n bytes, and for read/write a line.
+More difficult cases should be handled by in-core
+formatting eg:
+
+	print_string (string_of_int i)
+
+is correct and
+
+	print_int i
+
+is wrong. The former cannot block on formatting, the latter can.
+(assuming nonblocking line I/O is available).
+
+You're stuck between a rock and hard place here :)
+
+The read/write functions of a system are designed to
+provide control inversion: data coming in or going out
+is naturally interrupt (callback) driven, but it is
+inconvenient to program with callbacks (I would say
+it more strongly -- it is *untenable* to use callbacks).
+
+Therefore the scheduler provides blocking I/O, and switches
+out programmatic demands for I/O, effecting control inversion.
+
+You can try to work around this with non-blocking I/O,
+but it is really a hack because doing so is tantamount
+to writing your own scheduler to provide control inversion,
+in other words, inventing your own operating system.
+It is even worse if you use event notifications to avoid
+polling (I mean, it is even more complex).
+
+In general the only really sound solution is indeed to 
+provide a full scale operating system abstraction layer,
+which requires the underlying programming language computational
+model be designed to work with it.
+
+Several systems can work this way: Felix and Haskell both
+have continuations, which seem to be the pre-requisite.
+MLton may also cope with this.
+
+The Ocaml computational model doesn't provide the required
+resources natively, although of course they could be implemented
+in Ocaml .. but then you would be programming with, for example,
+suitable monadic combinators, rather than arbitrary raw Ocaml code.
+
+Just so it is clear: given two sockets, you want to read integers
+off them. You can do this with two threads, both of which block.
+Or you can block, and invoke a callback when one conversion
+finally completes.
+
+The two techniques are control inverse. The only difference
+is that the thread model uses OS control inversion and the
+callback model uses hand written control inversion.
+
+BOTH techniques suck. The only way to do this properly is the
+way Felix does it: you write threaded code, but language
+control inverts it into callback driven code systematically,
+and provides its own OS abstraction layer: this gives you
+the responsiveness and performance of user space callback
+driven code, but the illusion of using threads.
+
+You will note this is not a magical silver bullet: it
+only works because the user code handles more specialised
+cases than a general purpose OS can handle well: if one tried
+to do this with full generality you'd just end up with yet
+another low performance operating system. IMHO the key here
+is that application specific information .. perhaps embodied
+in the type system .. can be used by the user program and
+language translator, but not the underlying OS.
+
+Just to see, in Felix you'd do it something like:
+
+	var ich = mk_schannel[int]();
+
+	spawn_sthread { 
+		forever { 
+ 			var x : int;
+			read_int (sock1, &x);
+			write ich, x;
+		}
+	}
+
+	spawn_sthread { 
+		forever { 
+ 			var x : int;
+			read_int (sock2, &x);
+			write ich, x;
+		}
+	}
+
+	forever {
+		var x:int;
+		read (ich, &x);
+		print x; endl;
+	}
+
+The two 'threads' spawned here are NOT pre-emptive threads.
+They're actually continuations, which are resumed by
+the underlying demux library notification mechanism
+starting them up again based on epoll/poll/kqueue/select etc.
+The interaction along the channel 'ich' is entirely synchronous.
+
+Ocaml can do this now using Event module .. but it only works
+across pthread boundaries.
+
+Strangely .. the Ocaml VM system does this stuff for the
+bytecode interpreter already, interleaving bytecode to
+emulate threads, and forwarding blocking operations
+so the emulated threads block .. but the actual pre-emptive
+thread (process) does not.
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

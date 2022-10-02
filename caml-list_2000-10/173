@@ -1,0 +1,141 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA23285 for caml-red; Thu, 26 Oct 2000 16:45:09 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA18470 for <caml-list@pauillac.inria.fr>; Thu, 26 Oct 2000 08:57:58 +0200 (MET DST)
+Received: from math.berkeley.edu (gold.Math.Berkeley.EDU [169.229.58.61])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id e9Q6vuv25158
+	for <caml-list@inria.fr>; Thu, 26 Oct 2000 08:57:57 +0200 (MET DST)
+Received: from yuban-c.math.berkeley.edu (blue1.Math.Berkeley.EDU [169.229.58.58])
+	by math.berkeley.edu (8.9.3/8.9.3) with ESMTP id XAA28212;
+	Wed, 25 Oct 2000 23:57:52 -0700 (PDT)
+Received: (from datta@localhost)
+	by yuban-c.math.berkeley.edu (8.9.3/8.9.3) id XAA07291;
+	Wed, 25 Oct 2000 23:57:38 -0700 (PDT)
+Date: Wed, 25 Oct 2000 23:57:38 -0700
+From: Ruchira Datta <datta@math.berkeley.edu>
+To: caml-list@inria.fr
+Subject: Why Not Tail-Recursive?
+Message-ID: <20001025235738.A7286@blue1.berkeley.edu>
+Reply-To: datta@math.berkeley.edu
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+Sender: weis@pauillac.inria.fr
+
+
+I am interested in the following problem: given a set of elements with
+weights, enumerate all subsets with a given total weight.  I wrote the
+function find_subsets_of_total_weight to do this in OCaml.  It works
+exactly as I expect on small inputs.  But on larger (not extremely large)
+inputs, I get a stack overflow.  
+
+The function deepen within find_subsets_of_total_weight originally had an
+accumulating parameter subsets, but I took that out in favor of printing
+out each subset as it was found, in case that was what was causing the
+stack to overflow.  Unfortunately it wasn't.  I have inserted and deleted
+print statements at numerous places, and in every case the function is
+doing as I expect right up until the stack overflows, or at least so
+it seems to me.  
+
+The only thing I can think of is that the functions deepen and next_path
+are not actually tail-recursive as I expected them to be.  But why not?  
+
+I have appended here the file weights.ml, which includes test data
+leading to a stack overflow on my OCaml system.  (Bonus points if you can
+guess where the test data came from.)  Any help anyone can give me with
+this problem would be greatly appreciated.  Thanks in advance.
+
+Ruchira Datta
+datta@math.berkeley.edu
+
+------------------------------weights.ml------------------------------
+let sort_elts_by_wgt all_elts wgt_fn =
+  let compare_wgt x y = compare (wgt_fn x) (wgt_fn y) in
+  List.sort ~cmp:compare_wgt all_elts
+
+exception Done
+
+(* invariant for next_path and deepen: 
+  weight_so_far is the sum of the weights of the elements marked true in
+  elts_so_far; also weight_so_far < desired_wgt *)
+(* next_path *cannot* be called to find the initial path *)
+(*
+The procedure print_fn is supposed to decode a list such as, e.g.,
+[ (elt0, true); (elt1, false); (elt2, false); (elt3, true) ] into
+the subset [ elt0; elt3 ] and print it out; it is purely side-effecting.
+*)
+
+let find_subsets_of_total_weight all_elts wgt_fn print_fn desired_wgt =
+  let elts_sorted_by_wgt = sort_elts_by_wgt all_elts wgt_fn in
+  let rec next_path ( elts_so_far, wgt_so_far, undecided_elts ) =
+    match elts_so_far with
+    | [] -> raise Done (* no paths left *)
+    | ( elt, true ) :: other_elts ->
+        let new_wgt = wgt_so_far -. wgt_fn elt in
+        ( ( elt, false ) :: other_elts, new_wgt, undecided_elts )
+    | ( elt, false ) :: other_elts ->
+        next_path ( other_elts, wgt_so_far, elt :: undecided_elts )
+  in
+  let rec deepen ( elts_so_far, wgt_so_far, undecided_elts ) =
+    try (
+      match undecided_elts with
+      | [] -> 
+        let new_path = next_path ( elts_so_far, wgt_so_far, undecided_elts ) 
+        in deepen new_path
+      | elt :: elts ->
+        let new_wgt = wgt_so_far +. wgt_fn elt in
+        if new_wgt < desired_wgt then
+          deepen ( ( ( elt, true ) :: elts_so_far ), new_wgt, elts )
+        else if new_wgt = desired_wgt then
+          let _ = print_fn ( ( elt, true ) :: elts_so_far ) in
+          deepen ( ( ( elt, false ) :: elts_so_far ), wgt_so_far, elts )
+        else (* new_wgt > desired_wgt *)
+          let new_path = next_path ( elts_so_far, wgt_so_far, undecided_elts ) 
+          in deepen new_path
+    ) with Done -> ()
+  in deepen ( [], 0., elts_sorted_by_wgt )
+
+let weights = [
+  ( "w0", 3.0 );
+  ( "w1", 4.0 );
+  ( "w2", 5.0 );
+  ( "w3", 5.0 );
+  ( "w4", 6.0 );
+  ( "w5", 10.0 );
+  ( "w6", 11.0 );
+  ( "w7", 11.0 );
+  ( "w8", 11.0 );
+  ( "w9", 18.0 );
+  ( "w10", 22.0 );
+  ( "w11", 23.0 );
+  ( "w12", 25.0 );
+  ( "w13", 54.0 );
+  ( "w14", 92.0 );
+  ( "w15", 238.0 )
+]
+
+let total =
+  let accum total_so_far wgt = total_so_far +. snd wgt in
+  List.fold_left ~f:accum ~init:0. weights
+
+let tie_num = float_of_int ( int_of_float total / 2 )
+
+let _ = 
+  let cout = open_out "tied_weights.txt" in
+  let print_elt ( name, weight ) =
+    let _ = Printf.fprintf cout "\t%s\t\t\t%d\n" name (int_of_float weight) 
+    in
+    ()
+  in
+  let print_path elts =
+    let _ = Printf.fprintf cout "Way:\n" in
+    let rec print_elts = function
+    | [] -> ()
+    | ( elt, true ) :: elts -> ( print_elt elt; print_elts elts )
+    | ( elt, false ) :: elts -> print_elts elts
+    in print_elts elts
+  in
+  try
+    find_subsets_of_total_weight weights snd print_path tie_num
+  with Stack_overflow -> (Printf.printf "Stack overflowed\n"; close_out cout);;
+
+

@@ -1,0 +1,124 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id B3AE6BC0B
+	for <caml-list@yquem.inria.fr>; Thu, 28 Dec 2006 07:18:10 +0100 (CET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kBS6I8Pw021467
+	for <caml-list@inria.fr>; Thu, 28 Dec 2006 07:18:09 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.7/8.13.7) with ESMTP id kBS6I5Bn019776;
+	Thu, 28 Dec 2006 15:18:05 +0900 (JST)
+Date: Thu, 28 Dec 2006 15:17:53 +0900 (JST)
+Message-Id: <20061228.151753.38663586.garrigue@math.nagoya-u.ac.jp>
+To: jyh@cs.caltech.edu
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Pure visitor patterns
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <DD63B67D-4F25-4DDE-8C08-213EED0A9BD7@cs.caltech.edu>
+References: <DD63B67D-4F25-4DDE-8C08-213EED0A9BD7@cs.caltech.edu>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 459361A0.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; foo:01 'self:01 foo:01 'self:01 escapes:01 'foo:01 'foo:01 recursive:01 recursive:01 scalable:01 bool:01 escapes:01 extensible:01 extensible:01 caml-list:01 
+
+From: Jason Hickey <jyh@cs.caltech.edu>
+
+> I've been trying to write pure visitors (visitors that compute without
+> side-effects).  The main change is that a visitor returns a value.
+> Here is a (failed) example specification based on having only one kind
+> of thing "foo".
+> 
+>      class type ['a] visitor =
+>        object ('self)
+>          method visit_foo : foo -> 'a
+>        end
+> 
+>      and foo =
+>        object ('self)
+>          method accept : 'a. 'a visitor -> 'a
+>          method examine : int
+>        end
+> 
+> This fails because the variable 'a escapes its scope in the method  
+> accept.
+> It can be fixed by breaking apart the mutual type definition.
+> 
+>      class type ['a, 'foo] visitor =
+>        object ('self)
+>          method visit_foo : 'foo -> 'a
+>        end
+> 
+>      class type foo =
+>        object ('self)
+>          method accept : 'a. ('a, foo) visitor -> 'a
+>          method examine : int
+>        end
+> 
+> The second form works, but it is hard to use because of the number
+> of type parameters needed for the visitor (in general).
+> 
+> Here are my questions:
+> 
+>     - Why does 'a escape its scope in the recursive definition?
+
+Because during recursive definitions parameters of these definitions
+are handled as monomorphic. So you cannot generalize the 'a locally.
+
+>     - Is there some other style that would solve this problem?
+
+Not really. Using private rows and recursive allow for some more
+expressiveness (in particular you can then define pure visitors on
+extensible on an extensible collection of classes), but they are a bit
+tricky to use in this context, so I'm not sure this is an improvement
+for simple cases.
+
+Another trick to make this pattern more scalable is to use constraints
+for parameters.
+
+class type ['a, 'cases] visitor =
+  object ('self)
+    constraint 'cases = <foo: 'foo; bar: 'bar; ..>
+    method visit_foo : 'foo -> 'a
+    method visit_bar : 'bar -> 'a
+  end
+class type foo =
+  object ('self)
+    method accept : 'a. ('a, cases) visitor -> 'a
+    method examine : int
+  end
+and bar =
+  object ('self)
+    method accept : 'a. ('a, cases) visitor -> 'a
+    method examine : bool
+  end
+and cases = object method foo : foo method bar : bar end
+
+> P.S. Here is an alternate scheme with non-polymorphic visitors, where
+> the returned value is just a visitor.  The accept method needs to
+> preserve the type, so this one also has the "escapes its scope"
+> problem.
+> 
+>      class type visitor =
+>        object ('self)
+>          method visit_foo : foo -> 'self
+>        end
+> 
+>      and foo =
+>        object ('self)
+>          method accept : 'a. (#visitor as 'a) -> 'a
+>        end
+>      ...
+
+Same reason: #visitor has an hidden type parameter, so it cannot be
+generalized in a mutually recursive definition.
+
+Jacques Garrigue
+

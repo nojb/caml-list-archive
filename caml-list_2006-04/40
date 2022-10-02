@@ -1,0 +1,134 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id A7880BC5B
+	for <caml-list@yquem.inria.fr>; Tue, 11 Apr 2006 11:00:19 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k3B1Pe90025592
+	for <caml-list@yquem.inria.fr>; Tue, 11 Apr 2006 03:25:40 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA18941 for <caml-list@pauillac.inria.fr>; Tue, 11 Apr 2006 03:25:39 +0200 (MET DST)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k3B1PbnM025588
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Tue, 11 Apr 2006 03:25:38 +0200
+Received: (qmail 14029 invoked by uid 107); 11 Apr 2006 01:25:35 -0000
+Received: from vwmetnet.metnet.navy.mil (192.16.167.21)
+  by selenite.metnet.navy.mil with SMTP; 11 Apr 2006 01:25:35 -0000
+Received: from Adric.metnet.navy.mil ([152.80.48.103])
+ by vwmetnet.metnet.navy.mil (NAVGW 2.5.2.9) with SMTP id M2006041101335731944
+ for <caml-list@inria.fr>; Tue, 11 Apr 2006 01:33:57 GMT
+Received: by Adric.metnet.navy.mil (Postfix, from userid 760)
+	id 5B1F5AC2A; Mon, 10 Apr 2006 18:25:29 -0700 (PDT)
+To: caml-list@inria.fr
+Subject: ANN: Dynamic binding library
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20060411012529.5B1F5AC2A@Adric.metnet.navy.mil>
+Date: Mon, 10 Apr 2006 18:25:29 -0700 (PDT)
+X-Miltered: at nez-perce with ID 443B0594.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 443B0591.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; oleg:01 ocaml:01 delimited:01 ocaml:01 val:01 val:01 mutation:01 mutable:01 bindings:01 stack:01 delimited:01 threads:01 bindings:01 mutation:01 rebinding:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.0.3
+
+
+Dynamic binding adds expressiveness; as Luc Moreau emphasized, it is,
+when used in moderation, quite useful: for parameterizing a function
+deep in the code without changing the interface of all callers; for
+propagating the environment information like the current working
+directory, printing-depth, etc.  Dynamic binding is inescapable in
+mobile code or continuation-based web servers. Dynamic binding, in
+some restricted form, is already present in OCaml: exception handlers
+are dynamically bound by the 'handle' form. This message announces the
+availability of general dynamic binding. This is joint work with
+Chung-chieh Shan and Amr Sabry.
+
+Dynamic binding is implemented as a regular library (dependent on the
+delimited continuations library announced earlier on this list).  No
+changes to the OCaml system and no code transformations are required;
+(parts of the) code that do not use dynamic variables incur no
+overhead and run at the same speed as before. Here's the interface:
+
+type 'a dynvar
+val dnew : unit -> 'a dynvar
+
+   Given a dynvar, a value and a thunk, evaluate the thunk in the dynamic
+   environment extended with the binding of the given value to the
+   given dynvar
+val dlet : 'a dynvar -> 'a -> (unit -> 'w) -> 'w
+
+   Dereferencing: obtain the value associated with the dynvar
+   by the closest dynamically-enclosing dlet
+val dref : 'a dynvar -> 'a
+
+   Mutation: obtain the current value of the dynvar and change that
+   value to the given one. This `mutation' has the effect only
+   within the dynamic scope of the latest dlet
+val dset : 'a dynvar -> 'a -> 'a
+
+   Given a dynvar and a function, apply the function to the current
+   value of the dynvar, and return the result. The application
+   is evaluated in the dynamic environment _outside_ of the
+   closest dynamically-enclosing dlet.
+val dupp : 'a dynvar -> ('a -> 'w) -> 'w
+
+
+Our dynamic variables are mutable (cf. fluid-variables in many Scheme
+systems); mutations however are visible only within the scope of the
+dlet statement where they occurred. Here's the simple example
+
+let test12 =
+  let p = dnew () in
+  dlet p 1 (fun () ->
+    let v1 = dref p in
+    let v2 = dlet p 2 (fun () ->
+      let v3 = dset p 12 in
+      let v4 = dref p in
+      (v3,v4)) in
+    let v5 = dref p in
+    (v1,v2,v5))
+
+which yields (1, (2, 12), 1). The function 'dupp' is an extension of
+the conventional dynamic binding. It lets us obtain not only the
+current binding to the dynamic variable, but any of the previous
+bindings as well. In general, we can fold over the execution stack as
+if it were a list (please see the 'nub' example in the test code
+below).
+
+Because dynamic binding is implemented in terms of delimited
+continuations, the two features harmoniously interact. We can use
+dynamic variables in shift-based, cooperative threads. At thread
+creation time, the user can `designate' some existing dynamic
+variables to be private to the thread; the rest are inherited from the
+parent. New dynamic variables and new bindings automatically become
+thread-private, so the above designation is accomplished with just
+dlet.  Mutation and rebinding of private dynamic variables have effect
+only in the corresponding thread. Mutations to shared variables are
+visible to everyone. Likewise, a re-parameterization of a dynamic
+variable in the parent thread is visible in all child threads sharing
+that variable. Such partial inheritance of dynamic environment among
+threads is an often desired feature; luckily, it is inherent in our
+design and thus available `for free'. The end of the test code
+vdynvar.ml demonstrates the partial inheritance among the parent and
+two cooperatively run threads.
+
+The implementation is surprisingly, short. In particular,
+
+let dref p      = shift p (fun f -> fun v -> f v v)
+let dset p newv = shift p (fun f -> fun v -> f v newv)
+let dupp p g    = shift p (fun f -> fun y -> f (g y) y)
+
+with dlet taking not much longer.
+
+	http://pobox.com/~oleg/ftp/ML/dynvar.mli
+	http://pobox.com/~oleg/ftp/ML/dynvar.ml
+The test code:
+	http://pobox.com/~oleg/ftp/ML/vdynvar.ml
+The dependency:
+   http://pobox.com/~oleg/ftp/Computation/Continuations.html#caml-shift
+
+

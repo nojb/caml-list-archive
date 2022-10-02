@@ -1,0 +1,190 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA23678; Fri, 21 Jun 2002 11:09:57 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA23744 for <caml-list@pauillac.inria.fr>; Fri, 21 Jun 2002 11:09:56 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g5L99sv28830
+	for <caml-list@inria.fr>; Fri, 21 Jun 2002 11:09:54 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id SAA23118
+	for <caml-list@inria.fr>; Fri, 21 Jun 2002 18:09:52 +0900 (JST)
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Marshalling objects (was: French interactive
+ fiction, anyone ?)
+In-Reply-To: <20020620233919K.garrigue@kurims.kyoto-u.ac.jp>
+References: <20020620140857P.garrigue@kurims.kyoto-u.ac.jp>
+	<20020620094147.A77@pauillac.inria.fr>
+	<20020620233919K.garrigue@kurims.kyoto-u.ac.jp>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020621180952Z.garrigue@kurims.kyoto-u.ac.jp>
+Date: Fri, 21 Jun 2002 18:09:52 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 157
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+I've made a patch for the CVS version which seems to work.
+(Note how this is stronger than "it works!")
+
+It solves all the issues evocated in previous mails:
+* let modules can change public method ids
+  (I checked, and could easily obtain a segfault; it's a bit hard to
+   trigger as you must have several compilation units)
+* oids not updated
+
+You can now marshal objects as data with closures, and both oids and
+method ids are properly handled.
+About sharing, well, inputed objects do not not share vtables with
+internally created objects, but they share between themselves if they
+are in a single data structure.
+
+To ouput an object: Marshal.to_channel oc o [Marshal.Closures]
+To input an object: input_value ic
+
+Why a patch? It doesn't look too dangerous (no typing implied), but
+I'm not sure whether it will go into CVS any time soon.
+
+Independent problem: CamlinternalOO doesn't seem thread-safe: if two
+threads create new objects simultaneously, how can we be sure that
+they will have different ids?
+
+Jacques Garrigue
+
+Index: byterun/extern.c
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/byterun/extern.c,v
+retrieving revision 1.41
+diff -u -r1.41 extern.c
+--- extern.c	2002/06/07 09:49:37	1.41
++++ extern.c	2002/06/21 08:50:38
+@@ -328,9 +328,11 @@
+     case Forward_tag:
+       v = Forward_val (v);
+       goto tailcall;
++/*
+     case Object_tag:
+       extern_invalid_argument("output_value: object value");
+       break;
++*/
+     case Custom_tag: {
+       unsigned long sz_32, sz_64;
+       char * ident = Custom_ops_val(v)->identifier;
+Index: byterun/intern.c
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/byterun/intern.c,v
+retrieving revision 1.48
+diff -u -r1.48 intern.c
+--- intern.c	2002/06/03 14:21:50	1.48
++++ intern.c	2002/06/21 08:50:38
+@@ -26,6 +26,7 @@
+ #include "mlvalues.h"
+ #include "misc.h"
+ #include "reverse.h"
++#include "callback.h"
+ 
+ static unsigned char * intern_src;
+ /* Reading pointer in block holding input data. */
+@@ -137,6 +138,22 @@
+         dest = (value *) (intern_dest + 1);
+         *intern_dest = Make_header(size, tag, intern_color);
+         intern_dest += 1 + size;
++        if (tag == Object_tag && size >= 2) {
++          static value *last_id = NULL;
++          value id0;
++          if (!last_id) {
++            last_id = caml_named_value ("CamlinternalOO.last_id");
++            if (!last_id)
++              fatal_error ("Cannot access CamlinternalOO.last_id from C");
++          }
++          id0 = Field(*last_id, 0);
++          Field(*last_id, 0) = id0 + 2; /* caml int */
++          intern_rec(dest++);
++          intern_rec(dest);
++          *dest++ = id0;
++          size = size - 2;
++          if (size == 0) return;
++        }
+         for(/*nothing*/; size > 1; size--, dest++)
+           intern_rec(dest);
+         goto tailcall;
+Index: stdlib/Makefile
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/stdlib/Makefile,v
+retrieving revision 1.74
+diff -u -r1.74 Makefile
+--- Makefile	2002/06/05 12:08:38	1.74
++++ Makefile	2002/06/21 08:50:39
+@@ -30,8 +30,8 @@
+   set.cmo map.cmo stack.cmo queue.cmo stream.cmo buffer.cmo \
+   printf.cmo format.cmo scanf.cmo \
+   arg.cmo printexc.cmo gc.cmo \
+-  digest.cmo random.cmo camlinternalOO.cmo oo.cmo \
+-  genlex.cmo callback.cmo weak.cmo \
++  digest.cmo random.cmo callback.cmo camlinternalOO.cmo oo.cmo \
++  genlex.cmo weak.cmo \
+   lazy.cmo filename.cmo int32.cmo int64.cmo nativeint.cmo complex.cmo
+ LABELLED=arrayLabels.ml listLabels.ml stringLabels.ml moreLabels.ml
+ 
+Index: stdlib/camlinternalOO.ml
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/stdlib/camlinternalOO.ml,v
+retrieving revision 1.1
+diff -u -r1.1 camlinternalOO.ml
+--- camlinternalOO.ml	2002/04/24 09:49:06	1.1
++++ camlinternalOO.ml	2002/06/21 08:50:39
+@@ -21,6 +21,9 @@
+ let new_id () =
+   let id = !last_id in incr last_id; id
+ 
++(* Used in intern.c *)
++let () = Callback.register "CamlinternalOO.last_id" last_id
++
+ let set_id o id =
+   let id0 = !id in
+   Array.unsafe_set (Obj.magic o : int array) 1 id0;
+@@ -57,6 +60,7 @@
+ let first_bucket = 0
+ let bucket_size = 32                    (* Must be 256 or less *)
+ let initial_object_size = 2
++let label_kinds = 2        (* Alternate public and private labels *)
+ 
+ (**** Index ****)
+ 
+@@ -67,8 +71,9 @@
+ let next label =
+   incr label_count;
+   let label = label + step in
++  (* alternate private and public buckets: skip one bucket here *)
+   if label mod (step * bucket_size) = 0 then
+-    label + step * (65536 - bucket_size)
++    label + step * (label_kinds * 65536 - bucket_size)
+   else
+     label
+ 
+@@ -219,8 +224,14 @@
+     Hashtbl.add methods met label;
+     label
+ 
+-let new_anonymous_method =
+-  new_label
++(* Private labels are numbered independently *)
++let first_private_label = first_label + 65536 * step
++let last_private_label = ref first_private_label
++
++let new_anonymous_method () =
++  let label = !last_private_label in
++  last_private_label := next !last_private_label;
++  label
+ 
+ (**** Types ****)
+ 
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

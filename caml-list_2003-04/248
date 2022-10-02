@@ -1,0 +1,71 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA31107; Wed, 16 Apr 2003 21:16:10 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA31289 for <caml-list@pauillac.inria.fr>; Wed, 16 Apr 2003 21:16:08 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h3GJG8X29236
+	for <caml-list@inria.fr>; Wed, 16 Apr 2003 21:16:08 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA31132 for caml-list@inria.fr; Wed, 16 Apr 2003 21:16:08 +0200 (MET DST)
+Date: Wed, 16 Apr 2003 21:16:07 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Inria Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] OCaml signal handlers (Sys.signal) and C code
+Message-ID: <20030416211607.B30839@pauillac.inria.fr>
+References: <20030404165616.GA17379@lordsoth.takhisis.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20030404165616.GA17379@lordsoth.takhisis.org>; from zack@bononia.it on Fri, Apr 04, 2003 at 06:56:16PM +0200
+X-Spam: no; 0.00; caml-list:01 callback:01 sigalrm:01 bug:01 allocations:01 stub:01 malloc:01 otherlibs:01 ocaml:01 caml:01 garbage:01 blocking:01 workaround:01 handler:01 behaviour:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> I've noticed that a callback registered using Sys.signal function for
+> the Sys.sigalrm signal isn't called while executing external C code.
+> 
+> The execution is delayed until the C code execution is over.
+> 
+> Is there any way to avoid this behaviour? (Actually the only solution I
+> see is to modify the C code so that handler is registered there, but I'm
+> working with an external library which is not under my own control)
+> 
+> Is this an intended behaviour or a bug?
+
+Very much intended behavior.  OCaml signal handlers can execute
+arbitrary Caml code, including heap allocations and garbage
+collections.  If they could be invoked at any time, e.g. in the middle
+of a garbage collection, disaster would ensue.
+
+However, there is one workaround for long-running pieces of C code
+that do not access the Caml heap: in the Caml/C stub code, wrap the
+call to the C function as follows:
+
+        enter_blocking_section();
+        /* call C functions */
+        leave_blocking_section();
+
+In the "blocking section" that is bracketed by the calls to
+enter_blocking_section() and leave_blocking_section(), signals will be
+honored immediately.  However, the C code executed inside the blocking
+section *must not* heap-allocate nor access the Caml heap in any way.
+In practice, this means that all conversions between Caml and C data
+structures must be done outside the blocking section:
+
+        /* extract arguments from Caml data, copying them to stack-allocated
+           blocks or malloc()-ed blocks */
+        enter_blocking_section();
+        /* call C functions */
+        leave_blocking_section();
+        /* convert C results to Caml data */
+
+For examples of use, you can look at the C stub codes in e.g. otherlibs/unix
+in the OCaml distribution.
+
+Hope this answers your question.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,92 @@
+Return-Path: <mshinwell@janestreet.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 7D962BC57
+	for <caml-list@yquem.inria.fr>; Fri,  9 Jul 2010 10:39:11 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuwBAIR9Nkwmachwl2dsb2JhbACgOBUBAQEBAQgVBzO+M4UnBIp6
+X-IronPort-AV: E=Sophos;i="4.53,562,1272837600"; 
+   d="scan'208";a="66078928"
+Received: from mx1.janestreet.com ([38.105.200.112])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 09 Jul 2010 10:39:10 +0200
+Received: from nyc-qsv-mail1.delacy.com ([172.25.22.57])
+	by mx1.janestreet.com with esmtp (Exim 4.71)
+	(envelope-from <mshinwell@janestreet.com>)
+	id 1OX96y-0006Gb-CL; Fri, 09 Jul 2010 04:39:08 -0400
+Received: from nyc-qsv-004.delacy.com ([172.25.22.194] helo=qsmtp.delacy.com)
+	by nyc-qsv-mail1.delacy.com with esmtps (TLSv1:AES256-SHA:256)
+	(Exim 4.71)
+	(envelope-from <mshinwell@janestreet.com>)
+	id 1OX96y-0000n0-AK; Fri, 09 Jul 2010 04:39:08 -0400
+Received: from ldn-qws-r01.delacy.com ([172.23.65.101] helo=ldn-qws-r01)
+	by qsmtp.delacy.com with smtp (Exim 4.71)
+	(envelope-from <mshinwell@janestreet.com>)
+	id 1OX96x-0005YW-5z; Fri, 09 Jul 2010 04:39:08 -0400
+Received: by ldn-qws-r01 (sSMTP sendmail emulation); Fri,  9 Jul 2010 09:39:06 +0100
+From: "Mark Shinwell" <mshinwell@janestreet.com>
+Date: Fri, 9 Jul 2010 09:39:06 +0100
+To: Michael Ekstrand <michael@elehack.net>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Native code stack overflow detection guarantees
+Message-ID: <20100709083906.GQ29068@janestreet.com>
+References: <i15s9k$e35$1@dough.gmane.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <i15s9k$e35$1@dough.gmane.org>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+X-Spam: no; 0.00; shinwell:01 userland:01 runtime:01 runtime:01 bug:01 segfault:01 segfault:01 recursive:01 computes:01 libc:01 libc:01 recursive:01 wholly:98 invoke:01 wrote:01 
+
+On Thu, Jul 08, 2010 at 08:59:30PM -0400, Michael Ekstrand wrote:
+> Therefore, I am wondering: are there documented guarantees on which the
+> native code stack overflow behavior rests?  Linux processes usually
+> receive a segmentation fault when they run out of stack space; is that
+> guaranteed, or is it simply the usual convenient behavior?  What about
+> for other systems?
+
+I am not an expert on all the various cases which might arise during a case of
+stack overflow, but I believe on Linux it is exposed to userland as a
+segmentation fault.  Exactly how this is exposed shouldn't be any different
+when executing Caml native-compiled code or C code, for example.  In terms of
+Caml-specific behaviour (and assuming that the user's code does not itself
+alter the signal handling behaviour) then the runtime should catch the stack
+overflow via the SIGSEGV handler.  The intuition behind what is supposed to
+happen next is as follows: if the faulting address was in the stack, and the
+program counter (PC) was "in your Caml program", then we produce a
+Stack_overflow exception.  Otherwise we will just invoke the default signal
+action for the segmentation fault, which on Linux will terminate the program.
+
+(There are lots of functions in the runtime which could cause a stack overflow
+in the case of a bug in their own code; and it would probably be bad if those
+ended up with a Stack_overflow exception rather than a segfault.  This seems to
+me to be at least one reason why you probably don't want to turn every segfault
+in the stack into a Stack_overflow exception; instead, we try to distinguish
+based on the PC.)
+
+Unfortunately, there isn't really any wholly satisfactory notion of "in your
+Caml program".  For example, you might end up getting close to blowing the
+stack in a recursive Caml function which just computes things without calling
+any library calls; and then you call a glibc function and hit the stack limit.
+Such a fault might morally be "in your code" even though the PC is pointing to
+somewhere inside libc.so.  Yet, you could also fail if you don't do any
+recursing at all in your Caml program, and happen to call a function in glibc
+which chooses to eat all the stack on Fridays only.  The symptom would be the
+same; the PC is still inside libc.so, except this time glibc is at fault.
+
+The approximation used by the runtime for "in your Caml program" is whether
+the PC lies within the compiled Caml code of your program.  Thus, in
+particular, if you get close to blowing the stack in your recursive function
+and then happen to fail inside the runtime function [compare], for example,
+it will not be reported as a Stack_overflow exception but rather a segfault.
+As such, you can't rely on exactly what will happen; from the outside this
+appears non-deterministic.
+
+A further complication is addressed in Mantis 4746, which notes that the
+address space randomization features of recent Linux kernels also has the
+potential to mess up the runtime's metrics for calculating whether the
+faulting address lies in the stack or not.  This can also affect, basically
+randomly, whether you get Stack_overflow or a segfault.
+
+Mark
+

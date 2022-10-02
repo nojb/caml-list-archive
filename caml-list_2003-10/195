@@ -1,0 +1,122 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA18499; Thu, 16 Oct 2003 16:01:29 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA11270 for <caml-list@pauillac.inria.fr>; Thu, 16 Oct 2003 16:01:27 +0200 (MET DST)
+Received: from granger.mail.mindspring.net (granger.mail.mindspring.net [207.69.200.148])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h9GE1Q118439;
+	Thu, 16 Oct 2003 16:01:26 +0200 (MET DST)
+Received: from user-0ccekej.cable.mindspring.com ([24.199.81.211] helo=minsky-primus.homeip.net)
+	by granger.mail.mindspring.net with smtp (Exim 3.33 #1)
+	id 1AA8gv-0002DA-00; Thu, 16 Oct 2003 10:01:25 -0400
+Received: from 141.155.88.179
+        (SquirrelMail authenticated user yminsky)
+        by minsky-primus.homeip.net with HTTP;
+        Thu, 16 Oct 2003 10:01:25 -0400 (EDT)
+Message-ID: <53116.141.155.88.179.1066312885.squirrel@minsky-primus.homeip.net>
+In-Reply-To: <20031016151658.A5633@pauillac.inria.fr>
+References: 
+    <51792.141.155.88.179.1066142234.squirrel@minsky-primus.homeip.net>
+    <20031016151658.A5633@pauillac.inria.fr>
+Date: Thu, 16 Oct 2003 10:01:25 -0400 (EDT)
+Subject: Re: [Caml-list] Weird behavior with nan's and min/max
+From: "Yaron Minsky" <yminsky@cs.cornell.edu>
+To: "Xavier Leroy" <xavier.leroy@inria.fr>
+Cc: caml-list@inria.fr
+User-Agent: SquirrelMail/1.4.2-1
+MIME-Version: 1.0
+Content-Type: text/plain;charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Priority: 3
+Importance: Normal
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 yaron:01 minsky:01 yminsky:01 cornell:01 bug:01 bug:01 floats:01 floats:01 val:01 faq:01 faq:01 beginner's:01 beginners:01 bin:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Your explanation matches my general understanding of the bug, and why it's
+hard to fix.  One thing that I think should be fixed, though, is the
+documentation.  This is really a surprising little bug, and it would be
+nice to have it mentioned in the documentation somewhere, perhaps as a
+footnote of sorts to the definition of equality.
+
+Here's a related question:  how to test if a float is nan efficiently?  I
+know two ways: seeing if it's not equal to itself, and using
+Pevasives.classify_float.  The performance difference is pretty
+interesting.  Here are the performance results I got for 100,000
+iterations.
+
+Time for classify nan : 0.001205 secs
+Time for classify norm: 0.001205 secs
+Time for eqtest nan   : 0.093635 secs
+Time for eqtest norm  : 0.000302 secs
+
+I'm quite surprised that the equality test is so slow on nan's.  Is this
+just a feature of x86 hardware?  Are there any other options for testing
+for nan-ness?
+
+y
+
+>> Now here's the weird bit.  I decided I wanted a polymorphic comparison
+>> that wouldn't have this problem.  But this is a little harder than it
+>> seems, since it turns out that specialized float version of equality is
+>> different from the polymorphic version.
+>
+> Yes, it's a long-standing bug for which we haven't yet a good
+> solution.  More exactly, there are two problematic solutions:
+>
+> 1- Fix polymorphic equality so that it behaves like IEEE equality on
+> floats,
+> i.e. it always returns false when one of its arguments is NaN.
+> The problem is that this breaks the implication
+>         x == y  imply  x = y
+> and thus the current implementation of polymorphic equality needs to
+> be made less efficient.  Currently, x = y starts by testing x == y
+> and returns true if the pointer equality holds.  But this could be the
+> wrong result according to the new specification, since x can contain
+> an NaN somewhere.  Hence, polymorphic equality would have to traverse
+> its two arguments even when they are physically the same.  The
+> performance impact of this change on real programs is unknown.
+>
+> 2- As J M Skaller proposed, change the behavior of polymorphic
+> equality and its version specialized to floats so that nan = nan
+> and nan <> x if x <> nan.  Similar changes need to be done on the
+> <>, <= and >= tests for consistency.  IEEE comparisons would then have to
+> be
+> provided as separate primitives.  This preserves the implication
+> x == y ==> x = y.  But the machine code generated for =, <>, <= and >=
+> over floats will have to be a lot less efficient than it is now, since
+> all processors implement float comparisons as per IEEE.
+>
+> Coming back to your proposed workaround:
+>
+>> # let raw_min = min
+>> val raw_min : 'a -> 'a -> 'a = <fun>
+>> # let min x y =
+>>   if not (y = y) then y
+>>   else if not (x = x) then x
+>>   else raw_min x y
+>> ;;
+>
+> A way to make this work would be to replace the "not (x = x)" tests
+> by calls to the following function (of type 'a -> bool):
+>
+> let is_obj_nan x =
+>   Obj.tag (Obj.repr x) = Obj.double_tag &&
+>   (let f = (Obj.magic x : float) in not (f = f))
+>
+> Not pretty, I agree.
+>
+> - Xavier Leroy
+>
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives:
+> http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ:
+> http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

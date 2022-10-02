@@ -1,0 +1,278 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA07408; Thu, 18 Apr 2002 01:50:09 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA07404 for <caml-list@pauillac.inria.fr>; Thu, 18 Apr 2002 01:50:08 +0200 (MET DST)
+Received: from vasquez.zip.com.au (vasquez.zip.com.au [203.12.97.41])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3HNo6X20449
+	for <caml-list@inria.fr>; Thu, 18 Apr 2002 01:50:06 +0200 (MET DST)
+Received: from ozemail.com.au (ppp248.dyn20.pacific.net.au [61.8.20.248])
+	by vasquez.zip.com.au (8.9.3/8.9.3/Debian 8.9.3-21) with ESMTP id JAA00875
+	for <caml-list@inria.fr>; Thu, 18 Apr 2002 09:49:53 +1000
+X-Authentication-Warning: vasquez.zip.com.au: Host ppp248.dyn20.pacific.net.au [61.8.20.248] claimed to be ozemail.com.au
+Message-ID: <3CBE0A20.9090508@ozemail.com.au>
+Date: Thu, 18 Apr 2002 09:49:52 +1000
+From: John Max Skaller <skaller@ozemail.com.au>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:0.9.2.1) Gecko/20010901
+X-Accept-Language: en-us
+MIME-Version: 1.0
+To: caml-list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Polymorphic variants
+References: <3CBD4523.6080707@ozemail.com.au> <87y9fmr4fo.dlv@wanadoo.fr>
+Content-Type: text/plain; charset=ISO-8859-15; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Remi VANICAT wrote:
+
+>John Max Skaller <skaller@ozemail.com.au> writes:
+>
+>>Unfortunately, this doesn't work out as well as I'd expected
+>>because of recursion:
+>>
+>>type a = [`A of a  | `B]
+>>type b = [`A of  b]
+>>
+>>The second type is a subtype of the first,
+>>but this fails:
+>>
+>>let f (x:a) =
+>>match x with
+>>  #b -> ()
+>>
+>>with the message:
+>>
+>>This pattern matches values of type [< b] = [< `A of b]
+>>but is here used to match values of type a = [ `A of a | `B];;
+>>
+>
+>the problem here is that you intended #b is a non fixed matching rule,
+>I mean, imagine you have :
+>
+>`A (`A ( `A ( `A ( `A ( `A `B)))))
+>
+>to check that this is not in #b, one have to look deep in the
+>structure of the value. 
+>
+Yes. But high level programming languages are *meant* to do
+high level things, aren't they?
+
+Here's another example that fails, which is very annoying:
+
+type a = [`A of e | `B]
+and e = [a  | `C]
+
+"The type constructor a is not yet completely defined"
+
+Arggg. Of course it isn't. It works just fine if I textually
+substitute:
+
+type a =[`A of e | `B]
+and e = [`A of e|`B|`C]
+
+Almost all interesting cases of variants (for compiler writers anyhow)
+involve type recursion. It shouldn't matter if the type is completely
+defined, only that the definition is finally completed :)
+
+BTW: I can't write  "t as x" in a type expression. Why not?
+I'm forced to name it in a type binding .. that means that inductive types,
+for example, can not be specified anonymously:
+
+  (Cons of list | Empty) as list
+
+Yeah, ocaml sum types are generative ... but the polymorphic
+variant equivalents are not .. so
+
+  [`Cons of list | `Empty] as list
+
+should work. [Can I use a 'constraint' here? I've never used
+a constraint before]
+
+>pattern matching only look at the firsts
+>levels of the structure. This must be done otherwise.
+>
+It doesn't "must" be done. I think you mean, there are advantages
+only handling the easy cases: easy to write the compiler,
+easy to optimise, easy for the end user to monitor
+code complexity .. and easy for the programmer to handle
+the more difficult cases manually ..
+
+> for example :
+>
+>type a = [`A of a | `B | `C]
+>type b = [`A of b | `C]
+>
+>let rec f (x:a) =
+>  match x with
+>  | `A x -> `A (f x)
+>  | `C -> `C
+>  | _ -> failwith "arg";;
+>
+
+The compiler doesn't know the type of x here,
+at least without looking at the usage (clearly, usage
+dictates type a). But the ambiguity could easily
+be resolved by the client with an annotation.
+
+>>
+>>No, I meant what I said! I can write both:
+>>
+>>`A 1
+>>
+>>and also
+>>
+>>`A 1.1
+>>
+>
+>No, you can't. the types informations are lost at runtime, so ocaml
+>will never be able to make the difference between the two.
+>
+I certainly can write them both:
+
+`A 1; `A 1.1;
+type int_t = [`A of int];
+type float_t = [`A of float];;
+
+No problem doing this. Perhaps there should be.
+The problem only manifests here:
+
+type num = [ int_t | float_t ]
+
+because the same constructor name has two different
+argument types. It is even possible to write a function
+that accepts both
+
+let f x = x
+
+happily accepts both :-)
+
+Now you say that the type information is lost at run time,
+but that is NOT immediately apparent from the documentation.
+Indeed, it need not be the case: the implementation *could*
+mangle the constructor name with the argument type
+so that
+
+  `A_int
+  `A_float
+
+are treated as distinct constructors. Then the following:
+
+fun x = match x with
+| `A a -> ..
+
+would give an error, since the compiler cannot know
+which `A it is, however the problem could easily be fixed
+by the user:
+
+| `A (a:int) ->
+
+now we know it is `A of int. Things "must be so"
+if they are a consequence of theory, but it isn't
+always evident which theory is used, and why that
+one is best :-)
+
+Perhaps one consequence of this is that the documentation
+needs to be more specific and have more examples:
+the author knowing the chosen theory and implementation
+believes only lightweight coverage is necessary, not seeing
+the many alternatives someone less involved might.
+
+For example, C++ objects DO have associated and accessible
+run time type information. I know Ocaml doesn't .. but there are
+other things I know less well, and there are C++ users
+coming to ocaml that might think pattern matching
+uses RTTI.
+
+To come back to the examples: the type
+
+[`A of int | `A of float | `B]
+
+is perfectly legitimate. The actual error is only on matching.
+If the client never matches on `A, there is no error:
+
+match x with | `B -> .. | _ -> ...
+
+this match would be OK, `A isn't refered to.
+It isn't clear why the compiler writer chose to allow
+any argument of `A, but disallows specifying a name for
+a type containing two distinct `A constructors instead
+of simply reporting an ambiguity on use: they're
+called "polymorphic variants" but they aren't actually polymorphic,
+at least in this sense :-)
+
+
+>
+>it's not type in pattern matching, it's pattern. It is not, at all,
+>the same thing, even if their is link between the two.
+>
+Sure, I know that. (Actually, the sum constructor tags really ARE
+run time type information, they tell which case of the sum
+is represented, and hence the type of the constructor argument)
+
+>
+>You should look to the mixin.ml file that can be found in testlabl
+>directories of the source distribution, it show how to make what you
+>seem to want.
+>
+The biggest problem I have with ocaml, is that while I can
+make anything I want, it is often not evident just what the
+compiler/language permits, and what it doesn't.
+
+This is particularly serious for me when it comes to modules:
+it just isn't clear to me what will work and what will not,
+and experiments here can be very time consuming and laborious.
+The ideas seem simple, but the syntax is sometimes quite arcane,
+and all sorts of restrictions that don't exist in the underlying
+basic category theory can bite you days into a project.
+
+To give a more concrete example: the first time I tried to
+use polymorphic variants, I lost a week and had to undo
+all my changes because I kept getting error messages I
+couldn't make head or tail of. I decided to try again
+when my project got even more complex, and I really needed
+stronger static typing, but didn't want to create a huge number
+of standard sum types and laboriously code the maps between
+them case by case .. not to mention the industrial requirement
+that every type have an associated print routine, for example.
+
+I pressed on despite the horrendous error messages,
+knowing that the transormation HAD to be totally
+mechanical in the first instance. [Replace A with `A ..]
+
+I lost another week due to a bug in Ocaml 3.02.
+It took a while to determine this really was a compiler bug
+matching polymorphic variants (3.01 worked fine,
+and so does 3.04).
+
+[My point is that it is very hard to proceed when you don't
+know if an error is a bug in your understanding, a bug
+in your implementation, or a bug in the compiler ..
+so it is safer to eliminate the first case by not using
+advanced features .. but if this argument were extended,
+it would be an argument for using C instead of ocaml...]
+
+Well, having looked at the English translation of the 
+Ocaml book by Emmanuel Chailloux, Pascal
+Manoury and Bruno Pagano, I think a big hole is going
+to be plugged. This book covers quite advanced topics,
+I might learn something here!
+
+Anyhow .. sadly, ocaml is such a wonderful language.
+I say sadly because I am unemployed and poor .. and
+just can't bring myself to work with C/C++ again.
+Its just too much of a step backwards, and I'm not
+enough of a diplomat to hide it from my fellow
+workers or employers (who still think OO and C++
+are wonderful, and Java is Gods own language ..)
+
+-- 
+John Max Skaller, mailto:skaller@ozemail.com.au
+snail:10/1 Toxteth Rd, Glebe, NSW 2037, Australia.
+voice:61-2-9660-0850
+
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

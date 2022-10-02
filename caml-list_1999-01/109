@@ -1,0 +1,103 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA15815 for caml-redistribution; Tue, 26 Jan 1999 18:45:52 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA12818 for <caml-list@pauillac.inria.fr>; Tue, 26 Jan 1999 16:01:00 +0100 (MET)
+Received: from kronstadt.transbay.net (ip55241.transbay.net [209.133.55.241])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id QAA22995
+	for <caml-list@inria.fr>; Tue, 26 Jan 1999 16:00:55 +0100 (MET)
+Received: (from itz@localhost)
+	by kronstadt.transbay.net (8.8.6/8.8.6) id WAA13077;
+	Mon, 25 Jan 1999 22:46:13 -0800
+Date: Mon, 25 Jan 1999 22:46:13 -0800
+Message-Id: <199901260646.WAA13077@kronstadt.transbay.net>
+From: Ian T Zimmerman <itz@transbay.net>
+To: caml-list@inria.fr
+In-reply-to: <19990126012435.21454@pauillac.inria.fr> (message from Xavier
+	Leroy on Tue, 26 Jan 1999 01:24:35 +0100)
+Subject: Re: Catching Break?
+Sender: weis
+
+> Date: Tue, 26 Jan 1999 01:24:35 +0100
+> From: Xavier Leroy <Xavier.Leroy@inria.fr>
+> X-Gnus-Article-Number: 93   Mon Jan 25 17:11:10 1999
+> 
+> > Why doesn't this work:
+> >  let main() =
+> >   Sys.catch_break true; try Unix.kill (Unix.getpid()) Sys.sigint
+> >   with Sys.Break -> prerr_endline "CAUGHT!"; exit 0
+> >  let _ = main()
+> >  This program just prints "Fatal error: Uncaught exception
+> > Sys.Break" as if the try block weren't there.  Am I overlooking
+> > something really obvious?
+
+>  No, it's fairly subtle, actually.  For various reasons related to
+> the Caml runtime system, signals in OCaml are not necessarily
+> handled at the program point where they are received: the signal
+> handler is called only at the next "safe" program point.
+>  In the case of the ocamlc bytecode interpreter, "safe" program
+> points are at function application and at the beginning of each loop
+> iteration.  So, in your example above, we leave the "try..with"
+> before the handler for the signal is called, and that handler thus
+> raises the Sys.Break exception outside of the "try..with".
+
+I understand the kind of consideration which leads to deferring the
+handler.  I may be in the middle of a garbage collection etc.
+
+>  If you add a function call after the Unix.kill, everything should
+> work as expected
+
+When I have read your mail I thought this would be trivial to work
+around.  But it isn't.  First it isn't that obvious what counts as
+a function application.  Given the functional nature of ML I'd like to
+say "everything".  But then I start to have doubts.  What about basic
+arithmetic operators for instance?
+
+let suicide() =
+    Unix.kill (Unix.getpid()) Sys.sigint
+
+let suicidal = try 
+    begin suicide(); ~-1 end
+with Sys.break -> 0
+
+Or how about an assertion?  Is "assert" just a core library symbol, or
+a keyword?
+
+let suicidal = try
+    begin suicide(); assert true end
+with Sys.break -> ()
+
+Finally, and more seriously, this is just a toy example.  In my real
+program, I need to return a _value_ from the expression that
+corresponds to suicide().  I tried
+
+let suicide() =
+    begin Unix.kill (Unix.getpid()) Sys.sigint; 1 end
+
+let id x = x
+
+let suicidal = try
+    (suicide(), id 0)
+with Sys.break -> (0, 0)
+
+
+and then
+
+let suicidal = try
+    id (suicide())
+with Sys.break -> 0
+
+
+Neither works the way I need, although in both cases there is (in my
+naive opinion) a function application between the signal and the end
+of the try block.
+
+Do I really have to use _sequencing_ to force a `safe point'?  That
+throws away the value from suicide(), so I'll have to invent a
+reference to assign to - eeek!
+
+-- 
+Ian T Zimmerman                        <itz@transbay.net>
+I came to the conclusion that what was wrong about the guillotine
+was that the condemned man had no chance at all, absolutely none.
+Albert Camus, _The Outsider_
+
+
+

@@ -1,0 +1,111 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id D6F3781792
+	for <caml-list@sympa.inria.fr>; Mon,  1 Jul 2013 16:47:32 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.213;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.213;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.213;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao0BAICU0VHB/BfVcmdsb2JhbABaDoMuvHeCaoESDgEKCgwJFAMlgiMBAQUnEUARCxgJFg8JAwIBAgFFBgEMCAEBiA+7eI9lg2cDl0iGIY13QA
+X-IPAS-Result: Ao0BAICU0VHB/BfVcmdsb2JhbABaDoMuvHeCaoESDgEKCgwJFAMlgiMBAQUnEUARCxgJFg8JAwIBAgFFBgEMCAEBiA+7eI9lg2cDl0iGIY13QA
+X-IronPort-AV: E=Sophos;i="4.87,974,1363129200"; 
+   d="scan'208";a="19620782"
+Received: from msa04.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.213])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 01 Jul 2013 16:47:32 +0200
+Received: from [192.168.1.116] ([92.151.39.25])
+	by mwinf5d68 with ME
+	id v2nU1l00T0YZpAs032nVQQ; Mon, 01 Jul 2013 16:47:31 +0200
+Message-ID: <51D19680.4060609@frisch.fr>
+Date: Mon, 01 Jul 2013 16:47:28 +0200
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:22.0) Gecko/20100101 Thunderbird/22.0
+MIME-Version: 1.0
+To: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>, 
+ OCaML List Mailing <caml-list@inria.fr>
+References: <00C57DF0-C6F0-4EDE-8607-2155F3A17146@math.nagoya-u.ac.jp>
+In-Reply-To: <00C57DF0-C6F0-4EDE-8607-2155F3A17146@math.nagoya-u.ac.jp>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Request for feedback: A problem with injectivity
+ and GADTs
+
+On 04/28/2013 02:02 AM, Jacques Garrigue wrote:
+> The fix is simple enough: we should track injectivity, and assume that abstract
+> types are not injective by default.
+> However, this also means that the first type I defined above (using Hashtbl.t)
+> will be refused.
+>
+> How many of you are using GADTs in this way, and how dependent are you on
+> abstract types ?
+
+FWIW, it turns out that we have very recently introduced such a case 
+(and I realized it while synchronizing our version of OCaml with the trunk).
+
+We used to have a functor with this signature:
+
+module ABSTRACT_1_MATCHER (T : sig type 'a t val t: unit t ttype end) :
+     sig
+       module type S = sig
+         type s
+         type t
+         val t: t ttype
+         val eq: (s, t T.t) TypEq.t
+       end
+       val check: 'a ttype -> (module S with type s = 'a) option
+     end
+
+ttype is our type representing type structures at runtime.  The functors 
+returns a function that checks if a given runtime type represents an 
+instance of an unary abstract type constructor passed in argument to the 
+functor (the functors check that this is indeed an abstract type).   In 
+case of success, the function returns the ttype of the type constructor 
+argument.  The existential is encoded with a first-class module and the 
+type-equality is encoded in the classical way (('a, 'b) TypEq.t 
+witnesses the equality of 'a and 'b:  type (_, _) t = Eq: ('a, 'a) t).
+
+A GADT was recently introduced to replace this with a more direct 
+representation:
+
+module ABSTRACT_1_MATCHER (T : sig type 'a t val t: unit t ttype end) :
+     sig
+       type _ is_t = Is: 'a ttype -> 'a T.t is_t
+       val check: 'a ttype -> 'a is_t option
+     end
+
+The problem is that this doesn't work any more (because T.t is not 
+injective).
+
+For now, I think I'll use:
+
+
+module ABSTRACT_1_MATCHER (T : sig type 'a t val t: unit t ttype end) :
+     sig
+       type _ is_t = Is: 'b ttype * ('a, 'b T.t) TypEq.t -> 'a is_t
+       val is_t: 'a ttype -> 'a is_t option
+     end
+
+
+which is accepted and roughly equivalent (by opening the equality 
+witness, one can retrieve the static equality 'a == 'b T.t).
+
+
+Alain

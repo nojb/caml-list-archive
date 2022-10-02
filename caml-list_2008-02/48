@@ -1,0 +1,107 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 12EFDBC6C
+	for <caml-list@yquem.inria.fr>; Mon,  4 Feb 2008 11:58:44 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ah4FAIZ+pkfUnw7VhWdsb2JhbACCNo1zAQEBCAQGBwgTB5oQ
+X-IronPort-AV: E=Sophos;i="4.25,302,1199660400"; 
+   d="scan'208";a="22148271"
+Received: from ptb-relay02.plus.net ([212.159.14.213])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 04 Feb 2008 11:58:43 +0100
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1JLz2A-00048W-BC; Mon, 04 Feb 2008 10:58:42 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: Alain Frisch <alain@frisch.fr>
+Subject: Re: [Caml-list] Using OCaml's run-time from LLVM-generated native code
+Date: Mon, 4 Feb 2008 10:32:05 +0000
+User-Agent: KMail/1.9.7
+Cc: caml-list <caml-list@yquem.inria.fr>
+References: <200802012124.56835.jon@ffconsultancy.com> <200802032319.15846.jon@ffconsultancy.com> <47A6B8B5.9010907@frisch.fr>
+In-Reply-To: <47A6B8B5.9010907@frisch.fr>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200802041032.05929.jon@ffconsultancy.com>
+X-Plusnet-Relay: 30e73d340d0dea656e9c309fdd80fe15
+X-Spam: no; 0.00; ocaml's:01 run-time:01 frisch:01 ocaml's:01 pointer:01 ocaml:01 runtime:01 ocaml:01 camlparam:01 stdio:01 mlvalues:01 alloc:01 intext:01 extern:01 camlprim:01 
+
+On Monday 04 February 2008 07:03:17 Alain Frisch wrote:
+> Jon Harrop wrote:
+> > How does OCaml's stack walker work with C code, for example? In
+> > particular, how does it know what is a pointer into the heap from a C
+> > stack frame? Must it be explicitly disabled?
+>
+> The OCaml runtime does not scan the stack frames corresponding to C
+> functions.
+
+How does it know which stack frames correspond to C functions?
+
+> Jon, it is somewhat weird that you spend so much time writing about
+> forking OCaml and do not take a few minutes to read the source code. The
+> macros CAMLparam*, CAMLlocal* are not really that mysterious.
+
+Despite the availability of that code it seems that few people can use it 
+correctly and I am one of them.
+
+This seems to work even though it calls full_major aggressively:
+
+#include <stdio.h>
+#include <string.h>
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/memory.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+#include <caml/custom.h>
+#include <caml/intext.h>
+
+extern value caml_gc_full_major(value v);
+
+CAMLprim value fib(value nv) {
+  CAMLparam1(nv);
+  CAMLlocal5(a, b, c, d, e);
+  int64 n = Int64_val(nv);
+  if (n < 2) CAMLreturn(nv);
+  a = copy_int64(n-1);
+  b = copy_int64(n-2);
+  c = fib(a);
+  d = fib(b);
+  e = copy_int64(Int64_val(c) + Int64_val(d));
+  caml_gc_full_major(0);
+  CAMLreturn(e);
+}
+
+int apply(int n) {
+  CAMLlocal2(nv, fibn);
+  nv = copy_int64(n);
+  fibn = fib(nv);
+  caml_gc_full_major(0);
+  return Int64_val(fib(nv));
+}
+
+int main(int argc, char* argv[]) {
+  caml_main(argv);
+  printf("%d\n", apply(argc == 2 ? atoi(argv[1]) : 10));
+  return 0;
+}
+
+Is that correct code?
+
+Rather than messing around with these macros in each and every function it is 
+probably easier and more efficient to register a single global root at entry, 
+pointing to a shadow stack and push and pop elements to and from that 
+directly.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/products/?e
+

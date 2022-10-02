@@ -1,0 +1,86 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA09214; Tue, 27 Jul 2004 09:22:16 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA12407 for <caml-list@pauillac.inria.fr>; Tue, 27 Jul 2004 09:22:15 +0200 (MET DST)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i6R7MEEV014159
+	for <caml-list@inria.fr>; Tue, 27 Jul 2004 09:22:15 +0200
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.12.11/1.01.28121999) with ESMTP id i6R7MEHJ021941
+          ; Tue, 27 Jul 2004 09:22:14 +0200 (CEST)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.12.3/jb-1.1)
+	id i6R7MC9x020652 ; Tue, 27 Jul 2004 09:22:13 +0200 (MET DST)
+X-Authentication-Warning: clipper.ens.fr: frisch owned process doing -bs
+Date: Tue, 27 Jul 2004 09:22:12 +0200 (MET DST)
+From: Alain Frisch <Alain.Frisch@ens.fr>
+X-X-Sender: frisch@clipper.ens.fr
+Reply-To: Alain Frisch <Alain.Frisch@ens.fr>
+To: "Hawkins, Thomas" <thomas.d.hawkins@medtronic.com>
+cc: Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Undefined_recursive_module
+In-Reply-To: <CC62E8B84E918E438D0BA094D9AF417903D5E3D2@MSPM1BMSGM12.ent.core.medtronic.com>
+Message-ID: <Pine.SOL.4.44.0407270908100.5262-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavisd-milter (http://amavis.org/)
+X-Greylist: Sender IP whitelisted, not delayed by milter-greylist-1.3.3 (nef.ens.fr [129.199.96.32]); Tue, 27 Jul 2004 09:22:14 +0200 (CEST)
+X-Miltered: at nez-perce with ID 410602A6.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; alain:01 frisch:01 alain:01 frisch:01 caml-list:01 snag:01 functor:01 functor:01 recursion:01 unsound:01 coercions:01 reordering:01 fragile:01 eta-expand:01 indirection:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, 26 Jul 2004, Hawkins, Thomas wrote:
+
+> I just started experimenting with recursive modules, but have hit a snag
+> with Undefined_recursive_module.
+>
+> Basically I need to define an ADT where the data structure contains Sets
+> and the Set elements reference back to the data structure.  In the
+> following example, the mutually recursive modules include the main data
+> structure (Process), an ordered type (Files), and a set (FileSet
+> returned from the Set functor). Both the Process and the File modules
+> define only function values, therefore I believe the example satisfies
+> the "safe module" requirement.  It does compile and run for one case
+> (see does_work).  However, if I make multiple calls to Process.add_file,
+> Undefined_recursive_module is raised (see does_not_work).
+>
+> Any suggestions?  (I'm using 3.08.0)
+
+I guess the problem is that when you apply the functor Set.Make, OCaml has
+to perform a coercion on the argument (File) to create a structure of the
+expected type (OrderedSet). This coercion copies the fields from the yet
+uninitialized File structure (dummy slots). The fields in File are
+eventually filled up to close the recursion loop, but the copy, used by
+Set.Make implementation, is left untouched, hence the problem.
+
+This very example would probably have worked correctly with OCaml 3.07,
+because an optimization was then used to avoid the coercion when it was
+only a prefix-extraction of the structure (it was then replaced by the
+identity), but it seems this optimization is unsound with recursive
+modules. Now, it's very difficult to avoid coercions (a simple reordering
+of the fields requires a coercion), and so the technique of using
+recursive modules to define a type t and the type of t sets is rather
+fragile.
+
+(The reason why a single call does not produce the error is that you
+don't need to call File.compare for the first call to FileSet.add.)
+
+
+I faced the same problem. The solution I choosed was to eta-expand
+the argument of the functor (yet another instance of the "We can solve any
+problem by introducing an extra level of indirection" theorem):
+
+In your example, you can replace Set.Make(File) by:
+
+  Set.Make(struct type t = File.t let compare x = File.compare x end)
+
+
+Hope this helps,
+
+
+ Alain
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,164 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 44B1FBC0B
+	for <caml-list@yquem.inria.fr>; Fri, 29 Dec 2006 03:09:30 +0100 (CET)
+Received: from ptb-relay02.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kBT29Tlt014508
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Fri, 29 Dec 2006 03:09:30 +0100
+Received: from [80.229.56.224] (helo=[10.0.0.5])
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1H07BZ-0002dR-4L
+	for caml-list@yquem.inria.fr; Fri, 29 Dec 2006 02:09:29 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Question on writing efficient Ocaml.
+Date: Fri, 29 Dec 2006 02:07:18 +0000
+User-Agent: KMail/1.9.5
+References: <BAY114-F190B1A8C554A52013E63ECA9C70@phx.gbl>
+In-Reply-To: <BAY114-F190B1A8C554A52013E63ECA9C70@phx.gbl>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-15"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200612290207.19141.jon@ffconsultancy.com>
+X-Miltered: at concorde with ID 459478D9.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 ocaml:01 verbose:01 unboxing:01 iter:01 flatten:01 argv:01 generality:01 polymorphism:01 optimising:01 generality:01 iter:01 frog:98 polymorphic:01 wrote:01 
+
+On Thursday 28 December 2006 11:42, Ian Oversby wrote:
+> I've written some Ocaml code to solve the problem of placing 8 queens on a
+> board so that none of them attack each-other.
+
+Your program is very verbose: many times longer than is necessary. Most of 
+this verbosity can be attributed to performing various boxing, unboxing and 
+allocation tasks that are superfluous and simply slow the code down. However, 
+profiling suggests that you're also using a different algorithm in OCaml as 
+the core functions are called many more times in the OCaml than in the C++.
+
+Contrast your code with a minimal program to solve the n-queens problem in 
+OCaml:
+
+let rec unthreatened (x1, y1) (x2, y2) =
+  x1 <> x2 && y1 <> y2 && x2 - x1 <> y2 - y1 && x1 - y2 <> x2 - y1;;
+
+let rec search n f qs ps =
+  if length qs = n then f qs else
+    iter (fun q -> search n f (q::qs) (filter (unthreatened q) ps)) ps;;
+
+let ps = rev (flatten (init n (fun i -> init n (fun j -> i, j))))
+search n f [] ps
+
+This program starts with a list of all board positions "ps" and simply filters 
+out threatened positions as queens are added. Performance is poor compared to 
+your C++:
+
+0.625s C++ (130 LOC)
+4.466s OCaml (28 LOC)
+
+My first solution is written for brevity and not performance so it is still 3x 
+slower than the C++:
+
+The core of the program is just this:
+
+open List;;
+
+let print_board n queens =
+  for y=0 to n-1 do
+    for x=0 to n-1 do
+      print_string (if mem (x, y) queens then "Q" else ".")
+    done;
+    print_newline()
+  done;
+  print_newline();;
+
+let rec fold_n2 f accu x y n =
+  if y=n then accu else
+    if x=n then fold_n2 f accu 0 (y + 1) n else
+      fold_n2 f (f accu x y) (x + 1) y n;;
+
+let unthreatened (x1, y1) (x2, y2) =
+  x1 <> x2 && y1 <> y2 && x2 - x1 <> y2 - y1 && x1 - y2 <> x2 - y1;;
+
+let rec search n f queens () x y =
+  if for_all (unthreatened (x, y)) queens then
+    if length queens = n - 1 then f ((x, y) :: queens) else
+      fold_n2 (search n f ((x, y) :: queens)) () (x + 1) y n;;
+
+then I wrote this to search once and print and then search a given number of 
+times (for benchmarking):
+
+exception Queens of (int * int) list;;
+
+let _ =
+  let n = 8 in
+  let f qs = raise (Queens qs) in
+  (try search n f [] () 0 0 with Queens qs -> print_board n qs);
+  match Sys.argv with
+  | [|_; reps|] ->
+      for rep=2 to int_of_string reps do
+	try search n (fun _ -> raise Exit) [] () 0 0 with Exit -> ()
+      done
+  | _ -> ()
+
+The "fold_n2" and "search" functions are both polymorphic folds. The former 
+folds over a square array and the latter folds over all solutions to the 
+n-queens problem. The generality of the "search" function is not used in this 
+case, as I just print the first solution found and bail using an exception.
+
+On my machine, 1000 solutions takes:
+
+0.625s C++ (130 LOC)
+1.764s OCaml (30 LOC)
+
+So OCaml is >4x more concise but 2.8x slower than C++.
+
+Profiling shows that a lot of time is spent in List.for_all. We can roll this 
+ourselves to remove some polymorphism and improve performance:
+
+let rec unthreatened x1 y1 = function
+  | (x2, y2) :: t ->
+      x1 <> x2 && y1 <> y2 && x2 - x1 <> y2 - y1 && x1 - y2 <> x2 - y1 &&
+	unthreatened x1 y1 t
+  | [] -> true;;
+
+let rec search n f queens () x y =
+  if unthreatened x y queens then
+    if length queens = n - 1 then f ((x, y) :: queens) else
+      fold_n2 (search n f ((x, y) :: queens)) () (x + 1) y n;;
+
+This gets the time down to:
+
+1.159s OCaml (33 LOC)
+
+We can continue optimising by removing some generality. Let's turn the "fold" 
+into an "iter" so that "search" becomes monomorphic:
+
+let rec iter_n2 f x y n =
+  if y<n then
+    if x=n then iter_n2 f 0 (y + 1) n else
+      (f x y;
+       iter_n2 f (x + 1) y n);;
+
+let rec search n f queens x y =
+  if unthreatened x y queens then
+    if length queens = n - 1 then f ((x, y) :: queens) else
+      iter_n2 (search n f ((x, y) :: queens)) (x + 1) y n;;
+
+Performance is improved even more, at the cost of generality.
+
+0.827s OCaml (34 LOC)
+
+So OCaml is now only 30% slower whilst still being ~4x more concise.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+Objective CAML for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists
+

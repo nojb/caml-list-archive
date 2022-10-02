@@ -1,0 +1,235 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA06483; Sat, 15 Jun 2002 21:21:33 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA06464 for <caml-list@pauillac.inria.fr>; Sat, 15 Jun 2002 21:21:32 +0200 (MET DST)
+Received: from ntlg.sibnet.ru (dns.sibnet.ru [217.70.96.34])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g5FJIwP01426
+	for <caml-list@inria.fr>; Sat, 15 Jun 2002 21:19:30 +0200 (MET DST)
+Received: from sibnet.ru (tlg5-ppp23.sibnet.ru [217.70.97.24])
+	by ntlg.sibnet.ru (8.9.3+Sun/8.9.3) with ESMTP id XAA01190
+	for <caml-list@inria.fr>; Sat, 15 Jun 2002 23:18:42 +0400 (MSD)
+Received: by sibnet.ru id m17JJ4g-001En5C; Sun, 16 Jun 2002 02:19:02 +0700 (NOVST)
+Date: Sun, 16 Jun 2002 02:19:02 +0700
+From: Max Kirillov <max630@mail.ru>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] static variables in a function
+Message-ID: <20020616021902.A22564@max.home>
+Mail-Followup-To: caml-list@inria.fr
+References: <20020614170830.28193.qmail@web10705.mail.yahoo.com> <vfiznxxagiy.fsf@harp.is.s.u-tokyo.ac.jp> <20020615114201.B1425@max.home> <864rg5oxpo.fsf@laurelin.dementia.org> <20020615215124.C1425@max.home> <86y9dgo6y6.fsf@laurelin.dementia.org>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="r5Pyd7+fXNt84Ff3"
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+In-Reply-To: <86y9dgo6y6.fsf@laurelin.dementia.org>; from j.prevost@cs.cmu.edu on Sat, Jun 15, 2002 at 12:14:09PM -0400
+X-Sender: Max <max@ppp.sibnet.ru>
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--r5Pyd7+fXNt84Ff3
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+On Sat, Jun 15, 2002 at 12:14:09PM -0400, John Prevost wrote:
+<...>
+> If we change our focus, howeverm the technique becomes more
+> interesting.  Take a look at this, for example:
+<...>
+> let memoize f =
+
+Hmm... this isn't executed at read time because function has
+a parameter...
+
+>   let stow = Hashtbl.create 20 in
+>   fun x -> begin
+>     if not (Hashtbl.mem stow x) then begin
+>       try (let v = f x in Hashtbl.replace stow x (Val v))
+>         with e -> Hashtbl.replace stow x (Exn e)
+>      end;
+>     match Hashtbl.find stow x with
+>       | Val x -> x
+>       | Exn e -> raise e
+>   end
+<...>
+> let rec fib_r2 x =
+>   memoize (fib' fib_r2) x
+
+The function memoize (and even "memoize (fib' fib_r2)" with
+a variable first parameter) as called at every recursion
+step and therefore no caching will be performed. (I've
+tested it).
+
+The working way is:
+
+let fib_r3 = memoize fib_r1
+
+which is, btw, very similar to
+
+let fib_r3 = new memoize fib_r1
+
+> In this case, the whole point of the function is that it produces a
+> function identical in every way to the original function, except that
+> it memoizes its work so as not to repeat.  There's no convenient
+> "object" to stuff the value into, because the function *is* our
+> object.  The only way we can store the data correctly is to have the
+> information somehow attached to the function we're creating.
+
+Well, OO-biased programmer would say it's a good reson to
+_make_ an object with only one exported method. Nearly any
+programmer would say that we should make an object to
+provide additional control, say, to clear the cache.
+
+I've played with it a bit, and discover that there are many
+ways to do the job. Three files attached contains three ways
+of doing the same things via function returned from
+initialization func (accPart.ml), commonly known OO-patterns
+(accClass.ml) and modules system (accMod.ml). Tha task is to
+remember a function and initial value, then sending operands
+for successive applications of function.
+
+To allow several "methods" to deal with data object we must
+return several function, not just one. Moreover, we cannot
+use inheritance, as we can with classes.
+
+accMod.ml discovers generally the same features as
+accClass.ml, but contains a bit more verbose writing. Maybe,
+modules is not a good way to contain persistent mutable
+value.
+
+Max.
+
+PS: maybe in version2 one could use record with labelled
+things, to make it a bit nicer.
+
+--r5Pyd7+fXNt84Ff3
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="accPart.ml"
+
+let p s n = print_string (s^string_of_int n^"\n"); flush stdout
+
+(*version 1*)
+let acc f init =
+    let vR = ref init in
+    let fApp x =
+	let newX = f !vR x in
+	vR := newX;
+	newX in
+    fApp
+
+let f1 = acc (+) 0
+
+let _ = p "f1:" (f1 1)
+let _ = p "f1:" (f1 1)
+let _ = p "f1:" (f1 1)
+
+(*version 2*)
+let acc' f init =
+    let vR = ref init in
+    let fApp x =
+	let newX = f !vR x in
+	vR := newX;
+	newX
+    and fIni x = (vR := x) in
+    (fApp,fIni)
+
+let (f1a,f1i) = acc' (+) 0
+
+let _ = p "f1a:" (f1a 1)
+let _ = p "f1a:" (f1a 1)
+let _ = p "f1a:" (f1a 1)
+let _ = f1i (-5)
+let _ = p "f1a:" (f1a 1)
+let _ = p "f1a:" (f1a 1)
+let _ = p "f1a:" (f1a 1)
+
+--r5Pyd7+fXNt84Ff3
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="accClass.ml"
+
+let p s n = print_string (s^string_of_int n^"\n"); flush stdout
+
+(*version 1*)
+class ['a,'b] acc f init = object
+    val mutable v = (init:'a)
+    val func = (f:'a -> 'b -> 'a)
+    method app x =
+	let newX = func v x in
+	v <- newX;newX
+end
+
+let f1 = new acc (+) 0
+
+let _ = p "f1:" (f1#app 1)
+let _ = p "f1:" (f1#app 1)
+let _ = p "f1:" (f1#app 1)
+
+(*version 2*)
+class ['a,'b] acc' f init = object
+    inherit ['a,'b] acc f init
+    method init x = v <- x
+end
+
+let f2 = new acc' (+) 0
+
+let _ = p "f2:" (f2#app 1)
+let _ = p "f2:" (f2#app 1)
+let _ = p "f2:" (f2#app 1)
+let _ = f2#init (-5)
+let _ = p "f2:" (f2#app 1)
+let _ = p "f2:" (f2#app 1)
+let _ = p "f2:" (f2#app 1)
+
+--r5Pyd7+fXNt84Ff3
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="accMod.ml"
+
+let p s n = print_string (s^string_of_int n^"\n"); flush stdout
+
+module type AccArgT = sig
+    type t and t1
+    val init: t
+    val f: t -> t1 -> t
+end
+
+module AccArgInt(I:sig val init:int val f:int->int->int end) = struct
+    type t = int and t1 = int
+    let init = I.init and f = I.f
+end
+
+(*version 1*)
+module Acc(T:AccArgT) = struct
+    let vR = ref T.init
+    let func = T.f
+    let app x =
+	let newX = func !vR x in
+	vR := newX;newX
+end
+
+module F1 = Acc(AccArgInt(struct let init = 0 and f = (+) end))
+
+let _ = p "f1:" (F1.app 1)
+let _ = p "f1:" (F1.app 1)
+let _ = p "f1:" (F1.app 1)
+
+(*version 2*)
+module Acc1(T:AccArgT) = struct
+    module A = Acc(T)
+    include A
+    let init x = vR:=x
+end
+
+module F2 = Acc1(AccArgInt(struct let init = 0 and f = (+) end))
+
+let _ = p "f2:" (F2.app 1)
+let _ = p "f2:" (F2.app 1)
+let _ = p "f2:" (F2.app 1)
+let _ = F2.init (-5)
+let _ = p "f2:" (F2.app 1)
+let _ = p "f2:" (F2.app 1)
+let _ = p "f2:" (F2.app 1)
+
+--r5Pyd7+fXNt84Ff3--
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

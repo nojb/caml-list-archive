@@ -1,0 +1,141 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA19183 for caml-red; Wed, 7 Feb 2001 22:44:08 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA14921 for <weis@pauillac.inria.fr>; Wed, 7 Feb 2001 02:32:14 +0100 (MET)
+Received: from localhost.localdomain (jimbo52.zip.com.au [202.7.88.52])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f171WA922815;
+	Wed, 7 Feb 2001 02:32:11 +0100 (MET)
+Received: from ozemail.com.au (IDENT:root@localhost [127.0.0.1])
+	by localhost.localdomain (8.9.3/8.8.7) with ESMTP id MAA12948;
+	Wed, 7 Feb 2001 12:29:00 +1100
+Message-ID: <3A80A4DB.E3CA3FA9@ozemail.com.au>
+Date: Wed, 07 Feb 2001 12:28:59 +1100
+From: John Max Skaller <skaller@ozemail.com.au>
+X-Mailer: Mozilla 4.7 [en] (X11; I; Linux 2.2.12-20 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Pierre Weis <Pierre.Weis@inria.fr>
+CC: caml-list@inria.fr
+Subject: Re: compilation of lablgl examples.
+References: <200102061555.QAA08776@pauillac.inria.fr>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: weis@pauillac.inria.fr
+
+Pierre Weis wrote:
+> 
+> [...]
+> > pet project over to them ... but the use of standard variant
+> > constructors is extremely heavy, and I'm having trouble
+> > coming to terms with the need to virtually rewrite my
+> > entire source.
+ 
+> Could you explain a bit why ``the use of standard variant
+> constructors is extremely heavy'' (I thought it was on the contrary
+> extremely light and elegant!) ?
+
+	Excuse my poor English -- what I meant was
+"A very large percentage of symbols in the source code
+are variant constructor names". A very large amount of code
+consists of match .. with statements where the expression
+is a variant type, and the result expressions are another
+variant. 
+
+	For example, something like this happens:
+the type of a function declaration in the Abstract Syntax Tree is:
+
+  | AST_function of id_t * parameter_t list * typecode_t * statement_t
+list
+
+which is converted to:
+ 
+  | DCL_function of   parameter_t list * typecode_t * asm_t list
+
+which is converted to:
+
+  | SYMDEF_function of parameter_t list * typecode_t * int list * exe_t
+list * name_map_t
+ 
+which is converted to:
+
+  | BDCL_function of   bparameter_t list * btypecode_t * int list *
+exe_t list * name_map_t
+
+which is converted to:
+
+  | BBDCL_function of   bparameter_t list * btypecode_t * int list *
+bexe_t list * name_map_t
+
+That is, there are FIVE separate types for each phase of the
+compilation,
+all of which represent a function declaration (and the same again
+for other constructions).
+
+What is happening is: first, the statements are desugared and split
+into declarative and executable parts of a lower level language,
+then the list of statements of a function is split into
+executable code and a map representing contained declarations,
+then the type names are bound, and finally variable names 
+are bound. The final structure is then used by the back end to
+generate a list of non-nested functions (C++ classes, actually).
+
+The strict 'phasing' enforced by the separate typing makes
+it easy to find errors statically. But the verbosity makes
+it easy to _make_ a lot more errors, and the structure is
+inflexible. Said another way, the current design consists of
+a sequence of functors:
+
+	Lex -> Parse -> AST -> SYM -> DCL -> BDCL -> BBDCL -> C++ 
+
+where the categories joining these functors are distinct.
+
+Another solution would be to use a single category for the inner
+work space, moving from one 'subspace' to another, but while this
+is very flexible, the lack of structure makes static error checking
+weak.
+
+But with polymorphic variants, types can be ascribed to the
+'subspaces' even when they overlap, and it can be done
+_after_ the fact to check correctness, while standard
+variants require the typing to be designed first.
+
+I.e., polymorphic variants are more useful for prototyping,
+since types do not need to be declared before writing
+algorithms, yet the declarations can still be added later
+when the design is solider to check just how solid it really is.
+
+At least, this is my expectation. For example, an 'expression'
+type can be defined to include BOTH 'string name' and
+'name as integer index into symbol table', allowing
+a single routine 'print expression', while it is still
+possible to give a type for 'expression not containing
+any string names' (to be used after all the names are bound).
+
+[At present, there are three 'types' for expressions,
+and three almost identical print routines to display them:
+all the expressions are the same, except that the second
+type has all lambda's removed and _also_ has the names
+of types bound (but not variables) while the third type
+has variable names bound as well: the first type 
+already fails to use static typing to distingush
+'expression with lambdas' and 'expression with lambdas removed'
+which in principle it should.]
+
+I am not certain this will work. Comments appreciated.
+I am loath to try it out, since it would takes many days to
+rewrite all the constructor names, and I would have to undo
+all the work if the experiment failed. Note that doing it
+all manually (mainly adding a back quote in front of all
+the constructor names everywhere) it is easy to make a spelling
+mistake, which will lead to obscure typing problems:
+it is hard to do this conversion incrementally, and therefore
+isolate the source of a problem. If I could 'add backquotes'
+in front of all the constructor names mechanically,
+then everything would work 'as is', and I could begin the task
+of identifying formerly distinct variant components.
+
+-- 
+John (Max) Skaller, mailto:skaller@maxtal.com.au
+10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+checkout Vyper http://Vyper.sourceforge.net
+download Interscript http://Interscript.sourceforge.net
+
+

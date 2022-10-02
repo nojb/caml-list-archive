@@ -1,0 +1,141 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p19GF0a4001258
+	for <caml-list@sympa-roc.inria.fr>; Wed, 9 Feb 2011 17:15:00 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnoBAJxMUk3U436rkWdsb2JhbACEHKEoFQEBAQEJCwoHEQMhrCSQKAKBJYM/dgSHW4dH
+X-IronPort-AV: E=Sophos;i="4.60,446,1291590000"; 
+   d="scan'208";a="75641711"
+Received: from moutng.kundenserver.de ([212.227.126.171])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 09 Feb 2011 17:14:55 +0100
+Received: from office1.lan.sumadev.de (dslb-084-059-074-063.pools.arcor-ip.net [84.59.74.63])
+	by mrelayeu.kundenserver.de (node=mrbap1) with ESMTP (Nemesis)
+	id 0M03sS-1Q81MQ1mjk-00ue2L; Wed, 09 Feb 2011 17:14:54 +0100
+Received: from [192.168.1.111] (546BE640.cm-12-4d.dynamic.ziggo.nl [84.107.230.64])
+	by office1.lan.sumadev.de (Postfix) with ESMTPA id 1D8A05F702;
+	Wed,  9 Feb 2011 17:14:54 +0100 (CET)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: orbitz@ezabel.com
+Cc: rossberg@mpi-sws.org, caml-list@inria.fr
+In-Reply-To: <F325FC2E-D852-4A7A-8550-F77797392BD0@ezabel.com>
+References: <50AF76A1-30E0-4735-AFB2-88BB603899CE@ezabel.com>
+	 <77df810e993b3002f8b97622102da8dd.squirrel@mail.mpi-sws.org>
+	 <F325FC2E-D852-4A7A-8550-F77797392BD0@ezabel.com>
+Content-Type: text/plain; charset="UTF-8"
+Date: Wed, 09 Feb 2011 17:14:52 +0100
+Message-ID: <1297268092.24058.416.camel@thinkpad>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.28.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:ifUqFsdgcMByw+pJ99kwkd85LXO9Dpy+flbPfgSxTPG
+ 8gJBC0ZbaJcLvVOM+QAk4aoeiaIgD3A00o2fL+2eX3H2C9YLmM
+ s3Y+iGiZE+RZwLkzqz3/iR+mmDtwDh4AFxf+UZLU9gIDa6z8Bo
+ 1TyhoGjwF3EnHRD4dUoxZSFeU2QEOYHpJPhh6PrqbZLCxKhOOP
+ 4qa95PTX/NYgkzW5L361Q==
+Subject: Re: [Caml-list] Scoped Bound Resource Management just for C++?
+
+Am Mittwoch, den 09.02.2011, 10:15 -0500 schrieb orbitz@ezabel.com:
+> Thanks for the answers everyone.
+> 
+> How does one safely write code in Ocaml that guarantees resources will  
+> be freed?  Guillaume mentioned the with-idiom, but even that doesn't  
+> seem entirely safe.
+
+You mean C++ is safer in this respect?
+
+Come on. Fully automatic memory management as in Ocaml is certainly
+safer than any semi-automatic scheme. It will find all memory blocks
+that are not referenced anymore. It's guaranteed. It works even with
+circular structures (this is not a boy GC).
+
+You would use "with" only for cases where non-memory resources are
+referenced, like file descriptors. And you have to close files in C++,
+too. If you want to be very careful here, you can even set a finaliser
+that emits a warning when you forgot to close a descriptor (but you have
+then to remember whether you closed it), like in
+
+type managed_fd =
+  { fd : Unix.file_descr;
+    mutable fd_closed : bool
+  }
+
+(* after opening the file: *)
+let mfd = { fd=fd; fd_closed=false }
+
+(* Attach the finaliser: *)
+let mfd_fin mfd =
+  if not mfd.fd_closed then
+    prerr_endline "Hey, there is a forgotten file descriptor"
+Gc.finalise mfd_fin mfd
+
+(* Use mfd as in - ensure you always pass mfd around: *)
+Unix.read mfd.fd ...
+
+(* When you close: *)
+Unix.close mfd.fd;
+mfd.fd_closed <- true
+
+I wouldn't recommend to close fd in mfd_fin, because fd might not be a
+simple file, and you can trigger any kind of external activity by
+closing it.
+
+I've written a number of 24/7 server programs in Ocaml now, and I can
+tell you, resource management is easy. You can usually skip the "search
+for memory leaks" step before deploying to production.
+
+Gerd
+
+> On Feb 9, 2011, at 7:01 AM, rossberg@mpi-sws.org wrote:
+> 
+> >> One of the benefits, in my opinion, of C++ is SBRM.  You can reason
+> >> about the lifetime of an object and have an give yourself guarantees
+> >> about its clean up.  The method of initialization and clean up are
+> >> also consistent for every object in the language.
+> >
+> > Don't believe the hype. :) Scope-bound resource management is  
+> > inherently
+> > broken, at least without sophisticated type system support. In a
+> > higher-order language, there are various ways in which objects could  
+> > escape
+> > their scope, e.g. closures, references, exceptions. That can only  
+> > mean one
+> > of two things for SBRM:
+> >
+> > 1) Either it is not actually true, i.e. life times are not actually  
+> > bound by
+> > scope in general and you have no actual guarantees,
+> >
+> > 2) or it is unsafe, i.e. you can access an object after its life  
+> > time has
+> > ended, with potentially desastrous effects.
+> >
+> > C++ chose (2), which is out of the question for a safe language. If  
+> > your
+> > language makes heavy use of first-class functions (and thus  
+> > closures) that
+> > strategy is a particular no-go.
+> >
+> > Also, SBRM does not scale at all to concurrency. The underlying  
+> > assumption
+> > that all life times are somehow well-bracketed through the dynamic  
+> > calling
+> > hierarchy simply doesn't hold anymore when you have shared-state
+> > concurrency. Getting life times right in concurrent C++ is a  
+> > nightmare in my
+> > experience, and often requires synchronizing deallocation in quite
+> > inefficient ways (thereby effectively making it explicit, and  
+> > subverting the
+> > whole idea of tying it to scope implicitly).
+> >
+> > /Andreas
+> >
+> 
+> 
+
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Bad Nauheimer Str.3, 64289 Darmstadt,Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

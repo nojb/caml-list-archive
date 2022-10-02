@@ -1,0 +1,74 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p09EEsHl028647
+	for <caml-list@sympa-roc.inria.fr>; Sun, 9 Jan 2011 15:14:55 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtoAAHZRKU3UnwckkWdsb2JhbACWN4EljGoVAQECCQsKBxEEILpthUwE
+X-IronPort-AV: E=Sophos;i="4.60,296,1291590000"; 
+   d="scan'208";a="72628097"
+Received: from relay.ptn-ipout02.plus.net ([212.159.7.36])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 09 Jan 2011 15:14:49 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjMGAP9QKU1UXebr/2dsb2JhbACWN4EljGpzumqFTAQ
+Received: from outmx07.plus.net ([84.93.230.235])
+  by relay.ptn-ipout02.plus.net with ESMTP; 09 Jan 2011 14:14:48 +0000
+Received: from 66.94.112.87.dyn.plus.net ([87.112.94.66] helo=WinEight)
+	 by outmx07.plus.net with esmtp (Exim) id 1Pbw2i-0004S3-93
+	for caml-list@yquem.inria.fr; Sun, 09 Jan 2011 14:14:48 +0000
+From: "Jon Harrop" <jon@ffconsultancy.com>
+To: <caml-list@yquem.inria.fr>
+Date: Sun, 9 Jan 2011 14:14:39 -0000
+Message-ID: <01b901cbb007$8e525090$aaf6f1b0$@com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Mailer: Microsoft Office Outlook 12.0
+Thread-Index: AcuwB4zCBufMujYPQnGnZwVV8Xg/Wg==
+Content-Language: en-gb
+Subject: [Caml-list] Mark-region GC
+
+Thought you guys might appreciate my recent foray into GC design:
+
+ 
+http://flyingfrogblog.blogspot.com/2011/01/importance-of-locality-and-sparsi
+ty-in.html
+  http://flyingfrogblog.blogspot.com/2011/01/sweeping-700-faster.html
+
+In summary, I think I have found a way to make a simple GC for HLVM that is
+almost as fast as OCaml's on serial functional code, significantly faster on
+imperative code and can easily support both parallelism among mutators and
+even parallel+concurrent collection.
+
+Specifically, I noted that the advantage of OCaml's generational GC is
+largely its ability to sweep large numbers of dead infants from the nursery
+in constant time but the disadvantage is the overhead of evacuating
+survivors. I was able to mimic the advantage without the disadvantage by
+allocating regions and storing bitvectors representing the blocks within the
+region that are allocated and marked. Hundreds of heap allocated blocks in a
+region can then be swept simply by reading those two bitvectors, computing
+the bitwise AND and writing the result as an updated allocated bitvector
+(with everything unmarked zeroed out). Moreover, 512-bit bitvectors fill a
+cache line and offer near-optimal granularity for the rest of the system.
+Thus, the new collector is sweeping at a rate of 40Gb of heap blocks per
+second (!), not only for the "nusery" (thread-local region) but potentially
+also for the entire "major heap" (global queues of full and non-full
+regions).
+
+I was also able to mimic the advantage of Appel's semi-generational
+collector with the added benefit of reducing synchronization by sweeping the
+thread-local region when it fills. Many local sweeps are typically performed
+before the local region fills so contention for obtaining new regions from
+the global queue is greatly reduced.
+
+However, my design does degrade the performance of allocation. Rather than
+using a bump allocator, I search for the next non-255 byte in the allocated
+bitvector and then use a 255-element lookup table to find the next zero bit,
+set it, calculate and return the corresponding pointer into the region. I
+haven't profiled the overhead of this allocator but my C++ prototype gets
+within 10% of OCaml's performance on the list-based n-queens solver. I am
+*extremely* happy with that result! :-)
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com
+

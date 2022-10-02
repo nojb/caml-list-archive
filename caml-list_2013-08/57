@@ -1,0 +1,131 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id A209B820A1
+	for <caml-list@sympa.inria.fr>; Wed, 14 Aug 2013 18:19:34 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  Xavier.Leroy@inria.fr) identity=pra; client-ip=212.27.42.2;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="Xavier.Leroy@inria.fr";
+  x-sender="Xavier.Leroy@inria.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  Xavier.Leroy@inria.fr) identity=mailfrom;
+  client-ip=212.27.42.2;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="Xavier.Leroy@inria.fr";
+  x-sender="Xavier.Leroy@inria.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@smtp2-g21.free.fr) identity=helo;
+  client-ip=212.27.42.2;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="Xavier.Leroy@inria.fr";
+  x-sender="postmaster@smtp2-g21.free.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkoBABCtC1LUGyoClGdsb2JhbABbgzu/NYEkFg4BAQEBBw0JCRQDJYIkAQEEAVMlBgsLGAkWDwkDAgECAUUTCAEBEId2Cgi5K5BXhBIDl2SBLYR8jkaBaCQ
+X-IPAS-Result: AkoBABCtC1LUGyoClGdsb2JhbABbgzu/NYEkFg4BAQEBBw0JCRQDJYIkAQEEAVMlBgsLGAkWDwkDAgECAUUTCAEBEId2Cgi5K5BXhBIDl2SBLYR8jkaBaCQ
+X-IronPort-AV: E=Sophos;i="4.89,878,1367964000"; 
+   d="scan'208";a="29371294"
+Received: from smtp2-g21.free.fr ([212.27.42.2])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 14 Aug 2013 18:19:33 +0200
+Received: from [192.168.1.2] (unknown [82.237.71.191])
+	by smtp2-g21.free.fr (Postfix) with ESMTP id DE4A94B0184
+	for <caml-list@inria.fr>; Wed, 14 Aug 2013 18:19:29 +0200 (CEST)
+Message-ID: <520BAE10.5070402@inria.fr>
+Date: Wed, 14 Aug 2013 18:19:28 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:17.0) Gecko/20130804 Thunderbird/17.0.8
+MIME-Version: 1.0
+To: caml-list@inria.fr
+References: <CACLX4jTdwP-O81J4BB6p1QJ2SCGSh+7Jw25Wum0WH6ET-D+WrQ@mail.gmail.com>
+In-Reply-To: <CACLX4jTdwP-O81J4BB6p1QJ2SCGSh+7Jw25Wum0WH6ET-D+WrQ@mail.gmail.com>
+X-Enigmail-Version: 1.4.6
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Turning floating point errors into exceptions
+
+On 04/08/13 02:49, Yaron Minsky wrote:
+> This is really bringing up a rather old question to see whether the
+> state of the world has changed when it comes to handling floating
+> point exceptions.  Here's the thread on this topic from 2003.
+> 
+> http://caml.inria.fr/pub/ml-archives/caml-list/2003/10/686468535e6100213e2e85bca8be51f1.en.html
+> 
+> The key question is: is it possible to cause floating point operations
+> that generate values like NaN and inf to instead generate exceptions.
+> The answer from Xavier as of 2003 is: no, there's no good way of
+> portably catching a synchronous error like SIGFPE.  Apparently this is
+> in part due to the state of the C standards of the time.
+> 
+> So, I'm curious whether things have changed enough such that this
+> would now be easier.
+
+Not really.  There are three different issues:
+
+1- No portable way to turn floating-point exceptional conditions
+(generation of a NaN, etc) into a signal.
+
+C99 standardizes a <fenv.h> interface to select which exceptional
+conditions to track and to test which exc.cond. occurred in the past.
+Their docs talk about "exceptions" and "raising exceptions", but I
+find this misleading as (AFAIK) no change in control-flow occurs when
+such an exceptional condition occurs: it's just recorded somewhere for
+later testing.
+
+The GNU C library adds a feenableexcept() function that does what you
+want, i.e. trap (generate a signal) when a selected exceptional
+condition occurs.  I don't think it is available under MacOS X or the
+BSDs, although equivalent functionality is available under different
+names.  And of course Microsoft's CRT library doesn't even implement
+<fenv.h> ("C90 ought to be enough for everybody") and has its own
+nonportable functions for this purpose.
+
+In short, this is one of these problems where it's easier to write
+inline assembly for each platform of interest than to find the
+appropriate nonstandard function of the C library.
+
+2- Hard to turn a synchronous signal into an OCaml exception.
+
+Well, ocamlopt does it for stack overflow conditions, but the code is
+an #ifdef fest and it's not guaranteed that you'll get a useable stack
+backtrace out of it.  Also, it works only if the synchronous signal
+occurs in OCaml code: if it occurs in C code, there is not enough
+context to generate an OCaml exception, and the only option is to kill
+the program.  This leads to issue #3:
+
+3- Does your libm (the C math library we use for sin, cos, log, exp,
+etc) still works if exceptional FP conditions cause traps?
+
+I have no idea.  But I wouldn't be surprised if some of these
+functions can produce denormals internally even when the final result
+is a normal FP number.  So, if you trap on denormals, your program
+will be killed.
+
+> The issue came up again because I've been showing OCaml to a
+> physicist friend who asked how to turn on this behavior in OCaml, a
+> thing he's used to from Fortran and considers essential for
+> debugging.
+
+If all your physicist friend want is the Fortran behavior (trap on
+exceptional FP conditions and either kill the program or drop to the
+debugger), your physicist friend could probably get it by linking with
+a tiny OCaml/C library that just sets the FP processor to "trap" on
+the conditions of interest.  Writing such a library is left to this
+esteemed OCaml community :-)
+
+Proper Caml-style handling of traps as catchable exceptions is
+probably too hard to get right, for reasons explained above.
+
+One last word for your physicist friend: trapping on NaNs and working
+in a debugger is no substitute for proper numerical analysis.  What I
+mean is that properly-written numerical libraries don't generate
+exceptional FP conditions when given valid inputs, and provide ways to
+validate their inputs.
+
+- Xavier Leroy

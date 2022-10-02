@@ -1,0 +1,355 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA04934 for caml-redistribution; Fri, 30 Jul 1999 03:27:51 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA27406 for <caml-list@pauillac.inria.fr>; Thu, 29 Jul 1999 00:44:24 +0200 (MET DST)
+Received: from cepheus.azstarnet.com (cepheus.azstarnet.com [169.197.56.195])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id AAA01509
+	for <caml-list@inria.fr>; Thu, 29 Jul 1999 00:44:22 +0200 (MET DST)
+Received: from dylan (dialup14ip005.tus.azstarnet.com [169.197.36.133])
+	by cepheus.azstarnet.com (8.9.3/8.9.3) with SMTP id PAA07732
+	for <caml-list@inria.fr>; Wed, 28 Jul 1999 15:44:17 -0700 (MST)
+X-Sent-via: StarNet http://www.azstarnet.com/
+Message-ID: <000b01bed94a$c681b870$210148bf@dylan>
+From: "David McClain" <dmcclain@azstarnet.com>
+To: <caml-list@inria.fr>
+Subject: CLOS and ML?
+Date: Wed, 28 Jul 1999 15:44:36 -0700
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 4.72.3110.5
+X-MimeOLE: Produced By Microsoft MimeOLE V4.72.3110.3
+Sender: weis
+
+I have been missing CLOS sooo much that I decided to give it a try in OCAML.
+It turns out that to first order, one can quite readily acheive multi-method
+dispatch using ML-like languages (see below...) Of course it would be far
+more convenient if this were an inherent part of the language. I have
+thought briefly about making a front-end that would accept an extended
+syntax incorporating some notion of multi-methods and having it translate to
+standard OCAML as a result. This would alleviate all runtime dispatching
+except for those cases where a possibly ambiguous data type is acted upon.
+
+Is there any reason not to make CLOS-like behavior (e.g., STklos, CLOS,
+Dylan) in an ML language?
+
+- DM
+
+(* -------------------------------------------------------------------------
+------------------- *)
+(* gf.ml -- CLOS Generic Functions with Multimethod Dispatch for OCAML *)
+(* DM/MCFA  07/99 *)
+
+type user_type = {ut_super : user_type option;
+    ut_iflds : string list;
+    ut_cflds : (string * opnd ref) list}
+
+and user_instance = user_type * opnd list ref
+
+and opnd =
+    FLOAT  of float
+  | INT    of int
+  | LIST   of opnd list
+  | ARRAY  of opnd array
+  | STRING of string
+  | CHAR   of char
+  | BOOL   of bool
+  | NIL
+  | USER   of user_instance
+
+type opnd_type =
+    TCHAR
+  | TSTRING
+  | TINT
+  | TFLOAT
+  | TBOOL
+  | TLIST
+  | TARRAY
+  | TTOP
+  | TSEQUENCE
+  | TNUMBER
+  | TNULL
+  | TUSER of user_type
+
+let type_of = function
+    INT _     -> TINT
+  | FLOAT _   -> TFLOAT
+  | CHAR _    -> TCHAR
+  | STRING _  -> TSTRING
+  | BOOL _    -> TBOOL
+  | LIST _    -> TLIST
+  | ARRAY _   -> TARRAY
+  | NIL       -> TNULL
+  | USER(t,_) -> TUSER(t)
+
+type gf_method_function =
+    FUNARY  of (opnd -> gf_method list -> opnd)
+  | FBINARY of (opnd -> opnd -> gf_method list -> opnd)
+  | FAPPLY  of (opnd list -> gf_method list -> opnd)
+
+and gf_method = {gf_sig  : opnd_type list;
+   gf_spec : int list;
+   gf_fn   : gf_method_function}
+
+type 'a tree =
+    LEAF  of 'a                 (* real, instantiable *)
+  | RNODE of 'a * 'a tree list  (* real, instantiable *)
+  | VNODE of 'a * 'a tree list  (* virtual, not instantiable *)
+
+let type_tree =
+  VNODE(TTOP,
+ [LEAF TBOOL;
+  LEAF TCHAR;
+  VNODE(TNUMBER,
+        [LEAF TINT;
+  LEAF TFLOAT]);
+  VNODE(TSEQUENCE,
+        [RNODE(TLIST,
+        [LEAF TNULL]);
+  LEAF TARRAY;
+  LEAF TSTRING])])
+
+let cpl_of_type t =
+  match t with
+      TUSER t' ->
+ let rec scan = function
+     {ut_super = None}    -> [TTOP]
+   | {ut_super = Some t'} -> (TUSER t') :: scan t'
+ in
+   t :: scan t'
+    | _ ->
+ let rec augment t' subtrees =
+   List.fold_left
+     (fun rslt subtree ->
+        match (rslt,scan subtree) with
+     (_,None) -> rslt
+   | (None,Some lst) -> Some(t' :: lst)
+   | _ -> failwith "invalid type-tree")
+     None subtrees
+ and scan = function
+     LEAF t' ->
+       if t == t' then Some [t] else None
+   | VNODE(t',subtrees) ->
+       augment t' subtrees
+   | RNODE(t',subtrees) ->
+       if t == t' then Some [t] else augment t' subtrees
+ in
+   match scan type_tree with
+       None     -> failwith "type not instantiable"
+     | Some lst -> List.rev lst
+
+let cpl_of_arg arg =
+  cpl_of_type (type_of arg)
+
+let gf_apply {gf_fn = fn} args next_methods =
+  match fn with
+      FUNARY fn' ->
+ fn' (List.hd args) next_methods
+    | FBINARY fn' ->
+ fn' (List.hd args) (List.nth args 1) next_methods
+    | FAPPLY fn'  ->
+ fn' args next_methods
+
+let call_next_method args = function
+    [] -> failwith "no next method"
+  | h::t -> gf_apply h args t
+
+(* ------------------------------------------------- *)
+let say str =
+  print_string str;
+  print_newline()
+
+class type generic_function_type =
+      object
+ method add_method :
+   opnd_type list -> gf_method_function -> unit
+ method call :
+   opnd list -> opnd
+ method methods :
+   unit -> gf_method list
+ method applicable_methods :
+   opnd list -> gf_method list
+ method remove_sig :
+   opnd_type list -> unit
+      end
+
+class generic_function nargs : generic_function_type =
+  object(self)
+    val methods = ref []
+
+    method add_method signat fnbody =
+      if List.length signat != nargs then
+ failwith "incommensurate gf signature"
+      else
+ let meth = {gf_sig  = signat;
+      gf_spec =
+        List.map
+   (function typ ->
+      List.length (cpl_of_type typ))
+   signat;
+      gf_fn = fnbody}
+ in
+   self#remove_sig signat;
+   methods := meth :: !methods
+
+    method remove_sig signat =
+      methods :=
+      List.fold_right
+ (fun meth rslt ->
+    if meth.gf_sig = signat then rslt else meth :: rslt)
+ !methods []
+
+    method methods () = !methods
+
+    method applicable_methods args =
+      let cpls = List.map cpl_of_arg args in
+ Sort.list
+   (fun {gf_spec = spec1} {gf_spec = spec2} ->
+      spec1 > spec2)
+   (List.fold_right
+      (fun ({gf_sig = signat} as gf) rslt ->
+  if List.for_all2 List.memq signat cpls then
+    gf :: rslt
+  else
+    rslt)
+      !methods [])
+
+    method call args =
+      if List.length args != nargs then
+ failwith "gf called with incorrect arg count";
+      match self#applicable_methods args with
+   [] ->
+     failwith "no applicable methods";
+ | h :: t ->
+     gf_apply h args t
+  end
+
+(* test it out... *)
+let gf_add = new generic_function 2
+let _ =
+  List.iter
+    (function (signat,fnbody) ->
+       gf_add#add_method signat (FBINARY fnbody))
+    [
+      [TINT;TINT],      (fun (INT a) (INT b) _ ->
+      INT (a + b));
+      [TINT;TFLOAT],    (fun (INT a) (FLOAT b) _ ->
+      FLOAT(float a +. b));
+      [TFLOAT;TINT],    (fun (FLOAT a) (INT b) _ ->
+      FLOAT(a +. float b));
+      [TFLOAT;TFLOAT],  (fun (FLOAT a) (FLOAT b) _ ->
+      FLOAT(a +. b));
+      [TSTRING;TSTRING],(fun (STRING s1) (STRING s2) _ ->
+      STRING(s1 ^ s2));
+      [TCHAR;TSTRING],  (fun (CHAR c) (STRING s) _ ->
+      STRING(String.make 1 c ^ s));
+      [TSTRING;TCHAR],  (fun (STRING s) (CHAR c) _ ->
+      STRING(s ^ String.make 1 c))
+    ]
+
+
+(* CLOS Class and Instance Objects *)
+
+let top = { ut_super = None;
+     ut_iflds = [];
+     ut_cflds = [] }
+
+let union l1 l2 =
+  let weed_out l1 l2 =
+    (* remove items from l1 that already exist in l2 *)
+    List.filter
+      (fun item ->
+  not (List.mem item l2))
+      l1
+  in
+    l2 @ weed_out l1 l2
+
+let new_class super iflds cflds =
+  let iflds' = union iflds super.ut_iflds in
+  let cflds' =
+    union (List.map fst cflds)
+      (List.map fst super.ut_cflds)
+  in
+  let cflds'' =
+    List.fold_right
+      (fun name rslt ->
+  try
+    (name, ref (List.assoc name cflds)) :: rslt
+  with
+      Not_found ->
+        (name, ref !(List.assoc name super.ut_cflds)) :: rslt)
+      cflds' []
+  in
+    { ut_super = Some super;
+      ut_iflds = iflds';
+      ut_cflds = cflds'' }
+
+let new_instance usr_class =
+  USER(usr_class,
+       ref (List.map
+       (fun _ -> NIL)
+       usr_class.ut_iflds))
+
+let get_slot (USER(cls,slots)) name =
+  let rec iiter names vals =
+    match (names,vals) with
+ ([],[]) -> raise Not_found
+      | (nh::nt,vh::vt) ->
+   if nh = name then vh else iiter nt vt
+      | _ -> failwith "get_slot: invalid instance"
+  in
+  let rec citer = function
+      [] -> raise Not_found
+    | (n,vr) :: tl ->
+ if n = name then !vr else citer tl
+  in
+    try
+      iiter cls.ut_iflds !slots
+    with
+ Not_found ->
+   citer cls.ut_cflds
+
+
+let set_slot (USER(cls,slots)) name valu =
+  let rec iiter names vals =
+    match (names,vals) with
+ ([],[]) -> raise Not_found
+      | (nh::nt,vh::vt) ->
+   if nh = name then
+     valu :: vt
+   else
+     vh :: iiter nt vt
+      | _ -> failwith "get_slot: invalid instance"
+  in
+  let rec citer = function
+      [] -> raise Not_found
+    | (n,vr) :: tl ->
+ if n = name then
+   vr := valu
+ else
+   citer tl
+  in
+    try
+      slots := iiter cls.ut_iflds !slots
+    with
+ Not_found ->
+   citer cls.ut_cflds
+
+(* test it out... *)
+let cx = new_class top ["a";"b";"c"] ["cc",INT 15]
+let x  = new_instance cx
+let _ =
+  gf_add#add_method [TUSER(cx);TUSER(cx)]
+    (FBINARY(fun (USER(cx,_) as a) (USER(cx,_) as b) _ ->
+        let ans = new_instance cx in
+   set_slot ans "a" (get_slot a "a");
+   set_slot ans "b" (gf_add#call
+         [get_slot a "b";
+          get_slot b "b"]);
+   set_slot ans "c" (get_slot b "c");
+   ans))
+
+
+
+

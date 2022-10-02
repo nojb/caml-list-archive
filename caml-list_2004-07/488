@@ -1,0 +1,119 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA06303; Sat, 31 Jul 2004 12:34:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA05075 for <caml-list@pauillac.inria.fr>; Sat, 31 Jul 2004 12:34:20 +0200 (MET DST)
+Received: from fichte.ai.univie.ac.at (fichte.ai.univie.ac.at [131.130.174.156])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i6VAYJEV029543
+	for <caml-list@inria.fr>; Sat, 31 Jul 2004 12:34:20 +0200
+Received: from fichte.ai.univie.ac.at (markus@localhost [127.0.0.1])
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) with ESMTP id i6VAYDDu012883;
+	Sat, 31 Jul 2004 12:34:13 +0200
+Received: (from markus@localhost)
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) id i6VAYCP5012882;
+	Sat, 31 Jul 2004 12:34:12 +0200
+Date: Sat, 31 Jul 2004 12:34:12 +0200
+From: Markus Mottl <markus@oefai.at>
+To: "Christopher A. Gorski" <cgorski@cgorski.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] const equivalent for mutable types?
+Message-ID: <20040731103412.GA11964@fichte.ai.univie.ac.at>
+Mail-Followup-To: "Christopher A. Gorski" <cgorski@cgorski.org>,
+	caml-list@inria.fr
+References: <410B5EBD.6060800@cgorski.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+Content-Transfer-Encoding: quoted-printable
+In-Reply-To: <410B5EBD.6060800@cgorski.org>
+User-Agent: Mutt/1.5.6i
+X-Miltered: at nez-perce with ID 410B75AB.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 const:01 passing:01 reproducing:01 const:01 'rw:99 val:01 val:01 incr:01 decr:01 struct:01 'rw:99 incr:01 decr:01 printf:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sat, 31 Jul 2004, Christopher A. Gorski wrote:
+> In my code I find that I'm passing a lot of mutable values to functions.=
+=20
+>  Some functions merely read the values.  Others modify the values.  Is=20
+> there a method in OCaml for reproducing behavior similar in spirit to=20
+> the const declaration in C?
+
+No, you'd need an abstract module for this to hide the concrete
+representation.  This is actually good SE-practice.
+
+You can do this very conveniently using so-called phantom types.  For the
+special case of references, here is an example that implements ones,
+which can be made constant:
+
+---------------------------------------------------------------------------
+module type REF =3D sig
+  type ('a, 'rw) t
+
+  val ref : 'a -> ('a, [ `R | `W ]) t
+  val (!) : ('a, [> `R ]) t -> 'a
+  val (:=3D) : ('a, [> `W ]) t -> 'a -> unit
+
+  val incr : (int, [> `W ]) t -> unit
+  val decr : (int, [> `W ]) t -> unit
+
+  external const : ('a, [> `R ]) t -> ('a, [ `R ]) t =3D "%identity"
+  external normal_ref : ('a, [ `R | `W ]) t -> 'a ref =3D "%identity"
+end
+
+module Ref : REF =3D struct
+  type ('a, 'rw) t =3D 'a ref
+
+  let ref =3D ref
+  let (!) =3D (!)
+  let (:=3D) =3D (:=3D)
+
+  let incr =3D incr
+  let decr =3D decr
+
+  external const : ('a, [> `R ]) t -> ('a, [ `R ]) t =3D "%identity"
+  external normal_ref : ('a, [ `R | `W ]) t -> 'a ref =3D "%identity"
+end
+---------------------------------------------------------------------------
+
+The phantom variable is 'rw.  When creating references, it can be any
+of `R (for reading) and `T (for writing).  Some functions only require
+the reference to be readable (like (!)), others only need to write to
+them (e.g. (:=3D)).  References are made constant by simply applying the
+(internal) identity function to them, which is actually a no-op.  But we
+only leave the `R-flag in the type.  A "normal" reference can be made
+=66rom the upper ones only if they support both reading and writing.
+
+> let result =3D change (const r)
+>=20
+> and have the compiler give me a type error.
+
+Now we try this out with your example:
+
+---------------------------------------------------------------------------
+open Ref
+
+let () =3D
+  let t =3D ref 0 in
+  let change r =3D incr r in
+  let nochange r =3D Printf.printf "test:%d\n" !r in
+  change (const t)
+---------------------------------------------------------------------------
+
+And we get:
+
+  This expression has type (int, [ `R ]) Ref.t but is here used with type
+    (int, [> `W ]) Ref.t
+
+"nochange" will work without a type error as expected.
+
+Regards,
+Markus
+
+--=20
+Markus Mottl          http://www.oefai.at/~markus          markus@oefai.at
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,132 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA01730; Fri, 13 Aug 2004 10:08:55 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA01255 for <caml-list@pauillac.inria.fr>; Fri, 13 Aug 2004 10:08:54 +0200 (MET DST)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i7D88rRM021771
+	for <caml-list@inria.fr>; Fri, 13 Aug 2004 10:08:53 +0200
+Received: from ibm3.cicrp.jussieu.fr (ibm3.cicrp.jussieu.fr [134.157.15.3])
+          by shiva.jussieu.fr (8.12.11/jtpda-5.4) with ESMTP id i7D87mxZ075313
+          ; Fri, 13 Aug 2004 10:07:48 +0200 (CEST)
+X-Ids: 168
+Received: from ibm1.cicrp.jussieu.fr (ibm1.cicrp.jussieu.fr [134.157.15.1])
+          by ibm3.cicrp.jussieu.fr (8.8.8/jtpda/mob-V8) with ESMTP id KAA99712
+          ; Fri, 13 Aug 2004 10:06:49 +0200
+Received: from localhost (fernande@localhost)
+          by ibm1.cicrp.jussieu.fr (8.8.8/jtpda/mob-v8) with ESMTP id KAA557096
+          ; Fri, 13 Aug 2004 10:06:27 +0200
+X-Authentication-Warning: ibm1.cicrp.jussieu.fr: fernande owned process doing -bs
+Date: Fri, 13 Aug 2004 10:06:26 +0200 (DST)
+From: Diego Olivier Fernandez Pons <Diego.FERNANDEZ_PONS@etu.upmc.fr>
+X-X-Sender: fernande@ibm1
+To: brogoff <brogoff@speakeasy.net>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Managing a polymorphic environment
+In-Reply-To: <Pine.LNX.4.58.0408120942030.22505@shell2.speakeasy.net>
+Message-ID: <Pine.A41.4.44.0408130937130.524432-100000@ibm1>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at concorde with ID 411C7715.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at shiva.jussieu.fr with ID 411C76D4.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; pons:01 pons:01 etu:99 caml-list:01 basing:01 struct:01 val:01 val:01 instanciated:01 runtime:01 struct:01 abstr:01 abstr:01 fernandez:01 fernandez:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+    Bonjour,
+
+> I'm sure I'm completely misunderstanding your problem, but how about
+> referring to the environment variables by by strings and attaching
+> properties to them, using the property list trick that Xavier
+> described here a few years ago
+
+What I had in mind is basing the environment in the polymorphic
+physical equality (==) - and therefor I said the environment was
+expected to be small and hence could use an equality based set
+representation
+
+module Env = struct
+  type 'a t = ('a * string) list
+  let empty : 'a t = []
+  let add : 'a -> string -> 'a t -> 'a t = fun x s l -> (x, s) :: l
+  let rec get_string : 'a -> 'a t -> string = fun x l ->
+    match l with
+      | [] -> ""
+      | (y, s) :: tail -> if x == y then s else get_string x tail
+end
+
+# let env = Env.empty;;
+val env : 'a Env.t = []
+# let x = 5;;
+val x : int = 5
+# let y = 3;;
+val y : int = 3
+# let env = Env.add x "x" env;;
+val env : int Env.t = [(5, "x")]
+# let env = Env.add y "y" env;;
+val env : int Env.t = [(3, "y"); (5, "x")]
+# Env.get_string x env;;
+- : string = "x"
+# Env.get_string y env;;
+- : string = "y"
+
+The problem is to make Env forget it is typed because the
+polymorphic parameter 'a captures the first instanciated type
+(int in my example) even if (==) is polymorphic.
+
+I solve it below with some magic.
+
+My code seems - at least to me - correctly typed. Why isn't 'a Env.t
+'totally' polymorphic or is it polymorphic in a 'more general' sense ?
+It does not seem able to raise a runtime error, does it ?
+
+module Env = struct
+  type t
+  let empty : t = Obj.magic []
+  let add : 'a -> string -> t -> t = fun x s l ->
+    let l' : ('a * string) list = Obj.magic l in
+    let l'' = (x, s) :: l' in
+    let l''' : t = Obj.magic l'' in
+      l'''
+  let rec get_string : 'a -> t -> string = fun x l ->
+    let l' : ('a * string) list = Obj.magic l in
+      match l' with
+	| [] -> ""
+	| (y, s) :: _ when x == y -> s
+	| _ :: tail ->
+	    let tail' : t = Obj.magic tail in
+	      get_string x tail'
+end
+
+module Env :
+  sig
+    type t
+    val empty : t
+    val add : 'a -> string -> t -> t
+    val get_string : 'a -> t -> string
+  end
+
+Example :
+
+# let env = Env.empty;;
+val env : Env.t = <abstr>
+# let x = 5;;
+val x : int = 5
+# let y = 3.0;;
+val y : float = 3.
+# let env = Env.add x "an int" env;;
+val env : Env.t = <abstr>
+# let env = Env.add y "a float" env;;
+val env : Env.t = <abstr>
+# Env.get_string x env;;
+- : string = "an int"
+# Env.get_string y env;;
+- : string = "a float"
+
+
+        Diego Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

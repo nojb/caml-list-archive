@@ -1,0 +1,118 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA31265 for caml-redistribution; Tue, 15 Jun 1999 22:48:03 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA29559 for <caml-list@pauillac.inria.fr>; Tue, 15 Jun 1999 11:20:53 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id LAA13401
+	for <caml-list@inria.fr>; Tue, 15 Jun 1999 11:20:51 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id LAA10062;
+	Tue, 15 Jun 1999 11:20:41 +0200 (MET DST)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <199906150920.LAA10062@miss.wu-wien.ac.at>
+Subject: Re: lexer, parser
+To: garrigue@kurims.kyoto-u.ac.jp (Jacques GARRIGUE)
+Date: Tue, 15 Jun 1999 11:20:41 +0100 (MET DST)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <19990615110150N.garrigue@kurims.kyoto-u.ac.jp> from "Jacques GARRIGUE" at Jun 15, 99 11:01:50 am
+X-Mailer: ELM [version 2.4 PL21]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> > Execution of "semantics" is also much faster than versions that use
+> > algebraic datatypes and pattern matching, because here we only have to
+> > call methods (wrapped in the functions of the stream) on objects instead
+> > of match abstract syntax trees or else.
+> 
+> Sorry to answer pinpoint, but I just want to avoid a confusion.
+> 
+> In caml pattern-matching is much more efficient than calling a method.
+> Calling a method is a dynamic operation, involving looking-up a table
+> and calling a possibly curried function, while pattern-matching is
+> completely statically compiled.
+
+Sorry for having caused confusion - my statement above was indeed
+misleading. I thought that the original writer wanted to use objects
+anyway, so instead of calling methods and matching patterns in the object,
+calling the methods alone would be faster even if there is a curried
+function inbetween. Matching patterns without using objects would be
+faster, of course - but in my eyes much less flexible.
+
+Here an example:
+
+---------------------------------------------------------------------------
+(* definitions for version with algebraic datatypes *)
+type action = Inc | Dec
+
+class c1 = object
+  val mutable x = 0
+  method x = x
+  method interpret = function
+    | Inc -> x <- x + 1
+    | Dec -> x <- x - 1
+end
+
+let action1 () =
+  match Random.int 2 with
+  | 0 -> Inc
+  | 1 -> Dec
+  | _ -> failwith "impossible pattern"
+
+(* definitions for version with functions encapsulating method calls *)
+class c2 = object
+  val mutable x = 0
+  method x = x
+  method inc = x <- x + 1
+  method dec = x <- x - 1
+end
+
+let inc obj = obj#inc
+let dec obj = obj#inc
+
+let action2 () =
+  match Random.int 2 with
+  | 0 -> inc
+  | 1 -> dec
+  | _ -> failwith "impossible pattern"
+
+(* generate the stream - this is the optimized version with
+   linear time behaviour *)
+let rec action_stream action =
+  Stream.lcons action (Stream.slazy (fun _ -> action_stream action))
+
+(* uncomment the appropriate part to test the specific version *)
+let _ =
+  let o = new c1
+  and strm = action_stream action1 in
+  for i = 1 to 5000000 do Stream.next strm done;
+(*
+  let o = new c2
+  and strm = action_stream action2 in
+  for i = 1 to 5000000 do (Stream.next strm) o done;
+*)
+  Printf.printf "o#x: %d\n" o#x
+---------------------------------------------------------------------------
+
+If we count away the time that is spent during traversal of the stream,
+the (compiled) version using encapsulated method calls is (on my machine)
+a bit more than 20% faster.
+
+In my opinion the version without pattern matching is much more natural:
+although we have to define the encapsulating functions once, it is never
+necessary to explicitely match the action type - we could thus easily
+redirect the stream to other objects that match the signature.
+
+The OO-version is much easier to maintain, because the different actions
+are really different methods, whereas in the other version the correct
+"semantics" has to be chosen in one function (where the patterns are
+matched). Thus, we can (by inheritence, parameterized objects, etc..)
+easily use abstraction mechanism for generating new "semantics".
+
+Best regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

@@ -1,0 +1,114 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id F3A44BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 22 Apr 2009 15:59:51 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhgCAL+/7knU4366nGdsb2JhbACBT5RwAQEBAQEICwoHEQO7YAGDcwY
+X-IronPort-AV: E=Sophos;i="4.40,230,1238968800"; 
+   d="scan'208";a="38870896"
+Received: from moutng.kundenserver.de ([212.227.126.186])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 22 Apr 2009 15:59:51 +0200
+Received: from office1.lan.sumadev.de (dslb-094-219-222-076.pools.arcor-ip.net [94.219.222.76])
+	by mrelayeu.kundenserver.de (node=mreu2) with ESMTP (Nemesis)
+	id 0MKv5w-1LwczN3peJ-0001sA; Wed, 22 Apr 2009 15:59:50 +0200
+Received: from [192.168.5.104] (dslb-094-219-222-076.pools.arcor-ip.net [94.219.222.76])
+	by office1.lan.sumadev.de (Postfix) with ESMTPSA id DA1F1C0EDA;
+	Wed, 22 Apr 2009 15:58:38 +0200 (CEST)
+Subject: Re: hydro: is server-to-server call possible?
+From: Gerd Stolpmann <gerd@gerd-stolpmann.de>
+To: Vsevolod Fedorov <sevaAtWork@mail.ru>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <49DDD10E.5050004@mail.ru>
+References: <49DDD10E.5050004@mail.ru>
+Content-Type: text/plain
+Date: Wed, 22 Apr 2009 16:02:15 +0200
+Message-Id: <1240408935.13057.42.camel@flake.lan.gerd-stolpmann.de>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.12.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V01U2FsdGVkX18dQPWk0eOOwXh76NN6ZvFWLDYJZOo6Obh1kNd
+ DmLC2Z/KNO69chQxsNjRnl8ikUegjummhXrnTGzRogCxsIrUcr
+ 5SZjAv9Z17m4DRd/8MsrQ==
+X-Spam: no; 0.00; gerd:01 stolpmann:01 gerd:01 donnerstag:01 synchronous:01 synchronous:01 async:01 enforces:01 exn:01 exn:01 util:01 substituted:01 foo:01 foo:01 util:01 
+
+
+Am Donnerstag, den 09.04.2009, 14:42 +0400 schrieb Vsevolod Fedorov:
+> Hello!
+> 
+> I use Hydro implementation of the Ice protocol and stumbled upon the
+> following problem:
+> I need one server to make calls to another one. But I can not make a
+> synchronous call because I am already inside the event loop. And I can
+> not make asynchronous call because asynchronous servants seem to be
+> unsupported.
+> So here the question: can I do this at all? And if yes, then how?
+
+Of course you can.
+
+First, you can always make a synchronous call. Just create a new event
+system with Unixqueue.create_unix_event_system, and throw it away after
+the call is over. Of course, your server is blocked during this time.
+
+Asynchronous servants are supported (maybe undocumented :-) ). In fact,
+all servants are async, and only the "parachute" enforces a synchronous
+behavior. parachute is defined by the generator like
+
+let rec parachute =
+  (fun userfn ->
+    (fun emit_result -> 
+      (fun emit_exn -> 
+        (fun session -> 
+          try ( emit_result (userfn session) )
+          with
+            | User_exception e -> emit_exn e
+            | g -> 
+                session # emit_unknown_exception
+                  (Hydro_util.exn_to_string g)
+        )
+      )
+    )
+  )
+
+(I've substituted readable variable names.)
+
+Now, a synchronous method definition looks like:
+
+method foo arg1 arg2 ... argN =
+  parachute
+    (fun session ->
+        ...
+        result
+    )
+
+As you see from its definition, parachute "eats up" three more arguments
+and hides them from the user. You could also write
+
+method foo arg1 arg2 ... argN emit_result emit_exn session =
+  try 
+    let result = ... in
+    emit_result result
+  with
+   | User_exception e -> emit_exn e
+   | g -> 
+        session # emit_unknown_exception (Hydro_util.exn_to_string g)
+
+I hope it becomes now clear how to make the method async. Just don't
+call emit_result/emit_exn immediately, but later when you have the
+result (or exception). Bypass parachute, whose task is to ensure that
+emit_result/emit_exn is immediately called.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+
+

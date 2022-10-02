@@ -1,0 +1,188 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 85F42BC6C
+	for <caml-list@yquem.inria.fr>; Wed,  1 Nov 2006 07:56:07 +0100 (CET)
+Received: from rabbit.math.nagoya-u.ac.jp (rabbit.math.nagoya-u.ac.jp [133.6.130.5])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id kA16u56a023695
+	for <caml-list@inria.fr>; Wed, 1 Nov 2006 07:56:06 +0100
+Received: from localhost (millas [172.16.30.29])
+	by rabbit.math.nagoya-u.ac.jp (8.12.11/3.7W) with ESMTP id kA16taLP025113;
+	Wed, 1 Nov 2006 15:55:36 +0900 (JST)
+Date: Wed, 01 Nov 2006 15:53:45 +0900 (JST)
+Message-Id: <20061101.155345.41627497.garrigue@math.nagoya-u.ac.jp>
+To: Pietro.Abate@anu.edu.au
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] design problem
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <20061101054039.GA25334@pulp.rsise.anu.edu.au>
+References: <20061101054039.GA25334@pulp.rsise.anu.edu.au>
+X-Mailer: Mew version 4.0.69 on Emacs 22.0.50 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 45484505.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; re-use:01 variants:01 variants:01 camlp:01 recursive:01 annotations:01 annotations:01 readable:01 inference:01 catch-all:01 catch-all:01 verbose:01 failwith:01 sig:01 val:01 
+
+From: Pietro Abate <Pietro.Abate@anu.edu.au>
+
+> I've the following code to write types and functions in an extensible
+> way, so to re-use my code a bit. Everything seems working fine. 
+> 
+> I've two questions:
+> - Is there a better way of achieving a similar result ? Here I'm using
+>   polymorphic variants, but I'm wondering if somebody already cooked
+>   something together by using variants and camlp4 extensions...
+
+No idea, but polymorphic variants are supposed to be good at this :-)
+If you like modules, you might want to try combining with private row
+types and recursive modules (see the paper in publications), but
+whether it helps or not depends on the size of your code.
+
+> - At the moment type errors are pretty horrible. How can I coerce these
+>   functions to give prettier errors ? I've tried to coerce the function
+>   f in the *_aux functions below, but of course this is not possible as
+>   it needs to be polymorphic by design ...
+
+You can perfectly write polymorphic type annotations.
+Here is your code with some annotations, which gives readable types
+after inference.
+Note that I removed the catch-all cases in your pattern-matchings, are
+they greatly reduce the interest of using polymorphic
+variants. However I had to leave one for `Not, as otherwise the
+parameter would not be extensible.
+
+I also enclose a version using private row types, which separates
+positive and negative cases, so as to remove all catch-all cases.
+This is more verbose, but more powerful, and all types are explicit.
+
+Jacques Garrigue
+
+(* my basic data type *)
+type 'a termpc =
+    [`And of 'a * 'a
+    |`Or of 'a * 'a
+    |`Not of 'a
+    |`Atom of string
+    ]
+;;
+
+(* a simple normal form function *)
+let nnfpc_aux f : [> 'a termpc] termpc -> 'a = function
+  |`Not ( `Not x   )  -> f x
+  |`Not ( `And(x,y) ) -> `Or  (f (`Not x), f (`Not y) )
+  |`Not ( `Or (x,y) ) -> `And (f (`Not x), f (`Not y) )
+  |`And (x,y)         -> `And (f x, f y)
+  |`Or  (x,y)         -> `Or  (f x, f y)
+  |`Not ( `Atom _) as x -> x
+  |`Atom _ as x -> x
+  |`Not _ -> failwith "impossible pc"
+
+;;
+
+let rec nnfpc t = nnfpc_aux nnfpc t;;
+
+(* extension of the basic data type *)
+type 'a termk =
+    [`Dia of 'a
+    |`Box of 'a
+    |'a termpc
+    ]
+;;
+
+let nnfk_aux f : [> 'a termk] termk -> 'a = function
+  |`Not (`Dia x ) -> `Box (f (`Not x))
+  |`Not (`Box x ) -> `Dia (f (`Not x))
+  |`Dia x         -> `Dia (f x)
+  |`Box x         -> `Box (f x)
+  |#termpc as x -> nnfpc_aux f x
+;;
+
+let rec nnfk t = nnfk_aux nnfk t;;
+
+(* an other extension on top of termk *)
+type 'a termlck =
+    [`CDia of 'a
+    |`CBox of 'a
+    |'a termk
+    ]
+;;
+
+let rec nnflck_aux f : [> 'a termlck] termlck -> 'a = function
+  |`Not (`CDia x ) -> `CBox (f (`Not x))
+  |`Not (`CBox x ) -> `CDia (f (`Not x))
+  |`CDia x         -> `CDia (f x)
+  |`CBox x         -> `CBox (f x)
+  |#termk as x -> nnfk_aux f x
+;;
+
+let rec nnflck t = nnflck_aux nnflck t;;
+
+let a = `Not (`Not (`Not (`Dia (`CDia (`Atom "a")))));;
+let b = nnflck a;;
+
+
+(* Alternative version using private row types *)
+module type T = sig
+  type term
+  val nnf : term -> term
+  val nnf_not : term -> term
+end
+
+module Fpc(X : T with type term = private [> 'a termpc] as 'a) =
+  struct
+    type term = X.term termpc
+    let nnf : term -> _ = function
+      |`Not(`Atom _) as x -> x
+      |`Not x     -> X.nnf_not x
+      |`And (x,y) -> `And (X.nnf x, X.nnf y)
+      |`Or  (x,y) -> `Or  (X.nnf x, X.nnf y)
+      |`Atom _ as x -> x
+    let nnf_not : term -> _ = function
+      |`Not x    -> X.nnf x
+      |`And(x,y) -> `Or  (X.nnf_not x, X.nnf_not y)
+      |`Or (x,y) -> `And (X.nnf_not x, X.nnf_not y)
+      |`Atom _ as x -> `Not x
+  end
+
+module rec Pc : T with type term = Pc.term termpc = Fpc(Pc)
+
+module Fk(X : T with type term = private [> 'a termk] as 'a) =
+  struct
+    type term = X.term termk
+    module Pc = Fpc(X)
+    let nnf : term -> _ = function
+      |`Dia x -> `Dia (X.nnf x)
+      |`Box x -> `Box (X.nnf x)
+      |#termpc as x -> Pc.nnf x
+    let nnf_not : term -> _ = function
+      |`Dia x -> `Box (X.nnf_not x)
+      |`Box x -> `Dia (X.nnf_not x)
+      |#termpc as x -> Pc.nnf_not x
+  end
+
+module rec K : T with type term = K.term termk = Fk(K)
+
+module Flck(X : T with type term = private [> 'a termlck] as 'a) =
+  struct
+    type term = X.term termlck
+    module K = Fk(X)
+    let nnf_not : term -> _ = function
+      |`CDia x -> `CBox (X.nnf_not x)
+      |`CBox x -> `CDia (X.nnf_not x)
+      |#termk as x -> K.nnf_not x
+    let nnf : term -> _ = function
+      |`CDia x -> `CDia (X.nnf x)
+      |`CBox x -> `CBox (X.nnf x)
+      |#termk as x -> K.nnf x
+  end
+
+module rec Lck : T with type term = Lck.term termlck = Flck(Lck)
+
+let b = Lck.nnf a
+

@@ -1,0 +1,118 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 9BA57BC4E
+	for <caml-list@yquem.inria.fr>; Thu, 17 Aug 2006 05:11:13 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k7H3BDXr008959
+	for <caml-list@yquem.inria.fr>; Thu, 17 Aug 2006 05:11:13 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA20397 for <caml-list@pauillac.inria.fr>; Thu, 17 Aug 2006 05:11:12 +0200 (MET DST)
+Received: from wr-out-0506.google.com (wr-out-0506.google.com [64.233.184.225])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k7GJZePU005269
+	for <caml-list@inria.fr>; Wed, 16 Aug 2006 21:35:41 +0200
+Received: by wr-out-0506.google.com with SMTP id 55so64800wri
+        for <caml-list@inria.fr>; Wed, 16 Aug 2006 12:34:45 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition;
+        b=t4T/jz+f1b6oJ3zu1SW7OVRXMPO9Y8lldo+A700AYy4aJDjR0ysiBZZV2iLE5nErUTFAyaXNFxPaCeREqwEoZyHDNzRl/ly9Efaj9icV7/0G1+lvNfAr6SrdxzuUVVx+/2ttZXbXrh0USnRpgeftrUbVYfCawomBrfK2+yX1EEA=
+Received: by 10.49.20.5 with SMTP id x5mr905434nfi;
+        Wed, 16 Aug 2006 12:34:44 -0700 (PDT)
+Received: by 10.78.158.8 with HTTP; Wed, 16 Aug 2006 12:34:43 -0700 (PDT)
+Message-ID: <aee06c9e0608161234l5c9e69a3he67c9caf903e69c7@mail.gmail.com>
+Date: Wed, 16 Aug 2006 12:34:43 -0700
+From: "Nathaniel Gray" <n8gray@gmail.com>
+To: "Caml List" <caml-list@inria.fr>
+Subject: Help interfacing with C
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+X-Spam: no; 0.00; interfacing:01 fdlist:01 pairs:01 fdset:01 fdlist:01 fdset:01 newres:01 val:01 newres:01 val:01 alloc:01 alloc:01 otherlibs:01 unix:01 ocaml:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.3
+
+Hi folks,
+
+I'm having a heck of a time figuring out why this code *doesn't* work:
+
+/* fdlist is a list of (file_descr * 'a) pairs.  Filter by FD_ISSET */
+static value fdset_to_fdlist2(value fdlist, fd_set *fdset)
+{
+  value l, p, newres;
+  value res = Val_int(0);
+
+  Begin_roots4(l, p, res, newres);  /* I know, this is aggressive */
+    for (l = fdlist; l != Val_int(0); l = Field(l, 1)) {
+      p = Field(l, 0);
+      int fd = Int_val(Field(p, 0));
+      if (FD_ISSET(fd, fdset)) {
+        newres = alloc_small(2, 0);
+        Field(newres, 0) = p;
+        Field(newres, 1) = res;
+        res = newres;
+      }
+    }
+  End_roots();
+  return res;
+}
+
+But this code *does* work:
+
+/* fdlist is a list of file_descr.  Filter by FD_ISSET */
+static value fdset_to_fdlist(value fdlist, fd_set *fdset)
+{
+  value l;
+  value res = Val_int(0);
+
+  Begin_roots2(l, res);
+    for (l = fdlist; l != Val_int(0); l = Field(l, 1)) {
+      int fd = Int_val(Field(l, 0));
+      if (FD_ISSET(fd, fdset)) {
+        value newres = alloc_small(2, 0);
+        Field(newres, 0) = Val_int(fd);
+        Field(newres, 1) = res;
+        res = newres;
+      }
+    }
+  End_roots();
+  return res;
+}
+
+The second sample comes directly from otherlibs/unix/select.c in the
+ocaml compiler, and the first is part of a modification I'm writing to
+have select work on (file_descr * 'a) pairs instead of plain file
+descriptors.  The Begin_roots4 line was originally Begin_roots3(l,
+res, newres), but it doesn't seem to make any difference.  When I run
+in gdb the failure looks like this:
+
+Program received signal EXC_BAD_ACCESS, Could not access memory.
+Reason: KERN_PROTECTION_FAILURE at address: 0x00000000
+0x000051ac in caml_array_unsafe_get (array=1, index=1) at array.c:101
+101       if (Tag_val(array) == Double_array_tag)
+(gdb) bt
+#0  0x000051ac in caml_array_unsafe_get (array=1, index=1) at array.c:101
+#1  0x0002dd84 in caml_interprete (prog=0x205000, prog_size=949932) at
+interp.c:869
+#2  0x00021bd8 in caml_main (argv=0xbfffe934) at startup.c:414
+#3  0x00002630 in main (argc=2, argv=0xbfffe934) at main.c:35
+
+It fails on line 869 of this code in caml_interprete:
+867         Instruct(C_CALL2):
+868           Setup_for_c_call;
+869           accu = Primitive(*pc)(accu, sp[1]);
+870           Restore_after_c_call;
+
+I've tried poking in gdb, but as far as I can tell the result of the
+function is a well-formed list.  Any suggestions?
+
+Thanks!
+-n8
+
+-- 
+>>>-- Nathaniel Gray -- Caltech Computer Science ------>
+>>>-- Mojave Project -- http://mojave.cs.caltech.edu -->
+

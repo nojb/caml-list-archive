@@ -1,0 +1,107 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id DC05FBB9C
+	for <caml-list@yquem.inria.fr>; Wed, 23 Nov 2005 14:40:08 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jANDe8QG014680
+	for <caml-list@yquem.inria.fr>; Wed, 23 Nov 2005 14:40:08 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA03942 for <caml-list@pauillac.inria.fr>; Wed, 23 Nov 2005 14:40:07 +0100 (MET)
+Received: from kraid.nerim.net (smtp-103-wednesday.nerim.net [62.4.16.103])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jANDe7vC003994
+	for <caml-list@inria.fr>; Wed, 23 Nov 2005 14:40:07 +0100
+Received: from karryall.dnsalias.org (oandrieu.pck.nerim.net [213.41.240.180])
+	by kraid.nerim.net (Postfix) with ESMTP id B71D240F3D;
+	Wed, 23 Nov 2005 14:40:06 +0100 (CET)
+Received: by karryall.dnsalias.org (Postfix, from userid 500)
+	id 21B94596FDA; Wed, 23 Nov 2005 14:40:07 +0100 (CET)
+From: Olivier Andrieu <oandrieu@nerim.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <17284.28982.834548.164979@karryall.dnsalias.org>
+Date: Wed, 23 Nov 2005 14:40:06 +0100
+To: Thomas Fischbacher <Thomas.Fischbacher@Physik.Uni-Muenchen.DE>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] C Callback issues
+In-Reply-To: <Pine.LNX.4.61.0511231319580.19523@eiger.cip.physik.uni-muenchen.de>
+References: <Pine.LNX.4.61.0511231319580.19523@eiger.cip.physik.uni-muenchen.de>
+X-Mailer: VM 7.19 under Emacs 21.4.1
+X-Miltered: at concorde with ID 43847138.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 43847137.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; andrieu:01 oandrieu:01 nerim:01 caml-list:01 foo:01 ocaml:01 ocaml:01 bindings:01 foo:01 camlprim:01 val:01 exn:01 val:01 optionally:01 malloc:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+ Thomas Fischbacher [Wednesday 23 November 2005] :
+ >
+ > 
+ > Hello all,
+ > 
+ > suppose I have a C library which provides functionality via registering C 
+ > callbacks that take a closure parameter. For the sake of this example,
+ > let's say via set_foo_callback(void (*f)(void *),void *closure_param).
+ > 
+ > Now, if I want to lift this to the OCaml level by writing a C 
+ > callback-wrapper which will use the closure arg to pass the OCaml 
+ > function to be called, I encounter a slight problem:
+ > 
+ > Callbacks have to be "announced globally" to C by means of 
+ > Callback.register.
+
+Well, no, not really. Bindings with callbacks usually don't use this
+registering mechanism. You can do something like this:
+
+,----
+| static void foo_wrapper (void *);
+| 
+| CAMLprim value
+| ml_set_foo_callback (value f)
+| {
+|   static value closure;
+|   if (closure == 0)
+|       caml_register_global_root (&closure);
+|   closure = f;
+|   set_foo_callback (foo_wrapper, &closure);
+|   return Val_unit;
+| }
+| 
+| static void
+| foo_wrapper (void *data)
+| {
+|   value *closure = data;
+|   value res;
+|   res = caml_callback_exn (*closure, Val_unit);
+|   /* optionally : */
+|    *  if (Is_exception_val (res))
+|    *    do_something()
+|    */
+| }
+`----
+
+and on the caml side, it's simply:
+
+  external set_foo_callback : (unit -> unit) -> unit = "ml_set_foo_callback"
+
+You can also malloc the space for the C parameter:
+
+  value *closure;
+  closure = caml_stat_alloc (sizeof *closure);
+  *closure = f;
+  caml_register_global_root (closure);
+  ...
+
+which you'd need to free at some point:
+
+  caml_unregister_global_root (closure);
+  caml_stat_free (closure);
+
+It depends on how exactly the C API works (e.g. wether specifying NULL
+as the function callback is used the unregister the callback).
+
+-- 
+   Olivier
+

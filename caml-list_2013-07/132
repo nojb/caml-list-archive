@@ -1,0 +1,130 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 077E881798
+	for <caml-list@sympa.inria.fr>; Fri, 19 Jul 2013 11:05:03 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao4CAFgA6VFCJwNzemdsb2JhbABaxFCBJQ4BAQsHDQk8giQBAQQBJ1IFFjRpFIgPBrY9kA8HFoNmA5dcAZRfPA
+X-IPAS-Result: Ao4CAFgA6VFCJwNzemdsb2JhbABaxFCBJQ4BAQsHDQk8giQBAQQBJ1IFFjRpFIgPBrY9kA8HFoNmA5dcAZRfPA
+X-IronPort-AV: E=Sophos;i="4.89,700,1367964000"; 
+   d="scan'208";a="26591102"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 19 Jul 2013 11:05:01 +0200
+Received: (qmail 36422 invoked by uid 9370); 19 Jul 2013 09:05:00 -0000
+Date: 19 Jul 2013 09:05:00 -0000
+Message-ID: <20130719090500.36421.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: dra-news@metastack.com
+CC: caml-list@inria.fr
+In-reply-to: <000001ce83bf$879e6520$96db2f60$@metastack.com>
+Subject: Re: [Caml-list] GADT in an optional parameter
+
+
+> Now, in my woolly way, I thought that the default value for an optional
+> parameter behaved /almost/ like syntactic sugar, but clearly not. Is there a
+> way to annotate this to achieve what I'm after? 
+
+Actually a default parameter is syntactic sugar. When the type checker
+sees
+
+        fun ?(p=v) -> body
+
+it essentially macro-expands the expression to the following
+
+   fun xxOpt -> let p = match xxOpt with
+                         | Some xxSth -> xxSth
+                         | None       -> v
+                in body
+and then type checks the resulting macro-expansion. Here xxOpt and
+xxSth are internally generated identifiers with funky names (the type
+checker is fond of generating funny identifiers, especially when
+dealing with objects). You can see this expansion process for yourself,
+typing/typecore.ml; search for the line
+
+  | Pexp_function (l, Some default, [spat, sbody]) ->
+
+If you apply this expansion to your function
+
+> let find : type s t . 
+>     ?mode:(s, t) wrap -> string -> s Map.Make(String).t -> t = 
+>  fun ?(mode = Exn) key map ->
+
+you will see the error right away. Let's take a simpler GADT for clarity
+
+    type _ g = 
+      | Int : int -> int g 
+      | Str : string -> string g
+    ;;
+
+and write a consumer of GADT values (which pattern-matches on them)
+
+    let g_consumer : type a. a g -> string = function
+      | Int x -> string_of_int x
+      | Str x -> x
+    ;;
+
+This is a polymorphic function: it can handle data of the type
+[int g] and [string g]:
+
+    g_consumer (Int 1);;
+    g_consumer (Str "str");;
+
+Let us attempt to write a producer:
+
+let g_producer1 : type a. a g = Int 1;;
+
+we immediately get an error:
+
+  let g_producer1 : type a. a g = Int 1;;
+                                  ^^^^^
+Error: This expression has type int g but an expression was expected of type
+         a g
+
+
+Although we may consume either [int g] or [string g], we can produce
+only one of them. Likewise,
+        fun x -> match x with
+                   true ->  Int 1
+                 | false -> Str "str"
+;;
+fails similarly.
+
+
+If we desugar the original example with the optional parameter, we get
+something like
+
+        let mode = match xxOpt with
+                 | Some x -> x
+                 | None   -> Int 1
+
+the parameter mode is supposed to be polymorphic, [a g], but the match
+expression, which produces GADT, cannot produce the polymorphic GADT
+type. If we see Int 1, then result must be [int g]. 
+
+Again, a function that pattern-matches on GADT can be polymorphic. A
+function/expression that _produces_ GADT (that is, uses GADT
+constructors to produce values) cannot be polymorphic in the resulting
+GADT.
+
+

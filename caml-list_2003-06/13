@@ -1,0 +1,100 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA04505; Mon, 2 Jun 2003 11:26:19 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA04501 for <caml-list@pauillac.inria.fr>; Mon, 2 Jun 2003 11:26:18 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h529QHH00097;
+	Mon, 2 Jun 2003 11:26:17 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA04440; Mon, 2 Jun 2003 11:26:16 +0200 (MET DST)
+Date: Mon, 2 Jun 2003 11:26:16 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Norman Ramsey <nr@eecs.harvard.edu>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] implementing bit vectors in OCaml
+Message-ID: <20030602112616.A3740@pauillac.inria.fr>
+References: <20030601170317.002EF12F9CE@flatcoat.eecs.harvard.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20030601170317.002EF12F9CE@flatcoat.eecs.harvard.edu>; from nr@eecs.harvard.edu on Sun, Jun 01, 2003 at 01:03:17PM -0400
+X-Spam: no; 0.00; caml-list:01 vectors:01 scrutinizing:99 interfacing:01 implemented:01 pointers:01 char:01 lxor:01 -dimensional:01 bigarrays:01 nativeint:01 slower:01 ocamlopt:01 sparse:01 filliatre's:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> We have a program that is spending a lot of time in set operations,
+> and we're thinking of trying an imperative implementation based on
+> bit vectors.
+> I would hope that the basis of such an implementation would be an array
+> of native integers, but on scrutinizing the manual (espeically the chapter
+> on interfacing to C), I have concluded that such a thing is not possible.
+> Our choices appear to be
+> 
+>   * An array of native integers, which will be implemented as an array
+>     of pointers to native integers, because integers are boxed.
+> 
+>   * An array of tagged integers, which will be less efficient as
+>     dividing by 31 is more expensive than shifting.
+> 
+> How would the gurus recommend that we proceed?  Is there a better,
+> still efficient data structure for a set of small integers?
+
+As others mentioned, you can use strings, which are really arrays of
+bytes.  For instance:
+
+type t = string
+
+let create nbits = String.make ((nbits + 7) / 8) '\000'
+
+let is_set s n =
+  (Char.code s.[n lsr 3]) land (1 lsl (n land 7)) <> 0
+
+let set s n =
+  let i = n lsr 3 in
+  s.[i] <- Char.unsafe_chr (Char.code s.[i] lor (1 lsl (n land 7)))
+
+let clear s n =
+  let i = n lsr 3 in
+  s.[i] <- Char.unsafe_chr (Char.code s.[i] land
+                                         (0xFF lxor (1 lsl (n land 7))))
+
+Operations on whole sets such as union and intersection will not be as
+fast as they could be with an array of 32- or 64-bit integers
+(you're processing the set 8 bits at a time instead of 32 or 64 bits
+at a time), though.
+
+Another option is to use 1-dimensional bigarrays of kind int32 or
+nativeint.  In bytecode, bigarray accesses are much slower than string
+accesses.  However, with sufficient type constraints, ocamlopt can
+generate good inline code for bigarray accesses.
+
+For very sparse sets, binary trees (as in the Set module) or Patricia
+trees (as in J.-C. Filliâtre's library) can be more efficient, though.
+
+> Could the compiler gods be persuaded to provide unboxed
+> representations for arrays of untagged integers, as is already done
+> for `float array'?
+
+The special case for float arrays is already a bit of a hack and it
+isn't clear this was a really good idea -- although it sure helps with
+benchmarks :-)  
+
+The problem with this special case is that every polymorphic array
+operation (when the array type is not known statically) is turned into
+a run-time test
+
+        if this_is_a_float_array
+        then box_float(load_float_from_array)
+        else load_word_from_array
+
+If additional special cases were added, these generic array operations
+would become even more costly and generate even bigger code...
+
+Hope this helps,
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

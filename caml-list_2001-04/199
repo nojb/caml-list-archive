@@ -1,0 +1,129 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id FAA06363; Wed, 11 Apr 2001 05:35:31 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA06361 for <caml-list@pauillac.inria.fr>; Wed, 11 Apr 2001 05:35:30 +0200 (MET DST)
+Received: from c001.iad.cp.net (c001-h002.c001.iad.cp.net [209.228.6.116])
+	by concorde.inria.fr (8.11.1/8.10.0) with SMTP id f3B3ZSD17060
+	for <caml-list@inria.fr>; Wed, 11 Apr 2001 05:35:28 +0200 (MET DST)
+Received: (cpmta 15648 invoked from network); 10 Apr 2001 23:35:24 -0400
+Received: from dsl-64-128-194-9.telocity.com (HELO GRANADA) (64.128.194.9)
+  by smtp.patkai.com (209.228.6.116) with SMTP; 10 Apr 2001 23:35:24 -0400
+X-Sent: 11 Apr 2001 03:35:24 GMT
+To: caml-list@inria.fr
+Subject: [Caml-list] Future of labels
+From: G Michael Sawka <sawka@cs.stanford.edu>
+Date: 10 Apr 2001 20:35:00 -0700
+Message-ID: <uelv0p0rf.fsf@cs.stanford.edu>
+Lines: 103
+User-Agent: Gnus/5.0808 (Gnus v5.8.8) Emacs/20.7
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+[As a small pre-script, I think it is really exciting to see all this
+talk about language design (both theoretical and practical). I've been
+lurking on the CAML list (and the labeling thread) for a  while,
+trying to make sense of all of the discussion.]
+
+Unless I am missing something, I don't see how you can reconcile
+normal function application with commuting labeled arguments within
+the current type system.  Consider:
+  
+  let sub_1 x y = <fun>  :  int -> int -> int
+  let sub_2 ~x ~y = <fun>  :  x:int -> y:int -> int
+
+The function sub_1 is a normal curried function that builds a closure
+as the arguments are applied, and then passes the arguments all at
+once to the underlying function.  The underlying closure data
+structure can be thought of as an array since accesses are done via
+position.
+
+The function sub_2 is special.  It seems as if the labels "x" and "y"
+are part of the type of the argument.  So, x:int is really a sub-type
+of int.  But if this is the case, then "x:int" and "y:int" have
+different types.  (Which certainly is consistent with how CAML handles
+application of labeled arguments).
+
+So, with commuting arguments, the given function signature doesn't
+really give the whole story, we're really created two functions:
+
+  x:int -> y:int -> int
+  y:int -> x:int -> int
+
+It seems to me that in order to support this type of argument
+commuting, you end up creating the concept of a light-weight record
+within the closure.
+
+So, abstractly you end up with:
+ 
+  [x:int; y:int] -> int
+
+and the syntax "sub_2 ~x:5" merely sets the "x" field of the
+light-weight record held in the closure to the value 5.  A call 
+"sub_2 ~y:10" would set the field "y" to 10.  The special semantics of
+this record are that when all the fields are set, it calls the
+underlying function, and no field can be set twice.
+
+This accumulation idea of values within the closure is equivalent to
+the notion of the closure for sub_1 (since a call to "sub_1 5" sets
+the 0th element in the array to the value 5).  The difference is that
+in the first case, the underlying closure structure is accessed as an
+array, and in the second case it is accessed as a map.
+
+The conclusion?  These types of accesses *shouldn't* be mixed.  
+
+But they are... which is what I think is creating all the confusion.
+In label mode, the "map" concept is the dominant one.  In non-label
+mode, the positional concept is dominant.  In CAML, it seems that they
+are unified by hacks, whereby in non-label mode a label can be
+associated with each position, and if a label is given, it is checked
+for accuracy.  And, in label mode a position is assocated with each
+label (based upon the order in which the arguments were declared) and
+if no label is given the position can be used to do the mapping.  But
+in general, I think this unification is a bad idea... (e.g. label
+mode's ability to commute labeled and unlabeled arguments!)
+
+What is needed is either to choose one mode or the other (which cannot
+be done -- as it seems that the one thing this discussion has agreed
+on is that we can't agree on one particular mode).  Or, a syntax
+(yuck) needs to be created to allow function signatures to clearly
+mark which closure access mode is dominant.  Example:
+
+  f  :  [x:int; y:int] -> z:int -> int
+
+The first two arguments are mapped primarily by name.  Labels should
+be used.  The third argument is mapped by position.  A label was
+provided for clarity, but is not important.  Possible applications:
+
+  f ~x:5 ~y:10 20
+  f ~y:18 ~x:2 17
+  f ~x:1 ~y:2 ~z:72
+
+Unallowed applications:
+
+  f ~z:8 ~x:2 ~y:10   <- z is a positional arugment, not
+                         interchangeable with the mapped arguments
+                         it must come 3rd.
+  f 1 2 3             <- very bad style.  this should probably not be
+                         allowed, or at least a warning should be
+                         thrown indicating that you should not access
+                         the labeled argument "x" by position.
+
+Note also that the currying works properly (and intuitively):
+  (f ~x:5) : [y:int] -> z:int -> int
+  (f ~y:10) : [x:int] -> z:int -> int
+  (f ~y:8 ~x:20) : z:int -> int
+
+If you apply a labeled argument, it consumes on of the arguments from
+the "[]".
+
+
+                      -mike.
+
+
+p.s.  Does this make sense, or am I missing something in the theory?
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

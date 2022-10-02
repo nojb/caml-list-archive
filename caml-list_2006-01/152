@@ -1,0 +1,126 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 0E7E7BB9C
+	for <caml-list@yquem.inria.fr>; Fri, 20 Jan 2006 16:07:06 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k0KF75NU030556
+	for <caml-list@yquem.inria.fr>; Fri, 20 Jan 2006 16:07:05 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA28633 for <caml-list@pauillac.inria.fr>; Fri, 20 Jan 2006 16:07:05 +0100 (MET)
+Received: from kaiserslautern1.lmsintl.com (Kaiserslautern1.lms-gmbh.de [213.68.136.230])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k0KF74cu021857
+	for <caml-list@inria.fr>; Fri, 20 Jan 2006 16:07:04 +0100
+Received: by kaiserslautern1.lmsintl.com with Internet Mail Service (5.5.2653.19)
+	id <ZWZ6549H>; Fri, 20 Jan 2006 16:07:04 +0100
+Message-ID: <26EB47FDD566A7469FC862DAF373792F07D738@kaiserslautern1.lmsintl.com>
+From: "Bauer, Christoph" <Christoph.Bauer@lms-gmbh.de>
+To: caml-list@inria.fr
+Subject: Again C-Interface: caml_alloc_custom
+Date: Fri, 20 Jan 2006 16:07:03 +0100
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.5.2653.19)
+Content-Type: text/plain
+X-Miltered: at nez-perce with ID 43D0FC99.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 43D0FC98.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; c-interface:01 alloc:01 ocaml:01 alloc:01 sizeof:01 allocations:01 camlparam:01 camlreturn:01 const:01 camlparam:01 val:01 camlreturn:01 val:01 printf:01 fflush:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+Hi,
+
+many thanks for the anwsers of my other questions.
+
+I use Custom_blocks in OCaml to handle reference-countend
+objects (Tcl_Obj). My program runs fine - but only with use=0, max=1
+in caml_alloc_custom.
+
+ caml_alloc_custom( &tcl_obj_ops, sizeof( Tcl_Obj * ), 0, 1 );
+
+Otherwise (use=1, max=1; use=1, max=100) I get random 
+crashes (e.g. in mark_slice). This makes me a bad feeling.
+
+Maybe something more is involved (Callbacks+GC?), because with a simple
+test (many allocations and finalizations) case couldn't reproduce 
+this crash.
+
+Does anybody have such experiences?
+
+Could be here a problem (CAMLparam+CAMLreturn in C-called function):
+
+static value copy_tcl_array(int objc,  Tcl_Obj * const * objv)
+{
+  CAMLparam0 ();
+  CAMLlocal2 (result, t);
+  int n;
+
+  result = Val_int(0);
+  for (n = objc-1; n >= 0; --n) {
+    t = caml_alloc_small(2,0);
+    Field(t, 0) = alloc_tcl_obj( objv[n] );
+    Field(t, 1) = result; 
+    result = t;
+  }
+  CAMLreturn (result);
+}
+
+
+... C-Code:
+ r = callback(*f, copy_tcl_array(objc-2, objv+2));
+
+Regards,
+Christoph Bauer
+
+
+For completness the tcl_obj_ops:
+
+#define TclObj_val(x) (*((Tcl_Obj**) Data_custom_val(x)))
+
+static
+void finalize_tclobj( value v ) {
+  /* printf("finalize tclobj\n"); */
+  fflush(stdout);
+  Tcl_DecrRefCount( TclObj_val (v) );
+}
+
+static
+int compare_tclobj( value v1, value v2 ) {
+  CAMLparam2( v1, v2 );
+  CAMLreturn( strcmp( Tcl_GetString( TclObj_val(v1)), 
+                      Tcl_GetString( TclObj_val(v2) )));
+}
+
+static 
+long hash_tclobj( value v ) {
+  CAMLparam1( v );
+  char *s = Tcl_GetString( TclObj_val(v ) );
+  long result = 0;
+  while( *s ) result = (result * 7) + *s++;
+  CAMLreturn( result );
+}
+
+static
+struct custom_operations tcl_obj_ops = {
+  "Tcl_Obj",
+  &finalize_tclobj,
+  &compare_tclobj,
+  &hash_tclobj,
+  custom_serialize_default,
+  custom_deserialize_default
+};
+
+
+Christoph Bauer
+Dipl. Inf.
+
+LMS Deutschland GmbH
+Luxemburgerstr. 7
+D-67657 Kaiserslautern
+
+T +49 631 303 22 152
+
+mailto:Christoph.Bauer@lms-gmbh.de
+http://www.lmsintl.com 
+

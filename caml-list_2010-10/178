@@ -1,0 +1,82 @@
+Return-Path: <michael@elehack.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id C88CDBBAF
+	for <caml-list@yquem.inria.fr>; Sat, 30 Oct 2010 19:38:20 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhkFAF70y0yty1O7/2dsb2JhbACTTo18cbxhgwMIgjkEhFeJBRk
+X-IronPort-AV: E=Sophos;i="4.58,265,1286143200"; 
+   d="scan'208";a="76811814"
+Received: from elehack.net ([173.203.83.187])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 30 Oct 2010 19:38:17 +0200
+Received: from [192.168.42.103] (unknown [68.168.162.166])
+	by elehack.net (Postfix) with ESMTPSA id 0EDFFC886F
+	for <caml-list@yquem.inria.fr>; Sat, 30 Oct 2010 12:40:37 -0500 (CDT)
+Message-ID: <4CCC5802.4080909@elehack.net>
+Date: Sat, 30 Oct 2010 12:38:10 -0500
+From: Michael Ekstrand <michael@elehack.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en-US; rv:1.9.2.12) Gecko/20101027 Lightning/1.0b2 Thunderbird/3.1.6
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] How does OCaml update references when values are
+ moved by the GC?
+References: <418632253.26199.1288302511712.JavaMail.root@zmbs1.inria.fr>	<8277D889-83E2-4037-91B3-3EB5E9EB2EA9@inria.fr> <018c01cb7856$1e228350$5a6789f0$@com>
+In-Reply-To: <018c01cb7856$1e228350$5a6789f0$@com>
+X-Enigmail-Version: 1.1.2
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 pointers:01 pointers:01 compaction:01 runtime:01 mutable:01 ocaml:01 pointer:01 mutable:01 runtime:01 run-time:01 traversing:01 unboxed:01 arrays:01 rewriting:01 
+
+On 10/30/2010 12:15 PM, Jon Harrop wrote:
+> I was hoping for a little more detail, of course. :-)
+> 
+> How is the mapping from old to new pointers stored? Does the GC rewrite all
+> of the thread-local stacks in series before allowing any of them to
+> continue?
+
+I imagine so.
+
+> Does the write barrier record pointers written into the major heap
+> so only those specific locations are rewritten at minor heap collections but
+> the entire major heap is rewritten upon compaction?
+
+Yes.  The runtime maintains a 'remembered set', a list of pointers from
+the major heap back to the minor heap.  Maintaining this set is why
+mutable data can be expensive in OCaml - any time you store a pointer
+into a mutable field, the runtime must check whether the new link is
+from the major to the minor heap and update the refs list accordingly.
+Richard WM Jones has details here:
+
+http://rwmj.wordpress.com/2009/08/08/ocaml-internals-part-5-garbage-collection/
+
+> Can the GC distinguish
+> between an array of ints and an array of pointers at run-time in order to
+> avoid traversing all of the ints when trying to rewrite pointers?
+
+Not that I know of.  The tag block does not have a documented reserved
+value to indicate that - there are values to indicate an unboxed float
+array, a string, and an array of opaque values, but not an integer array
+(unless the opaque value flag is set for integer arrays).
+
+> Also, any idea what the maximum proportion of the running time of a program
+> is spent doing this rewriting? For example, if you fill a float->float hash
+> table with values does updating the pointers in the major heap account for a
+> significant proportion of the total running time of the program?
+
+In my data analysis jobs (which wind up allocating quite large heaps),
+the compactor almost never (detectably) runs.  Minor cycles and major
+slices are a much larger concern in my experience.  I work around that
+by increasing the minor heap size to decrease minor heap thrashing (my
+general rule of thumb is that I want each "work unit", whatever that may
+be, to fit in the minor heap).
+
+It could well be that other applications will have different
+characteristics that trigger more compactions.  I cannot speak for those
+applications.  Further, when I have huge floating-point data structures,
+I'm usually using bigarrays (not because I choose them over arrays,
+typically, but because such code in my work frequently has to interact
+with BLAS or SPARSKIT at some point).
+
+- Michael
+

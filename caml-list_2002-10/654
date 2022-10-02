@@ -1,0 +1,136 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA10986; Thu, 24 Oct 2002 02:00:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA10222 for <caml-list@pauillac.inria.fr>; Thu, 24 Oct 2002 02:00:27 +0200 (MET DST)
+Received: from comtv.ru (comtv.ru [217.10.32.4])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g9O00QD24052
+	for <caml-list@inria.fr>; Thu, 24 Oct 2002 02:00:26 +0200 (MET DST)
+Received: from [10.0.66.9] ([10.0.66.9] verified)
+  by comtv.ru (CommuniGate Pro SMTP 3.5.9)
+  with ESMTP-TLS id 5067196; Thu, 24 Oct 2002 04:00:24 +0400
+Date: Thu, 24 Oct 2002 04:00:41 +0400 (MSD)
+From: malc <malc@pulsesoft.com>
+X-X-Sender: malc@home.oyster.ru
+To: Christophe TROESTLER <debian00@tiscalinet.be>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: float boxing (was: matrix-matrix multiply)
+In-Reply-To: <Pine.LNX.4.44.0210231605530.824-100000@home.oyster.ru>
+Message-ID: <Pine.LNX.4.44.0210240348380.2152-100000@home.oyster.ru>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 23 Oct 2002, malc wrote:
+
+> > A few questions in view of this.  First, on my machine (AMD Athlon
+> > 1GHz running GNU/Linux), the timings give a preference to ref.ml
+> > 
+> > time ./ref 100000000
+> > real    0m1.279s user    0m1.280s sys     0m0.000s
+> > time ./ref2 100000000
+> > real    0m1.411s user    0m1.380s sys     0m0.000s
+> > 
+> > What could be a reason for that?
+> 
+> I think the reason is simple, both are more or less nop operations,
+> x or x.f is not used anywhere, hence no need to allocate the float.
+> This short example highlights the difference:
+> 
+> let useref n = 
+>   let x = ref 1.0 in
+>   for i = 1 to n do x := !x +. 1.0 done;
+>   !x
+> 
+> type t = { mutable f:float };;
+> let userec n = 
+>   let x = { f = 1.0 } in
+>   for i = 1 to n do x.f <- x.f +. 1.0 done;
+>   x.f
+> 
+> let _ =
+>   let n = int_of_string Sys.argv.(2) in
+>   Printf.printf "%f\n"
+>   (if Sys.argv.(1) = "ref" then
+>     useref n
+>   else
+>     userec n)
+> 
+> ref# time ./refrec rec 100000000
+> 100000001.000000
+> 
+> real    0m2.283s
+> user    0m2.280s
+> sys     0m0.000s
+> ref# time ./refrec ref 100000000
+> 100000001.000000
+> 
+> real    0m1.916s
+> user    0m1.910s
+> sys     0m0.010s
+> 
+> More or less same machine here.
+
+I believe i should add something here. Let's look at the inner loops.
+
+Mutable version:
+.L107:
+	fld1
+	faddl	(%ecx)
+	fstpl	(%ecx)
+	addl	$2, %eax
+	cmpl	%ebx, %eax
+	jle	.L107
+
+Suboptimal but ok...
+
+Reference version:
+.L101:
+.L103:	movl	young_ptr, %eax
+	subl	$12, %eax
+	movl	%eax, young_ptr
+	cmpl	young_limit, %eax
+	jb	.L104
+	leal	4(%eax), %ecx
+	movl	$2301, -4(%ecx)
+	fld1
+	faddl	(%esi)
+	fstpl	(%ecx)
+	movl	%ecx, %esi
+	addl	$2, %ebx
+	cmpl	%edx, %ebx
+	jle	.L101
+
+Lots of instructions + boxing.. And yet its faster than mutable one..
+Wonders of modern CPUs.
+
+My first take at simplest asm code doing the same:
+    mov eax, n
+    fld1
+    fld1
+  LL:
+    fadd st, st(1)
+    dec eax
+    jnz LL
+
+    fstp result
+    fstp st
+
+ref# time ./c 100000000
+100000001.000000
+
+real    0m0.394s
+user    0m0.390s
+sys     0m0.000s
+
+(Turned out that both gcc and icc produce similar code give or take)
+
+P.S. It would be interesting to see timings produced by P3/P4.
+
+-- 
+mailto:malc@pulsesoft.com
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

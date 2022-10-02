@@ -1,0 +1,117 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p77C8Qe7016123
+	for <caml-list@sympa-roc.inria.fr>; Sun, 7 Aug 2011 14:08:31 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: At8BAB9/Pk7RVaE2kGdsb2JhbAAoGqdfCBQBAQEBCQkNBxQEIYFZAiYGARseAxIQKTURAQUBFkGHTQIjmlSCVAqMMYJVg0o7iG0CAwaGQASHVosshi6GIjyDXw
+X-IronPort-AV: E=Sophos;i="4.67,332,1309730400"; 
+   d="scan'208";a="104886314"
+Received: from mail-fx0-f54.google.com ([209.85.161.54])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 07 Aug 2011 14:08:31 +0200
+Received: by fxe4 with SMTP id 4so2207183fxe.27
+        for <caml-list@inria.fr>; Sun, 07 Aug 2011 05:08:30 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=date:from:to:subject:message-id:x-mailer:mime-version:content-type
+         :content-transfer-encoding;
+        bh=nkzEPDM4AqpZnDbE2aC8C6g/EKk8sEtIFPCUhGqFVAk=;
+        b=vYWS9YmwJYDzR2OXDdxfCihjGT7Sx6sGvwlexZIsrwJUayorXXhoEYLI1DjaXNAJFr
+         4SphXtHa73hR5yiT14FKRzrP64N8+fXsXYXQgwXtCVt7NlfK8Z/BgE4obXsNwoge1BWS
+         U6iTX+gGUUZAag1Lt8Qq3/sK5E46bhniU/Zy8=
+Received: by 10.223.4.147 with SMTP id 19mr1379861far.39.1312718910528;
+        Sun, 07 Aug 2011 05:08:30 -0700 (PDT)
+Received: from lemon.local.tld (3-50-133-95.pool.ukrtel.net [95.133.50.3])
+        by mx.google.com with ESMTPS id l18sm268868fam.4.2011.08.07.05.08.27
+        (version=SSLv3 cipher=OTHER);
+        Sun, 07 Aug 2011 05:08:28 -0700 (PDT)
+Date: Sun, 7 Aug 2011 15:07:19 +0300
+From: ygrek <ygrekheretix@gmail.com>
+To: caml-list@inria.fr
+Message-Id: <20110807150719.34376e5e605354e296c528ca@gmail.com>
+X-Mailer: Sylpheed 3.2.0beta1 (GTK+ 2.24.4; i486-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Subject: [Caml-list] poor man's allocation profiler
+
+Hello,
+
+  I would like to share a simple trick that can be used to find
+allocation hot spots in ocaml programs. The idea is the same as
+in "poor man's profiler"[1] (by the way it is perfectly applicable
+and useful for profiling ocaml programs, see also pmp script[2]),
+and shares its advantages:
+ - no recompilation needed
+ - simple, understandable and universally available
+and shortcomings:
+ - launching gdb many times is rather slow
+ - sampling influences performance of target process
+
+  We know that caml_call_gc is usually called from allocation functions
+(when minor heap is exhausted). Putting breakpoint at caml_call_gc
+and recording stack traces when breakpoint is hit, then grouping identical
+traces after long run will show the functions that call gc most often,
+hence do most allocations!
+
+  Unfortunately gdb cannot properly unwind ocaml stack traces because
+ocamlopt doesn't employ frame pointer and doesn't provide static stack
+unwind information. As a result, on x86_64 stacks are shown in full,
+but with lots of garbage, on 32-bit - usually truncated after a couple of
+frames. But fear not :) - there exists a patch for ocamlopt to 
+produce stack unwind information[3] and after recompiling one can enjoy
+full stack traces in gdb! Patch doesn't break binary compatibility and so
+there is no need to recompile all used libraries (but that is advisable to
+get maximum coverage).
+
+  Finally, the spell :
+
+for i in $(echo {1..100}); do\
+ gdb -p PID -batch -n -q -ex 'b caml_call_gc' -ex 'c' -ex 'bt'\
+ |awk '/^#[^0]/ {print $4}' |uniq |paste -s -d , ;\
+done |sort |uniq -c |sort -nr
+
+  Let's test this method on some large and hairy ocaml codebase, e.g. mldonkey[4] :)
+  (Output is truncated manually for readability)
+
+  Original : 
+
+     41 camlList__rev_append_1051,camlList2__cut_rec_1071,camlCommonFile__fun_2610,camlWeak__iter_bucket_1117,camlArray__iter_1101 ...
+     33 camlList2__cut_rec_1071,camlCommonFile__fun_2610,camlWeak__iter_bucket_1117,camlArray__iter_1101,camlBasicSocket__exec_timers_1547 ...
+      6 camlBasicSocket__iter_task_1504,camlBasicSocket__loop_1550,camlCommonMain__entry,caml_program,caml_start_program,caml_main,main
+      2 camlBasicSocket__iter_timer_1509,camlBasicSocket__loop_1550,camlCommonMain__entry,caml_program,caml_start_program,caml_main,main
+      2 camlBasicSocket__f_1523,camlBasicSocket__exec_timers_1547,camlBasicSocket__loop_1550 ...
+      [...]
+
+  Ouch, 75% of allocations happen in single place, after some investigation
+it appears to be really inefficient implementation of sliding window used
+in a tight loop. After switching to Queue we get :
+
+     30 camlBasicSocket__iter_task_1504,camlBasicSocket__loop_1550,camlCommonMain__entry,caml_program,caml_start_program,caml_main,main
+     10 camlBasicSocket__iter_timer_1509,camlBasicSocket__loop_1550,camlCommonMain__entry,caml_program,caml_start_program,caml_main,main
+      7 camlCommonSwarming__fun_4928,camlBitv__fun_1554,camlArray__iteri_1111,camlCommonSwarming__set_uploader_intervals_3030 ...
+      6 camlCommonSwarming__intervals_to_string_3017,camlCommonSwarming__set_uploader_intervals_3030,camlBTClients__client_to_client_2653 ...
+      4 camlPrintf__scan_format_1278,camlString2__unsplit_1082,camlFilename2__normalize_1033,camlCommonShared__new_shared_1681,camlCommonShared__fun_1932 ...
+      [...]
+
+  Fixing iter_timer is simple :
+
+     23 camlBasicSocket__iter_task_1504,camlBasicSocket__loop_1558,camlCommonMain__entry,caml_program,caml_start_program,caml_main,main
+      7 camlBasicSocket__loop_1518,camlBasicSocket__loop_1558,camlCommonMain__entry,caml_program,caml_start_program,caml_main,main
+      4 camlPrintf__scan_format_1278,camlString2__unsplit_1082,camlFilename2__normalize_1033,camlCommonShared__new_shared_1681 ...
+      2 camlPrintf__scan_format_1278,camlString2__unsplit_1082,camlFilename2__normalize_1033,camlCommonComplexOptions__incoming_dir_1983 ...
+      2 camlPrintf__scan_format_1278,camlList__iter_1074,camlBencode__encode_1085,camlList__iter_1074,camlBencode__encode_1085 ...
+      [...]
+
+  The only remaining big hot spot is iter_task, but it requires larger
+changes, so I'll leave it out. The majority of allocations now are spread
+accross whole program. As a result - allocation rate reduced by 25%.
+
+[1]: http://poormansprofiler.org/
+]2]: http://aspersa.googlecode.com/svn/trunk/pmp
+[3]: http://caml.inria.fr/mantis/view.php?id=5314
+[4]: http://mldonkey.sf.net/
+
+Hope somebody finds it useful :)
+
+-- 
+ ygrek
+ http://ygrek.org.ua

@@ -1,0 +1,122 @@
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p2G2M34l023086
+	for <caml-list@sympa-roc.inria.fr>; Wed, 16 Mar 2011 03:22:03 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtgDAC67f01V2gB5h2dsb2JhbACmIgEBAQoLCQcWJcELDYJvgmYEkEaIWg
+X-IronPort-AV: E=Sophos;i="4.63,191,1299452400"; 
+   d="scan'208";a="93977014"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 16 Mar 2011 03:21:58 +0100
+X-Alinto-smtpauth-localdomain: Yes
+Received: from seldon (unknown [85.218.93.111])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id 4B744834A63;
+	Wed, 16 Mar 2011 03:21:55 +0100 (CET)
+Received: from yziquel by seldon with local (Exim 4.72)
+	(envelope-from <guillaume.yziquel@citycable.ch>)
+	id 1PzgMw-0008RG-L3; Wed, 16 Mar 2011 03:21:50 +0100
+Date: Wed, 16 Mar 2011 03:21:50 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+To: Nicolas Ojeda Bar <nojb@math.harvard.edu>
+Cc: caml-list@yquem.inria.fr
+Message-ID: <20110316022150.GJ22969@localhost>
+References: <057400AC-9E39-45CC-AB7A-35C67C339F83@math.harvard.edu>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <057400AC-9E39-45CC-AB7A-35C67C339F83@math.harvard.edu>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p2G2M34l023086
+Subject: Re: [Caml-list] obj magic performance and other questions
+
+Le Tuesday 15 Mar 2011 à 12:05:31 (-0400), Nicolas Ojeda Bar a écrit :
+> Hello,
+> 
+> This is not very efficient. I can use Obj.magic to access that same field as
+> follows:
+> 
+> let rec2_b x =
+> Obj.obj (Obj.field (Obj.field (Obj.repr x.children 0) 0))
+
+Seems that you messed up some parentheses.
+
+> My question is: is this use of Obj safe? and is this compiled to (two) simple
+> array accesses? Or is Obj.obj doing something behind the scenes?
+
+yziquel@seldon:~/sandbox/ocaml$ cat a.ml 
+let f x = Obj.obj (Obj.field (Obj.field (Obj.repr x) 0) 0)
+yziquel@seldon:~/sandbox/ocaml$ ocamlopt -c -S -dlambda a.ml 
+(seq
+  (let
+    (f/1030
+       (function x/1031
+         (id (array.unsafe_get (array.unsafe_get (id x/1031) 0) 0))))
+    (setfield_imm 0 (global A!) f/1030))
+  0a)
+
+So it should be compiled to array accesses. However, they are not so
+simple array accesses due to OCaml data layout. Moreover, there's this
+'id' around. Let's see:
+
+yziquel@seldon:~/sandbox/ocaml$ cat a.s
+
+[...]
+
+camlA__f_1030:
+	subq	$8, %rsp
+.L103:
+	movq	%rax, %rdi
+	movzbq	-8(%rdi), %rax
+
+So the stack has been managed, and the %rax registers now contains the
+tag of the 'x' argument to 'f'.
+
+	cmpq	$254, %rax
+
+This checks that the tag is or isn't the tag of an array of doubles.
+(Obj.double_array_tag is 254). So we shouldn't jump on the ext 'je'.
+
+	je	.L102
+	movq	(%rdi), %rbx
+
+The register %rbx now contains the first field of 'x'.
+
+	jmp	.L101
+
+[...]
+
+.L101:
+	movzbq	-8(%rbx), %rax
+
+This looks at the tag of the first field of 'x', and checks below if it
+is an array of doubles.
+
+	cmpq	$254, %rax
+	je	.L100
+	movq	(%rbx), %rax
+
+%rax now contains the first field of the first field of 'x'.
+
+	addq	$8, %rsp
+	ret
+
+And 'f' returns with what you want.
+
+So, aside from checking if tag is 254, it's essentially two direct array
+accesses, and the 'id' function of Obj.repr and Obj.obj is erased.
+
+	external repr : 'a -> t = "%identity"
+	external obj : t -> 'a = "%identity"
+	external field : t -> int -> t = "%obj_field"
+
+You could probably hack the compiler to avoid the tag checking if you
+really wanted to avoid the 254 test. That'd require another "%..." to be
+implemented I guess.
+
+> Thanks!
+> N
+
+-- 
+     Guillaume Yziquel
+

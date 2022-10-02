@@ -1,0 +1,158 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA32575 for caml-red; Sun, 22 Oct 2000 21:41:54 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA23280 for <weis@pauillac.inria.fr>; Sun, 22 Oct 2000 00:36:51 +0200 (MET DST)
+Received: from shell5.ba.best.com (shell5.ba.best.com [206.184.139.136])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id e9LManj21625;
+	Sun, 22 Oct 2000 00:36:50 +0200 (MET DST)
+Received: from localhost (bpr@localhost)
+	by shell5.ba.best.com (8.9.3/8.9.2/best.sh) with ESMTP id PAA20590;
+	Sat, 21 Oct 2000 15:36:43 -0700 (PDT)
+Date: Sat, 21 Oct 2000 15:36:43 -0700 (PDT)
+From: Brian Rogoff <bpr@best.com>
+To: Chris Hecker <checker@d6.com>
+cc: Pierre Weis <Pierre.Weis@inria.fr>, caml-list@inria.fr
+Subject: Re: circular types?
+In-Reply-To: <4.3.2.7.2.20001020142837.02ee31f0@shell16.ba.best.com>
+Message-ID: <Pine.BSF.4.21.0010211513100.28299-100000@shell5.ba.best.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: weis@pauillac.inria.fr
+
+On Fri, 20 Oct 2000, Chris Hecker wrote:
+> >It's exactly similar to value definitions: put a ``and'' between the
+> >two recursive definitions.
+> >type foo = B of bar
+> >and bar = F of foo
+> Ah, thanks!  Is there any way to do it without the "and"?  In other
+words, 
+> what if I want to do this but the types are defined "far away" from each 
+> other in the source.  The "and" solution works, but I'm looking for 
+> something like forward declarations from C++:
+> 
+> class foo;
+> class bar;
+> class foo { bar *Bar; };
+> // ...lots of stuff...
+> class bar { foo *Foo; };
+
+Nope, no forwards in Ocaml. At some point, you'll have to tie the recursive 
+knot with an "and". If the problem you're having is that "far away" means 
+"in different modules" then you bump into the lack of recursive modules, 
+IMO the biggest PITA with ML style modules. This hurts most in a situation 
+where you want something like the Composite pattern with modules  
+
+type composite = { data : string ; children : CompositeSet.t }
+and module CompositeSet = 
+  Set.Make( struct 
+              type t = composite 
+              let compare c1 c2  = 
+                Pervasives.compare (String.length c1.data) 
+                                   (String.length c2.data) 
+            end )
+
+The first choice, which you don't like, is to put the mutually recursive
+types into the same module. This would entail copying all of the source for
+Set.Make into the module where you're defining the Composite, and using
+"and" to tie the recursion together. I agree this is a poor workaround.
+
+Another choice, which I saw on caml-list in a post from Benoit deBoursetty, 
+is to make polymorphic versions of the Set functor by grab-and-hack on the
+source of Set, and use the polymorphism to move the recursive dependence out 
+of lift the module. So you make a 
+
+module type PolyOrderedType =
+  sig
+    type 'a t
+    val compare: 'a t -> 'a t -> int
+  end;;
+
+type 'a composite_fwd = { data : string ; forward : 'a };;
+
+module OrderedComposites =
+  struct
+    type 'a t = 'a composite_fwd
+    let compare cf1 cf2 = 
+      Pervasives.compare (String.length cf1.data) (String.length cf2.data) 
+  end;;
+
+module CompositeSet = PolySet.Make(OrderedComposites);;
+
+and given these polymorphic sets we can untie the mutual recursion with an 
+"and" as follows 
+
+type children = { children : composite CompositeSet.t }
+and  composite = children composite_fwd;;
+
+This is better, but involves an unpleasant extra level of indirection. You
+can find the polymorphic sets at
+
+http://www.stud.enst.fr/~debourse/caml.html
+
+if this technique looks useful.
+
+If the entities involved in the module spanning mutual recursion are
+classes, and you *absolutely-don't-want-to-put-them-in-the-same-module*
+you can create a dummy module in which the dependent classes are linked
+and inherit from that. That moves the mutual recursion but doesn't break
+it; there is no way I know of to break it short of doing a downcast or
+narrowing-conversion on the classes, which is illegal in Ocaml. 
+
+Here is a silly example; starting with these impossible signatures
+
+module type DoctorType = 
+  sig 
+    class c : 
+      object 
+	method treat_patient : PatientType.c 
+	method bill_patient : PatientType.c 
+      end 
+  end ;;
+
+module type PatientType = 
+  sig 
+    class c : 
+      object 
+	method visit_doctor : DoctorType.c 
+	method pay_doctor : DoctorType.c 
+      end 
+  end ;;
+
+we add a parent module which expresses an interface dependency and write
+the signatures in terms of that. 
+
+module Forwards = 
+  sig 
+    class virtual patient_intf = 
+      object 
+	method virtual visit_doctor : doctor_intf  
+	method virtual pay_doctor :   doctor_intf
+      end 
+    and virtual doctor_intf = 
+      object 
+	method virtual treat_patient : patient_intf
+        method virtual bill_patient  : patient_intf
+      end 
+  end ;;
+
+module type DoctorType = 
+  sig 
+    class c : 
+      object 
+	method treat_patient : Forwards.patient_intf
+	method bill_patient : Forwards.patient_intf
+      end 
+  end ;;
+
+module type PatientType = 
+  sig 
+    class c : 
+      object 
+	method visit_doctor : Forwards.doctor_intf
+	method pay_doctor : Forwards.doctor_intf
+      end 
+  end ;;
+
+-- Brian
+
+
+
+

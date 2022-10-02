@@ -1,0 +1,162 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA06956; Tue, 3 Jul 2001 22:47:18 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA06947 for <caml-list@pauillac.inria.fr>; Tue, 3 Jul 2001 22:47:17 +0200 (MET DST)
+Received: from red.csi.cam.ac.uk (red.csi.cam.ac.uk [131.111.8.70])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f63KlGL09325
+	for <caml-list@inria.fr>; Tue, 3 Jul 2001 22:47:16 +0200 (MET DST)
+Received: from student.cusu.cam.ac.uk
+	([131.111.179.82] helo=mrs35-1.clare.cam.ac.uk ident=root)
+	by red.csi.cam.ac.uk with esmtp (Exim 3.22 #1)
+	id 15HX4j-000323-00
+	for caml-list@inria.fr; Tue, 03 Jul 2001 21:47:14 +0100
+Received: from 127.0.0.1 (ident=mrs) by mrs35-1.clare.cam.ac.uk with
+ esmtp (MasqMail 0.1.14) id 15HX6h-3j4-00 for caml-list@inria.fr; Tue,
+ 03 Jul 2001 21:49:15 +0100
+To: caml-list@inria.fr
+Subject: [Caml-list] Dynamic types, casts, and rights amplification
+X-Mailer: Mew version 1.94.1 on XEmacs 21.1 (Crater Lake)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20010703214914J.mrs35@cam.ac.uk>
+Date: Tue, 03 Jul 2001 21:49:14 +0100
+From: Mark Seaborn <mrs35@cam.ac.uk>
+X-Dispatcher: imput version 991025(IM133)
+Lines: 130
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Here's a nice use of OCaml's casts to provide what can be viewed as an
+open dynamic type (except that variant tags -- called brands here --
+are created at run time).
+
+  (* Should obey these axioms:
+       unpack b (pack b x) = Some x
+       unpack b1 (pack b2 x) = None    provided b1 != b2
+       unpack b null = None
+     (ie. for the last one, the brand for null is closely-held)
+     and lastly:
+       make_brand() != make_brand()
+     NB. The equality used here is behavioural equality (which
+     is undecidable) rather than OCaml's `=' or `=='.
+  *)
+  (* I was going to have:
+     make_brand : 'a -> 'a brand
+     where the argument is an example value which is ignored.
+     But this isn't really necessary, and it could be awkward. *)
+  module type Dyn = sig
+    type 'a brand
+    type t
+    val make_brand : unit -> 'a brand
+    val pack : 'a brand -> 'a -> t
+    val unpack : 'a brand -> t -> 'a option
+    val null : t
+  end
+
+  module Dyn : Dyn = struct
+    (* Don't care about this type; it is cast to and from,
+       the equivalent of C's void*. *)
+    type any = int
+    type 'a brand = Stamp.t
+    type t = Stamp.t * any
+    let make_brand() = Stamp.make()
+    let pack brand value = (brand, Obj.magic value)
+    let unpack brand1 (brand2, value) =
+      if Stamp.eq brand1 brand2 then Some (Obj.magic value) else None
+    let null = pack (make_brand()) ()
+  end
+
+using this module:
+
+  module type Stamp = sig
+    type t
+    val make : unit -> t
+    val eq : t -> t -> bool
+  end
+  
+  module Stamp : Stamp = struct
+    type t = unit ref
+    let make() = ref()
+    let eq s1 s2 = s1 == s2
+  end
+
+and here's a utility built with the Dyn module:
+
+  (* Should obey these axioms:
+       unpack (pack x) = x
+       unpack (pack2 b s x) = x
+       amplify b (pack x) = None
+       amplify b (pack2 b s x) = Some s
+       amplify b1 (pack2 b2 s x) = None    provided b1 != b2
+     Note that
+       pack x = pack2 b s x
+     where b is closely-held, ie. not available to anyone.
+     The last axiom is simply the generativity of make_brand:
+       make_brand() != make_brand()
+     NB. The equality used here is behavioural equality (which
+     is undecidable) rather than OCaml's `=' or `=='.
+  *)
+  module type RightsAmp = sig
+    type 'a t
+    type 'a brand
+    val make_brand : unit -> 'a brand
+    val pack2 : 'b brand -> 'b -> 'a -> 'a t
+    val pack : 'a -> 'a t
+    val unpack : 'a t -> 'a
+    val amplify : 'b brand -> 'a t -> 'b option
+  end
+  
+  module RightsAmp : RightsAmp = struct
+    type 'a brand = 'a Dyn.brand
+    type 'a t = 'a * Dyn.t
+    let make_brand = Dyn.make_brand
+    let pack2 brand secret value = (value, Dyn.pack brand secret)
+    let pack value = (value, Dyn.null)
+    let unpack (value, _) = value
+    let amplify brand (_, x) = Dyn.unpack brand x
+  end
+
+
+I believe it's type sound, because it's not possible to create
+polymorphic brands by the same restriction that prevents reference
+values from being used polymorphically (the fact that this worked was
+rather neat, I thought).  However, if OCaml changed its tagged data
+representation, casting could probably no longer be used this way (is
+that likely to happen?).  I think it should be possible to
+alternatively implement this with brands as weak hash tables, and
+Dyn.t as a unique stamp acting as a hash table key (though OCaml
+doesn't provide weak hash tables, I think).
+
+I found this particularly useful for getting around OCaml's
+restrictions on circular dependencies between modules (in particular,
+not being able to use a module parametrically in a cycle of
+mutually-recursive types).
+
+I used it to wrap up closures and allow the creator of closures to
+recognise those closures it created and unpack hidden data from them
+(or fall back to the default case for closures created by others) --
+this is where the RightsAmp module comes in.  It would have been
+convenient if this layer of wrapping was not needed and closures could
+be branded directly -- I imagine that the representation of closures
+is fairly flexible, and this could be a more lightweight solution.
+Brands would act a little like classes, except that the identity of a
+class would act like a capability and need not be revealed.
+
+I wonder, has anyone done this before?  And if so, what phrases did
+they use?  (I have seen `brand' associated with rights amplification,
+so I used that term.)
+
+What is the chance of this going into the OCaml distribution?
+ie. Would you want to commit yourself to providing this interface in
+OCaml in the future?
+
+-- 
+         Mark Seaborn
+   - mseaborn@bigfoot.com - http://www.srcf.ucam.org/~mrs35/ -
+
+        ``Cambridge?  Didn't that used to be a polytechnic?''
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

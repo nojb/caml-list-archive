@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA17892; Tue, 14 May 2002 14:51:49 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA17887 for <caml-list@pauillac.inria.fr>; Tue, 14 May 2002 14:51:48 +0200 (MET DST)
+Received: from kiefer.ai.univie.ac.at (kiefer.ai.univie.ac.at [131.130.174.157])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g4ECpjn08142;
+	Tue, 14 May 2002 14:51:46 +0200 (MET DST)
+Received: (from markus@localhost)
+	by kiefer.ai.univie.ac.at (8.9.3/8.9.3/Debian 8.9.3-21) id OAA17574;
+	Tue, 14 May 2002 14:51:33 +0200
+Date: Tue, 14 May 2002 14:51:33 +0200
+From: Markus Mottl <markus@oefai.at>
+To: Francois Pottier <francois.pottier@inria.fr>, eijiro_sumii@anet.ne.jp,
+        Alain Frisch <frisch@clipper.ens.fr>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Turning off type-checking
+Message-ID: <20020514125133.GC15675@kiefer.ai.univie.ac.at>
+Mail-Followup-To: Francois Pottier <francois.pottier@inria.fr>,
+	eijiro_sumii@anet.ne.jp, Alain Frisch <frisch@clipper.ens.fr>,
+	caml-list@inria.fr
+References: <20020514091053.A8883@pauillac.inria.fr> <Pine.SOL.4.44.0205141001400.3093-100000@clipper.ens.fr> <706871B20764CD449DB0E8E3D81C4D4301EE6D43@opus.cs.cornell.edu> <20020514091053.A8883@pauillac.inria.fr> <20020514165632J.sumii@tuba.is.s.u-tokyo.ac.jp> <706871B20764CD449DB0E8E3D81C4D4301EE6D43@opus.cs.cornell.edu> <20020514091053.A8883@pauillac.inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <Pine.SOL.4.44.0205141001400.3093-100000@clipper.ens.fr> <20020514165632J.sumii@tuba.is.s.u-tokyo.ac.jp> <20020514091053.A8883@pauillac.inria.fr>
+User-Agent: Mutt/1.3.26i
+Organization: Austrian Research Institute for Artificial Intelligence
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, 14 May 2002, Francois Pottier wrote:
+> The worst-case complexity is obtained by nesting `let' bindings
+> on the left side, i.e.
+> 
+>   let x1 = let x2 = let x3 = ...
+> 
+> Do you generate such code, Markus?
+
+There may indeed be many cases of nested "let"s and also pattern-matches.
+
+Just to give an example of how this works, given this data specification
+(usual algebraic datatypes) + data samples (mappings from one domain
+to another):
+
+---------------------------------------------------------------------------
+SPEC MySpec = BEGIN
+  satisfaction = Low | High | Very satisfaction.
+  diameter = Large | Small.
+  sort = Mozzarella | Gorgonzola.
+  topping = Cheese sort | Tomatoes | Mushrooms.
+  spiced = False | True.
+  meal =
+    | WienerSchnitzel diameter
+    | Pizza (diameter * spiced * topping)
+    | TapirSoup spiced.
+END
+
+DATA MyData : (meal : MySpec) -> (satisfaction : MySpec) = BEGIN
+  Pizza (Large, True, Cheese Mozzarella) -> Very (Very High).
+  Pizza (Large, True, Cheese Gorgonzola) -> Very (Very Low).
+  Pizza (Large, False, Tomatoes) -> Very (Very Low).
+  WienerSchnitzel Small -> Very Low.
+  TapirSoup True -> Very Low.
+  TapirSoup False -> Very High.
+END
+---------------------------------------------------------------------------
+
+The generated code (induced function) would look like this:
+
+---------------------------------------------------------------------------
+let model meal_d1 =
+  let satisfaction_c1 =
+    (match meal_d1 with
+    | TapirSoup spiced_d1 ->
+        (match spiced_d1 with
+        | True -> Low
+        | False -> High)
+    | Pizza (_, spiced_d1, topping_d1) ->
+        let satisfaction_c1 =
+          (match spiced_d1 with
+          | True ->
+              (match topping_d1 with
+              | Cheese sort_d1 ->
+                  (match sort_d1 with
+                  | Gorgonzola -> Low
+                  | Mozzarella -> High)
+              | _ -> High)
+          | False -> Low) in
+        Very satisfaction_c1
+    | WienerSchnitzel _ -> Low) in
+  Very satisfaction_c1
+---------------------------------------------------------------------------
+
+If there are, say, mappings from 100 to 100 variables and thousands of
+deeply structured sample values (a "real-world" problem), the models
+can look quite terrifying.
+
+In another still comparatively small test case with 1000 random samples
+the generated code requires about 1.6MB. What concerns me here is that
+the OCaml-interpreter requires more than 60MB to check it!
+
+> Markus, do the sub-expressions in your programs have huge types?
+
+Well, depends on the notion of "huge". It can happen that the model
+factors out redundant data constructors from large structures. Then it
+has to pack and unpack somewhat large tuples, e.g.:
+
+  let (v7_c1, (* snip 13 bindings *) v7_c15) =
+    (match v6_d1 with
+    ...) in
+  (v7_c1, V7S (V6A, v6_c2), ...)
+
+But the size of the types is probably not the real issue, because it is
+still strongly tied to the data. The structure of the data surely plays
+a role, but its size puts a limit on the size of the types.
+
+On Tue, 14 May 2002, Alain Frisch wrote:
+> It seems that what takes time is occurence checking (disabled with
+> -rectypes) and pretty-printing of types (because internally, there are
+> many sharings), not type inference itself. For this (unatural) example,
+> bad behaviour of occurence checking is visible (less than 0.04 seconds
+> with -rectypes, and more than 10 minutes [I'm not patient enough to
+> wait more] without -rectypes).
+
+I am afraid, but this does not change much, the timing difference is
+lower than 10%. Maybe I am just asking for too much, and it is the sheer
+size of the code that doesn't allow more efficiency?
+
+Anyway, as it seems, parsing medium-sized test cases takes about an
+order of magnitude less time than the subsequent type checking so there
+may be points for improvement...
+
+Regards,
+Markus
+
+-- 
+Markus Mottl                                             markus@oefai.at
+Austrian Research Institute
+for Artificial Intelligence                  http://www.oefai.at/~markus
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

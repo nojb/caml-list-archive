@@ -1,0 +1,101 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.8 required=5.0 tests=AWL,NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 33BE5BBAF
+	for <caml-list@yquem.inria.fr>; Tue, 16 Sep 2008 12:14:19 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvYEAMsjz0jAXQImiGdsb2JhbACLagGGDYEPAQEBDyClMIFl
+X-IronPort-AV: E=Sophos;i="4.32,407,1217800800"; 
+   d="scan'208";a="14993316"
+Received: from discorde.inria.fr ([192.93.2.38])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 16 Sep 2008 12:14:19 +0200
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id m8GAEHci017388
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Tue, 16 Sep 2008 12:14:18 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtsBAE4jz0jAEKcgmmdsb2JhbACLagGGDYEPAQEBAQEIBQgHEaUvgWU
+X-IronPort-AV: E=Sophos;i="4.32,407,1217800800"; 
+   d="scan'208";a="17334510"
+Received: from unknown (HELO selenite.metnet.navy.mil) ([192.16.167.32])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 16 Sep 2008 12:14:17 +0200
+Received: (qmail 24480 invoked by uid 107); 16 Sep 2008 10:14:13 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 16 Sep 2008 10:14:13 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id E4E51AE53; Tue, 16 Sep 2008 03:12:41 -0700 (PDT)
+From: oleg@okmij.org
+To: David.Teller@ens-lyon.org, caml-list@inria.fr
+Subject: Keeping local types local?
+Message-Id: <20080916101241.E4E51AE53@Adric.metnet.fnmoc.navy.mil>
+Date: Tue, 16 Sep 2008 03:12:41 -0700 (PDT)
+X-Miltered: at discorde with ID 48CF86F9.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; oleg:01 monads:01 monads:01 ocaml:01 unit-:01 local':01 invocation:01 polymorphism:01 polymorphism:01 ocaml:01 metaocaml:01 compiler:01 bool:01 4.3:98 wrote:01 
+
+
+David Rajchenbach-Teller wrote:
+
+> One way of doing so would be to use monads but my idea is to use local
+> modules and local types and take advantage of the fact that values of
+> that type cannot escape the scope of the local module. Unfortunately,
+> as it turns out, sometimes, values with a local type can escape their
+> scope -- and I'm looking for an idea on how to plug the leak.
+
+I don't think there is much hope. Without monads (or, better,
+parameterized monads) and without the effect type system, there is
+nothing to prevent the `escape'. The type system of OCaml is
+powerless: it can prevent the value 'v' of some type to be used
+outside the local module that declares that local type. However,
+nothing prevents us from forming a closure
+	fun () -> consumer v; ()
+and using that closure anywhere we see fit. The closure has the
+`effect' of consuming the value, regardless of any bracketing
+boundaries. And yet its type is unit->unit. The problem with ML in
+general is precisely that the type of the function says absolutely
+nothing about the function's effects. It gets worse: there is a
+similar way to consume the value 'v' of a `local' type
+inappropriately: via an assignment. The consumer code may include the
+following:
+
+	let thunk = ref (fun () -> ())
+
+	let process () =
+	     !thunk ();
+	     thunk := fun () -> ignore (set v);
+	     ...
+
+The next invocation of the the process function of the consumer will
+execute set v, probably outside of the transaction
+boundaries. One should also worry about returning thunks via
+exceptions... 
+
+Section 4.3 of
+	http://okmij.org/ftp/Computation/resource-aware-prog/region-io.pdf
+as well as the accompanying code shows several attempts to break out
+of the region boundaries. As far as the Region-IO paper is concerned,
+all attempts failed. Because we do use monads, rank-2 polymorphism and
+because the type of the monad specifically reflects its effects. For
+fancier guarantees, one needs parameterized monads (which aren't
+actually monads), see Section 6 of the paper.
+
+Rank-2 polymorphism is available in OCaml too. In fact, MetaOCaml uses
+this technique to prevent `escaping' of free variables, to make sure
+that only closed code could be run. Mutations and exceptions still
+pose the problem however.
+
+Perhaps the best approach in OCaml now is sand-boxing. Although
+it is not advertised much, OCaml system is quite `reflective'. One can
+trivially adapt the main compiler driver so to compile a source code
+file in a `reduced' environment -- the environment that does not have
+the ref type, for example. By controlling the available operations and
+available types, we can restrict the effects; we should also define an
+appropriate variant (Int, Bool, pair, array -- but not a closure) and
+insist the return value be of that variant type. The return value
+must be serializable, and we should only permit assignments of
+serializable values. That may be sufficient for safety.
+

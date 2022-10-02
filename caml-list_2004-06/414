@@ -1,0 +1,172 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA10560; Tue, 29 Jun 2004 03:02:58 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA10515 for <caml-list@pauillac.inria.fr>; Tue, 29 Jun 2004 03:02:56 +0200 (MET DST)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i5T12rEV021111
+	for <caml-list@inria.fr>; Tue, 29 Jun 2004 03:02:54 +0200
+Received: from [192.168.1.200] (ppp217-185.lns1.syd3.internode.on.net [203.122.217.185])
+	by smtp1.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id i5T12n4Y028832;
+	Tue, 29 Jun 2004 10:32:50 +0930 (CST)
+Subject: [Caml-list] Exceptions considered harmful
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: extlib <ocaml-lib-devel@lists.sourceforge.net>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <20040628173400.GB26193@fichte.ai.univie.ac.at>
+References: <20040628143917.GA21847@fichte.ai.univie.ac.at>
+	 <Pine.LNX.4.44.0406290056580.1229-100000@localhost>
+	 <20040628173400.GB26193@fichte.ai.univie.ac.at>
+Content-Type: text/plain
+Message-Id: <1088470968.18587.123.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 29 Jun 2004 11:02:49 +1000
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 40E0BFBD.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; sourceforge:01 2004:99 re-raise:01 failwith:01 haskell:01 monadic:01 recursions:01 avoiding:01 statically:01 fragile:01 9660:01 glebe:01 nsw:01 snail:02 match:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, 2004-06-29 at 03:34, Markus Mottl wrote:
+> On Tue, 29 Jun 2004, Martin Jambon wrote:
+> > This makes me feel like we will not know if the "finally block" has been
+> > completed or not. Why not totally prohibiting any exception raised from
+> > the "finally block"?
+> > 
+> > let protect f x finally =
+> >   let res =
+> >     try f x
+> >     with exc ->
+> >       (try finally x with _ -> invalid_arg "protect")
+> >       raise exc in
+> >   (try finally x with _ -> invalid_arg "protect");
+> >   res
+> 
+> But how do you know then that the exception came from "finally" and not
+> from "f"?  You could even lose the information, whether "f" was executed
+> successfully at all!
+
+In general, I think exceptions are a bad idea.
+I spend a lot of time removing them from my code :(
+
+In a typical case it goes like this:
+
+try 
+  let f = open_in fname in
+  do_something f;
+  close_in f
+with _ -> ()
+
+
+Only this is very BAD code because it fails to isolate
+two completely distinct possibilities for an error:
+in opening the file, or in processing it: in the latter
+case the file isn't closed: we didn't actually
+expected a processing error here, and also fail to
+correctly re-raise the exception.
+
+This lack of localisation is quite hard to fix:
+
+  let f = try open_in fname with _ -> () in
+  do_something f;
+  close_in f
+
+WOOPS! that's a type error, which is good, because
+we can't 'do_something' if the file wasn't opened.
+What else can we try?
+
+  try 
+    let f = open_in fname in
+    begin 
+      try do_something f
+      with _ -> close_in f 
+    end;
+    close_in f;
+  with _ -> failwith "Do something failed"
+
+WOOPS, we tried to close f twice. We can only do this:
+
+  exception Some_error
+  try 
+    let f = open_in fname in
+    begin 
+      try do_something f
+      with _ -> close_in f; raise Some_error
+    end;
+    close_in f;
+   with Some_error -> raise Some_error
+   | _ -> ()
+
+but now we have lost the location and kind of the
+error in something .. and we had to introduce a new
+global exception as well. 
+
+The obvious way to fix this mess is to eliminate the 
+undesirable exceptions early:
+
+  let result = 
+    try Some (open_in fname) with _ -> None 
+  in match result with
+  | None -> ()
+  | Some f -> 
+    begin try do_something with x -> close_in f; raise x end
+    close_in f
+
+Of course, the result of the calculation here is unit,
+more generally we'd be saying 
+
+let result = do_something in close_in f; result
+
+and obviously we'd be wrapping that as well.
+
+Generally, the exceptions discard localisation
+and destroy any kind of static assurance errors are handled.
+
+To me, the Haskell monadic approach seems a sounder.
+
+The problem with exceptions is that they're basically
+without solid theoretical principles. Throwing out 
+context is one thing .. recovering at an unknown
+point, trapping unknown exceptions without any
+aid from the type system simply defeats the purpose
+of having a type system.
+
+As far as I can see, just about the only way to
+use exceptions properly is to eliminate them
+at the earliest possible point .. which suggests
+libraries simply shouldn't throw them.
+
+It seems difficult to escape from deep recursions
+without exceptions. They can be convenient.
+They're useful for rapid prototyping where you
+need a demo that works on some cases *fast*.
+
+And they seem convenient when you 'know' there
+can't be an error. The price is high. In avoiding
+statically handling false negatives (errors that
+can't occur) your code has become fragile: any change
+which may in fact lead to raising an error will
+not be discovered without testing.. and then it
+will be very hard to find.
+
+Would static exceptions be better? (Allow exceptions
+but require that they're caught in an ancestor of the
+scope they're raised in, and at least in a child of
+the scope the exception is declared in)
+
+Any comments on any of this appreciated.
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,136 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA31114 for caml-red; Sun, 16 Jul 2000 23:55:52 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA25090 for <caml-list@pauillac.inria.fr>; Mon, 10 Jul 2000 15:16:26 +0200 (MET DST)
+Received: from isil.localdomain (adsl-151-201-232-238.bellatlantic.net [151.201.232.238])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e6ADGOH18660
+	for <caml-list@inria.fr>; Mon, 10 Jul 2000 15:16:24 +0200 (MET DST)
+Received: by isil.localdomain (Postfix, from userid 1000)
+	id 55F1736B20; Mon, 10 Jul 2000 09:16:43 -0400 (EDT)
+To: Judicael Courant <Judicael.Courant@lri.fr>
+Cc: caml-list@inria.fr
+Subject: Re: Camlp4's (lack of) hygiene (was Re: Macros)
+References: <200007101142.NAA02925@pc87.lri.fr>
+From: John Prevost <prevost@maya.com>
+Date: 10 Jul 2000 09:16:39 -0400
+In-Reply-To: Judicael Courant's message of "Mon, 10 Jul 2000 13:42:25 +0200 (MEST)"
+Message-ID: <87r992nn0o.fsf@isil.localdomain>
+Lines: 114
+User-Agent: Gnus/5.0808 (Gnus v5.8.8) Emacs/20.7
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: weis@pauillac.inria.fr
+
+>>>>> "jc" == Judicael Courant <Judicael.Courant@lri.fr> writes:
+
+    jc> Notice that even O'Caml itself (I mean without camlp4) already
+    jc> has this problem:
+
+    jc> # let x = [| 1 ; 2 |];;  
+    jc> val x : int array = [|1; 2|]
+    jc> # module Array = struct end;;
+    jc> module Array : sig end
+    jc> # x.(1);; (* guess what happens... *)
+    jc> Unbound value Array.get
+    jc> # (* x.(1) just expands to Array.get x 1 *)
+
+Ugh...  That's horrible!  On the one hand, I can see how it could be
+useful from the point of view of using different implementations of
+arrays, but on the other hand, it's a mess.
+
+Especially considering the description of array syntax in the manual:
+
+------------------------------------------------------------------------
+Arrays
+
+The expression [| expr1 ; ... ; exprn |] evaluates to a n-element
+array, whose elements are initialized with the values of expr1 to
+exprn respectively. The order in which these expressions are evaluated
+is unspecified.
+
+The expression expr1 .( expr2 ) returns the value of element number
+expr2 in the array denoted by expr1. The first element has number 0;
+the last element has number n-1, where n is the size of the array. The
+exception Invalid_argument is raised if the access is out of bounds.
+
+The expression expr1 .( expr2 ) <- expr3 modifies in-place the array
+denoted by expr1, replacing element number expr2 by the value of
+expr3. The exception Invalid_argument is raised if the access is out
+of bounds. The value of the whole expression is ().
+------------------------------------------------------------------------
+
+These are described in terms of operations on the base array type.
+The fact that the operations are implemented as sugar shouldn't mean
+that the behavior is different from what you would expect.  Normal
+function calls have better behavior than this--all the more reason
+that constructions which are part of the language definition should
+work in a safe manner.
+
+Also of note, of course, is that [| ... |] *does* work, no matter what
+bindings are in scope.
+
+If no change is made to make this safer, the language definition
+should be changed to note that writing "expr1 .( expr2 )" is
+completely identical to "Array.get expr1 expr2" for purposes of
+scoping.
+
+
+Finally, I'd like to note that the same properties occur with strings:
+
+    # "foo".[1];;
+    - : char = 'o'
+    # module String = struct end;;
+    module String : sig end
+    # "foo".[1];;
+      ---------
+    Unbound value String.get
+
+While I've actually never been tempted to create an Array module by
+that name (I might be tempted a little with the current discussion on
+clf about fast persistent arrays), I have in fact created a String
+module.  At the time, I was working on some wide character stuff.
+
+I suppose that, on one hand, this points out why things are good:
+
+module Wide = (struct
+  type ochar = char
+  type char = int
+  type ostring = string
+  type string = char array
+  let o_to_char = Char.code
+  let o_to_string = (* I'm too lazy to write this for you *)
+  (* other stuff *)
+  module String = struct
+    let get = Array.get
+    let set = Array.set
+  end
+end : sig
+  type ochar = char
+  type char
+  type ostring = string
+  type string
+  val o_to_char : ochar -> char
+  module String : sig
+    val get : string -> int -> char 
+    val set : string -> int -> char -> unit
+  end
+end)
+
+By opening this, you're instantly using wide characters instead of 8
+bit characters.  (Except for the little "constants" problem.)  But,
+like with arrays, I think you might be justifiably confused if you did
+this, and .[ ] stopped working "normally", and yet quotation marks
+still worked the same.  Especially when you mostly want .[ ] for "byte
+array" "strings" more than strings.
+
+
+Allowing .() and .[] to somehow be bound would be a different matter.
+Then normal scoping would apply, and you'd expect it.
+
+
+Gah.  In any case, these rough edges are making me start to hate
+syntax (not just Caml's) as a whole class of experience.  (Though I
+still like Caml's more than SML's.  :)
+
+
+John.
+
+

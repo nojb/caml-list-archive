@@ -1,0 +1,107 @@
+Return-Path: <Damien.Pous@ens-lyon.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.3 required=5.0 tests=SPF_FAIL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id A741EBC0B
+	for <caml-list@yquem.inria.fr>; Thu,  1 Feb 2007 19:42:31 +0100 (CET)
+Received: from pilet.ens-lyon.fr (pilet.ens-lyon.fr [140.77.167.16])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l11IgV2J031156
+	for <caml-list@inria.fr>; Thu, 1 Feb 2007 19:42:31 +0100
+Received: from localhost (localhost [127.0.0.1])
+	by pilet.ens-lyon.fr (Postfix) with ESMTP id 36AA915BB71
+	for <caml-list@inria.fr>; Thu,  1 Feb 2007 19:42:31 +0100 (CET)
+Received: from pilet.ens-lyon.fr ([127.0.0.1])
+	by localhost (pilet [127.0.0.1]) (amavisd-new, port 10024) with ESMTP
+	id 22487-92 for <caml-list@inria.fr>;
+	Thu, 1 Feb 2007 19:42:30 +0100 (CET)
+Received: from localhost (fulmar.ens-lyon.fr [140.77.51.7])
+	by pilet.ens-lyon.fr (Postfix) with ESMTP id E01F515BB75
+	for <caml-list@inria.fr>; Thu,  1 Feb 2007 19:42:29 +0100 (CET)
+From: Damien Pous <Damien.Pous@ens-lyon.fr>
+To: caml-list@inria.fr
+Subject: Marshal, closures, bytecode and native compilers
+Date: Thu, 01 Feb 2007 19:44:06 +0100
+Message-ID: <87lkjhogzt.fsf@smtp.ens-lyon.fr>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) Emacs/21.4 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Virus-Scanned: by amavisd-new-20030616-p10 (Debian) at ens-lyon.fr
+X-Miltered: at discorde with ID 45C23497.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; damien:01 damien:01 ens-lyon:01 bytecode:01 bytecode:01 marshaling:01 argv:01 stdout:01 stdin:01 ocamlc:01 ocamlopt:01 ocamlc:01 -version:01 marshaled:01 marshaled:01 
+
+Bonjour,
+
+I found some strange difference between the native and bytecode
+compilers, when Marshaling functional values:
+
+[damien@mostha]$ cat lift.ml
+let r = ref 0
+let f =
+  fun () -> incr r; print_int !r; print_newline()
+let () = match Sys.argv.(1) with
+  | "w" ->  Marshal.to_channel stdout f [Marshal.Closures]
+  | "r" ->
+      let g = (Marshal.from_channel stdin: unit -> unit) in
+        g (); f ()
+  | _ -> assert false
+
+[damien@mostha]$ ocamlc lift.ml; ( ./a.out w | ./a.out r )
+1
+1
+[damien@mostha]$ ocamlopt lift.ml; ( ./a.out w | ./a.out r )
+1
+2
+[damien@mostha]$ ocamlc -version
+3.09.2
+
+In the bytecode version, the reference [r] gets marshaled along with
+[f] so that the calls [f()] and [g()] respectively affect the initial
+reference of the reader, and the (fresh) marshaled reference.
+
+On the contrary in the native version, it seems that [f] is not
+`closed': its code address is directly sent, and the call [g()]
+affects the initial reference of the reader.
+
+For my needs, I definitely prefer the second answer (only the address
+is sent). However, if I move the declaration of the reference inside
+the definition of [f], both compilers agree on the first answer: the
+reference is marshaled.
+
+[damien@mostha]$ cat refs.ml
+let f =
+  let r = ref 0 in
+    fun () -> incr r; print_int !r; print_newline()
+let () = match Sys.argv.(1) with
+  | "w" ->  Marshal.to_channel stdout f [Marshal.Closures]
+  | "r" ->
+      let g = (Marshal.from_channel stdin: unit -> unit) in
+        g (); f ()
+  | _ -> assert false
+
+[damien@mostha]$ ocamlc refs.ml; ( ./a.out w | ./a.out r )
+1
+1
+[damien@mostha]$ ocamlopt refs.ml; ( ./a.out w | ./a.out r )
+1
+1
+
+
+More than the different behaviour of ocamlc and ocamlopt on "lift.ml",
+I am quite surprised that ocamlopt does not give the same results on
+"refs.ml" and "lift.ml" : the second is just a `lambda-lifting' of the
+first one!
+
+
+Here come my questions:
+ - How to guess how deep a functional value will be marshaled?
+ - Is there a way to enforce the second behaviour, where the reference is
+   not marshalled (ocamlopt lift.ml)?
+
+
+Cimer beaucoup,
+Damien
+

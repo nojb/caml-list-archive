@@ -1,0 +1,127 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id B5777BC6B
+	for <caml-list@yquem.inria.fr>; Tue, 18 Sep 2007 11:08:08 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAAIz70bAXQImn2dsb2JhbACOEAICBwQGBwgY
+X-IronPort-AV: E=Sophos;i="4.20,267,1186351200"; 
+   d="scan'208";a="16354301"
+Received: from discorde.inria.fr ([192.93.2.38])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 18 Sep 2007 11:09:13 +0200
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l8I98Y7C027601
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Tue, 18 Sep 2007 11:08:36 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAIoy70bLENaMnmdsb2JhbACOEAICBwQGDxg
+X-IronPort-AV: E=Sophos;i="4.20,267,1186351200"; 
+   d="scan'208";a="2853036"
+Received: from ipmail01.adl2.internode.on.net ([203.16.214.140])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 18 Sep 2007 11:09:11 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAANcx70Z5LHvc/2dsb2JhbAAM
+X-IronPort-AV: E=Sophos;i="4.20,267,1186324200"; 
+   d="scan'208";a="193360101"
+Received: from ppp121-44-123-220.lns10.syd6.internode.on.net (HELO [192.168.1.201]) ([121.44.123.220])
+  by ipmail01.adl2.internode.on.net with ESMTP; 18 Sep 2007 18:39:08 +0930
+Subject: Re: [Caml-list] [ANN] coThreads 0.10
+From: skaller <skaller@users.sourceforge.net>
+To: caml-list@inria.fr
+Cc: Zheng Li <li@pps.jussieu.fr>
+In-Reply-To: <20070918162347.e04ac421.mle+ocaml@mega-nerd.com>
+References: <87lkb5fe3f.fsf@pps.jussieu.fr>
+	 <20070918121041.6683b111.mle+ocaml@mega-nerd.com>
+	 <1190095167.22073.54.camel@rosella.wigram>
+	 <20070918162347.e04ac421.mle+ocaml@mega-nerd.com>
+Content-Type: text/plain
+Date: Tue, 18 Sep 2007 19:09:07 +1000
+Message-Id: <1190106547.24514.24.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 46EF9592.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; hackery:01 lseek:01 errno:01 lseek:01 endline:01 wronly:01 endline:01 lockf:01 lockf:01 0.10:98 sourceforge:01 wrote:01 wrote:01 unix:01 rec:01 
+
+On Tue, 2007-09-18 at 16:23 +1000, Erik de Castro Lopo wrote:
+> skaller wrote:
+
+> > It is not clear that a seek to an invalid position in the file
+> > is going to succeed. It's also not clear to me that the seek
+> > argument isn't 32 bits (depends on complex ugly GNU macro
+> > hackery what type off_t is .. my Caml got built with
+> > the LARGE_FILE macro thing so it should be 64 bits).
+> 
+> Shouldn't off_t always be 64 bits on a 64 bit CPU? 
+
+I don't know. I traced through the code and did some debugging,
+and the problem is that system wide mutex is emulated by using
+locking on an lseek on a (deleted) lock file. The seek address
+is a magic number which is rather large, and this appears to
+cause the EINVAL errno on the lseek call.
+
+let lock_fd = 
+  print_endline "CREATING MUTEX";
+  let lock_name = fresh_name "_mutex" in
+  remove_exists lock_name; 
+  let fd = openfile lock_name [O_WRONLY; O_CREAT] file_perm in
+  remove_exists lock_name;
+  fd
+
+type t = int (* The offset *)
+
+let create = fresh_number
+
+let rec lock lk = 
+  print_endline ("LOCK " ^ string_of_int lk);
+  if lk <> lseek lock_fd lk SEEK_SET then assert false;
+  lockf lock_fd F_LOCK 1
+
+So basically a mutex is modelled by an offset,
+which is created by fresh_number routine, and using
+Unix discretionary locks with lockf function, which
+is based on the current position in the file.
+
+Well, I don't see how the lseek can fail unless there
+is a filesize constraint somewhere detecting that
+
+1695112678495748100
+
+is an invalid offset for lseek. 
+
+A possible patch is to take this in process.coordinator
+
+(* fresh_number fresh_name ensure that there won't exist number/name
+   confliction between running processes.
+*)
+let fresh_number =
+  let usable_size = Sys.word_size -2 in
+  let bits_of_id = 16 in (* Should be sufficient in most OS *)
+  let bits_of_num = usable_size - bits_of_id in
+  let counter = ref 0 in
+  fun () ->
+    let self_id = id (self ()) in
+    let id_part = bit_chop_to_n bits_of_id self_id in
+    let num_part = 
+      counter := bit_chop_to_n bits_of_num (!counter + 1);
+      !counter in
+    (id_part lsl bits_of_num) + num_part
+
+
+and use the line 2:
+
+  let usable_size = 30 in
+
+instead (though I didn't try it, some other places may need
+to replace Sys.word_size the same way for it to work
+properly).
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

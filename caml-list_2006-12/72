@@ -1,0 +1,187 @@
+Return-Path: <bhurt@spnz.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 5BB8EBC0B
+	for <caml-list@yquem.inria.fr>; Sun, 10 Dec 2006 02:36:30 +0100 (CET)
+Received: from barrayar.com ([216.139.135.60])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kBA1aSNE020064
+	for <caml-list@inria.fr>; Sun, 10 Dec 2006 02:36:29 +0100
+Received: from localhost (localhost [127.0.0.1])
+	by barrayar.com (Postfix) with ESMTP id 6BD613B10F
+	for <caml-list@inria.fr>; Sat,  9 Dec 2006 20:42:11 -0500 (EST)
+Date: Sat, 9 Dec 2006 20:42:11 -0500 (EST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@barrayar.nyct.net
+To: caml-list <caml-list@inria.fr>
+Subject: Today's inflamatory opinion: exceptions are bad
+Message-ID: <Pine.LNX.4.64.0612091823020.24657@barrayar.nyct.net>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at concorde with ID 457B649D.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 enforces:01 getline:01 filedesc:01 stdin:01 recursion:01 recursive:01 stack:01 recursive:01 bug:01 ocaml:01 desc:01 desc:01 synchronous:01 numerically:01 
+
+
+I think I've come to the conclusion that exceptions are bad.
+
+In Ocaml, they're useless in many cases, and in most cases wrong. 
+Avoiding them generally makes for better code.  There are two vague types 
+of exceptions- those the program can, and probably should- handle, and 
+those that the program can't, and probably should even try to, handle.
+
+For the former, returning a variant type ('a option if nothing else) is a 
+better idea, for (at least) two reasons.  One, the type system enforces 
+the requirement to actually handle the error, at the location the return 
+value of the function is desired.  Want the result?  Handle the errors. 
+Which allow a function to "pass along" an error if it wants to.  So you 
+could still write functions like:
+
+let getline ?channel () =
+ 	match filedesc with
+ 		| Some(c) -> input_line c
+ 		| None -> (* read from stdin *) read_line ()
+;;
+
+The second reason is that match ... with doesn't break tail recursion, 
+while try ... with does.  This code is not tail recursive:
+
+let rec echo_file channel =
+ 	try
+ 		begin
+ 			let line = input_line channel in
+ 			print_string (line ^ "\n");
+ 			echo_file channel
+ 		end
+ 	with
+ 		| End_of_file -> ()
+;;
+
+Call this on a very long file, and you'll blow stack.  But if input_line 
+returned, say, string option (where None meant end of file), the natural 
+code would be:
+
+let rec echo_file channel =
+ 	match input_line channel with
+ 		| Some(line) ->
+ 			begin
+ 				print_string (line ^ "\n");
+ 				echo_file channel
+ 			end
+ 		| None -> ()
+;;
+
+This is tail recursive.  This is probably the number one bug hit by 
+newbies- "I tried to read in a big file and Ocaml blew up!"  The work 
+around to this is to basically implement the function:
+
+let fixed_input_line channel =
+ 	try
+ 		Some(input_line channel)
+ 	with
+ 		| End_of_file -> None
+;;
+
+and call it instead.  Except often times this function is hand-inlined and 
+only serves to obfuscate the code.
+
+string option probably isn't the best type for input_line to return, as 
+reading can cause other errors.  But this just proves my point even more:
+
+let rec echo_file channel =
+ 	match input_line channel with
+ 		| Input(line) ->
+ 			begin
+ 				print_line (line ^ "\n");
+ 				echo_file channel
+ 			end
+ 		| End_of_file -> ()
+ 		| Read_error(desc) ->
+ 			begin
+ 				print_line ("Read error: " ^ desc ^ "\n");
+ 				()
+ 			end
+;;
+
+Note that this leaves the door open to sharing a single variant type among 
+all the input functions:
+
+type 'a input =
+ 	| Input of 'a
+ 	| End_of_file
+ 	| Read_error of string
+;;
+
+So that input_line returns string input, input_char char input, input_int 
+int input, and so on.
+
+This does force error handling to be *somewhat* local, but I think this is 
+a good thing, not a bad thing.  The farther away the error handling is 
+from the error source, the harder it is to figure out what caused the 
+error, and what to do about it (other than just die).  If that's the 
+behavior I want, it's easy to just do:
+ 	| Read_error (_) -> exit (-1)
+
+The other type of exception is exemplified by the out of memory condition. 
+In 30+ years of using computers and 10+ years of professionally 
+programming them, I think I've seen two programs that gracefully and 
+correctly handled the out of memory condition by doing something other 
+than just exiting the program.  And both of those programs assumed the OOM 
+condition occured because of leaked memory, and thus by rolling back and 
+starting over memory could be reclaimed.  The solution there is to not 
+leak memory- garbage collection is a wonderfull thing.
+
+As a general rule, if your program is running out of memory, you're trying 
+to solve too big of a problem.  If you're trying to invert a 30k by 30k 
+matrix on a 32-bit machine, it just isn't going to work.  And long before 
+you run out of memory, you're generally going to push the machine into 
+swapping and make it unusably slow, so if you're wanting to put a limit on 
+the size of problems a program can handle, the limit should probably be 
+well before the out of memory condition happens.
+
+There's one other system level error (i.e. generated by an interrupt) I 
+can think of the program handling: fp errors, if you're using signalling 
+fp.  Maybe.  The thing is that these errors are synchronous, they happen 
+at specific points in the code and arise because of something specific the 
+code does.  Which means, if you're using these, you want to know where and 
+why the problem happened- and generally you want to know more than just 
+"divide by zero on line 29 of mat_invert".  And tail call optimization 
+makes it hard to figure out how you got there in the general case.
+
+I suppose you could want to write code like "normally use conjugate 
+gradiant, unless you hit a problem, in which case back off and do the much 
+more numerically stable (if slower) gaussian elimination", with the 
+definition of "problem" being "hit a signalling float".  But this is very 
+much the exception that proves the rule- this is how rarely exceptions are 
+usefull.
+
+Other system level errors?  Things like bounds check violations, or 
+integer divide by zeros?  These are programatic errors, and generally 
+catching them in the program doesn't help.
+
+There's one other use for exceptions I've seen (and done)- using them as 
+non-local longjmps.  A classic example for this is a delete functions on a 
+tree structure- you recurse all the way down to the leafs and discover 
+that you're not deleting anything at all, what do you do?  I sometimes 
+(too often) throw an exception to jump out of the recursion back up to the 
+top level.
+
+The fact that I always feel dirty when I do this, and feel the need to 
+include a comment defending this decision is, I think, indicative ("Hmmm. 
+This means something!" -- Closet Encounters of the Nerd Kind).  Or I could 
+just be having a Pascal flashback (the language, not the coworker).
+
+My point here is this: Ocaml is not Java (a fact we should all be 
+gratefull for, IMHO).  Simply because Java and C++ do something, doesn't 
+mean that it's a good thing to do.
+
+Major changes to the language itself I see as unlikely in the near term. 
+I'm mainly putting this rant out there to a) generate discussion, b) make 
+people think, and c) maybe influence the design of future Ocaml libraries 
+and code.
+
+Brian
+

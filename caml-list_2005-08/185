@@ -1,0 +1,120 @@
+Return-Path: <damien.doligez@inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id B0BC4BDC5
+	for <caml-list@yquem.inria.fr>; Mon, 22 Aug 2005 18:50:30 +0200 (CEST)
+Received: from [128.93.8.130] (macadam.inria.fr [128.93.8.130])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j7MGoUmB004535
+	for <caml-list@yquem.inria.fr>; Mon, 22 Aug 2005 18:50:30 +0200
+Mime-Version: 1.0 (Apple Message framework v733)
+In-Reply-To: <43065B83.6050503@dravanet.hu>
+References: <43065B83.6050503@dravanet.hu>
+Content-Type: text/plain; charset=ISO-8859-1; delsp=yes; format=flowed
+Message-Id: <254E6767-A097-455B-872B-483725D26744@inria.fr>
+Content-Transfer-Encoding: quoted-printable
+From: Damien Doligez <damien.doligez@inria.fr>
+Subject: Re: [Caml-list] Parameter evaluation order
+Date: Mon, 22 Aug 2005 18:50:30 +0200
+To: caml-list <caml-list@yquem.inria.fr>
+X-Mailer: Apple Mail (2.733)
+X-Miltered: at concorde with ID 430A0256.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; damien:01 damien:01 caml-list:01 ocaml's:01 unspecified:01 curried:01 evalue:01 compiler:01 curried:01 higher-order:01 replacing:01 ocamlopt:01 corresponds:01 stack:01 2005,:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Aug 20, 2005, at 00:21, M=E1rk S. Zolt=E1n wrote:
+
+> But I do think that currying + strictness + side-effects =3D> left-to-=20=
+
+> right evaluation order.
+
+The problem (and historical reason for OCaml's unspecified order) is =20
+that
+
+currying + side-effects + left-to-right evaluation order =3D> =
+inefficiency
+
+Suppose you want to evaluate a curried function call in left-to-right =20=
+
+order:
+f e1 e2 e3 e4
+
+You must evaluate f first, then e1.  Then you must apply f to e1, giving
+a new function g1.  Then you must evalue e2, then apply f1 to e2, giving
+f2, etc.
+
+That's because f might do some side effects between its arguments.  =20
+Since
+all functions are unary and you must encode n-ary functions with =20
+currying,
+there is no way to specify (within the type system) a function that is
+safe for efficient application.  You would like to evaluate f, then e1,
+then e2, then e3, then e4, then the whole application at once, but you
+cannot.
+
+So the programmer wants to write a function call with 4 arguments, but
+he cannot, and his code ends up doing 4 separate function calls, which
+is a lot of overhead.
+
+Hence there needs to be a notion of n-ary function at some point.  If =20=
+
+not
+in the type system, then within the compiler, which has to guess which
+functions the programmer wants to use as n-ary, and which ones as =20
+curried,
+and translate between the two versions as needed.  Fortunately, it's not
+hard to guess, since true curried functions are almost nonexistent, =20
+so you
+can't go wrong (efficiency-wise) if you always guess "n-ary".  The only
+drawback is that you have to work harder to implement higher-order
+functions, and you lose some efficiency there.
+
+> =3D=3D=3D=3D ordertest.ml =3D=3D=3D=3D=3D
+> let f a b c d =3D ()
+>
+> let () =3D
+>  let ff1 =3D f (print_string "1") in
+>  let ff2 =3D ff1 (print_string "2") in
+>  let ff3 =3D ff2 (print_string "3") in
+>  ff3 (print_string "4");
+>  print_newline ()
+>
+> let () =3D
+>  let f2 =3D f (print_string "1") (print_string "2")
+>  in f2 (print_string "3") (print_string "4") ;
+>  print_newline ()
+>
+> let () =3D
+>  f
+>    (print_string "1")
+>    (print_string "2")
+>    (print_string "3")
+>    (print_string "4");
+>  print_newline ()
+> =3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D
+
+You'll see the problem if you try replacing your definition of f with
+the following:
+
+let f a =3D
+   print_string "a";
+   fun b ->
+   print_string "b";
+   fun c ->
+   print_string "c";
+   fun d ->
+   print_string "d";
+   ()
+;;
+
+Note the really strange results when compiled with ocamlopt.
+
+All these problems disappear when you evaluate in right-to-left order,
+which corresponds to a nice optimization in the original ZAM: evaluate
+and push each argument on the stack, then jump to the function code.
+
+-- Damien
+

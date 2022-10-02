@@ -1,0 +1,149 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA20601 for caml-red; Fri, 7 Jul 2000 17:03:20 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA06113 for <caml-list@pauillac.inria.fr>; Fri, 7 Jul 2000 16:31:06 +0200 (MET DST)
+Received: from suburbia.net (suburbia.net [203.4.184.1])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e67EUtf18087
+	for <caml-list@inria.fr>; Fri, 7 Jul 2000 16:30:57 +0200 (MET DST)
+Received: by suburbia.net (Postfix, from userid 110)
+	id F025A6C4CF; Sat,  8 Jul 2000 00:30:45 +1000 (EST)
+Resent-Sender: proff@suburbia.net
+Resent-To: caml-list@inria.fr
+Resent-Cc: proff@iq.org
+Resent-From: Julian Assange <proff@iq.org>
+Resent-Date: 08 Jul 2000 00:30:45 +1000
+Path: ozemail.com.au!newsfeed.ozemail.com.au!nsw.nnrp.telstra.net!news.syd.connect.com.au!news.mel.connect.com.au!news-spur1.maxwell.syr.edu!news.maxwell.syr.edu!sjc-peer.news.verio.net!news.verio.net!nuq-read.news.verio.net.POSTED!not-for-mail
+Original-Sender: tmb@aimnet.com
+Newsgroups: comp.lang.functional
+Subject: fast functional arrays (OCAML code)
+From: tom <tmb.atncalpointveriopointcomx@x.x>
+Message-ID: <pb8puothv30.fsf@aimnet.com>
+Lines: 114
+User-Agent: Gnus/5.0803 (Gnus v5.8.3) XEmacs/21.1 (Arches)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Date: 05 Jul 2000 00:53:07 -0700
+NNTP-Posting-Host: 206.184.58.110
+X-Complaints-To: abuse@verio.net
+X-Trace: nuq-read.news.verio.net 962785063 206.184.58.110 (Wed, 05 Jul 2000 08:17:43 GMT)
+NNTP-Posting-Date: Wed, 05 Jul 2000 08:17:43 GMT
+Organization: Verio
+X-Cache: nntpcache 2.4.0b3 (see http://www.nntpcache.org/)
+Resent-Message-Id: <20000707143045.F025A6C4CF@suburbia.net>
+To: undisclosed-recipients:;
+Sender: weis@pauillac.inria.fr
+
+I claimed in a previous posting that imperative algorithms that use
+arrays can be translated into completely functional code with no
+logarithmic slowdown.  The trick is to have functional arrays that
+provide access to the latest version in constant time, even though
+access to older versions may be slower.  The implementation of these
+functional array types, of course, requires side effects, but the same
+is true for many other parts of a pure functional language
+implementation.  What matters is the interface that the user sees
+and the performance that the implementation has.
+
+I couldn't find the original code (it's been 10 years; I think I even
+posted the SML version to USENET), but I quickly typed it in again in
+OCAML.  It's pretty simple, but I hope I didn't make some silly
+mistake.  The code gives you completely persistent, functional arrays
+with constant time update and lookup for the latest version.  It's
+based on the idea of "reverse differences" that is also used by the
+RCS version control system.
+
+I'm really surprised that this kind of data structure isn't a standard
+part of functional programming language libraries, but I just checked
+GHC and Hugs and it isn't in there.  I think FP standard libraries
+should just have it out of principle, and it's easy for an implementor
+to provide.
+
+IMO, monad or linear type based arrays are good for some things.  But
+they require some machinery that complicate the language (and may
+complicate interfaces as well).  The SISAL "old" construct for array
+algorithms is also invaluable.  Those are both statically checkable
+special cases of persistent arrays, and I think all pure functional
+programming languages should support these kinds of constructs.
+
+But for other algorithms, data structures like these are, I believe,
+also very useful, and they are particularly easy to implement and
+explain.
+
+Using the same kind of dynamic approach, there are other special cases
+that can be implemented easily.  For example, you can have fast
+functional arrays that only keep the latest version and give you an
+error if you try to access any earlier version (a kind of "dynamic
+linear type").  Or you can have a functional array that keeps two
+versions for each element (very useful for numerical algorithms;
+similar to the SISAL "old" construct).  That, I think, is the
+direction that functional programming libraries should go in for fast
+functional arrays.
+
+Using path compression and various amortizable operations (including
+instantiating an array copy on the fly), you can also create data
+structures that behave efficiently for accesses to multiple versions.
+I've worked out a little bit in this direction; if you are interested
+in pursuing it further, drop me a note.
+
+Tom.
+
+PS: If anybody knows of a published reference to this kind of approach
+to functional arrays, I'd appreciate if you could send it to me.
+
+================================================================
+(* This is -*- caml -*- (actually, OCAML) code.
+
+   A fast functional array data structure using reverse diffs.
+   This data structure can be used to translate imperative algorithms
+   into pure functional programs without logarithmic overhead
+   and without any special type system support (no monads or
+   linear types).
+
+   Accesses/updates to the latest version of the array are always
+   constant time.  Access to older versions of the array have overhead
+   proportional to the age (this can be improved using
+   amortized rearrangement of the diff tree and instantiations
+   of new array copies). 
+
+   Derived from code originally written around 1990 for SML/NJ.
+
+   T h o m a s  M.  B r e u e l  (t m b at n c a l . v e r i o . c o m)
+   
+*)
+
+type 'a record = Data of 'a array | Diff of int * 'a * 'a record ref
+type 'a ffa = 'a record ref
+
+(* create a fast functional array *)
+
+let ffamake size initial_value = 
+  ref (Data (Array.make size initial_value))
+
+(* look up an element in a fast functional array *)
+
+let rec ffaref array index =
+  match !array with
+    Data a -> 
+      (* this is the common case in an imperative algorithm *)
+      a.(index)
+  | Diff(i,v,narray) ->
+      if i = index then v
+      else ffaref narray index
+
+(* return an array with the element at !index! replaced
+   by !value!; the external behavior of the !array! argument
+   remains unchanged *)
+
+let ffaset (array : 'a ffa) index (value : 'a) =
+  let old_value = ffaref array index in
+  match !array with
+    Data a ->
+      (* this is the common case in an imperative algorithm *)
+      (* for the main branch, create a reverse diff *)
+      let result = ref (Data a) in
+      a.(index) <- value;
+      array := Diff (index,old_value,result);
+      result
+  | Diff (i,v,a) ->
+      (* for branches, just create a forward diff *)
+      ref (Diff (index,value,array))
+================================================================
+
+

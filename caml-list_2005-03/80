@@ -1,0 +1,98 @@
+Return-Path: <xleroy@yquem.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: by yquem.inria.fr (Postfix, from userid 18180)
+	id 8B33EBC48; Mon,  7 Mar 2005 17:47:07 +0100 (CET)
+Date: Mon, 7 Mar 2005 17:47:07 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: EL CHAAR RABIH <RABIH.EL-CHAAR@sgam.com>
+Cc: "'caml-list@yquem.inria.fr'" <caml-list@yquem.inria.fr>,
+	"'jeanmarc.eber@lexifi.com'" <jeanmarc.eber@lexifi.com>
+Subject: Re: Using camljava library in a multithreaded context
+Message-ID: <20050307164707.GA17465@yquem.inria.fr>
+References: <71A291D8E360AF4EA6FFFAF9CAD136CA03773583@FR-MAILBOX2.fr.sgam.socgen>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <71A291D8E360AF4EA6FFFAF9CAD136CA03773583@FR-MAILBOX2.fr.sgam.socgen>
+User-Agent: Mutt/1.3.28i
+X-Spam: no; 0.00; camljava:01 camljava:01 ocaml:01 ocaml:01 runtime:01 jni:01 threads:01 synchronized:01 equivalently:01 synchronized:01 mutexes:01 threading:01 model:01 api:01 threads:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=-2.8 required=5.0 tests=ALL_TRUSTED 
+	autolearn=disabled version=3.0.2
+X-Spam-Level: 
+
+> I have been using the camljava library for a certain time, in order to
+> establish communications between java and caml.
+> The initial use of the library (maintained by Mr Leroy) supposed explicitly
+> that it is ocaml that initiates the call to java (it is ocaml that creates a
+> jvm instance).
+> 
+> I was confronted to the situation where java is the instancianting process
+> that should initialize the ocaml runtime. This was done by a little effort,
+> by making the following :
+> *	Java makes call through native methods
+> *	At each call, the JNIEnv variable used in the c code in jnistubs.c
+> is set to the actual JNIEnv passed in the native call.
+> *	The instanciation and deltetion of the jvm (used when ocaml was the
+> instanciating process) is not realised, since a valid JNIEnv is passed at
+> each native call.
+
+This looks fine, I would have done it in the same manner.
+
+> This solution seems satisfactory, but should be used (due to use of global
+> variable JNIEnv) in a context where each call to a native method is atomic.
+> This reflects in the java world that the call to native methods should be
+> made synchronised.
+> 
+> I am now facing a context where i need to make the library coherent with a
+> java multi threaded context.
+> The JNI manual states that each java thread will have it's own JNIEnv inside
+> the jvm. Therefore, two threads calling the same native method will pass two
+> different JNIEnv values. 
+
+Yes, but with correct locking, these two calls will execute in
+sequence, not in parallel, so it is still OK to store the JNIEnv in
+the global variable from jnistubs.c.
+
+The locking can be achieved either at the Java level (by using
+synchronized methods on a unique, global object, or equivalently by
+using the "synchronized" statement over such an object), or at the C
+level using Pthread mutexes or Win32 critical sections.  I'd recommend
+doing the locking at the Java level to ensure maximal compatibility
+with the Java threading model.
+
+> The camljava API used to achieve communications between java and caml should
+> be made reentrant. In order to achieve this, i made a deeper change in the
+> camljava library by making all function calls reentrant, handling the JNIEnv
+> as a method parameter.
+
+This is not necessary with proper locking as described above.
+
+> The idea that i would like to investigate more thoroughly is the possibility
+> to transpose the java threads into caml threads. If this is feasible, will
+> the execution be thread safe inside the GC ??
+
+Probably not.  Moreover, as you mention, Java, Caml and the C layer
+between the two can have different notions of threads, so a direct
+mapping is generally not possible.
+
+> My questions are the following :
+> *	Will i be able to prolonge a java thread into a caml thread
+
+No.
+
+> *	Will this make the execution GC safe
+
+I don't think so.
+
+> *	If java threads are not native threads, can there still be a work
+> around ?
+
+Locking at the Java level will ensure sequential (not concurrent)
+execution of the Caml code and Caml runtime system functions, which is
+what you need to enforce.
+
+Hope this helps,
+
+- Xavier Leroy
+

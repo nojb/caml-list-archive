@@ -1,0 +1,114 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA17402; Sat, 3 Aug 2002 16:22:03 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA17067 for <caml-list@pauillac.inria.fr>; Sat, 3 Aug 2002 16:22:02 +0200 (MET DST)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g73EM1505795
+	for <caml-list@inria.fr>; Sat, 3 Aug 2002 16:22:01 +0200 (MET DST)
+Received: from ibm3.cicrp.jussieu.fr (ibm3.cicrp.jussieu.fr [134.157.15.3])
+          by shiva.jussieu.fr (8.12.5/jtpda-5.4) with ESMTP id g73EM0jR003415
+          ; Sat, 3 Aug 2002 16:22:00 +0200 (CEST)
+Received: from ibm1.cicrp.jussieu.fr (ibm1.cicrp.jussieu.fr [134.157.15.1])
+          by ibm3.cicrp.jussieu.fr (8.8.8/jtpda/mob-V8) with ESMTP id QAA32280
+          ; Sat, 3 Aug 2002 16:20:06 +0200
+Received: from localhost (fernande@localhost)
+          by ibm1.cicrp.jussieu.fr (8.8.8/jtpda/mob-v8) with SMTP id QAA26808
+          ; Sat, 3 Aug 2002 16:19:17 +0200
+Date: Sat, 3 Aug 2002 16:19:16 +0200 (DST)
+From: Diego Olivier Fernandez Pons <Diego-Olivier.FERNANDEZ-PONS@cicrp.jussieu.fr>
+To: Alain Frisch <frisch@clipper.ens.fr>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Streams
+In-Reply-To: <Pine.SOL.4.44.0208021706020.17897-100000@clipper.ens.fr>
+Message-ID: <Pine.A32.3.95.1020803151507.29430A-100000@ibm1.cicrp.jussieu.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=iso-8859-1
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+    Alain,
+
+> type
+>   'a stream =3D
+>      | Nil
+>      | Patchable of 'a stream_patchable
+> and 'a stream_patchable =3D { mutable data : 'a streamCell }
+> and
+>   'a streamCell =3D
+>     | Cons of 'a * 'a stream
+>     | Append of 'a stream * 'a stream
+>     | Delayed of (unit -> 'a stream)
+>     | Generator of int * (int -> int) * (int -> 'a)
+
+Mes listes =E0 =E9valuation retard=E9es contrairement =E0 celles de Rauglau=
+dre
+supportent (quasi) totalement les fonctions g=E9n=E9ratrices, en
+particulier leur concat=E9nation.
+
+Quand Generator ou Delayed vont envoyer une exception [Empty] ou une
+liste vide [Nil] respectivement, il faut que je m=E9morise la valeur, ce
+qui emp=EAche la construction que vous proposez =E0 moins d'utiliser
+Append (Nil, Nil) ou un nouveau constructeur NilBis dans StreamCell.
+
+voici ma fonction force
+
+let rec force =3D function stream ->
+ (match stream.data with
+   | Delayed f -> let x =3D f () in stream.data <- x.data
+   | Generator (index, succ, gen) ->
+      (try
+         let next_index =3D succ index in
+           stream.data <- Cons (gen next_index,=20
+              makeStream (Generator (next_index, succ, gen)))
+        with Empty -> stream.data <- Nil)
+   etc.
+  ) ;
+  stream=20
+
+En fait nous voudrions mimer le mieux possible le comportement des
+listes de base, avec une unique repr=E9sentation de la liste vide :
+# []
+- : 'a list =3D []
+# let (_ :: tail) =3D [1] in tail
+- : int list =3D []
+
+# { data =3D Nil }
+- : '_a stream =3D { data =3D Nil }
+
+> Couln't you just abstract the generator outside the stream ?
+>=20
+> let gen ini f =3D
+>   let state =3D ref ini in
+>   (fun () -> state :=3D f !state),
+>   (fun () -> !state);;
+>=20
+> Do you really need to keep the current state visible ?
+
+Cette repr=E9sentation des g=E9n=E9rateurs a =E9t=E9 choisie afin de pouvoi=
+r
+impl=E9menter (relativement) efficacement les fonctions take et drop.
+
+J'ai gard=E9 l'indexe courant visible car c'=E9tait fait ainsi dans
+l'impl=E9mentation de Rauglaudre, en effet dans les streams de Caml
+l'indexe compte simultan=E9ment le nombre d'=E9tats consomm=E9s :=20
+
+la fonction drop k applique simplement succ^k sur l'indexe,
+
+la fonction take k remplace succ par la version suivante
+  let count =3D ref k in
+  let succ' =3D function index ->
+    if !count =3D 0 then raise Empty
+    else decr count ; succ index
+
+L'id=E9e est essentiellement que d=E9caler d'un indice est plus rapide que
+g=E9n=E9rer une valeur avec evenutellement une fonction triviale si ce
+n'est pas le cas 'a * 'a -> 'a * 'a -> 'a
+
+        Diego Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

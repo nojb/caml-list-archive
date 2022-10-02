@@ -1,0 +1,128 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id EAA07730; Mon, 15 Dec 2003 04:11:26 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA07744 for <caml-list@pauillac.inria.fr>; Mon, 15 Dec 2003 04:11:24 +0100 (MET)
+Received: from smtp1.pp.htv.fi (smtp1.pp.htv.fi [212.90.64.119])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBF3BO100633
+	for <caml-list@inria.fr>; Mon, 15 Dec 2003 04:11:24 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp1.pp.htv.fi (Postfix) with ESMTP
+	id B93D07FFE6; Mon, 15 Dec 2003 05:11:23 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBF3BMT28405;
+	Mon, 15 Dec 2003 05:11:22 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AVj8j-0000us-00; Mon, 15 Dec 2003 05:11:21 +0200
+To: Alain.Frisch@ens.fr
+Cc: Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Freeing dynamically loaded code
+References: <Pine.SOL.4.44.0312122135110.13180-100000@clipper.ens.fr>
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Mon, 15 Dec 2003 05:11:20 +0200
+In-Reply-To: <Pine.SOL.4.44.0312122135110.13180-100000@clipper.ens.fr> (Alain
+ Frisch's message of "Fri, 12 Dec 2003 22:26:46 +0100 (MET)")
+Message-ID: <87oeuayduv.fsf@naked.iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 dynamically:01 alain:01 frisch:01 closures:01 generic:01 stub:01 stub:01 faked:01 dynlink:01 verbose:01 alloc:01 val:01 val:01 wosize:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Alain Frisch wrote:
+> I propose to avoid creating "bad" closures that points to the loaded
+> code.  We simulate a bad closure by a closure to a generic stub. In
+> addition to the normal environment, we put two additional slots into
+> this closure: a pointer to the code block and an offset. This
+> closure is fully under the control of the GC. The stub is made of a
+> single instruction (or maybe two, see next paragraph), say a new
+> bytecode CALL_DYN, which computes the real destination from the
+> closure and jumps to it. We also need a new CLOSURE_DYN bytecode
+> that behaves as CLOSURE but create a faked closure instead of a bad
+> one. Dynlink changes CLOSURE to CLOSURE_DYN when it loads a
+> module. We need to take care of GRAB, RESTART and CLOSUREREC
+> similarly.
+
+Okay, now I finally think I know what you mean. I'll try to spell it
+out in a verbose manner here.
+
+So, if a normal closure would be something like this:
+
+                +-----+--------+-----------------+
+  static alloc  | ... | <code> | ...             |
+                +-----+--------+-----------------+
+                          ^
+                      ,---'
+                      |                       
+  +-------------+----------+----------+----------+
+  | Closure_tag | Code_val | Field(1) | Field(2) |
+  +-------------+----------+----------+----------+
+
+This would be transformed to:
+
+  +-------------+-----+--------+-----------------+  +--------------+
+  | String_tag  | ... | <code> | ...             |  | CALLDYN...   |
+  +-------------+-----+--------+-----------------+  +--------------+
+        ^`-------+-------'                                 ^
+        |        |                                         |
+        |        `-----------------------------------------|-----.
+        |             ,------------------------------------'     |
+        `-------------|-------------------------------.       <offset>
+                      |                               |          |
+  +-------------+----------+----------+----------+----------+----------+
+  | Closure_tag | Code_val | Field(1) | Field(2) | Field(3) | Field(4) |
+  +-------------+----------+----------+----------+----------+----------+
+
+And this CALLDYN instruction would do something like:
+
+  pc = Field(env, Wosize_val(env) - 2) +
+       Field(env, Wosize_val(env) - 1);
+  /* env already points correctly */
+  goto check_stacks;
+
+Am I on the right track?
+
+Now I have no idea what GRAB and RESTART do, and what would be need to
+fix them. They look scary. On CLOSUREREC I have an idea what it's
+supposed to do, but I have no idea how the Infix headers really work
+there - and what we'd need to do to fix that.
+
+Now, to get the file to produce these kind of wacky closures, we would
+need to do a few things. First of all we'd obviously need the CALLDYN
+parts allocated somewhere statically. Then, before reifying the
+bytecode, we'd wish to substitute all calls to CLOSURE with
+CLOSUREDYN, right? And GRABDYN, RESTARTDYN, CLOSURERECDYN if
+necessary. This would mean that we would have to go through the
+bytecode, pretty much like dumpobj.ml does - so we know how many
+parameters each instruction takes so we can find the correct
+instructions to modify. If we don't have to touch the parameters on
+anything, we don't need to recalculate any jump offsets, which is
+good. One thing which I am pondering though when thinking about
+CLOSUREDYN calls. All the information it has is the offset of the code
+to be referenced from the current position. How do we pass the
+knowledge where the start of the block is where this code resides, so
+it can place that pointer in the env and calculate the offset there as
+well? And it can't be a global variable temporarily or anything since
+every CLOSUREDYN instruction needs to create references to the
+codeblock that CLOSUREDYN instruction resides in. Well, I hope this
+can be solved with some hackery.
+
+Now the open questions that I am thinking about are that is anything
+bothered by having two more variables in it's env than it is expecting
+to have? Does anyone look at the size of the env block? Can we
+implement all of CLOSUREDYN, CLOSURERECDYN, GRABDYN and RESTARTDYN so
+that they produce compatible results? What about OFFSETCLOSURE and
+friends, did they do anything evil?
+
+Though sometimes I wonder how nice it could be if *all* code would
+have this calling convention. No more hacking with these special
+instructions, APPLY and friends would already do it. Though the cost
+would be one more word in size for closures everywhere.
+
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

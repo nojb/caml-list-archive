@@ -1,0 +1,179 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA06835; Fri, 21 May 2004 18:32:27 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA07341 for <caml-list@pauillac.inria.fr>; Fri, 21 May 2004 18:32:26 +0200 (MET DST)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i4LGWPEV001735
+	for <caml-list@inria.fr>; Fri, 21 May 2004 18:32:26 +0200
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.12.11/1.01.28121999) with ESMTP id i4LGWP4b051099
+          for <caml-list@inria.fr>; Fri, 21 May 2004 18:32:25 +0200 (CEST)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.12.3/jb-1.1)
+	id i4LGWO98023092 for <caml-list@inria.fr>; Fri, 21 May 2004 18:32:24 +0200 (MET DST)
+X-Authentication-Warning: clipper.ens.fr: frisch owned process doing -bs
+Date: Fri, 21 May 2004 18:32:23 +0200 (MET DST)
+From: Alain Frisch <Alain.Frisch@ens.fr>
+X-X-Sender: frisch@clipper.ens.fr
+Reply-To: Alain Frisch <Alain.Frisch@ens.fr>
+To: Caml list <caml-list@inria.fr>
+Subject: [Caml-list] Proposal for separate compilation
+Message-ID: <Pine.SOL.4.44.0405211830510.21660-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=ISO-8859-1
+Content-Transfer-Encoding: 8BIT
+X-Virus-Scanned: by amavisd-milter (http://amavis.org/)
+X-Greylist: Sender IP whitelisted, not delayed by milter-greylist-1.3.2 (nef.ens.fr [129.199.96.32]); Fri, 21 May 2004 18:32:25 +0200 (CEST)
+X-Miltered: at nez-perce with ID 40AE2F19.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; alain:01 frisch:01 alain:01 frisch:01 jacques:01 collision:01 mli:01 mli:01 cmx:01 cmx:01 constants:01 inlining:01 bottom-line:99 pointers:01 hash:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello list,
+
+I'd like to get feedback on a suggestion to modify the way OCaml
+handle separate compilation. I already mentioned that proposal to
+Xavier and Jacques.
+
+This is an attempt to address the issue of collision between the names
+of two external modules. This should also merge the concept of
+-pack'ed units and libraries, to get the best of both worlds.
+
+First, let me describe (my understanding of) the current system.
+
+i) The compiler transforms a source interface (.mli) to a compiled
+interface (.cmi). When other external modules are referenced in the
+.mli file, the corresponding .cmi files are looked up in the "include"
+directories (-I options on the command line). The name of these
+interfaces are stored symbolically in the .cmi. Their md5 are stored
+in the produced .cmi so as to detect inconsistencies.
+
+ii) The bytecode compiler transforms a source implementation (.ml)
+to a compiled implementation (.cmo). This name of the external
+implementation and interfaces used in .ml are stored in the .cmo.
+The md5 of the interfaces are all stored in the .cmo.
+
+iii) The native compiler produces a .cmx and a .o files. If the .cmx
+of other compiled implementation are found at compile time,
+they are used to propagate constants are perform cross-unit
+inlining. Their md5 are also stored in the produced .cmx.
+
+
+Currently, a compiled unit (.cmi,.cmo,.cmx,.o) refers to another unit
+through its symbolic name, as used in the source file.  My proposal is
+to replace these names with unique identifiers.
+
+Bottom-line: when a unit (.ml,.mli) is compiled, the external units
+are looked up. The information we really want to store in the compiled
+unit is a pointer to the external units as found during compilation.
+Since we want to be able to move or to repackage (in a library)
+compiled units, we can implement these pointers with unique
+identifiers: either a random number, or a md5 hash of the unit.
+
+
+Let me give an example.
+
+==a.mli==
+type t
+====
+
+==b.mli==
+type s = X of A.t
+====
+
+First you compile a.mli and you get a.cmi. When you compile b.mli,
+the file a.cmi is found, and intuitvely, the content of b.cmi
+corresponds to something like:
+
+==b.cmi==
+type s = X of #{a.cmi}.t
+====
+
+where #{a.cmi} denote the unique identifier (uid) of a.cmi as found during
+compile time. Same story for implementations.
+
+
+The compiler needs two distinct lookup mechanisms:
+
+- a mapping from symbolic names (found in source code) to uids
+- a mapping from uids to compiled units (either files, or part of an
+  archive/library)
+
+The first mapping is (almost) a preprocessing pass.
+
+Now it possible to have several units with the same name.
+For instance, consider a project with these files:
+
+dir1/a.ml
+dir1/a.mli
+dir1/b.ml
+dir1/b.mli
+dir2/a.ml
+dir2/a.mli
+
+Imagine that the only dependency is from dir1/b to dir1/a.
+To compile these:
+(cd dir1; ocamlopt -c a.mli a.ml b.mli b.ml)
+(cd dir2; ocamlopt -c a.mli a.ml)
+
+ocamlopt produces: dir1/{a,b}.{cmi,cmx,o} and dir2/a.{cmi,cmx,o}.
+dir1/b.{cmi,cmx} reference dir1/a.{cmi,cmx} through the uid
+of these files.
+
+Now you can compile a module x.ml that uses dir1/b.cmx and dir2/a.cmx.
+You just need to let the compiler/linker know how to find a compiled
+unit given its uid. For instance, you could just give it a list
+of directoroes, and it would look for all the .cmi,.cmx files in this
+directory. More realistically, you would keep into the uid the symbol
+name of the unit, so as to look only at the .cmi,.cmx files with
+the correct name. (You also want to store where the unit was
+found, for error messages, see below.)
+
+A library (.cma,.cmxa) would just be an archive of compiled units
+(*including* compiled interfaces) (plus probably an index: uid ->
+component).  It can be used for both mappings.  You need only to add a
+reference to the library file on the compiler command line (no need
+for a -I flag). Additionnaly, when building and/or compiling with a
+library, it should be possible to specify a prefix, or to give new
+names to its components. This would only affect the mapping from names
+to compiled units. This replaces the -pack option, with a slightly
+different semantics: when the same units is packaged in several
+libraries, and several of these libraries are used, the fact that it
+is the same module is retained (for the typing and link phases: types
+are compatibles, and only one implementation of the module is
+included). As a side product, one no longer needs to rename symbols in
+.o objects when we -pack (we get rid of objutils), because the symbols
+in the .o objects would be prefixed with the uid.
+
+We can imagine fancy features on the command line, like adding a
+prefix for a library:
+
+ocamlopt -c -prefix:A=mylib.cmxa x.ml
+
+or for a directory:
+
+ocamlopt -c -prefix:A=/home/joe/mylib/ x.ml
+
+It would compile x.ml, and references to modules A.* in x.ml would actually
+be resolved in mylib.cmxa (resp. ~/mylib/).
+(And for linking, simply: ocamlopt -o mylib.cmxa x.cmx, resp.:
+ocamlopt -o -I /home/joe/mylib x.cmx).
+
+You no longer get an error message:
+« Files b.cmo and a.cmo make inconsistent assumptions over interface A »
+but something like:
+« Couldn't find interface A with hash XXXXXX (which was found in
+  /home/joe/mylib.cma during compilation) »
+
+
+There are a lot of practical issues to deal with (such as: getting
+decent outputs for ocamlc -i and gprof, etc...).
+
+What do people think about the proposal ?
+
+
+-- Alain
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

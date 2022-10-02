@@ -1,0 +1,142 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA28875 for caml-redistribution; Mon, 30 Aug 1999 15:57:43 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA12490 for <caml-list@pauillac.inria.fr>; Mon, 30 Aug 1999 13:31:44 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id NAA21728
+	for <caml-list@inria.fr>; Mon, 30 Aug 1999 13:31:42 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id NAA13850;
+	Mon, 30 Aug 1999 13:31:29 +0200 (MET DST)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <199908301131.NAA13850@miss.wu-wien.ac.at>
+Subject: Re: GC with finalisation?
+To: skaller@maxtal.com.au (John Skaller)
+Date: Mon, 30 Aug 1999 13:31:29 +0100 (MET DST)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <3.0.6.32.19990830144523.00964e20@mail.triode.net.au> from "John Skaller" at Aug 30, 99 02:45:23 pm
+X-Mailer: ELM [version 2.4 PL21]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> >No, you need not care about references, because this will be done by the
+> >GC of OCaml. 
+> 
+> 	We must be firing past each other. I have to 'model'
+> all the references one python object has to other python
+> objects using the Syms. No python object will be collected
+> directly by ocaml, since they're all registered in a strong
+> array, just to prevent this!
+
+It's not the objects which are collected - it's their "Syms". The objects
+may exist anywhere - but must exist in the finalizing closures of the
+strong array.
+
+> 	Instead, every binding/unbinding of references 
+> in the python objects has to be modelled using the Syms,
+> so that inspecting the weak array of Syms, which ARE
+> collected by ocaml, will allow me to invoke the finaliser,
+> and THEN remove the final strong reference, to allow the
+> now finalised object to be collected by ocaml.
+> 
+> 	I can't just make a weak array of Syms, without
+> the Syms refering to each other, because they'd 
+> all get collected immediately!
+
+Where is the problem when several Syms get collected at once? As long
+as objects (better: their handlers) get registered in the right order,
+they will be finalized in the right order: simply, because the objects
+contain a "Sym" to other objects (via the closure!) and thus, not
+even the handlers of the other objects will be reclaimed before the
+containing object!
+
+This can, of course, lead to cycles which will never be reclaimed by
+the OCaml-GC when the objects in the closures reference themselves
+mutually. But this can be easily resolved by a "meta-GC":
+
+You finalize all objects of reclaimed handlers. Then you put all
+objects that are still available into a set.  Now you traverse all
+reachable objects from the root and fold'n'filter them out of the
+set. The remaining set contains all objects which should be reclaimed
+but reference themselves mutually -> these can now be removed from the
+weak array and be finalized...
+
+This last and a bit more time consuming pass (finding of cyclic
+structures) needs not be conducted every time you do "normal"
+finalization. You could use a "countdown" until this "cycle collection"
+is launched.
+
+> 	Right. And the 'Syms' will depend only on other Syms:
+> 
+> 	type Sym = Sym list ref;;
+
+I have rather thought about something like:
+
+  type 'a sym = Sym of 'a
+
+  class some_python_class = object
+    method finalize = print_endline "Finalized!"
+  end
+
+  let weak_ar = Weak.create 100
+  let strong_ar = Array.create 100 (Obj.magic 0)
+  let ar_size = ref (-1)
+
+  let register () =
+    let my_obj = new some_python_class in
+    let obj_handler = Sym my_obj in
+    Weak.set weak_ar 0 (Some obj_handler);
+    Array.set strong_ar 0 (fun _ -> my_obj#finalize);
+    incr ar_size;
+    obj_handler
+
+  let finalize () =
+    for i = 0 to !ar_size do
+      if not (Weak.check weak_ar i) then strong_ar.(i) ()
+    done
+
+  let _ =
+    ignore (register ());  (* Discards object_handler *)
+    Gc.full_major ();
+    finalize ()
+
+This is a fast hack - eg. "finalize" doesn't remove the closure after
+finalization, etc...
+
+But the main idea should be clear. If you "register" the objects in the
+order of their creation (naturally), they will also be finalized in the
+right order if you traverse the weak array.
+
+Note: if you remove the "ignore" in the main function and replace it by
+some binding, the object will not get finalized! - This proves that it
+is really due to the garbage collection that finalization happens.
+
+The "full major collection" is called to force the object handler (Sym)
+to be reclaimed. You need not do this during normal execution, but you
+will have to before the program exits as it immediately does in this
+small example.
+
+Ah, and you could even catch exceptions in function "finalize"!
+
+> >This guarantees that reclaimed elements of the weak array can be finalized
+> >at once when traversing the array.
+> 
+> 	The dependencies change dynamically, so it is not
+> possible to order the Sym array like this: the ordering is not
+> invariant.
+
+The dependencies exist through object handlers - as long as the "real
+object" is not reclaimed (it won't be as long as there is a closure
+containing it), it will not "release" depending objects (better: their
+"Sym"-handle). Thus, it is guaranteed that finalization respects this
+order. Time of object creation is "only" the second "finalization order
+criterion"...
+
+Regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

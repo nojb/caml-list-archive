@@ -1,0 +1,114 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 328A4BC0A
+	for <caml-list@yquem.inria.fr>; Fri, 19 Jan 2007 01:50:39 +0100 (CET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l0J0oacw024157
+	for <caml-list@inria.fr>; Fri, 19 Jan 2007 01:50:38 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.7/8.13.7) with ESMTP id l0J0oXsS029117;
+	Fri, 19 Jan 2007 09:50:33 +0900 (JST)
+Date: Fri, 19 Jan 2007 09:50:31 +0900 (JST)
+Message-Id: <20070119.095031.85416862.garrigue@math.nagoya-u.ac.jp>
+To: n8gray@gmail.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Benchmarking different dispatch types
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <aee06c9e0701171712k33761ed8r6dc30c46a9df6de7@mail.gmail.com>
+References: <aee06c9e0701171712k33761ed8r6dc30c46a9df6de7@mail.gmail.com>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 45B015DC.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 -inline:01 foc:01 compiler:01 -inline:01 logarithmic:01 unoptimized:01 inlining:01 speedup:01 16%:98 12%:98 89%:98 19%:98 1.2:98 3.2:98 
+
+From: "Nathaniel Gray" <n8gray@gmail.com>
+> As somebody trying to understand the performance of OCaml, I've often
+> wondered about the performance of the different forms of function
+> dispatch.  How do method calls compare to function calls?  How about
+> closure calls?  So I tried using the Benchmark library[1] to do a
+> quick test:
+> 
+> ========
+> (* Test method dispatch vs. function dispatch vs. closure dispatch
+>    Make sure to compile with -inline 0
+>  *)
+> 
+> let f x =
+>    x + 100
+> let call_f () = f 1
+> 
+> let o = object
+>    method f_o x = x + 100
+> end
+> let call_o () = o#f_o 1
+> 
+> let f_c () x = x + 100
+> let f_c' = f_c ()
+> let call_fc () = f_c' 1
+> 
+> let o_c = object
+>    method f_oc () x = x + 100
+> end
+> let f_oc' = o_c#f_oc ()
+> let call_foc () = f_oc' 1
+[...]
+>                     Rate       method obj. closure      closure     function
+>       method  25974026/s           --          -5%         -16%         -90%
+> obj. closure  27210884/s           5%           --         -12%         -89%
+>      closure  31007752/s          19%          14%           --         -88%
+>     function 254777070/s         881%         836%         722%           --
+
+There are a few problems in your methodology.
+One is that you are running your test only once inside a function.
+So what you are measuring ends up being (at least) the cost a calling
+a closure + the real cost of your test. Usually the wrapping function
+should itself be a loop.
+  let call_f () = for i = 1 to 1000 do ignore (f 1 + 1) done
+
+Another problem is that with such micro-benchmarks, all kinds of
+optimizations may skew results, either by the compiler or the CPU.
+You disabled one with -inline 0, but there is noway to discard others
+if you don't know what triggers them.
+
+For instance, when calling a method, normally you would have to search for
+it in the method list stored inside the object. This is done by a
+binary search, with logarithmic cost in the number of methods in the
+list. Since having to do it for every method call would badly impact
+performance, each call point caches the offset in the list for the
+last object called. If the last object was from the same class, then
+no search is done. There are only a few extra memory reads, to verify
+that indeed this is the right offset.
+So if want to measure the cost in the worst situation, you have to
+alternate calls (at the same point) between objects from different
+classes, for which the offset is different.
+In practice, hopefully this worst pattern doesn't occur too often, so
+it is still safe to assume that method calls 
+
+You should also look at the generated assembler (obtained with -S) to
+verify that no strange optimization happens.
+
+My own measurements on a Pentium M and PPC (using a slightly different
+benchmark, using loops and several different methods and functions)
+give (comparing to a direct function call):
+                    Pentium M   PPC G4
+Closure:            1.2x        3.2x
+Method:             2.9x        5.6x
+Unoptimized method: 6.9x        13x
+
+I'm a bit surprised by the low cost of a closure, particularly on
+pentium M, but this may be related to some CPU optimization.
+Note that with inlining you get a more than 10x speedup.
+This suggests that even in the best case method calls are actually
+about twice as expensive as closure calls, and 5 times in a
+particularly bad case.
+
+Jacques Garrigue
+

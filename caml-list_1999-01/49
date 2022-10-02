@@ -1,0 +1,151 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA22320 for caml-redistribution; Tue, 19 Jan 1999 18:08:17 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA06603 for <caml-list@pauillac.inria.fr>; Tue, 19 Jan 1999 17:49:43 +0100 (MET)
+Received: from batman.npl.co.uk (batman.npl.co.uk [139.143.5.1])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id RAA10042
+	for <caml-list@inria.fr>; Tue, 19 Jan 1999 17:49:40 +0100 (MET)
+Received: from herschel.npl.co.uk ([139.143.1.16])
+	by batman.npl.co.uk (8.9.1/8.9.1) with ESMTP id QAA16909
+	for <caml-list@inria.fr>; Tue, 19 Jan 1999 16:49:36 GMT
+Received: from squall.cise.npl.co.uk (squall.cise.npl.co.uk [139.143.18.3])
+	by herschel.npl.co.uk (8.8.5/8.8.5) with ESMTP id QAA26015
+	for <caml-list@inria.fr>; Tue, 19 Jan 1999 16:49:35 GMT
+Received: (from tm1@localhost)
+	by squall.cise.npl.co.uk (8.8.8/8.8.8) id QAA06463;
+	Tue, 19 Jan 1999 16:47:19 GMT
+Date: Tue, 19 Jan 1999 16:47:19 GMT
+Message-Id: <199901191647.QAA06463@squall.cise.npl.co.uk>
+X-Authentication-Warning: squall.cise.npl.co.uk: tm1 set sender to tm1@squall using -f
+From: Toby Moth <tm1@cise.npl.co.uk>
+To: caml-list@inria.fr
+Subject: counting words
+Sender: weis
+
+
+Remember the program in K & R for counting the number of occurrences of all the words in some input (K&R2, 6.5) ? Anyway, I happened to mention this program to a friend whilst a Perl hacker was listening in. To our surprise, the Perl programmer wrote a word counting program, including a binary tree sort, as we spoke. My friend then wrote his own rather less faithful but elegant version of this program in C++. Finally, I decided to write 2 OCAML versions - one using explicit buffering and streams, the other giving much of the work to ocamllex.
+
+The surprise (at least for me) was this - both ocaml versions were significantly faster than the C++ solution. I think the Perl program wins on style. It is closest to the K&R solution and handles white space most cleverly. However, we all know that OCAML can be written stylishly. The point which I am only just beginning to appreciate is that OCAML is remarkably fast. After all, this is just the sort of program which people usually say should be written in C/C++ because it will then run faster.
+
+Here are some results just to give a flavour of relative speeds on an Ultra 5.
+
+[tm1]$ ls -l tm.dv
+-rw-rw-r--   1 tm1      this      452849 Jan 13 13:06 tm.dv
+[tm1]$ time cat tm.dv | perl ~/lang/perl/wc.pl > pcount 
+
+real    0m28.604s                       PERL
+user    0m28.260s                            
+sys     0m0.100s
+[tm1]$ time cat tm.dv | ~/lang/c/wc > ccount
+
+real    0m2.708s                        C++
+user    0m2.260s
+sys     0m0.180s
+[tm1]$ time cat tm.dv | ~/lang/caml/ywc > mcount
+
+real    0m0.999s                       OCAML
+user    0m0.720s
+sys     0m0.080s
+
+
+And here is the code -
+
+PERL ( by Robin Barker )
+---
+package Tree;
+
+sub new { bless { count => 0 } }
+sub putintree {
+    my($tree,$value) = @_;
+    if( $tree->{count} ) {
+	if( $tree->{value} lt $value ) {
+	    $tree->{up} -> putintree($value)	
+        }
+	elsif( $tree->{value} gt $value ) {
+	    $tree->{down} -> putintree($value)	
+        }
+	else { $tree->{count}++ }
+    }
+    else {
+	$tree->{up} = new Tree; 
+	$tree->{down} = new Tree; 
+	$tree->{value} = $value;
+	$tree->{count} = 1;
+    }
+}
+
+sub show {
+    my $tree = shift;
+    if( $tree -> {count} ) {
+	$tree -> {down} -> show;	
+	printf "%4d\t%s\n", $tree->{count}, $tree->{value};
+	$tree -> {up} -> show;	
+    }
+}
+
+package main;
+
+my $tree = new Tree;
+
+while( <> ) { for ( /\w+/g ) { $tree-> putintree ($&) } }
+
+$tree->show;
+---
+
+C++ ( by Steve Gardner, also an OCAML fan )
+> Steve says:
+> "This might be faster if it used lex"
+---
+#include <iostream>
+#include <string>
+#include <map>
+
+int main()
+{
+  string buf;
+  typedef map<string, long> mymap;
+  mymap vec;
+
+  while (cin >> buf) ++vec[buf];
+
+  for (mymap::const_iterator p = vec.begin(); p != vec.end(); ++p)
+    cout << p->first << ": " << p->second << endl;
+}
+---
+
+OCAML ( by me. Forgive me any blemishes - I mean well )
+---
+(*** Lexer Approach to Word Count ***)
+
+{
+let hash = Hashtbl.create 101
+
+let hash_add string = 
+  try
+    let v = Hashtbl.find hash string in v:= !v + 1
+  with
+    Not_found -> Hashtbl.add hash string (ref 1)
+} 
+
+rule read = parse
+  [' ' '\n' '\r' '\t']+ { read lexbuf } 
+| [^' ' '\n' '\r' '\r']+ { hash_add ( Lexing.lexeme lexbuf ); read lexbuf }
+| eof { Hashtbl.iter ( fun k v -> Printf.printf "%4d\t%s\n" !v k ) hash }
+
+{ let _ = read_rec ( Lexing.from_channel stdin ) 0 }
+
+---
+
+ There are a few little extra details worth mentioning.
+
+1) The 2nd OCAML program which I haven't included uses the sort of string buffering + stream approach which you can find in the genlex.ml code. This second approach is rather longer, but not much slower.
+2) A longer C++ solution using #include <hash_map> was also much slower than either of the OCAML solutions.
+3) The speed of the Perl program is irrelevant, since no hashing algorithm was being used.
+
+-- 
+Albert Tobias Moth
+at work: research scientist at the National Physical Laboratory
+         tm1@npl.co.uk   +44 (0)181 943 6016
+at home: philosopher, dish washer, diarist, geek
+         toby@heynonnyno.demon.co.uk
+
+
+

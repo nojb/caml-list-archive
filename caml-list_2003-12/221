@@ -1,0 +1,150 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA21618; Thu, 18 Dec 2003 19:44:30 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA21721 for <caml-list@pauillac.inria.fr>; Thu, 18 Dec 2003 19:44:28 +0100 (MET)
+Received: from mail3.speakeasy.net (mail3.speakeasy.net [216.254.0.203])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBIIiRX10551
+	for <caml-list@inria.fr>; Thu, 18 Dec 2003 19:44:27 +0100 (MET)
+Received: (qmail 20065 invoked from network); 18 Dec 2003 18:44:25 -0000
+Received: from grace.speakeasy.net ([216.254.0.22])
+          (envelope-sender <brogoff@speakeasy.net>)
+          by mail3.speakeasy.net (qmail-ldap-1.03) with AES256-SHA encrypted SMTP
+          for <warplayer@free.fr>; 18 Dec 2003 18:44:25 -0000
+Date: Thu, 18 Dec 2003 10:44:17 -0800 (PST)
+From: brogoff@speakeasy.net
+To: Nicolas Cannasse <warplayer@free.fr>
+cc: Pierre Weis <pierre.weis@inria.fr>,
+        Falk Hueffner <falk.hueffner@student.uni-tuebingen.de>,
+        "caml-list@inria.fr" <caml-list@inria.fr>
+Subject: Re: [Caml-list] Python's yield, Lisp's call-cc or C's setjmp/longjmp
+ in OCaml
+In-Reply-To: <004c01c3c504$62407b80$0274a8c0@PWARP>
+Message-ID: <Pine.LNX.4.44.0312181008040.32105-100000@grace.speakeasy.net>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; brogoff:01 caml-list:01 python's:01 lisp's:01 c's:01 cannasse:01 pierre:01 weis:01 iterator:01 iterator:01 inequality:01 traversing:01 simulating:01 coroutines:01 struct:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 18 Dec 2003, Nicolas Cannasse wrote:
+> > [...]
+> > > This only works for simple examples. Try for example writing a
+> > > function which successively yields all possible moves for a chess
+> > > board. The "yield" operator really helps there.
+> >
+> > Very interesting: please give us the code corresponding to this
+> > example, in order for us to realize how the full power of the "yield"
+> > operator helps to solve this problem.
+> >
+> > Pierre Weis
+> >
+>
+> One simple sample is tree walking :
+> "if there was yield in ocaml"
+>
+> type 'a tree =
+>     |  Node of 'a tree list
+>     |  Leaf of 'a
+>
+> let rec iterator = function
+>     | Node l -> List.iter iterator l
+>     | Leaf x -> yield x
+
+I think this problem is relatively easily handled by the simple home made
+lazy lists I described before, available even in SML or Lisp.
+
+The canonical problem of this class is the "same fringe" problem for trees,
+where you'd like to compare the tree fringe but not have to build the entire
+fringe and do all of the comparisons, but just walk the tree and bail after the
+first inequality. I've appended the code of a simple polymorphic generator
+module, and two different tree representations to test samefringe on. I believe
+that the code is not much longer than the equivalent Sather code, if we take for
+granted that the generator code is part of the library.
+
+If this kind of stuff interests you, I suggest you also check out "zippers", and
+the paper called "That About Wraps It Up" on using Y in ML programming. The
+first, because the notion of "whole + context" is a useful one for traversing
+and manipulating data structures in a functional style, the second because you
+would like to know about simulating coroutines with first class functions.
+
+Of course, OCaml also has support for laziness with both Lazy (an lazy) as well
+as streams which offer other approaches, but I think the simple stuff buys you a
+lot of what iterators do.
+
+-- Brian
+
+module Generator =
+  struct
+     type  'a t = Nil | Cons of 'a * (unit -> 'a t)
+
+     (* Equality of two generators *)
+
+     let rec eq lz1 lz2 =
+       match (lz1,lz2) with
+         Nil, Nil -> true
+       | Cons (v1,f1), Cons (v2,f2) -> (v1 = v2) && eq (f1()) (f2())
+       | _ -> false
+
+     exception Empty
+
+     let make_nil () = Nil
+
+     let make x = Cons (x, make_nil)
+
+    (* Combines two generators *)
+
+     let rec concat f g =
+       match f () with
+         Nil -> g ()
+       | Cons(x,h) -> Cons(x, fun () -> concat h g)
+
+    (* Return the first item of the generator paired with the rest *)
+
+     let yield : 'a t -> 'a * 'a t = function
+         Nil -> raise Empty
+       | Cons(x,h) -> x, (h ())
+  end;;
+
+module Tree =
+  struct
+
+    (* A generic binary tree data type
+    *)
+    type 'a t = Leaf of 'a | Node of 'a t list
+
+    let make_leaf x = Leaf x
+    let make l = Node l
+
+    let rec fringe = function
+        Leaf(x) -> Generator.make x
+      | Node[] -> Generator.Nil
+      | Node(x::xs) ->
+          Generator.concat (fun () -> fringe x) (fun () -> fringe (Node xs))
+
+    let samefringe t1 t2 = Generator.eq (fringe t1) (fringe t2)
+  end;;
+
+module BinaryTree =
+  struct
+
+    (* A generic binary tree data type
+    *)
+    type 'a t = Leaf of 'a | Node of 'a t * 'a t
+
+    let make_leaf x = Leaf x
+    let make l r = Node(l,r)
+
+    let rec fringe = function
+        (Leaf x) -> Generator.make x
+      | (Node(l,r)) ->
+          Generator.concat (fun () -> fringe l) (fun () -> fringe r);;
+
+    let samefringe t1 t2 = Generator.eq (fringe t1) (fringe t2)
+  end;;
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

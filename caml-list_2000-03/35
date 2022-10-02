@@ -1,0 +1,107 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA05230 for caml-redistribution@pauillac.inria.fr; Mon, 6 Mar 2000 19:01:07 +0100 (MET)
+Resent-Message-Id: <200003061801.TAA05230@pauillac.inria.fr>
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA10864 for <caml-list@pauillac.inria.fr>; Mon, 6 Mar 2000 18:37:01 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id SAA21811;
+	Mon, 6 Mar 2000 18:35:48 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA02447; Mon, 6 Mar 2000 18:35:46 +0100 (MET)
+Message-ID: <20000306183546.18171@pauillac.inria.fr>
+Date: Mon, 6 Mar 2000 18:35:46 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: William Chesters <williamc@paneris.org>, caml-list@inria.fr
+Subject: Re: Interpreter vs hardware threads
+References: <14518.34203.741447.637489@gargle.gargle.HOWL> <38BC93FC.65E3ED43@in.ot.com.au> <38bd773a@tequila.cs.yale.edu> <200003021818.SAA13646@toy.william.bogus>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <200003021818.SAA13646@toy.william.bogus>; from William Chesters on Thu, Mar 02, 2000 at 06:18:32PM +0000
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Mon, 6 Mar 2000 19:01:07 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+>    IIRC, Linux native pthreads, for one, aren't at the moment meant to
+> be used in huge numbers---the flood-test performance of those Linux
+> Java VMs which map Java threads onto them supposedly suffers compared
+> with those that don't.  But Xavier would be able to tell us more about
+> that :).
+
+My pleasure :-)  It is true that threads in LinuxThreads are not as
+lightweight as some would like, mostly because they map 1-to-1 to
+kernel processes, and the Linux kernel limits the number of processes
+to 512 (for the super-user) or 256 (for normal users).  Also, kernel
+scheduling takes time linear in the number of processes (just like the
+OCaml bytecode-thread scheduler, which was strongly inspired by that
+of the Linux kernel), so context switching times increase as more
+threads are run.
+
+More generally, there are two very different viewpoints on threads
+that call for radically different implementations.
+
+The first viewpoint is that threads are a convenient abstraction to
+exploit fully some hardware features, such as multiple processors and
+overlapping of I/O and computation.  You can exploit multiple
+processors and overlap I/O without threads using e.g. communicating
+Unix processes and asynchronous I/O.  But it's a pain to program;
+threads make the programming of such applications much easier.
+
+In this viewpoint, you never need huge numbers of threads.  For heavy
+computation on a multiprocessor, N + 1 or N + 2 threads, where N is
+the number of processors, delivers optimal throughput; you're not
+going to run any faster with more threads.  For overlapped I/O on
+PC-class hardware, 20 threads or so are plenty: if you overlap more
+than 20 I/O requests at the same time, the disks and network cards
+won't follow, and throughput will not be increased either.
+
+Both LinuxThreads and to a lesser extent Caml threads were designed
+with that kind of applications in mind.  Caml threads can't exploit
+multiprocessors because the runtime system isn't safe
+w.r.t. concurrent execution, but they have proven quite effective for
+overlapped I/O, e.g. in the V6 intelligent Web proxy.
+
+The other viewpoint is that threads are a code structuring facility,
+making it easier to write programs that conceptually perform a lot of
+things concurrently, e.g. in response to external stimuli.  In this
+viewpoint, threads should be as lightweight as possible (starting a
+thread shouldn't be much more expensive than calling a function), and
+limited in number only by available memory.
+
+The sad fact is that there doesn't exist any implementation technique
+for threads that satisfy both viewpoints at once.  Very lightweight
+threads do exist, see e.g. the call/cc-based threads of SML/NJ, but
+entail significant performance penalties not only on I/O, but also on
+the actual running speed of the sequential code.  "Heavyweight"
+threads such as LinuxThreads or Win32 threads are very efficient
+w.r.t. I/O, but are expensive to start and to context-switch.
+Two-level thread libraries are a compromise that is appealing on
+paper, but not that much "lighter" than pure kernel-based threads in
+reality.
+
+Add to this the fact that the primitives provided by the underlying OS
+affect quite a lot thread libraries.  For instance, some Unixes
+provide async I/O notification via signals, and that could be used to
+speed up the Caml bytecode-thread scheduler, but not all Unixes
+provide them.  Also, if we were certain that the underlying OS
+provides native threads, we could build a two-level scheduler for
+bytecode threads that would probably be more efficient.  But of course
+we have to shoot for the lowest common denominator.
+
+So, don't expect miracles from Caml threads, either bytecode or
+system.  As Michael Hicks said, the current bytecode thread scheduler
+could be improved to run in time proportional to the number of threads
+waiting on I/O, rather than on the number of threads.  That would help
+if most of your threads are blocked on mutexes, conditions or event
+channels, but not if most of your threads perform I/O.
+
+>    (Of course, one could always ask the ocaml team that won the ICFP
+> competition in such spectacular fashion to knock off an
+> ocaml-to-event-driven-FSM compiler ...)
+
+I'm not sure that OCaml is the best input language for generating
+FSMs, but, yes, generating FSMs from a high-level concurrent language
+is an excellent approach.  You get both ultimate execution speed and a
+readable, maintainable description of the program.  Have a look for
+instance at Esterel (another glorious INRIA product :-))
+
+- Xavier Leroy
+
+

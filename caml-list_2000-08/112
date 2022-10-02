@@ -1,0 +1,101 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA20149 for caml-red; Sat, 26 Aug 2000 10:22:57 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA10703 for <caml-list@pauillac.inria.fr>; Fri, 25 Aug 2000 17:42:06 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e7PFfxv10756;
+	Fri, 25 Aug 2000 17:41:59 +0200 (MET DST)
+Received: (from vouillon@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA10303; Fri, 25 Aug 2000 17:41:59 +0200 (MET DST)
+Message-ID: <20000825174159.39156@pauillac.inria.fr>
+Date: Fri, 25 Aug 2000 17:41:59 +0200
+From: Jerome Vouillon <Jerome.Vouillon@inria.fr>
+To: John Max Skaller <skaller@maxtal.com.au>, Francois.Pottier@inria.fr
+Cc: caml-list@inria.fr
+Subject: Re: Language Design
+References: <000d01c00bb8$fb3e3560$210148bf@dylan> <39A36758.E474CC1E@maxtal.com.au> <20000824111226.28393@pauillac.inria.fr> <39A58286.81AEAF47@maxtal.com.au>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <39A58286.81AEAF47@maxtal.com.au>; from John Max Skaller on Fri, Aug 25, 2000 at 06:16:06AM +1000
+Sender: weis@pauillac.inria.fr
+
+On Fri, Aug 25, 2000 at 06:16:06AM +1000, John Max Skaller wrote:
+> Francois Pottier wrote:
+>  
+> > On Wed, Aug 23, 2000 at 03:55:36PM +1000, John Max Skaller wrote:
+> > > What is _actually_ required is a seamless way to integrate
+> > > stateful and function code:
+> > 
+> > Have you thought about employing some kind of monadic type system?
+> 
+> 	Yes, but I don't know enough to do it at the moment.
+> [Also, it turns out monads are not general enough to write
+> web services in, which puts me off a bit]
+
+I think you should really consider using monads. Here is an example.
+
+We define a value of type void to be either a continuation expecting a
+string or a final function that do not expect anything.
+
+    type void = Cont of (string -> void)
+              | Term of (unit -> unit)
+
+This is a procedure that does nothing.
+
+    let unit : void = Term (fun () -> ())
+
+And here is a possible implementation for read: the input string is
+assigned to v and then there is nothing more to do.
+
+    let read (v : string ref) : void = Cont (fun s -> v := s; unit)
+
+The following combinator takes two procedures p and p' and make them
+be evaluated in order.
+
+    let rec seq (p : void) (p': void) : void =
+      match p, p' with
+        Cont c, _ ->
+          Cont (fun s -> seq (c s) p')
+      | Term t, Cont c ->
+          Cont (fun s -> t (); c s)
+      | Term t, Term t' ->
+          Term (fun () -> t (); t' ())
+
+Finally, we have an operator to assign a value v to a reference x.
+
+    let set (x : 'a ref) (v : unit -> 'a) : void = Term (fun () -> x := v ())
+
+Now we can for instance define a procedure that reads to strings and
+returns their concatenation. This procedure does not need to know the
+actual definition of type void.
+
+    let read2 x =
+      let a = ref "" in let b = ref "" in
+      seq (read a) (seq (read b) (set x (fun () -> !a ^ !b)))
+
+You can also use some symbols to make it more readable:
+
+    let ($) = seq
+    let (-<-) = set
+    let read2 x =
+      let a = ref "" in
+      let b = ref "" in
+      read a $
+      read b $
+      x -<- (fun () -> !a ^ !b)
+
+We can try this procedure. First we define an evaluator. It takes the
+input stream and a procedure call as inputs.
+
+    let rec eval l p =
+      match l, p with
+        _,      Term t -> t ()
+      | s :: r, Cont c -> eval r (c s)
+      | _              -> ((* Stuck evaluation *))
+
+Then we evaluate read2 when two strings "a" and "b" are given as
+input:
+
+  let x = ref "" in eval ["a"; "b"] (read2 x); !x
+
+-- Jerome
+
+

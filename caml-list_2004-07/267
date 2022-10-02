@@ -1,0 +1,101 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA07384; Fri, 16 Jul 2004 10:45:02 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA08192 for <caml-list@pauillac.inria.fr>; Fri, 16 Jul 2004 10:45:01 +0200 (MET DST)
+Received: from fafnir.ens-lsh.fr (fafnir.ens-lsh.fr [193.51.131.254])
+	by concorde.inria.fr (8.12.10/8.12.10) with SMTP id i6G8j0SH030094
+	for <caml-list@inria.fr>; Fri, 16 Jul 2004 10:45:00 +0200
+Received: from  ([172.16.1.1]) by fafnir.ens-lsh.fr; Fri, 16 Jul 2004 10:45:07 +0200 (CEST)
+Received: from avalon.ens-lsh.fr (localhost [127.0.0.1])
+	by avalon.ens-lsh.fr (8.12.8/8.12.8) with ESMTP id i6G9hNsi020061
+	for <caml-list@inria.fr>; Fri, 16 Jul 2004 10:43:23 +0100 (WEST)
+Received: from ens-notes1.ens-lsh.fr (ens-notes1.ens-lsh.fr [10.2.1.44])
+	by avalon.ens-lsh.fr (8.12.8/8.12.8) with ESMTP id i6G9hN5w020058
+	for <caml-list@inria.fr>; Fri, 16 Jul 2004 10:43:23 +0100 (WEST)
+Received: from mostha ([10.3.25.139])
+          by ens-notes1.ens-lsh.fr (Lotus Domino Release 5.0.10)
+          with SMTP id 2004071610445581:16702 ;
+          Fri, 16 Jul 2004 10:44:55 +0200 
+Date: Fri, 16 Jul 2004 10:42:31 +0200
+From: Damien <Damien.Pous@ens-lyon.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] kprintf with user formatters
+Message-Id: <20040716104231.5497af93@mostha>
+In-Reply-To: <200407160602.IAA00723@pauillac.inria.fr>
+References: <20040715093953.53769963@mostha>
+	<200407160602.IAA00723@pauillac.inria.fr>
+Organization: mosthagloups
+X-Mailer: Sylpheed version 0.9.11claws (GTK+ 1.2.10; i386-pc-linux-gnu)
+Mime-Version: 1.0
+X-MIMETrack: Itemize by SMTP Server on ens-notes1/ENS-LSH(Release 5.0.10 |March 22, 2002) at
+ 16/07/2004 10:44:55,
+	Serialize by Router on ens-notes1/ENS-LSH(Release 5.0.10 |March 22, 2002) at
+ 16/07/2004 10:44:57,
+	Serialize complete at 16/07/2004 10:44:57
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain; charset=US-ASCII
+X-Miltered: at concorde with ID 40F7958C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; damien:01 damien:01 ens-lyon:01 caml-list:01 kprintf:01 formatters:01 2004:99 pierre:01 weis:01 fmt:01 printf:01 printf:01 fmt:01 val:01 val:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+your CPS solution is fine (except its syntax), 
+but I would like to defend my solution...
+
+On Fri, 16 Jul 2004 08:02:27 +0200 (MET DST) Pierre Weis wrote:
+> # let log b fmt = 
+>     if b then Printf.printf fmt else 
+>     let rec f x = Obj.magic f in f fmt;;
+> val log : bool -> ('a, out_channel, unit) format -> 'a = <fun>
+> # let x = log false "";;
+> val x : unit = <unknown constructor>
+> # Marshal.to_string x [];;
+> Exception: Invalid_argument "output_value: abstract value (outside
+> heap)".
+> 
+> There is clearly something wrong!
+then, what about the following :-)
+# Marshal.to_string (fun () -> ()) [];;
+Exception: Invalid_argument "output_value: abstract value".
+
+> It is overkill to introduce a new printf function just for that case.
+maybe...
+but it is not to hard to implement (after a quick look at printf.ml)
+without the "invalid unit value" problem:
+
+<<
+let count fmt = 
+  (* this function could be implemented more safely using Printf
+     internals*)  
+  let s = string_of_format fmt in
+  let rec aux a i = 
+    match String.unsafe_get s i with
+      | '%'  ->
+	  (match String.unsafe_get s (i+1) with
+	     | '%'  -> aux a (i+2)
+	     | '!'  -> aux a (i+2)
+	     | 'a'  -> aux (a+2) (i+2)
+	     | _    -> aux (a+1) (i+2))
+      | '\000'   -> a
+      | _    -> aux a (i+1)
+  in aux 0 0
+
+let rec eat = function
+  | 0 -> Obj.magic ()
+  | i -> Obj.magic (fun x -> eat (i-1))
+
+let zprintf (fmt: ('a, _, _, _) format4): 'a = eat (count fmt)
+
+let log b = if b then Printf.printf else zprintf
+>>
+
+if (like me), you don't like Obj.magic, please have look at printf.ml...
+
+regards,
+damien
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

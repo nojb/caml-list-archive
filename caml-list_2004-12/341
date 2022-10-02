@@ -1,0 +1,196 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 73561BB91
+	for <caml-list@yquem.inria.fr>; Mon, 27 Dec 2004 01:14:57 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iBR0Evsi008618
+	for <caml-list@yquem.inria.fr>; Mon, 27 Dec 2004 01:14:57 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA04237 for <caml-list@pauillac.inria.fr>; Mon, 27 Dec 2004 01:14:56 +0100 (MET)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iBR0EseN008608
+	for <caml-list@inria.fr>; Mon, 27 Dec 2004 01:14:55 +0100
+Received: from [192.168.1.200] (ppp194-89.lns1.syd2.internode.on.net [203.122.194.89])
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id iBR0EpGa089243
+	for <caml-list@inria.fr>; Mon, 27 Dec 2004 10:44:52 +1030 (CST)
+Subject: RE: [Caml-list] Checking for eof
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: caml-list <caml-list@inria.fr>
+In-Reply-To: <5DCA48FADB33FF4D8C32A164DF24F2B002374E6E@EUR-MSG-03.europe.corp.microsoft.com>
+References: 
+	 <5DCA48FADB33FF4D8C32A164DF24F2B002374E6E@EUR-MSG-03.europe.corp.microsoft.com>
+Content-Type: text/plain
+Message-Id: <1104106491.18148.232.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 27 Dec 2004 11:14:51 +1100
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 41CF5401.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 41CF53FE.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 sourceforge:01 syme:01 wrote:01 ocaml:01 bindings:01 expr:01 bindings:01 expr:01 imho:01 rec:01 handler:01 noreturn:01 handler:01 endl:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+On Mon, 2004-12-27 at 02:25, Don Syme wrote:
+
+> An OCaml or F# version of their construct might be 
+>   "let try <bindings> 
+>    in <expr> 
+>    with <matching>"
+
+> Another possibility might be 
+> 
+>   "let try <bindings> 
+>    with <matching>
+>    in <expr> "
+> 
+
+let readfile chan = 
+  let x = ref [] in 
+  try while true do x:= input_line chan :: !x done
+  with End_of_file -> List.rev !x
+
+is only 4 lines :)
+
+However, this is a bad use of exceptions, IMHO,
+since End_of_file isn't an error, and when thrown
+should never propagate far. With an option type instead:
+
+let readfile chan =
+  let rec loop rlst = 
+    match input_line chan with
+    | None -> List.rev rlst
+    | Some x -> loop (x::rlst)
+  in loop []
+
+is 6 lines and clearly tailrec.
+
+---------------------
+
+Here is what Felix does:
+
+proc f() {
+  g handler;
+
+  noreturn proc handler (x:int) { 
+    print "Error "; print x; endl;
+    goto endoff;
+  }
+
+endoff:>
+}
+
+Here, the handler is *passed* to the routine g,
+which calls it in event of an exceptional situation,
+the handler code then 'throws' by doing a non-local goto.
+(This unwinds the stack).
+
+This technique has a couple of advantages,
+the most important one being that it is *impossible*
+to fail to catch an exception. If code can 'throw'
+an exception, the type system ensures you pass it
+a handler.
+
+There is also no problem with creating 'exception types',
+handlers are just ordinary procedures.
+
+Finally an actual 'pragmatic' test on Alioth Shoothout
+had the Felix version of the test banned because it
+totally wiped out all other solutions on performance.
+I don't mean it was a bit faster -- it was orders
+of magnitude faster.
+
+The reason is the test was too simple, and the optimiser
+managed to reduce the whole test to a flat loop,
+the goto became local (local gotos in Felix become gotos in C).
+
+Optimisation of dynamic exceptions is very hard.
+This is because the raise and catch points are entirely
+decoupled statically: the coupling is entirely dynamic
+based on RTTI (even in Ocaml).
+
+The Felix technique on the other hand combines
+static scoping with dynamic argument passing
+in the *usual* way.
+
+It is much easier to reason about, provided
+the goto target is sensibly placed.
+
+It remains to encapsulate this technique in a nicer
+syntax than 'goto' for example something like:
+
+
+proc f() {
+  exception handler (x:int) { 
+    print "Error "; print x; endl;
+  }
+
+  g handler;
+}
+
+Note the handler of course doesn't have to
+be passed in the case it would be in scope anyhow,
+in which case the same syntax can be used to
+obtain fully static exception handling.
+
+[Felix doesn't have a way to put 'noreturn' in the typing,
+which would be needed to be sure when you 'throw' an
+exception it doesn't return]
+
+In particular, the 'analogue' of dynamic exception
+handling is obtained by storing the handler in a
+global variable, which means anyone can jump to it.
+This is the same as having an exception represented
+by a globally agreed on 'exception type'.
+
+What happens if the handler stack frame is already
+popped? Well, in Felix the handler runs fine,
+and the goto works (the stack frames are all heap
+allocated and garbage collected) -- however the
+falling off the end of the enclosing dead procedure
+terminates the program (because the return address
+is reset to NULL on returning, so the GC can
+collect the caller)
+
+If this sounds bad -- this is exactly what an 
+uncaught exception does.
+
+And now you can see, using the Felix technique
+as a model, some indication why dynamic EH is so bad. 
+It is equivalent to using a global variable for
+something that *should* be local.
+
+The difference is that 'variable' in Felix can
+be localised as required, and the localisation
+is then supported by the type system.
+
+This technique can of course by used in Ocaml.
+Although there is no 'goto' you can emulate it
+with exceptions (LOL)
+
+exception goto;
+let f () =
+  let handler i = 
+    print_endline ("Error " ^ string_of_int i);
+    raise goto;
+  in
+  try g handler
+  with goto -> ()
+
+It may be possible to leverage local modules to
+provide some way to localise the exception
+and guarrantee statically it can't escape
+(possibly allowing Ocaml to optimise..?)
+
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+

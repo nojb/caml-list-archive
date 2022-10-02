@@ -1,0 +1,165 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 7FCE1BB84
+	for <caml-list@yquem.inria.fr>; Tue, 18 Apr 2006 22:20:15 +0200 (CEST)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.183])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k3IKKFHA014215
+	for <caml-list@yquem.inria.fr>; Tue, 18 Apr 2006 22:20:15 +0200
+Received: from [84.58.142.150] (helo=gate.lan.gerd-stolpmann.de)
+	by mrelayeu.kundenserver.de (node=mrelayeu3) with ESMTP (Nemesis),
+	id 0MKxQS-1FVwgG2YqV-0006kr; Tue, 18 Apr 2006 22:20:13 +0200
+Received: from flakew.lan.gerd-stolpmann.de (flakew.lan.gerd-stolpmann.de [192.168.0.32])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id 6BF7EC113;
+	Tue, 18 Apr 2006 22:20:12 +0200 (CEST)
+Subject: Re: [Caml-list] migrate from ocamllex to ulex
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Ruslan Kosolapov <rkosolapov@swsoft.com>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <87u08ribb9.fsf@kosolapov.plesk.ru>
+References: <87u08ribb9.fsf@kosolapov.plesk.ru>
+Content-Type: text/plain
+Date: Tue, 18 Apr 2006 22:20:11 +0200
+Message-Id: <1145391612.15442.115.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: kundenserver.de abuse@kundenserver.de login:a6865a839c0178d9aa0ce41878507ea2
+X-Miltered: at concorde with ID 444549FF.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocamllex:01 gerd:01 stolpmann:01 ocamllex:01 lexer:01 mll:01 lexer:01 mll:01 byte:01 pxp:01 non-trivial:01 ocaml:01 syntax:01 grammar:01 o'caml:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Am Dienstag, den 18.04.2006, 14:37 +0700 schrieb Ruslan Kosolapov:
+> I want to use Polygen (http://polygen.org/web/), but this tool is not
+> work with UTF-8 (if I try to use UTF-8 symbols in template, error
+> "illegal character" appear).
+> 
+> As far as I understand problem is ocamllex - if I use UTF-8 symbols in
+> lexer.mll, ocamllex say to me "illegal character", so, I can't just
+> modify lexer.mll.
+
+Well, ocamllex just processes bytes. In order to scan UTF-8, just must
+create a regular expression that matches the byte representation. I did
+this with great success for PXP - but it is absolutely non-trivial.
+Better go with ulex.
+
+> So, I think I should modify Polygen to ulex using.
+> 
+> I have no any OCaml expirience, so such task is hard for me.
+
+Probably.
+
+> I look for code examples or any detailed documentation which show me
+> how I can migrate from ocamllex to ulex.
+
+It is not that complicated. The main difference is not that ulex is
+Unicode-based, but that ulex is a different kind of preprocessor. That
+has consequences for how the preprocessor is invoked, and for the syntax
+of the scanner.
+
+ocamllex is a classical preprocessor that produces an intermediate file
+which is then compiled. In contrast to that, ulex modifies the grammar
+of the O'Caml language such that new constructs can be used. These
+constructs are immediately mapped to the built-in elements of the
+language, so it is actually a preprocessor, but much better integrated.
+
+In order to run ulex, I strongly recommend to first install findlib
+(http://ocaml-programming.de/packages). Then, do
+mv lexer.mll lexer.ml - as ulex does not create intermediate files,
+there is no need for the .mll extension. Compile with
+
+ocamlfind ocamlc -package ulex -syntax camlp4o <args>
+
+or
+
+ocamlfind ocamlopt -package ulex -syntax camlp4o <args>
+
+for the native-code compiler. <args> are the same arguments as for plain
+ocamlc/ocamlopt. When linking the executable, also add the flag -linkpkg
+to the compiler invocations.
+
+You can simply use these compiler commands for all .ml and .mli files.
+
+Of course, you must also modify lexer.ml. In principle, transform
+
+{ <header> }
+
+rule <name1> <arg1> <arg2> ... = 
+  parse <regexp> { <action> }
+      | <regexp> { <action> } ...
+
+{ <trailer> }
+
+to:
+
+<header>
+
+let <name1> <arg1> <arg2> ... =
+  lexer <regexp> -> <action>
+      | <regexp> -> <action> ...
+;;
+
+<trailer>
+
+This is the purely syntactic part of the transformation. Furthermore,
+typing is a bit different.
+
+ocamllex uses the helper module Lexing. For example, to get the just
+scanned phrase, you can use the function call
+
+Lexing.lexeme lexbuf
+
+within one of the <action>s. lexbuf is the buffer the lexer operates on.
+ulex needs another type of buffer, suitable for Unicode. The module
+Ulexing provides such a buffer. However, typing is different. The
+corresponding call
+
+Ulexing.lexeme lexbuf
+
+returns the phrase, but not as string (O'Caml strings are simply
+sequences of 8 bit characters), but as array of integers. Use
+
+Ulexing.utf8_lexeme lexbuf
+
+to get a string of UTF-8 bytes.
+
+You will also see the different typing when you call the generated
+lexers. For ocamllex, this is something like:
+
+let lexbuf = Lexing.from_string "Example string" in
+<name> lexbuf
+
+(where <name> is the name of a lexer). For ulex, this is
+
+let lexbuf = Ulexing.from_utf8_string "Example string" in
+<name> lexbuf
+
+Look into ulexing.mli, you can also read from other sources.
+
+> Please help :)
+> 
+> 
+> PS: I tryed to modify file lexer.ml (such file produced by ocamllex),
+> but I don't know what exactly I should modify - lexer.ml is not
+> human-readable.
+
+Well, this is a finite automaton expressed as lookup table. After the
+NFA to DFA transformation step, it is practically impossible to
+understand it.
+
+Gerd
+
+P.S. Maybe this is also interesting for you:
+http://www.gerd-stolpmann.de/buero/service_ocaml.html.en
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

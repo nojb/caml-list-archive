@@ -1,0 +1,123 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id CAF96BC37
+	for <caml-list@yquem.inria.fr>; Tue, 12 May 2009 11:37:17 +0200 (CEST)
+X-IronPort-AV: E=Sophos;i="4.38,431,1233529200"; 
+   d="scan'208";a="29145116"
+Received: from estephe.inria.fr ([128.93.11.95])
+  by mail1-relais-roc.national.inria.fr with ESMTP; 12 May 2009 11:37:17 +0200
+Message-ID: <4A09434D.3020102@inria.fr>
+Date: Tue, 12 May 2009 11:37:17 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Thunderbird 2.0.0.17 (X11/20080929)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Ocamlopt x86-32 and SSE2
+References: <20090511043120.976EBBC67@yquem.inria.fr> <B1CD096B-910F-41B7-BBE8-5F2EA0DB49AF@cea.fr>
+In-Reply-To: <B1CD096B-910F-41B7-BBE8-5F2EA0DB49AF@cea.fr>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocamlopt:01 gcc:01 compilation:01 gcc:01 parallelism:01 dependencies:01 ocamlopt:01 speedups:01 predictable:01 cuoq:01 wikipedia:01 wiki:01 low-power:01 decoding:01 ergo:01 
+
+This is an interesting discussion with many relevant points being
+made.  Some comments:
+
+Matteo Frigo:
+> Do you guys have any sort of empirical evidence that scalar SSE2 math is
+> faster than plain old x87?
+> I ask because every time I tried compiling FFTW with gcc -m32
+> -mfpmath=sse, the result has been invariably slower than the vanilla x87
+> compilation.  (I am talking about scalar arithmetic here.  FFTW also
+> supports SSE2 2-way vector arithmetic, which is of course faster.)
+
+gcc does rather clever tricks with the x87 float stack and the fxch
+instruction, making it look almost like a flat register set and
+managing to expose some instruction-level parallelism despite the
+dependencies on the top of the stack.  In contrast, ocamlopt uses the
+x87 stack in a pedestrian, reverse-Polish-notation way, so the
+benefits of having "real" float registers is bigger.
+
+Using the experimental x86-sse2 port that I did in 2003 on a Core2
+processor, I see speedups of 10 to 15% on my few standard float
+benchmarks.  However, these benchmarks were written in such a way that
+the generated x87 code isn't too awful.  It is easy to construct
+examples where the SSE2 code is twice as fast as x87.
+
+More generally, the SSE2 code generator is much more forgiving towards
+changes in program style, and its performance characteristics are more
+predictable than the x87 code generator.  For instance, manual
+elimination of common subexpressions is almost always a win with SSE2
+but quite often a loss with x87 ...
+
+Pascal Cuoq:
+> According to http://en.wikipedia.org/wiki/SSE2, someone using a Via C7
+> should be fine.
+
+Richard Jones:
+> AMD Geode then ...
+
+Apparently, recent versions of the Geode support SSE2 as well.
+Low-power people love vector instruction sets, because it lets them do
+common tasks like audio and video decoding more efficiently, ergo with
+less energy.
+
+Sylvain Le Gall:
+> If INRIA choose to switch to SSE2 there should be at least still a way
+> to compile on older architecture. Doesn't mean that INRIA need to keep
+> the old code generator, but should provide a simple emulation for it. In
+> this case, we will have good performance on new arch for float and we
+> will still be able to compile on old arch. 
+
+The least complicated way to preserve backward compatibility with
+pre-SSE2 hardware is to keep the existing x87 code generator and bolt
+the SSE2 generator on top of it, Frankenstein-style.  Well, either
+that, or rely on the kernel to trap unimplemented SSE2 instructions
+and emulate them in software.  This is theoretically possible but I'm
+pretty sure neither Linux nor Windows implement it.
+
+David Mentre:
+> Regarding option 2, I assume that byte-code would still work on i386
+> pre-SSE2 machines? So OCaml programs would still work on those machines.
+
+You're correct, provided the bytecode interpreter isn't compiled in
+SSE2 mode itself (see below for one reason one might want to do this).
+However, packagers would still be unhappy about this: packaged OCaml
+applications like Unison or Coq are usually compiled to native-code
+(the additional speed is most welcome in the case of Coq...).
+Therefore, packagers would have to choose between making these
+applications SSE2-only or make them slower by compiling them to bytecode.
+
+Dmitry Bely:
+> [Reproducibility of results between bytecode and native]
+> I wouldn't be so sure. Bytecode runtime is C compiler-dependent (that
+> does use x87 for floating-point calculations), so rounding errors can
+> lead to different results.
+
+That's right: even though it stores all intermediate float results in
+64-bit format, a bytecode interpreter compiled in default x87 mode still
+exhibits double rounding anomalies.  One would have to compile it with
+gcc in SSE2 mode (like MacOS X does by default) to have complete
+reproducibility between bytecode and native.
+
+> Floating point is always approximate...
+
+I used to believe strongly in this viewpoint, but after discussion
+with people who do static analysis or program proof over float
+programs, I'm not so sure: static analysis and program proof are
+difficult enough that one doesn't want to complicate them even further
+to take extended-precision intermediate results and double rounding
+into account...
+
+To finish: I'm still very interested in hearing from packagers.  Does
+Debian, for example, already have some packages that are SSE2-only?
+Are these packages specially tagged so that the installer will refuse
+to install them on pre-SSE2 hardware?  What's the party line?
+
+- Xavier Leroy
+

@@ -1,0 +1,127 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p4NJa8qQ008778
+	for <caml-list@sympa-roc.inria.fr>; Mon, 23 May 2011 21:36:08 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmMBAEa22k1V2gB5mWdsb2JhbACmNQEBAQEBCAsLBxQliHC8Tg6GCwSUXYor
+X-IronPort-AV: E=Sophos;i="4.65,258,1304287200"; 
+   d="scan'208";a="109305320"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 23 May 2011 21:36:03 +0200
+X-Alinto-smtpauth-localdomain: Yes
+Received: from seldon (unknown [85.218.93.111])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id 50FB720C02B;
+	Mon, 23 May 2011 21:35:59 +0200 (CEST)
+Received: from yziquel by seldon with local (Exim 4.72)
+	(envelope-from <guillaume.yziquel@citycable.ch>)
+	id 1QOatJ-0007iU-Aa; Mon, 23 May 2011 21:34:13 +0200
+Date: Mon, 23 May 2011 21:34:13 +0200
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+To: Hakan Suka <hakan40us@yahoo.com>
+Cc: caml-list@inria.fr
+Message-ID: <20110523193413.GA22132@localhost>
+References: <172756.45853.qm@web120203.mail.ne1.yahoo.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <172756.45853.qm@web120203.mail.ne1.yahoo.com>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p4NJa8qQ008778
+Subject: Re: [Caml-list] functor inside a class
+
+Le Monday 23 May 2011 à 04:17:00 (-0700), Hakan Suka a écrit :
+> Hi everyone,
+> 
+> But can I have a local module definition so that the I can have a tracker not 
+> only for integers, but for any type being passed as input? The following does 
+> not work:
+> 
+> class ['a] tracker size =
+> let module LabelSet =
+> Set.Make (struct type t = 'a let compare = compare end)
+> in
+> object
+> val nums_to_track_tbl : (int32, LabelSet.t) Hashtbl.t =
+> Hashtbl.create size
+> 
+> method get pos = Hashtbl.find_all nums_to_track_tbl pos
+> 
+> end
+
+First of all, the scope in which you can refer to LabelSet is local to
+the class declaration. However, the class method get has a type which
+refers to LabelSet. That's out of scope.
+
+More importantly, it seems that
+
+	let f x = let module M = struct end in x
+
+is syntactically valid, while it doesn't seem to work out the same way for
+class declarations:
+
+	class ['a] tracker = fun size -> let module M = struct end in object end
+
+gives a syntax error.
+
+You should create your local module somewhere else than before 'object'
+'end'.
+
+> If this is not possible, would it work in Ocaml 3.12 with first-class modules?
+> 
+> I have seen the following code in the manual which seems fairly close of what I 
+> would need inside the parametrised class, but not sure if I can use the output 
+> of make_set inside the module. I haven't tested this because I have Ocaml 3.11.2
+> 
+> let make_set (type s) cmp =
+> let module S = Set.Make(struct
+> type t = s
+> let compare = cmp
+> end) in
+> (module S : Set.S with type elt = s) 
+> 
+> If that does not work, any suggestions on how to implement this?
+
+The big point is that you need the 'get' method to return something which
+is a 't' element of a module satisfying the 'Set.S with type t = 'a'
+signature.
+
+You need a type constructor for that. Set.Make(String).t is a valid
+type, but I do not see how parametrise String for some other 'a type.
+
+The following works:
+
+	type 'a set_module = (module Set.S with type elt = 'a)
+
+	let make_set (type s) ?(cmp = compare) () =
+		let module S = Set.Make (struct type t = s let compare = cmp end) in
+		(module S : Set.S with type elt = s)
+
+	class ['a] tracker size = object
+		val set = make_set ()   
+		val nums_to_track_tbl : (int32, 'a set_module) Hashtbl.t = Hashtbl.create size
+		method get pos = Hashtbl.find_all nums_to_track_tbl pos
+	end
+
+But it's a 'a set_module, not a 'a set, so first-class modules do not
+seem so useful at first glance...
+
+What you'd need is not a
+
+	type 'a set_module = (module Set.S with type elt = 'a)
+
+but something like
+
+	type 'a set = (module Set.S with type elt = 'a).t
+
+(which is not valid), and to my knowledge, this cannot be done.
+
+However, I think there is a polymorphic-not-functorised code for maps
+and sets lying out somewhere on the net. This is likely your best bet.
+
+> Thanks,
+> Hakan
+
+-- 
+     Guillaume Yziquel
+

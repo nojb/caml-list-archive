@@ -1,0 +1,130 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by sympa.inria.fr (Postfix) with ESMTPS id 552237ED5C
+	for <caml-list@sympa.inria.fr>; Thu,  2 Aug 2012 09:46:56 +0200 (CEST)
+Received-SPF: None (mail1-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail1-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail1-smtp-roc.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail1-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail1-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail1-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArcEAN4vGlBCJwNzd2dsb2JhbABFqCeRCAEMBw8HO4IgAQEsUjMcfQ6IBAu9d5JNA5VGAYEUkVg
+X-IronPort-AV: E=Sophos;i="4.77,699,1336341600"; 
+   d="scan'208";a="168864927"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 02 Aug 2012 09:46:55 +0200
+Received: (qmail 44054 invoked by uid 9370); 2 Aug 2012 07:46:53 -0000
+Date: 2 Aug 2012 07:46:53 -0000
+Message-ID: <20120802074653.44053.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: gabriel.scherer@gmail.com
+CC: bobzhang1988@gmail.com
+CC: caml-list@inria.fr
+X-Validation-by: oleg@okmij.org
+Subject: [Caml-list] Reifying types
+
+
+Gabriel Scherer wrote:
+> The new 4.00 release has added fairly interesting feature relying on
+> the compiler internals: the new -bin-annot option allowing to export
+> and manipulate the typedtree of an OCaml program has already stirred
+> interest among tools writers.
+
+That is indeed interesting! I admit I would like more, a primitive
+
+	type_reify : 'a -> -'a repr
+
+which returns a representation of a type of any expression. Here 
+'a repr is a representation of a type, represented as a GADT
+
+        type _ repr =
+          | Int   : int repr
+          | String: string repr
+          | Tuple : 'a repr * 'b repr -> ('a * 'b) repr
+          | List  : 'a repr -> ('a list) repr
+          | Arrow : 'a repr * 'b repr -> ('a -> 'b) repr
+...
+or using the representation described in the ML2010 paper with Jeremy Yallop
+   http://okmij.org/ftp/ML/first-class-modules/generics.ml
+(It's best if 'a repr is non-variant or at least contra-variant to
+prevent generalization).
+
+For example,
+	type_reify (1,"2") 
+will return a value of the type (int * string) repr.
+	type_reify ((fun x -> (x,"2")) (10 * 20))
+will return the same result. That is, the compiler builds the code
+that, when run, constructs an 'a repr value 
+(describing the type of the expression at hand).
+
+Such type_reify function lets us do cool generic programming (as was
+hinted in the generics.ml file above). We can do generic printing,
+generic serialization and deserialization, etc. Incidentally, although
+reifying expressions trivializes equational theory of the language (as
+was first shown by Mitch Wand in his paper about fexpr), reifying
+types (that is, extracting only part of the Typedtree, pertaining to
+types) is safe in this respect.
+
+MetaOCaml has something like that: the brackets
+	.< exp >. : 'a code
+for an expression of the type 'a. The value of 'a code is essentially
+the Typedtree, from which one can extract the type information.  I
+always thought it would be wonderful to do generic programming in
+(Meta)OCaml.  I've been trying for years to get anyone interested in
+this topic, without any success. BER MetaOCaml distribution does
+include one example of generic programming, generic print.
+	http://okmij.org/ftp/ML/index.html#gprint
+
+The problem with using raw types from the Typedtree is the sheer
+complexity of the type representation: the types contain aliases to
+expand, links to chase, type variables to substitute, etc. For
+example, to check if the type of an expression (a type associated with a
+Typedtree node) is an int, we have to write the following incantations
+
+let scrape env ty =
+  (Ctype.repr (Ctype.expand_head_opt env (Ctype.correct_levels ty))).desc
+
+let has_int_type exp =
+  match scrape exp.exp_env exp.exp_type with
+  | Tconstr(p, _, _) -> Path.same p Predef.path_int
+  | _ -> false
+
+
+Therefore, designing a good type representation like 'a repr will be
+of great benefit.
+
+
+Hongbo Zhang wrote:
+> There are a lot of things to explore having compiler as libraries.
+> (another advantage compared with Haskell)
+
+Perhaps you are not aware of GHC API -- which is the whole GHC
+compiler available as a library. It is indeed very handy, and is used
+a lot (for example, HINT -- Haskell interpreter, building module
+graphs, building Intellisense, etc.). Thus OCaml and Haskell are on
+par in offering compiler as a library (GHC API is must better
+documented though).
+
+http://www.haskell.org/haskellwiki/GHC/As_a_library
+http://www.haskell.org/ghc/docs/latest/html/libraries/ghc/GHC.html
+http://www.haskell.org/ghc/docs/latest/html/libraries/ghc/index.html
+
+
+

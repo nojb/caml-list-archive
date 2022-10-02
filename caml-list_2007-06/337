@@ -1,0 +1,243 @@
+Return-Path: <jtbryant@valdosta.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id DC31FBC0A
+	for <caml-list@yquem.inria.fr>; Thu, 21 Jun 2007 09:16:14 +0200 (CEST)
+Received: from mailx.valdosta.edu (mailx.valdosta.edu [168.18.130.251])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5L7GDwn023371
+	for <caml-list@yquem.inria.fr>; Thu, 21 Jun 2007 09:16:14 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao8CAETCeUaoEoLQ/2dsb2JhbACvIA
+X-IronPort-AV: E=Sophos;i="4.16,446,1175486400"; 
+   d="scan'208";a="79603567"
+Received: from blazemail.valdosta.edu ([168.18.130.208])
+  by mailx.valdosta.edu with ESMTP; 21 Jun 2007 03:16:12 -0400
+Received: from luminis (luminis [168.18.130.219]) by blazemail.valdosta.edu
+ (iPlanet Messaging Server 5.2 HotFix 2.04 (built Feb  8 2005))
+ with SMTP id <0JJZ0033N5J0J2@blazemail.valdosta.edu> for
+ caml-list@yquem.inria.fr; Thu, 21 Jun 2007 03:16:12 -0400 (EDT)
+Date: Thu, 21 Jun 2007 03:16:12 -0400 (EDT)
+From: Jonathan T Bryant <jtbryant@valdosta.edu>
+Subject: Functors + polymorphism = confusion
+To: caml-list@yquem.inria.fr
+Message-id: <6372856.1182410172319.JavaMail.jtbryant@valdosta.edu>
+MIME-version: 1.0
+Content-type: text/plain; charset=UTF-8
+Content-transfer-encoding: 7BIT
+X-Miltered: at discorde with ID 467A25BD.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; functors:01 polymorphism:01 functors:01 polymorphism:01 functor:01 functor:01 trivial:01 overlooking:01 inlined:01 mli:01 sig:01 val:01 val:01 sig:01 struct:01 
+
+I'm having some trouble getting functors to play nice with polymorphism.
+
+I'm using a functor to parallelize a function, so given a function 
+wrapped up in a module, I apply a functor to it get a module with 
+several parallel versions of the function.  The in/output of the 
+functions have to be types wrapped up in a Message module (as they may 
+need to be serialized).
+
+This is pretty trivial for monomorphic functions, but I can't seem to 
+define the Bind functor correctly to allow a polymorphic function 
+definition which is bound to two message types at functor application.  
+I've tried every variation on the theme I can think of, but I can't 
+seem to make it work.
+
+Is what I'm trying to do possible?  I think it is because I did 
+something similar for polymorphic messages (included in code, but not 
+used).  Maybe someone could point out to me something I'm overlooking?
+
+(Code inlined below)
+
+Thanks,
+--Jonathan
+
+functor_test.mli
+----------------
+
+module type Message =
+  sig
+    type t
+    val to_string : t -> string
+    val of_string : string -> t
+  end
+
+module type PolyMessage =
+  functor (M : Message) ->
+  sig
+    type 'a t
+    val to_string : M.t t -> string
+    val of_string : string -> M.t t
+  end
+
+module BindMessage :
+  functor (P : PolyMessage) ->
+  functor (M : Message) ->
+  Message
+
+module type Function =
+  sig
+    module A : Message
+    module B : Message
+    val f : A.t -> B.t
+  end
+
+module type PolyFunction =
+  (*
+  functor (A : Message) ->
+  functor (B : Message) ->
+  *)
+  sig
+    (* val f : A.t -> B.t *)
+    val f : 'a -> 'b
+  end
+
+module BindFunction :
+  functor (F : PolyFunction) ->
+  functor (A : Message) ->
+  functor (B : Message) ->
+  Function
+
+module type ParallelFunction =
+  sig
+    module A : Message
+    module B : Message
+    val sequential : A.t -> B.t
+    val concurrent : A.t -> B.t
+    val parallel : A.t -> B.t
+    val remote : A.t -> B.t
+  end
+
+module Parallelize : functor (F : Function) -> ParallelFunction
+
+module IntMessage : Message
+module FloatMessage : Message
+
+module Double : Function
+
+module Identity : PolyFunction
+module BoundIdentity : Function
+
+module ParallelDouble : ParallelFunction
+module ParallelIdentity : ParallelFunction
+
+functor_test.ml
+----------------
+
+module type Message =
+  sig
+    type t
+    val to_string : t -> string
+    val of_string : string -> t
+  end
+
+module type PolyMessage = functor (M : Message) ->
+  sig
+    type 'a t
+    val to_string : M.t t -> string
+    val of_string : string -> M.t t
+  end
+
+module BindMessage =
+  functor (P : PolyMessage) ->
+  functor (M : Message) ->
+  struct
+    module P = P (M)
+    type t = M.t P.t
+    let to_string m = P.to_string m
+    let of_string s = P.of_string s
+  end
+
+module type Function =
+  sig
+    module A : Message
+    module B : Message
+    val f : A.t -> B.t
+  end
+
+module type PolyFunction =
+  (*
+  functor (A : Message) ->
+  functor (B : Message) ->
+  *)
+  sig
+    (* val f : A.t -> B.t *)
+    val f : 'a -> 'b
+  end
+
+module BindFunction =
+  functor (F : PolyFunction) ->
+  functor (A : Message) ->
+  functor (B : Message) ->
+  struct
+    module A = A
+    module B = B
+    let f x = F.f x
+  end
+
+module type ParallelFunction =
+  sig
+    module A : Message
+    module B : Message
+    val sequential : A.t -> B.t
+    val concurrent : A.t -> B.t
+    val parallel : A.t -> B.t
+    val remote : A.t -> B.t
+  end
+
+module Parallelize = functor (F : Function) ->
+  struct
+    module A = F.A
+    module B = F.B
+    let sequential x = F.f x
+    let concurrent x = F.f x
+    let parallel x = F.f x
+    let remote x = F.f x
+  end
+
+module IntMessage =
+  struct
+    type t = int
+    let to_string m = string_of_int m
+    let of_string s = int_of_string s
+  end
+
+module FloatMessage =
+  struct
+    type t = float
+    let to_string m = string_of_float m
+    let of_string s = float_of_string s
+  end
+
+module Double =
+  struct
+    module A = IntMessage
+    module B = IntMessage
+    let f x = 2 * x
+  end
+
+module Identity =
+  (*
+  functor (A : Message) ->
+  functor (B : Message) ->
+  *)
+  struct
+    let f x = (Obj.magic x : 'b)
+    
+    (* Fails type checking, why?
+    let f x = x
+    *)
+  end
+
+module BoundIdentity = BindFunction (Identity) (IntMessage) (IntMessage)
+
+(* Fails type checking, as it should:
+module BoundIdentity = Bind (Identity) (IntMessage) (FloatMessage)
+*)
+
+module ParallelDouble = Parallelize (Double)
+module ParallelIdentity = Parallelize (BoundIdentity)
+

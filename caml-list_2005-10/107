@@ -1,0 +1,115 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 5CE3EBB81
+	for <caml-list@yquem.inria.fr>; Mon, 10 Oct 2005 08:19:07 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j9A6J6Z1018800
+	for <caml-list@yquem.inria.fr>; Mon, 10 Oct 2005 08:19:06 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA15267 for <caml-list@pauillac.inria.fr>; Mon, 10 Oct 2005 08:19:06 +0200 (MET DST)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j9A6J46T027276
+	for <caml-list@inria.fr>; Mon, 10 Oct 2005 08:19:05 +0200
+Received: from rosella (ppp2-148.lns1.syd7.internode.on.net [59.167.2.148])
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.6) with ESMTP id j9A6IqRd017357;
+	Mon, 10 Oct 2005 15:48:53 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] equality of Big_ints
+From: skaller <skaller@users.sourceforge.net>
+To: Ian Zimmerman <itz@buug.org>
+Cc: caml-list@inria.fr
+In-Reply-To: <87br1yhuxl.fsf@buug.org>
+References: <87br1yhuxl.fsf@buug.org>
+Content-Type: text/plain
+Date: Mon, 10 Oct 2005 16:18:52 +1000
+Message-Id: <1128925132.7508.21.camel@rosella>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.2.1.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 434A07DA.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 434A07D8.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 endline:01 endline:01 ocamlopt:01 cmxa:01 bug:01 struct:01 char:01 hash:01 serialize:01 wsize:01 wsize:01 deserialize:01 finalisers:01 hashing:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Mon, 2005-10-10 at 00:12 -0400, Ian Zimmerman wrote:
+> Is Big_int.eq_big_int the same as polymorphic equality on Big_int.big_int?
+
+No. Polymorphic equality does not work for Big_int.
+
+Example:
+
+let x = Big_int.big_int_of_int 42;;
+let y = Big_int.big_int_of_int 42;;
+
+if x = y then print_endline "Equal" else print_endline "Not equal";;
+
+Compile and execute:
+
+skaller@rosella:/work/felix/flx$ ocamlopt nums.cmxa x.ml -o bite
+skaller@rosella:/work/felix/flx$ ./bite
+Fatal error: exception Invalid_argument("equal: abstract value")
+
+Examining 'custom.h' this just looks like a bug:
+
+struct custom_operations {
+  char *identifier;
+  void (*finalize)(value v);
+  int (*compare)(value v1, value v2);
+  long (*hash)(value v);
+  void (*serialize)(value v,
+                    /*out*/ unsigned long * wsize_32 /*size in bytes*/,
+                    /*out*/ unsigned long * wsize_64 /*size in bytes*/);
+  unsigned long (*deserialize)(void * dst);
+};
+
+So custom blocks can support finalisers, comparators, hashing
+and serialisation. Big_int CAN be serialised .. looks like 
+the the comparator simply wasn't installed.
+
+For 'nat' I see this:
+
+static struct custom_operations nat_operations = {
+  "_nat",
+  custom_finalize_default,
+  custom_compare_default,
+  custom_hash_default,
+  serialize_nat,
+  deserialize_nat
+};
+
+[Nat is the underlying C type used in Big_int]
+
+So, a custom serialiser/deserialiser has been provided,
+but the default comparator is left in place (which throws
+an exception I guess).
+
+The reason may be because the equality of integers
+isn't the same as algebraic equality of the data structures:
+for example using signed magnitude minus 0 is not algebraically
+equal to plus 0 -- and polymorphic comparison compares the
+(ocaml) representations. So even if Nat custom block could
+provide a custom comparator that worked correctly, the Big_int
+built on it would only work if the representation was canonical,
+and the invariant could be expensive to maintain. But it does
+not seem like this is so in this case...
+
+For Rationals, however, it could be very much the case that
+maintaining the usual invariant (no common divisors of the
+numerator and denominator) would be expensive to maintain.
+
+So perhaps this is another case where polymorphic compare
+was a 'good idea at the time' but actually fails with abstract
+types. It really only works with sums, products, and some primitives,
+and fails with functions and general abstract types. The problem
+is Ocaml (rather than C) abstractions have no way to provide
+the run time with custom operations -- the type information
+is lost.
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

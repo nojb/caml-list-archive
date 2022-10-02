@@ -1,0 +1,123 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA23024; Mon, 18 Mar 2002 02:12:57 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA22572 for <caml-list@pauillac.inria.fr>; Mon, 18 Mar 2002 02:12:56 +0100 (MET)
+Received: from favie.faith.gr.jp (favie.faith.gr.jp [61.127.175.250])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g2I1CqD03700
+	for <caml-list@inria.fr>; Mon, 18 Mar 2002 02:12:53 +0100 (MET)
+Received: from localhost (dhcp7.faith.gr.jp [192.168.1.17])
+	by favie.faith.gr.jp (8.9.3/8.9.3) with ESMTP id KAA29612;
+	Mon, 18 Mar 2002 10:12:40 +0900
+In-Reply-To: <9601-Sat16Mar2002094255-0800-tim@fungible.com>
+References: <9601-Sat16Mar2002094255-0800-tim@fungible.com>
+Subject: Re: [Caml-list] Big executables from ocamlopt; dynamic libraries
+ again
+To: tim@fungible.com
+Cc: caml-list@inria.fr
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020318101225C.garrigue@kurims.kyoto-u.ac.jp>
+Date: Mon, 18 Mar 2002 10:12:25 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 91
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: tim@fungible.com (Tim Freeman)
+
+> When I compile a simple "hello world" app using lablgtk, the resulting
+> executable exceeds 800KB.  With a few apps like this, my package will
+> take offensively long to download, even over DSL.  The exectuable
+> seems to be including most of the lablgtk library in the executable,
+> which makes sense because lablgtk is statically linked in the
+> executable.
+> 
+> This isn't a problem with lablgtk.  A native code app that just prints
+> "hello world" on standard output takes 5K bytes if written in C but
+> 95K in ocaml.  
+
+This is indeed a problem (in my opininion small, but yet).
+But you're wrong in assuming that static linking means including the
+whole library. Actually this is quite the opposite: dynamic linking
+includes the whole library (but not in the executable), while static
+linking only includes needed parts. In particular dynamic linking
+without code sharing (using patched code) use more memory at runtime
+than static linking.
+You can see it as lablgtk.a is 1MB, while your app is only 800K
+(include the ocaml runtime, etc...)
+The unfortunate thing is that the structure of the LablGTK library
+creates lots of spurious dependencies. For instance, using a button
+links code for all kind of buttons, or using a label links code for
+the calendar widget... My decision was to privilege meaning (put
+related things together) over size (hack to be smaller).
+Yet, lablGTK stubs are tuned to produce small code on x86, but here
+your problem is with the size of the native code produced by ocamlopt,
+which is harder to optimize.
+
+> The GTK executable would be smaller if lablgtk were dynamically linked
+> into it.  I hear that a real shared library isn't an option because
+> the present ocaml compiler can't generate position independent code.
+> However, one can do dynamic linking on many machines without position
+> independent code or a shared library; the dynamic linker just
+> relocates the library at run time.
+
+You're right, but there is a bit more about dynamic linking.
+A major problem with using dynamic linking with ocaml (in particular
+with native code), is that your program come cut into small pieces,
+and you must be sure that they are all compatible. Somebody posted
+recently about problems when upgrading ocaml, and part of it is caused
+by incompatibilities in the binary format between versions. Just
+imagine the reaction of your user when, after having loaded various
+packages required for your program, he only gets an error message or a
+segmentation fault when trying to run it.
+
+Static linking considerably improves that, since your program will no
+longer depend on ocaml being installed, and the versions of its
+different components. By the way, static linking here only concerns
+the ocaml specific part of the code, libgtk itself is dynamically
+linked, since one can expect to find a compatible implementation on
+each platform.
+
+The situation is a little bit better with bytecode: this time one only
+depends on the version of ocaml, no longer the platform.
+This is only in the CVS version (next release), but you can now use
+the ocaml toplevel as a dynamic loader:
+Compile your application as a .cmo or .cma
+        ocamlc -a -o myapp.cma  tools.cmo main.cmo
+(you don't need to include required libraries here)
+Load it with ocaml
+        ocaml lablgtk.cma myapp.cma
+
+If speed is not a major problem, I think this can be nice in practice.
+
+> Is there any reason there's no support for writing dynamically
+> linkable libraries in OCAML?
+> 
+> Hmm, if you memorized the MD5 checksum of the library at compile time,
+> and checked it at run time, it could even be type safe.  Or you could
+> just memorize the MD5 of the signature of the library, in some sense;
+> this would allow patches like the recent zlib double-free.  If the
+> library knows it's checksum, and the code loading it knows the
+> expected checksum, then you can do this checking without computing a
+> checksum at run time.
+
+One point is that, on one side, you really want the checking, and on
+the other side, with the current MD5 approach, the checking is too
+version dependent. That is, even if you've changed nothing in your
+code, and it would be perfectly safe to run it, you have good chances
+the loader will refuse to do it. And this nullifies the zlib example:
+the newly compiled version would not be compatible with existing
+executables!
+Of course, this could be improved, but this needs some research and/or
+engineering work.
+
+Cheers,
+
+        Jacques Garrigue
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

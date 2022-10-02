@@ -1,0 +1,93 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 2CD96BC69
+	for <caml-list@yquem.inria.fr>; Wed, 28 Mar 2007 16:57:52 +0200 (CEST)
+Received: from [128.93.11.95] (estephe.inria.fr [128.93.11.95])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l2SEvoF7032334;
+	Wed, 28 Mar 2007 16:57:50 +0200
+Message-ID: <460A826E.4000105@inria.fr>
+Date: Wed, 28 Mar 2007 16:57:50 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Thunderbird 1.5.0.7 (X11/20060915)
+MIME-Version: 1.0
+To: Joel Reymont <joelr1@gmail.com>
+Cc: micha <micha-1@fantasymail.de>, caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Wrapping OCaml function returning a variant
+References: <E888843F-390B-49FB-82E5-662088922B56@gmail.com>	<20070328142550.72f2f3a6@hmmm.de>	<EF4A35B5-8E69-4B6A-BF8D-06C049C68B0A@gmail.com>	<20070328163420.241a2cfe@hmmm.de> <CD3AF249-FA07-4DBD-A360-06155A6DE2BF@gmail.com>
+In-Reply-To: <CD3AF249-FA07-4DBD-A360-06155A6DE2BF@gmail.com>
+X-Enigmail-Version: 0.94.0.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 460A826E.002 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 computations:01 val:01 pointer:01 val:01 pointer:01 char:01 char:01 constructor:01 constructor:01 integer:01 caml-list:01 explicitly:01 int:01 int:01 
+
+> I came up with this. Is it sound?
+
+Not quite.
+
+> char *morph(char *code, char** error, int *line, int *start, int *end)
+> {
+>   static value *closure = NULL;
+>   value v;
+>   char *res;
+>
+>   if (closure == NULL)
+>     closure = caml_named_value("morph");
+>
+>   v = callback(*closure, caml_copy_string(code));
+
+Here, caml_copy_string could trigger a GC and move the closure pointed
+to by closure, so the value of *closure could become invalid.
+You need to order the computations explicitly:
+
+    value vcode;
+    if (closure == NULL)
+      closure = caml_named_value("morph");
+    vcode = caml_copy_string(code);
+    v = callback(*closure, vcode);
+
+>   switch (Long_val(v)) {
+
+v is not a constant constructor, but a constructor with arguments.
+So, its representation is not an integer, but a pointer to a block.
+You want to discriminate on the tag of this block.
+
+    switch (Tag_val(v)) {
+
+
+>   case 0: /* success */
+>     res = String_val(Field(v, 0));
+>     *error = NULL;
+>   case 1: /* error  */
+>     res = NULL;
+>     *error = String_val(Field(v, 0));
+>     *line = Int_val(Field(v, 1));
+>     *start = Int_val(Field(v, 2));
+>     *end = Int_val(Field(v, 3));
+>   }
+
+The next GC can move the strings obtained by String_val, making
+invalid the pointer you return or store in *error.  Take a copy immediately:
+
+    switch (Tag_val(v)) {
+    case 0: /* success */
+      res = strdup(String_val(Field(v, 0)));
+      *error = NULL;
+    case 1: /* error  */
+      res = NULL;
+      *error = strdup(String_val(Field(v, 0)));
+      *line = Int_val(Field(v, 1));
+      *start = Int_val(Field(v, 2));
+      *end = Int_val(Field(v, 3));
+    }
+
+Hope this helps,
+
+- Xavier Leroy
+

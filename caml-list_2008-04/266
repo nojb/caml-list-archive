@@ -1,0 +1,93 @@
+Return-Path: <berke.durak@exalead.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 7526EBBC1
+	for <caml-list@yquem.inria.fr>; Wed, 23 Apr 2008 15:49:08 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnABAO/aDkjBL1AZiGdsb2JhbACRUgEBAQ8mm1s
+X-IronPort-AV: E=Sophos;i="4.25,699,1199660400"; 
+   d="scan'208";a="11829455"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 23 Apr 2008 15:49:08 +0200
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id m3NDn7TK002999
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Wed, 23 Apr 2008 15:49:08 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnABAO/aDkjBL1AZiGdsb2JhbACRUgEBAQ8mm1s
+X-IronPort-AV: E=Sophos;i="4.25,699,1199660400"; 
+   d="scan'208";a="11829454"
+Received: from gw.exalead.com (HELO exalead.com) ([193.47.80.25])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 23 Apr 2008 15:49:07 +0200
+Received: from [192.168.204.148] (madpc064.exalead.com [192.168.204.148])
+	(authenticated bits=0)
+	by exalead.com (8.14.2/8.14.0) with ESMTP id m3NDn6QZ006336
+	for <caml-list@inria.fr>; Wed, 23 Apr 2008 15:49:06 +0200
+Message-ID: <480F3E52.60300@exalead.com>
+Date: Wed, 23 Apr 2008 15:49:06 +0200
+From: Berke Durak <berke.durak@exalead.com>
+User-Agent: Thunderbird 1.5.0.10 (X11/20070221)
+MIME-Version: 1.0
+To: Caml-list List <caml-list@inria.fr>
+Subject: How to make a value uncomparable
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 480F3E53.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; berke:01 durak:01 berke:01 durak:01 pervasives:01 uniqueness:01 run-time:01 pervasives:01 run-time:01 sig:01 val:01 val:01 struct:01 sig:01 abstr:01 
+
+Well, as comparing non-canonical datastructures such as Sets and Maps with Pervasives.compare is unsafe,
+I was thinking of ways to make sure that you don't do such a thing.
+
+Our resident type experts could tell us if uniqueness types could be used for that purpose, but if you're
+willing to settle for run-time safety, here is a little solution.
+
+Pervasives.compare will refuse to run on heap values wrapped in an Abstract_tag, whose purpose is to stop the
+GC from nosing below the tag.  So if you have a value that's not Pervasives.compare-comparables, you can wrap
+it inside such a tag, and any call to Pervasives.compare will raise an invalid_arg.
+
+But how?  You could of course write a piece of native code, but it happens that the Abstract_tag is used by
+the Weak module.  So here's an Uncomparable module, that makes any value run-time Pervasives-uncomparable,
+at a cost of six extra words per value (if I'm correct).
+
+module Uncomparable :
+   sig
+     type 'a t
+     val make : 'a -> 'a t
+     val get : 'a t -> 'a
+   end
+   =
+   struct
+     type 'a t = 'a * 'a Weak.t
+
+     let make x =
+       let w = Weak.create 1 in
+       Weak.set w 0 (Some x);
+       (x, w)
+
+     let get (x, _) = x
+   end
+
+# #use "mkuncmp.ml";;
+module Uncomparable :
+   sig type 'a t val make : 'a -> 'a t val get : 'a t -> 'a end
+# Uncomparable.make 33;;
+- : int Uncomparable.t = <abstr>
+# let x = Uncomparable.make 33;;
+val x : int Uncomparable.t = <abstr>
+# let y = Uncomparable.make 33;;
+val y : int Uncomparable.t = <abstr>
+# compare x y;;
+Exception: Invalid_argument "equal: abstract value".
+# Uncomparable.get x;;
+- : int = 33
+# Uncomparable.get y;;
+- : int = 33
+
+-- 
+Berke DURAK
+

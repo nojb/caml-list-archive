@@ -1,0 +1,137 @@
+Return-Path: <darioteixeira@yahoo.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.6 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE,
+	DNS_FROM_RFC_POST,DNS_FROM_RFC_WHOIS autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id D6CA2BB84
+	for <caml-list@yquem.inria.fr>; Wed, 16 Jul 2008 23:22:22 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnsAAP0CfkjOvjGsfGdsb2JhbACSRQEBCwUCBgcRA54c
+X-IronPort-AV: E=Sophos;i="4.31,199,1215381600"; 
+   d="scan'208";a="13179578"
+Received: from web54602.mail.re2.yahoo.com ([206.190.49.172])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 16 Jul 2008 23:22:22 +0200
+Received: (qmail 29489 invoked by uid 60001); 16 Jul 2008 21:22:21 -0000
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+  s=s1024; d=yahoo.com;
+  h=Received:X-Mailer:Date:From:Subject:To:Cc:In-Reply-To:MIME-Version:Content-Type:Content-Transfer-Encoding:Message-ID;
+  b=0/vW/H+pwoaTZBZ3z38KIYsve8PI0DUIcrVWhMTRcZoGS7LzLHxxdsiaAB17ahQvCik87Kfe9em2hd/t9PztiYe8AqZQpnM+dWclnMG6PRHqZVffhNupAPlHhMwNdTP3cXP9Uq1CBHnbX7oVFXjx2bisA2mKwu8z94qquEEs3Do=;
+Received: from [212.13.63.210] by web54602.mail.re2.yahoo.com via HTTP; Wed, 16 Jul 2008 14:22:21 PDT
+X-Mailer: YahooMailWebService/0.7.199
+Date: Wed, 16 Jul 2008 14:22:21 -0700 (PDT)
+From: Dario Teixeira <darioteixeira@yahoo.com>
+Subject: Re: [Caml-list] Troublesome nodes
+To: Jeremy Yallop <jeremy.yallop@ed.ac.uk>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <487BAB0B.6030000@ed.ac.uk>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <461146.29236.qm@web54602.mail.re2.yahoo.com>
+X-Spam: no; 0.00; nodes:01 generative:01 denotes:01 sig:01 val:01 val:01 struct:01 foo:01 foo:01 sig:01 unification:01 compiler:01 unification:01 module-level:01 bindings:01 
+
+Hi,
+
+> The first problem is that phantom types must be implemented in terms
+> of abstract (or at least generative) types.  A simple example to
+> illustrate the problem: the types
+>=20
+>      int t
+> and
+>      float t
+>=20
+> denote the same type given the alias declaration
+>=20
+>      type 'a t =3D unit
+>=20
+> but different types given the abstract type declaration
+>=20
+>      type 'a t
+>=20
+> The clause "=3D private 'a" in your declaration above indicates that `t'
+> denotes an alias, not an abstract type.
+
+What mislead me was a simple experiment I made where declaring 't' private
+had the same effect as making it abstract for purposes of creating
+module values (thus forcing you to constructor functions), while at
+the same time keeping the 't' open for purposes of pattern-matching.
+Suppose you have a simple module that prevents the user from mixing the
+proverbial apples and oranges:
+
+module Fruit:
+sig
+        type 'a t
+
+        val apples: int -> [`Apples] t
+        val oranges: int -> [`Oranges] t
+        val (+): 'a t -> 'a t -> 'a t
+end =3D
+struct
+        type 'a t =3D int
+
+        let apples n =3D n
+        let oranges n =3D n
+        let (+) =3D (+)
+end
+
+open Fruit
+let foo =3D apples 10
+let bar =3D oranges 20
+let sum =3D foo + bar  (* oops! *)
+
+
+Now, if you un-abstract 't' by declaring "type 'a t =3D int" in the sig,
+then the rogue unification makes the compiler accept the erroneous
+top-level statements.  However, if instead you declare it as "type
+'a t =3D private int", then rogue unification is prevented, but the type
+is not completely hidden.  You can thus have your cake and eat it too.
+(Please correct me if my interpretation of 'private' is off).
+
+
+> Weak (ungeneralised) type variables are not allowed at module-level
+> bindings.  You'll see a similar error message if you try to compile a
+> module containing the following binding, for example
+>=20
+>     let x =3D ref None
+>=20
+> The solution to this problem is usually to change the form of the
+> offending expression, for example by eta-expanding a term denoting a
+> function.  In your case, though, the solution is to change the
+> declaration of the abstract type `t' to indicate that the type
+> parameters do not occur negatively in the right-hand side.  This takes
+> advantage of a novel feature of OCaml -- the "relaxed value
+> restriction" -- which uses a subtype-based analysis rather than a
+> simple syntactic check to determine whether bindings can be made
+> polymorphic.
+
+Thanks for the explanation.  The solution I adopted was to use the
+'+' covariance modifier (is that its name?) *only* for parameter 'a,
+because parameter 'b should always be "terminated" via a make_basic or
+make_complex function:  (there is no equivalent "termination" function
+for parameter 'a because I want to allow documents to be composed from
+other documents adlib).
+
+type (+'a, 'b) t constraint 'a =3D [< super_node_t ]
+val make_basic: ('a, [< `Basic]) t -> ('a, [`Basic]) t
+val make_complex: ('a, [< `Basic | `Complex]) t -> ('a, [`Complex]) t
+
+Also, I found it is alright to use ungeneralised type variables in
+intermediate expressions, as long as the final expression generalises it:
+(this is actually analogous to what happens when you declare "let x =3D ref
+None"; it is fine as long as sooner or later you make the type concrete)
+
+let doc =3D
+=09let n1 =3D bold [text "hello"] in=09=09(* 'b is weak *)
+=09let n2 =3D mref "ref" [n1] in=09=09(* 'b is still weak *)
+=09make_complex n2=09=09=09=09(* 'b is now concrete *)
+
+Cheers,
+Dario Teixeira
+=0A=0A=0A      __________________________________________________________=
+=0ANot happy with your email address?.=0AGet the one you really want - mill=
+ions of new email addresses available now at Yahoo! http://uk.docs.yahoo.co=
+m/ymail/new.html
+

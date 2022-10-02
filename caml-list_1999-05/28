@@ -1,0 +1,297 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA05585 for caml-redistribution; Mon, 17 May 1999 17:22:22 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA07024 for <caml-list@pauillac.inria.fr>; Sun, 16 May 1999 23:41:23 +0200 (MET DST)
+Received: from zaphod.in.tu-clausthal.de (zaphod.in.tu-clausthal.de [139.174.100.142])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id XAA19388
+	for <caml-list@inria.fr>; Sun, 16 May 1999 23:41:22 +0200 (MET DST)
+Received: from eressea.in.tu-clausthal.de (373f3b810a997@eressea.in.tu-clausthal.de [139.174.100.9])
+	by zaphod.in.tu-clausthal.de (8.8.7/8.8.7) with SMTP
+	id XAA25458;
+	Sun, 16 May 1999 23:41:21 +0200 (MET DST)
+From: Joerg Czeranski <jc@joerch.org>
+To: caml-list@inria.fr
+Date: Sun, 16 May 1999 23:40:56 +0200 (MET DST)
+Message-ID: <5v6tgd6vv$19X$1@joerch.org>
+Subject: more patches (for Unix signal mask)
+Sender: weis
+
+Hi!
+
+I had a look at the web interface to Caml's CVS repository
+and noticed that my previous patches are already incorporated
+(except for byterun/intern.c, but I'm not so sure that it makes
+a difference at all). :-)
+
+The DEC/Compaq C compiler people acknowledged that the sigsetjmp()
+handling in byterun/interp.c is a bug and they promised to fix
+it in a later compiler version.
+
+Now for my new O'Caml problems:
+
+An exception raised from C code (e.g. in the Unix module for every
+system call error) resets the current signal mask -
+by calling siglongjmp() in the bytecode interpreter or in
+default_reset_sigmask() for native binaries.
+
+I'm porting a small shell to O'Caml and it's mandatory that SIGCHLD
+stays blocked while process group data structures are modified, because
+the SIGCHLD handler has to modify them, too.
+
+I replaced all sigsetjmp() calls with _setjmp() calls (setjmp() is
+allowed to modify the signal mask, too, as per Single Unix Spec v2)
+and handled jumps out of signal handlers separately.
+
+Tracing the resulting binaries for the 2*3 cases that I know -
+raise in Caml code vs. raise in C code and
+raise without signal handlers vs. raise out of asynchronously
+handled signal vs. raise out of synchronously handled signal -
+seems to indicate that signal masks retain their proper values.
+
+sigaction() calls with SA_NODEFER and/or non-empty sa_mask fields
+are not yet handled, but they're not supported in O'Caml 2.02's
+Sys module anyway.
+
+The Single Unix Spec advises against using _setjmp() and for using
+sigsetjmp(), but I don't know how that could work without mistreating
+the signal mask in O'Caml.
+
+joerch
+
+==================== patches ====================
+*** byterun/interp.c.orig	Mon Mar 15 16:07:12 1999
+--- byterun/interp.c	Sun May 16 22:23:02 1999
+***************
+*** 201,207 ****
+    initial_external_raise = external_raise;
+    callback_depth++;
+  
+!   if (sigsetjmp(raise_buf.buf, 1)) {
+      local_roots = initial_local_roots;
+      accu = exn_bucket;
+      goto raise_exception;
+--- 201,207 ----
+    initial_external_raise = external_raise;
+    callback_depth++;
+  
+!   if (_setjmp(raise_buf.buf)) {
+      local_roots = initial_local_roots;
+      accu = exn_bucket;
+      goto raise_exception;
+*** byterun/fail.h.orig	Fri Nov 20 16:36:26 1998
+--- byterun/fail.h	Sun May 16 00:31:31 1999
+***************
+*** 30,46 ****
+  #define STACK_OVERFLOW_EXN 8    /* "Stack_overflow" */
+  #define SYS_BLOCKED_IO 9        /* "Sys_blocked_io" */
+  
+- #ifdef POSIX_SIGNALS
+  struct longjmp_buffer {
+-   sigjmp_buf buf;
+- };
+- #else
+- struct longjmp_buffer {
+    jmp_buf buf;
+  };
+- #define sigsetjmp(buf,save) setjmp(buf)
+- #define siglongjmp(buf,val) longjmp(buf,val)
+- #endif
+  
+  extern struct longjmp_buffer * external_raise;
+  extern value exn_bucket;
+--- 30,38 ----
+*** byterun/fail.c.orig	Sun Feb 14 17:48:22 1999
+--- byterun/fail.c	Sun May 16 01:13:01 1999
+***************
+*** 32,38 ****
+    Unlock_exn();
+    exn_bucket = v;
+    if (external_raise == NULL) fatal_uncaught_exception(v);
+!   siglongjmp(external_raise->buf, 1);
+  }
+  
+  void raise_constant(value tag)
+--- 32,38 ----
+    Unlock_exn();
+    exn_bucket = v;
+    if (external_raise == NULL) fatal_uncaught_exception(v);
+!   _longjmp(external_raise->buf, 1);
+  }
+  
+  void raise_constant(value tag)
+*** byterun/debugger.c.orig	Tue Sep  2 14:53:57 1997
+--- byterun/debugger.c	Sun May 16 01:13:37 1999
+***************
+*** 149,155 ****
+  
+    /* Catch exceptions raised by output_val */
+    saved_external_raise = external_raise;
+!   if (sigsetjmp(raise_buf.buf, 1) == 0) {
+      external_raise = &raise_buf;
+      output_val(chan, val, Val_unit);
+    } else {
+--- 149,155 ----
+  
+    /* Catch exceptions raised by output_val */
+    saved_external_raise = external_raise;
+!   if (_setjmp(raise_buf.buf) == 0) {
+      external_raise = &raise_buf;
+      output_val(chan, val, Val_unit);
+    } else {
+*** byterun/signals.c.orig	Mon Oct 26 20:18:04 1998
+--- byterun/signals.c	Sun May 16 01:13:49 1999
+***************
+*** 45,53 ****
+  #endif
+  #endif
+    if (async_signal_mode){
+!     leave_blocking_section ();
+!     execute_signal(signal_number);
+!     enter_blocking_section ();
+    }else{
+      pending_signal = signal_number;
+      something_to_do = 1;
+--- 45,76 ----
+  #endif
+  #endif
+    if (async_signal_mode){
+!     if (external_raise == NULL) {
+!       leave_blocking_section ();
+!       execute_signal(signal_number);
+!       enter_blocking_section ();
+!     } else {
+!       struct longjmp_buffer raise_buf, *saved_external_raise;
+! 
+!       saved_external_raise = external_raise;
+!       if (_setjmp(raise_buf.buf))
+!       {
+! 	sigset_t s;
+! 
+! 	external_raise = saved_external_raise;
+! 	sigemptyset(&s);
+! 	sigaddset(&s, signal_number);
+! 	sigprocmask(SIG_UNBLOCK, &s, NULL);
+! 	_longjmp(external_raise->buf, 1);
+!       }
+!       else
+!       {
+! 	external_raise = &raise_buf;
+!         leave_blocking_section ();
+!         execute_signal(signal_number);
+!         enter_blocking_section ();
+!       }
+!     }
+    }else{
+      pending_signal = signal_number;
+      something_to_do = 1;
+*** asmrun/stack.h.orig	Wed Nov 18 19:10:52 1998
+--- asmrun/stack.h	Sun May 16 02:31:25 1999
+***************
+*** 85,89 ****
+--- 85,95 ----
+  extern value caml_globals[];
+  extern long * caml_frametable[];
+  
++ struct caml_sigblock_node {
++   struct caml_sigblock_node *next;
++   int signal_number;
++ };
++ 
++ extern struct caml_sigblock_node *caml_sigblock_stack;
+  
+  #endif /* _stack_ */
+*** asmrun/fail.c.orig	Thu Nov 26 11:00:51 1998
+--- asmrun/fail.c	Sun May 16 02:48:11 1999
+***************
+*** 36,41 ****
+--- 36,42 ----
+  
+  static void default_reset_sigmask(void)
+  {
++ #if 0
+  #ifdef POSIX_SIGNALS
+    sigset_t mask;
+    sigemptyset(&mask);
+***************
+*** 45,50 ****
+--- 46,52 ----
+    sigsetmask(0);
+  #endif
+  #endif
++ #endif
+  }
+  
+  void (*caml_reset_sigmask)(void) = default_reset_sigmask;
+***************
+*** 55,66 ****
+--- 57,79 ----
+  
+  char * caml_exception_pointer = NULL;
+  
++ struct caml_sigblock_node *caml_sigblock_stack = NULL;
++ 
++ 
+  void mlraise(value v)
+  {
++   sigset_t s;
++   int do_unblock;
++   struct caml_sigblock_node *stack;
++ 
+    (*caml_reset_sigmask)();
+    Unlock_exn();
+    if (caml_exception_pointer == NULL) fatal_uncaught_exception(v);
+  
++   sigemptyset(&s);
++   do_unblock = 0;
++   stack = caml_sigblock_stack;
++ 
+  #ifndef Stack_grows_upwards
+  #define PUSHED_AFTER <
+  #else
+***************
+*** 70,76 ****
+--- 83,102 ----
+           (char *) local_roots PUSHED_AFTER caml_exception_pointer) {
+      local_roots = local_roots->next;
+    }
++ 
++   while (stack != NULL &&
++          (char *)stack PUSHED_AFTER caml_exception_pointer) {
++     sigaddset(&s, stack->signal_number);
++     do_unblock = 1;
++     stack = stack->next;
++   }
+  #undef PUSHED_AFTER
++ 
++   if (do_unblock)
++   {
++     sigprocmask(SIG_UNBLOCK, &s, NULL);
++     caml_sigblock_stack = stack;
++   }
+  
+    raise_caml_exception(v);
+  }
+*** asmrun/signals.c.orig	Thu Nov 26 11:08:37 1998
+--- asmrun/signals.c	Sun May 16 02:39:14 1999
+***************
+*** 115,123 ****
+--- 115,131 ----
+    if (async_signal_mode) {
+      /* We are interrupting a C function blocked on I/O.
+         Callback the Caml code immediately. */
++     struct caml_sigblock_node sigblock_node;
++ 
++     sigblock_node.next = caml_sigblock_stack;
++     sigblock_node.signal_number = sig;
++     caml_sigblock_stack = &sigblock_node;
++ 
+      leave_blocking_section();
+      callback(Field(signal_handlers, sig), Val_int(sig));
+      enter_blocking_section();
++ 
++     caml_sigblock_stack = sigblock_node.next;
+    } else {
+      /* We can't execute the signal code immediately.
+         Instead, we remember the signal and play with the allocation limit
+==================== end of patches ====================
+
+
+

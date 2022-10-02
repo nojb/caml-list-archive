@@ -1,0 +1,150 @@
+Return-Path: <chojin@lrde.epita.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A558BBC0A
+	for <caml-list@yquem.inria.fr>; Wed,  6 Dec 2006 04:43:53 +0100 (CET)
+Received: from rwcrmhc12.comcast.net (rwcrmhc12.comcast.net [216.148.227.152])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kB63hq2X020689
+	for <caml-list@inria.fr>; Wed, 6 Dec 2006 04:43:53 +0100
+Received: from [10.0.1.5] (c-67-188-3-155.hsd1.ca.comcast.net[67.188.3.155])
+          by comcast.net (rwcrmhc12) with SMTP
+          id <20061206034344m1200scprre>; Wed, 6 Dec 2006 03:43:48 +0000
+Mime-Version: 1.0 (Apple Message framework v749.3)
+Content-Transfer-Encoding: quoted-printable
+Message-Id: <4C40AFBA-AE30-4C22-B2A5-170FDA130B64@lrde.epita.fr>
+Content-Type: text/plain; charset=ISO-8859-1; delsp=yes; format=flowed
+To: caml-list@inria.fr
+From: =?ISO-8859-1?Q?Qu=F4c_Peyrot?= <chojin@lrde.epita.fr>
+Subject: time profiling and nested function inlining
+Date: Tue, 5 Dec 2006 19:43:08 -0800
+X-Mailer: Apple Mail (2.749.3)
+X-Miltered: at concorde with ID 45763C78.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; lrde:01 inlining:01 stub:01 stub:01 ocamlopt:01 -inline:01 -unsafe:01 cmpwi:01 bne:01 addi:01 globl:01 inlined:01 globl:01 cmpwi:01 bne:01 
+
+Hello, I have two questions, sorry if they have already been asked, =20
+but I searched
+through the archives and couldn't find the answers:
+
+- I tried to do some time profiling (Mac OS X, ppc G4) but for some =20
+reasons it doesn't
+seem to work. I compiled with OCamlMakefile using the command line =20
+"make profiling-native-code".
+When I execute the program, it does generate gmon.out, but when I run =20=
+
+gprof the only thing I get is:
+
+                                   called/total       parents
+index  %time    self descendents  called+self    name           index
+                                   called/total       children
+
+                 0.00        0.00       1/1           ___fixunsdfdi =20
+[476]
+[21]     0.0    0.00        0.00       1         ___stub_getrealaddr =20
+[21]
+
+-----------------------------------------------
+
+and
+
+%   cumulative   self              self     total
+time   seconds   seconds    calls  ms/call  ms/call  name
+0.0       0.00     0.00        1     0.00     0.00  =20
+___stub_getrealaddr [21]
+
+Thus, I'm wondering whether or not time profiling is supported on PPC =20=
+
+G4.
+And if it is,  can someone give me some clue to debug this issue?
+If it isn't, I would appreciate if someone could give me alternative =20
+solutions (apart from using an intel computer ;) )
+
+- I was looking at the asm output to get familiar with efficient =20
+coding style, and I tried the following example:
+
+let rec log2_acc value acc =3D
+   if value =3D 0
+   then acc
+   else log2_acc (value lsr 1) (acc + 1)
+
+let log2 value =3D
+   log2_acc value 0
+
+which compiles to (using "ocamlopt -inline 100 -unsafe -S)
+
+_camlTest_regular__log2_acc_57:
+L101:
+         cmpwi   r3, 1
+         bne     L100
+         mr      r3, r4
+         blr
+L100:
+         srwi    r5, r3, 1
+         ori     r3, r5, 1
+         addi    r4, r4, 2
+         b       L101
+         .globl  _camlTest_regular__log2_60
+         .text
+         .align  2
+_camlTest_regular__log2_60:
+L102:
+         li      r4, 1
+         b       _camlTest_regular__log2_acc_57
+
+Although log2_acc could have been inlined (which might not be =20
+beneficial in this case anyway), it looks quite ok.
+
+But when I tried with a nested function:
+
+let log2 value =3D
+   let rec log2_acc value acc =3D
+     if value =3D 0
+     then acc
+     else log2_acc (value lsr 1) (acc + 1)
+   in
+   log2_acc value 0
+
+I got the following output:
+_camlTest_nested__2:
+         .long   _caml_curry2
+         .long   5
+         .long   _camlTest_nested__log2_acc_59
+         .globl  _camlTest_nested__log2_acc_59
+         .text
+         .align  2
+_camlTest_nested__log2_acc_59:
+L101:
+         cmpwi   r3, 1
+         bne     L100
+         mr      r3, r4
+         blr
+L100:
+         srwi    r5, r3, 1
+         ori     r3, r5, 1
+         addi    r4, r4, 2
+         b       L101
+         .globl  _camlTest_nested__log2_57
+         .text
+         .align  2
+_camlTest_nested__log2_57:
+L102:
+         addis   r4, 0, ha16(_camlTest_nested__2)
+         addi    r4, r4, lo16(_camlTest_nested__2)
+         li      r4, 1
+         b       _camlTest_nested__log2_acc_59
+
+I'm wondering what these computations before the call are (frame?) =20
+and why the compiler couldn't get rid of them.
+Not that I am utterly concerned by these small extra computations... =20
+I'm just curious.
+
+Thanks for the help/explanations,
+
+--=20
+Best Regards,
+Qu=F4c=
+

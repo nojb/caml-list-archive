@@ -1,0 +1,124 @@
+Return-Path: <till.varoquaux@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 20DB3BB81
+	for <caml-list@yquem.inria.fr>; Wed,  8 Mar 2006 23:10:26 +0100 (CET)
+Received: from xproxy.gmail.com (xproxy.gmail.com [66.249.82.197])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k28MAP2b014679
+	for <caml-list@yquem.inria.fr>; Wed, 8 Mar 2006 23:10:25 +0100
+Received: by xproxy.gmail.com with SMTP id t15so207301wxc
+        for <caml-list@yquem.inria.fr>; Wed, 08 Mar 2006 14:10:24 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=SOv0d4N7buoruTDQ5kisLBZhEUHtXF1WCgfPL6+pMDunRJz950LygvRSEfbMWTm8t99ig47N+jvTc9bojNRN76kYhWyAmfHWmtnkqSqlFy6TjtOvcUxjVc+nure0t+ZuN36FzzoEdQGCguIATpB45bHvRSxRL7+GYCPpnkGGr6w=
+Received: by 10.70.72.5 with SMTP id u5mr1534051wxa;
+        Wed, 08 Mar 2006 14:10:24 -0800 (PST)
+Received: by 10.70.126.16 with HTTP; Wed, 8 Mar 2006 14:10:24 -0800 (PST)
+Message-ID: <9d3ec8300603081410p163053e6j8435270a504daf7d@mail.gmail.com>
+Date: Wed, 8 Mar 2006 23:10:24 +0100
+From: "Till Varoquaux" <till.varoquaux@gmail.com>
+To: "Thomas Fischbacher" <Thomas.Fischbacher@physik.uni-muenchen.de>
+Subject: Re: [Caml-list] recursive or loop
+Cc: mboconnor@acm.org, caml-list@yquem.inria.fr
+In-Reply-To: <Pine.LNX.4.63.0603082255040.26187@eiger.cip.physik.uni-muenchen.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+References: <200603061715.k26HF32w015203@nez-perce.inria.fr>
+	 <200603061925.35321.micha-1@fantasymail.de>
+	 <Pine.LNX.4.63.0603061931120.22496@eiger.cip.physik.uni-muenchen.de>
+	 <440F2B63.6000007@earthlink.net>
+	 <Pine.LNX.4.63.0603082255040.26187@eiger.cip.physik.uni-muenchen.de>
+X-Miltered: at nez-perce with ID 440F5651.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; recursive:01 stack:01 marshalling:01 marshalling:01 netchannels:01 netencoding:01 netencoding:01 decoding:01 segfaults:01 cheers:01 lambda:01 lambda:01 beginner's:01 ocaml:01 beginners:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.3
+
+On 3/8/06, Thomas Fischbacher <Thomas.Fischbacher@physik.uni-muenchen.de> w=
+rote:
+>
+> On Wed, 8 Mar 2006, Matthew O'Connor wrote:
+>
+> > > No it does not. But never mind. It would not help either.
+> >
+> > Doesn't CPS enable you to basically keep the entire call stack (or
+> > equivalent) in the heap?
+>
+> Yes, it does.
+>
+> >  Can you explain why it wouldn't help?  Thanks.
+>
+> You still would have to write out a closure if you want to write all the
+> state to disk.
+
+I beleive specifying Marshal.Closures when marshalling should do the trick.=
+..
+
+Another way to get along with suspending resuming is by marshalling a
+continuation. You can use Xavier Leroy's callcc library and see if
+this works out you (just call suspend when you went to exit with a
+save point):
+
+open Callcc
+open Netchannels
+open Marshal
+
+let suspend ()=3D
+  let save_state k=3D
+    let pipe =3D new Netencoding.Base64.encoding_pipe() in
+    with_out_obj_channel
+      (new output_channel (open_out "state"))
+      (fun ch ->
+         let ch' =3D new output_filter pipe ch in
+         ch' # output_string(to_string k [Closures]);
+         ch' # close_out()
+      );
+    (* Skips a warning because this function does not return (it is an exit
+       point)*)
+    ignore(exit 0)
+  in
+  callcc save_state
+(*
+  Saves the "state" the application is in as an base64 encoded marshalled
+  continuation.
+*)
+let _ =3D
+  if (Sys.file_exists "state") then
+    let res =3D
+      (let pipe =3D new Netencoding.Base64.decoding_pipe() in
+       with_in_obj_channel
+         (new input_channel (open_in "state"))
+         (fun ch ->
+            let ch' =3D new input_filter ch pipe in
+            let s =3D string_of_in_obj_channel ch' in
+            s
+         )) in
+    Sys.remove("state");
+    let k=3DMarshal.from_string res 0 in
+      throw k ()
+
+Although this has worked callcc is a proof of concept so be ready to
+have some nasty bugs... (I've had weird segfaults for instance).
+Cheers,
+Till
+
+> --
+> regards,               tf@cip.physik.uni-muenchen.de              (o_
+>  Thomas Fischbacher -  http://www.cip.physik.uni-muenchen.de/~tf  //\
+> (lambda (n) ((lambda (p q r) (p p q r)) (lambda (g x y)           V_/_
+> (if (=3D x 0) y (g g (- x 1) (* x y)))) n 1))                  (Debian GN=
+U)
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+

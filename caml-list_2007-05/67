@@ -1,0 +1,189 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id D2D12BC69;
+	Wed,  2 May 2007 10:41:55 +0200 (CEST)
+Received: from ipmail01.adl2.internode.on.net (ipmail01.adl2.internode.on.net [203.16.214.140])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l428fq0X013682;
+	Wed, 2 May 2007 10:41:53 +0200
+X-IronPort-AV: E=Sophos;i="4.14,477,1170595800"; 
+   d="scan'208";a="122325721"
+Received: from ppp8-148.lns1.syd7.internode.on.net (HELO [192.168.1.201]) ([59.167.8.148])
+  by ipmail01.adl2.internode.on.net with ESMTP; 02 May 2007 18:11:49 +0930
+Subject: Re: [Caml-list] menhir
+From: skaller <skaller@users.sourceforge.net>
+To: Francois.Pottier@inria.fr
+Cc: caml-list@inria.fr
+In-Reply-To: <20070502053815.GA726@yquem.inria.fr>
+References: <1177756336.11923.18.camel@rosella.wigram>
+	 <20070428165058.GA31584@yquem.inria.fr>
+	 <1177821783.25394.37.camel@rosella.wigram>
+	 <20070501155705.GA29617@yquem.inria.fr>
+	 <1178039464.8967.10.camel@rosella.wigram>
+	 <20070501173409.GB7308@yquem.inria.fr>
+	 <1178062950.8967.39.camel@rosella.wigram>
+	 <20070502053815.GA726@yquem.inria.fr>
+Content-Type: text/plain
+Date: Wed, 02 May 2007 18:41:44 +1000
+Message-Id: <1178095304.13660.71.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 46384ED0.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; 0200,:01 tokens:01 tokens:01 ocamlyacc:01 ocamlyacc:01 arises:01 lexer:01 compilation:01 endmarker:01 non-terminal:01 endmarker:01 compilation:01 parser:01 parser:01 syntax:01 
+
+On Wed, 2007-05-02 at 07:38 +0200, Francois Pottier wrote:
+> Hello,
+> 
+> > That is, instead of treating the token set precisely as the
+> > set of user tokens + eof, menhir is treating eof specially
+> > and not consistently with other tokens.
+> 
+> As far as Menhir is concerned, there is no special eof token.
+> The set of tokens is exactly the set of user-defined tokens.
+> This is true also of ocamlyacc.
+> 
+> Internally, the construction of the automaton uses a pseudo-token,
+> written #, which stands for the end of the token stream. This token
+> can appear in conflict explanation messages.
+
+Exactly. In Ocamlyacc it is named 'eof', and you can use that
+token in your productions.
+
+> > I'm not sure i fully understand the 'do we need lookahead'
+> > issue: I would have thought: you need a fetch if your action is 
+> > shift, and not if it is a reduce.
+> 
+> What you mean is, you need to *consume* one token if your action
+> is shift, and none if your action is reduce. However, in order to
+> make a decision (in order to choose between shift and reduce, and
+> between multiple reduce actions), you sometimes need to *consult*
+> one lookahead token, without consuming it.
+> 
+> This is necessary only *sometimes*, because, in some states, only
+> one reduce action is possible, and can be taken without consulting
+> a lookahead token.
+
+Right.
+
+> An end-of-stream conflict arises when a state has multiple
+> actions, some of which are on real tokens, and some of which are
+> on the pseudo-token #. In that case, one would like to consult
+> the next token in order to make a decision; however, there is a
+> possibility that we are at the end of the sentence that we are
+> trying to recognize, so asking the lexer for one more token might
+> be a mistake (in your terminology, it might be an overshoot).
+> 
+> Does this clarify things?
+
+Yes. Your code or my grammar is bugged :)
+
+My grammar is 
+
+compilation_unit:
+  | statement_aster ENDMARKER { $1 }
+
+where no non-terminal on which statements_aster depends 
+has a production containing ENDMARKER or # (eof).
+
+Therefore, there is no conflict. When compilation_unit
+is reduced the parser returns, the next token, whether
+it is # or any other, is irrelevant.
+
+The parser is therefore required to match the head
+of the input stream and NOT the whole stream.
+
+It seems Menhir wants to match the whole input,
+and is confused because it doesn't know what to
+do after it sees ENDMARKER.
+
+That means it doesn't detect that compilation_unit
+is a start symbol .. and the reduction is final.
+If you are augmenting the grammar to be:
+
+compilation_unit:
+	| statement_aster ENDMARKER eof { $1 }
+
+that would explain Menhir's confusion .. however the
+generated parser actually does work (provided the
+user defined syntax feature isn't used).
+
+IMHO: the end-of-stream thing is a serious bug in the
+design of Ocamlyacc which unfortunately Menhir duplicates.
+
+In particular there should be no possibility of the parser
+consulting the lexbuf, the signature of parsers is very
+wrong:
+
+	parser: (lexbuf -> token) -> lexbuf -> ast
+
+is a disaster. Because of this you're duplicating the
+disaster and probing the lexbuf for end of stream,
+which is just wrong. 
+
+There should be no implicit end of stream: a stream
+is an INFINITE sequence, a parser should process the
+head of the stream, and the signature should be:
+
+	parser: (state -> token) -> state -> ast
+
+where state is a USER defined type. If the user provides
+no state argument, then it defaults to unit.
+
+This denies the parser any access to a hidden 'end of stream'
+token. It's up to the user to decide what terminates the
+parse. The point again is that the token input to the
+parser is infinite: it can't ever be an error to read 
+a next token.
+
+The problem is the usual one for streams. Probably the
+interface should be changed to something like:
+
+	peek state n (* look ahead n symbols *)
+	read state   (* destructive read 1 symbol *)
+	loc state    (* return location for diagnostics *)
+
+This would support LR(infinity) parsing.
+
+A better interface would support recursive descent too,
+in that case you'd have to make the 'streaming' 
+persistent to support backtracking, that is you'd have to use:
+
+	state -> (token * state)
+
+as the lexer interface -- that gets rid of the push back problem.
+(This is trivial to implement on top of a destructive stream,
+by buffering with lists: Extlib streams do just that).
+
+Dypgen actually does a clever trick here, since GLR
+also requires actions which are purely functional ..
+from the outside (i.e. persistent): it allow mutations
+and they propagate locally in the current branch
+(L-attributes yes?). It also allows global mutations,
+but they only become permanent when all the branches
+agree on them.
+
+Anyhow the problem seems to reduce to this: I think
+a parser should read the head of a stream, and Menhir
+thinks it should read the whole stream, and it uses
+the bugged lexbuf interface to test for end of stream.
+
+So I could fix my grammar by adding 'end-of-stream'
+to my start symbols AND hack the otherwise unused
+lexbuf to show end-of-stream after ENDMARKER is read.
+
+Ocamlyacc doesn't complain though, suggesting it processes
+only the head of a stream .. and that there's a fundamental
+design distinction between the two parser generators.
+
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

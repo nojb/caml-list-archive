@@ -1,0 +1,106 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id E2677BB83
+	for <caml-list@yquem.inria.fr>; Tue,  4 Jul 2006 20:29:53 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k64ITsHq001630
+	for <caml-list@yquem.inria.fr>; Tue, 4 Jul 2006 20:29:55 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA16399 for <caml-list@pauillac.inria.fr>; Tue, 4 Jul 2006 20:29:53 +0200 (MET DST)
+Received: from mz2.forethought.net (mzpi4.forethought.net [216.241.36.13])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k64ITqAj001590
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Tue, 4 Jul 2006 20:29:53 +0200
+Received: from [216.241.35.41] (helo=[10.0.0.2])
+	by mz2.forethought.net with esmtp (Exim 4.51)
+	id 1FxpeT-0003SY-QA
+	for caml-list@inria.fr; Tue, 04 Jul 2006 12:29:40 -0600
+Message-ID: <44AAB3B3.6000807@gushee.net>
+Date: Tue, 04 Jul 2006 12:30:11 -0600
+From: Matt Gushee <matt@gushee.net>
+User-Agent: Thunderbird 1.5.0.4 (X11/20060615)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: LablGTK app maxes out CPU
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 44AAB3A2.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 44AAB3A0.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; lablgtk:01 lablgtk:01 invocation:01 gmain:01 util:01 util:01 unix:01 mkdir:01 unix:01 nonblock:01 gmain:01 buffer:01 rec:01 buf:01 buffer:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+[I posted this to the LablGTK list last week, but have not received any
+  responses, so here it is ...]
+
+Hello all,
+
+I have a program that I am developing in LablGTK, which has a 'daemon 
+mode' such that the app runs in the background without displaying the 
+GUI until the user 'starts' it--which in practice means waking it up; 
+then when the user 'quits', it really means just hiding the GUI and 
+waiting for the next invocation.
+
+Commands are passed to the daemon by means of a named pipe, and 
+GMain.Io.add_watch is used to cause the daemon to read the pipe (code 
+below). Now, I thought this would prevent the app from monopolizing the 
+CPU, but apparently it does not. When the app is started but before the 
+GUI is displayed for the first time, CPU usage is negligible, but as 
+soon as the GUI is displayed, the app starts using all available CPU 
+time, and it continues to do so as long as it runs, whether the GUI is 
+displayed or not. So I wonder if there's something more I need to do to 
+keep the app well-behaved (BTW, it should never require much CPU time. 
+It's a lightweight file manager, and is graphical only in the sense that 
+it is a GUI app--it uses no icons or other images).
+
+Here's the relevant code:
+
+     method daemon_setup () =
+       self#int_add_panel ~go:true ();
+       is_daemon <- true;
+       msg_pipe <- Filename.concat Util.temp_user_dir "message.pipe";
+       if not (Sys.file_exists Util.temp_user_dir) then
+         Unix.mkdir Util.temp_user_dir 0o755
+       else if Sys.file_exists msg_pipe then
+         Unix.unlink msg_pipe;
+       Unix.mkfifo msg_pipe 0o600;
+       msg_fd <-
+         (* Unix.openfile msg_pipe [Unix.O_RDONLY; Unix.O_NONBLOCK] 
+0o600; *)
+         Unix.openfile msg_pipe [Unix.O_RDONLY] 0o600;
+       let chan = GMain.Io.channel_of_descr msg_fd in
+       let watcher _ =
+         let cmdbuf = Buffer.create 4
+         and temp = " " in
+         let rec read_input ready =
+           let nchars = GMain.Io.read chan ~buf:temp ~pos:0 ~len:1 in
+           if nchars = 0 then ()
+           else
+             match temp with
+             | "%" -> read_input true
+             | "\n" -> read_input false
+             | s when ready -> (Buffer.add_string cmdbuf s; read_input true)
+             | _ -> read_input false
+         and do_command cmdstring =
+           match cmdstring with
+           | "show" -> self#show ()
+           | "hide" -> self#hide ()
+           | "quit" -> self#really_quit ()
+           | "hup" -> self#hup ()
+           | cs -> self#warn ("Unknown command: " ^ cs) in
+         read_input false;
+         do_command (Buffer.contents cmdbuf);
+         true in
+       ignore (GMain.Io.add_watch ~cond:[`IN] ~callback:watcher chan)
+
+
+Any suggestions?
+
+-- 
+Matt Gushee
+: Bantam - lightweight file manager : matt.gushee.net/software/bantam/ :
+: RASCL's A Simple Configuration Language :     matt.gushee.net/rascl/ :
+

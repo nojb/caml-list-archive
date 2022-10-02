@@ -1,0 +1,835 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA06232 for caml-redistribution; Sat, 19 Jun 1999 03:00:39 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA07574 for <caml-list@pauillac.inria.fr>; Fri, 18 Jun 1999 21:22:00 +0200 (MET DST)
+Received: from mail1.digital.com (mail1.digital.com [204.123.2.50])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id VAA08297
+	for <caml-list@inria.fr>; Fri, 18 Jun 1999 21:21:57 +0200 (MET DST)
+Received: from src-mail.pa.dec.com (src-mail.pa.dec.com [16.4.16.35])
+	by mail1.digital.com (8.9.2/8.9.2/WV2.0g) with ESMTP id MAA16004
+	for <caml-list@inria.fr>; Fri, 18 Jun 1999 12:21:57 -0700 (PDT)
+Received: by src-mail.pa.dec.com; id MAA11160; Fri, 18 Jun 1999 12:21:57 -0700 (PDT)
+Received: (from fessant@localhost)
+	by virtualc5.pa.dec.com (8.9.3/8.9.3) id MAA16942;
+	Fri, 18 Jun 1999 12:21:52 -0700
+From: Fabrice Le Fessant <fessant@pa.dec.com>
+Message-ID: <14186.40015.705993.378809@virtualc5.pa.dec.com>
+Date: Fri, 18 Jun 1999 12:21:51 -0700 (PDT)
+To: caml-list@inria.fr
+Subject: New patch for former C programers :)))
+X-Mailer: VM 6.62 under Emacs 19.34.1
+Reply-To: fessant@pa.dec.com
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Content-Type: text/plain; charset=iso-8859-1
+Sender: weis
+
+
+Here is a small patch to allow forward definition of functions in one
+module or in different modules (recursive modules) [+ a bug report in
+the middle]. Of course, for this to be safe, some reasonnable
+conditions are required, for example, that all values from a module A,
+which module A uses forward definitions from a module B, can not be
+used until the B module has been executed. In other words, if
+dependencies between modules are divided in "strong" (for values which
+are immediately executed) and "weak" (for values which may used if the
+function is applied) dependencies, weak dependencies between modules
+are safe iff there are no strong dependencies between these modules.
+
+  This allows to program in a completely C-style (prototypes in
+interfaces, C-style functions in modules). For example, modules A and
+B only contains C-style dependent functions in this example:
+
+a.mli:
+val todo: unit -> unit
+val name: unit -> unit
+
+b.mli:
+val name: unit -> unit
+
+a.ml:
+let _ = Printf.printf "A"; print_newline ()
+let todo () =
+  Printf.printf "%s " (B.name ()); print_newline ()
+let name () = "hello"
+
+b.ml:
+let _ = Printf.printf "B"; print_newline ()
+
+let name () = A.name ()
+
+main.ml:
+let _ = Printf.printf "main"; print_newline ()
+let _ = A.todo ()
+
+# ../ocamlc/opt -I ../stdlib -c b.mli c.mli
+# ../ocamlc/opt  -I ../stdlib a.ml b.ml main.ml
+# ./a.out
+A
+B
+main
+hello
+
+Remark (BUG REPORT): There is a bug in ocamlopt, due to the
+incremental manner values are stored in the interface, which forces
+the compiler to get rid off the dependence to the current module, thus
+allowing bad recursion (the patch removes this bug).
+
+test.mli
+val f1 : unit -> unit
+
+test.ml
+let f2 () = Test.f1 ()
+let _ = f2 ()
+let f1 () = f2 ()
+
+# ocamlopt test.mli
+# ocamlopt test.ml
+# ./a.out
+zsh: segmentation fault (core dumped)  ./a.out
+
+  This patch will be on a Web page as soon as I found an easiest way
+to modify it.
+
+- Fabrice Le Fessant
+          
+PS: Of course, if you want to program in C++-style, you can also apply
+the "cast" patch :)
+
+===============================================================
+
+To install the patch, clean your distribution, go in
+ocaml-2.02:
+
+~/src/ocaml-2.02# patch -p1 < patch.c-link
+~/src/ocaml-2.02# make world
+  some error messages when the debugger is compiled ...
+~/src/ocaml-2.02# make bootstrap             (REQUIRED !!!!!)
+~/src/ocaml-2.02# make opt ocamlc.opt ocamlopt.opt
+
+To test it, you can change the forward dependence between
+typing/typecore.ml and typing/typemod.ml (type_module ref), and try
+to recompile ...
+
+===============================================================
+
+diff -r -C 2 ocaml-2.02/asmcomp/asmlink.ml modrec/ocaml-2.02/asmcomp/asmlink.ml
+*** ocaml-2.02/asmcomp/asmlink.ml	Mon Jun 14 20:04:12 1999
+--- modrec/ocaml-2.02/asmcomp/asmlink.ml	Fri Jun 18 16:07:37 1999
+***************
+*** 67,70 ****
+--- 67,127 ----
+  
+  (* First pass: determine which units are needed *)
++ let compunits = Hashtbl.create 47
++ let required = ref []
++   
++ let init_compunits () =
++   Hashtbl.clear compunits;
++   required := []
++   
++ let add_compunit ui =
++   begin
++     try
++       let _ = Hashtbl.find compunits ui.ui_name in
++       failwith (Printf.sprintf "Twice the same module %s" ui.ui_name)
++     with
++       Not_found -> Hashtbl.add compunits ui.ui_name ui
++   end;
++   if ui.ui_required then required := ui :: !required
++   
++ let update_dependencies () =
++   Hashtbl.iter (fun id cu ->
++       if cu.ui_required then required := cu :: !required) compunits;
++   List.iter (fun cu ->
++       let rec add_strongs id =
++         if not (List.mem id cu.ui_strong_dep) then
++           begin
++             cu.ui_strong_dep <- id :: cu.ui_strong_dep;
++             try
++               let comp = Hashtbl.find compunits id in
++               List.iter (fun id -> 
++                   add_strongs id
++               ) comp.ui_weak_dep
++             with Not_found -> ()
++           end
++       in
++       List.iter add_strongs cu.ui_strong_dep
++   ) !required  
++   
++ let rec remove_compunits () =
++   match !required with
++     [] -> update_dependencies ()
++   | cu :: tail -> required := tail;
++       List.iter (fun (id,crc) ->
++           try
++             let cu = Hashtbl.find compunits id in
++             if not cu.ui_required then
++               (cu.ui_required <- true; 
++                 required := cu :: !required);
++           with Not_found -> ()) cu.ui_imports_cmx;
++       remove_compunits ()
++ 
++ let solved = ref []
++ let solve_weakdep ui =
++   List.iter (fun id ->
++       if not (List.mem id !solved) then
++         failwith (Printf.sprintf "%s has a strong dependency on %s"
++             ui.ui_name id)
++   ) ui.ui_strong_dep;
++   solved := ui.ui_name :: !solved
+  
+  module StringSet =
+***************
+*** 95,102 ****
+         Read the infos to see which modules it requires. *)
+      let (info, crc) = Compilenv.read_unit_info file_name in
+!     check_consistency file_name info crc;
+!     remove_required info.ui_name;
+!     List.iter add_required info.ui_imports_cmx;
+!     info :: tolink
+    end
+    else if Filename.check_suffix file_name ".cmxa" then begin
+--- 152,159 ----
+         Read the infos to see which modules it requires. *)
+      let (info, crc) = Compilenv.read_unit_info file_name in
+!       info.ui_required <- true;
+!       add_compunit info;
+!       check_consistency file_name info crc;
+!       info :: tolink
+    end
+    else if Filename.check_suffix file_name ".cmxa" then begin
+***************
+*** 110,125 ****
+      let info_crc_list = (input_value ic : (unit_infos * Digest.t) list) in
+      close_in ic;
+!     List.fold_right
+!       (fun (info, crc) reqd ->
+          if info.ui_force_link
+          or !Clflags.link_everything
+!         or is_required info.ui_name then begin
+            check_consistency file_name info crc;
+!           remove_required info.ui_name;
+!           List.iter add_required info.ui_imports_cmx;
+!           info :: reqd
+!         end else
+!           reqd)
+!     info_crc_list tolink
+    end
+    else raise(Error(Not_an_object_file file_name))
+--- 167,179 ----
+      let info_crc_list = (input_value ic : (unit_infos * Digest.t) list) in
+      close_in ic;
+!       List.fold_right
+!         (fun (info, crc) tolink ->
+          if info.ui_force_link
+          or !Clflags.link_everything
+!         or is_required info.ui_name then info.ui_required <- true;
+!           add_compunit info;
+            check_consistency file_name info crc;
+!           info :: tolink)
+!       info_crc_list tolink;
+    end
+    else raise(Error(Not_an_object_file file_name))
+***************
+*** 250,254 ****
+--- 304,315 ----
+      then "stdlib.p.cmxa" :: (objfiles @ ["std_exit.p.cmx"])
+      else "stdlib.cmxa" :: (objfiles @ ["std_exit.cmx"]) in
++   init_compunits ();
+    let units_tolink = List.fold_right scan_file objfiles [] in
++   remove_compunits ();
++   let units_tolink = List.fold_right (fun ui list ->
++         if ui.ui_required then ui :: list else list
++     ) units_tolink []  in
++   solved := Array.to_list Runtimedef.builtin_exceptions;
++   let _ = List.fold_left (fun _ ui -> solve_weakdep ui) () units_tolink in
+    Array.iter remove_required Runtimedef.builtin_exceptions;
+    if not (StringSet.is_empty !missing_globals) then
+diff -r -C 2 ocaml-2.02/asmcomp/compilenv.ml modrec/ocaml-2.02/asmcomp/compilenv.ml
+*** ocaml-2.02/asmcomp/compilenv.ml	Thu Feb  4 11:31:15 1999
+--- modrec/ocaml-2.02/asmcomp/compilenv.ml	Fri Jun 18 16:11:27 1999
+***************
+*** 39,42 ****
+--- 39,45 ----
+      mutable ui_imports_cmi: (string * Digest.t) list; (* Interfaces imported *)
+      mutable ui_imports_cmx: (string * Digest.t) list; (* Infos imported *)
++     mutable ui_required : bool;
++     mutable ui_strong_dep : string list;
++     mutable ui_weak_dep: string list;
+      mutable ui_approx: value_approximation;     (* Approx of the structure *)
+      mutable ui_curry_fun: int list;             (* Currying functions needed *)
+***************
+*** 51,54 ****
+--- 54,60 ----
+      ui_imports_cmi = [];
+      ui_imports_cmx = [];
++     ui_required = false;
++     ui_strong_dep = [];
++     ui_weak_dep = [];
+      ui_approx = Value_unknown;
+      ui_curry_fun = [];
+***************
+*** 132,135 ****
+--- 138,159 ----
+  
+  let save_unit_info filename =
++   current_unit.ui_strong_dep <- List.map Ident.name !Lambda.strongs;
++   current_unit.ui_weak_dep <- List.map Ident.name !Lambda.weaks;
++ (*  
++   current_unit.ui_strong_dep <- List.fold_left (fun list name ->
++       let name = String.capitalize (Ident.name name) in
++       if not (List.mem_assoc name current_unit.ui_imports_cmx) then
++         (if !Clflags.dump_lambda then
++             (Printf.printf "Remove strong dep to %s" name; print_newline ());
++           list) else name :: list
++       ) [] !Lambda.strongs;
++   current_unit.ui_weak_dep <- List.fold_left (fun list name ->
++       let name = String.capitalize (Ident.name name) in
++       if not (List.mem_assoc name current_unit.ui_imports_cmx) then
++         (if !Clflags.dump_lambda then
++             (Printf.printf "Remove weak dep to %s" name; print_newline ());
++           list) else name :: list      
++       ) [] !Lambda.weaks;
++ *)
+    current_unit.ui_imports_cmi <- Env.imported_units();
+    let oc = open_out_bin filename in
+diff -r -C 2 ocaml-2.02/asmcomp/compilenv.mli modrec/ocaml-2.02/asmcomp/compilenv.mli
+*** ocaml-2.02/asmcomp/compilenv.mli	Thu May 15 15:22:05 1997
+--- modrec/ocaml-2.02/asmcomp/compilenv.mli	Fri Jun 18 09:02:40 1999
+***************
+*** 20,23 ****
+--- 20,26 ----
+      mutable ui_imports_cmi: (string * Digest.t) list; (* Interfaces imported *)
+      mutable ui_imports_cmx: (string * Digest.t) list; (* Infos imported *)
++     mutable ui_required : bool;
++     mutable ui_strong_dep : string list;
++     mutable ui_weak_dep: string list;
+      mutable ui_approx: value_approximation;     (* Approx of the structure *)
+      mutable ui_curry_fun: int list;             (* Currying functions needed *)
+diff -r -C 2 ocaml-2.02/bytecomp/bytelink.ml modrec/ocaml-2.02/bytecomp/bytelink.ml
+*** ocaml-2.02/bytecomp/bytelink.ml	Fri Dec  4 10:38:03 1998
+--- modrec/ocaml-2.02/bytecomp/bytelink.ml	Fri Jun 18 16:09:22 1999
+***************
+*** 45,49 ****
+  
+  let missing_globals = ref IdentSet.empty
+! 
+  let is_required (rel, pos) =
+    match rel with
+--- 45,104 ----
+  
+  let missing_globals = ref IdentSet.empty
+! let compunits = Hashtbl.create 47
+! let required = ref []
+!   
+! let init_compunits () =
+!   Hashtbl.clear compunits;
+!   required := []
+!   
+! let add_compunit compunit =
+!   List.iter (fun (rel,pos) ->
+!       match rel with
+!         Reloc_setglobal id ->
+!           begin
+!             try
+!               let _ = Hashtbl.find compunits id in
+!               failwith (Printf.sprintf "Twice the same module %s" 
+!                   (Ident.name id))
+!             with
+!               Not_found -> Hashtbl.add compunits id compunit
+!           end
+!       | _ -> ()
+!   ) compunit.cu_reloc;
+!   if compunit.cu_required then required := compunit :: !required
+! 
+! let update_dependencies () =
+!   Hashtbl.iter (fun id cu ->
+!       if cu.cu_required then required := cu :: !required) compunits;
+!   List.iter (fun cu ->
+!       let rec add_strongs id =
+!         if not (List.mem id cu.cu_strong_dep) then
+!           begin
+!             cu.cu_strong_dep <- id :: cu.cu_strong_dep;
+!             try
+!               let comp = Hashtbl.find compunits id in
+!               List.iter (fun id -> 
+!                   add_strongs id
+!               ) comp.cu_weak_dep
+!             with Not_found -> ()
+!           end
+!       in
+!       List.iter add_strongs cu.cu_strong_dep
+!   ) !required
+!   
+! let rec remove_compunits () =
+!   match !required with
+!     [] -> update_dependencies ()
+!   | cu :: tail -> required := tail;
+!       List.iter (fun (rel,pos) ->
+!           match rel with
+!             Reloc_getglobal id -> (try 
+!                   let cu = Hashtbl.find compunits id in
+!                   if not cu.cu_required then
+!                     (cu.cu_required <- true; required := cu :: !required)
+!                 with Not_found -> ())
+!           | _ -> ()) cu.cu_reloc;
+!       remove_compunits ()
+!   
+  let is_required (rel, pos) =
+    match rel with
+***************
+*** 69,73 ****
+        find_in_path !load_path obj_name
+      with Not_found ->
+!       raise(Error(File_not_found obj_name)) in
+    let ic = open_in_bin file_name in
+    try
+--- 124,128 ----
+        find_in_path !load_path obj_name
+      with Not_found ->
+!         raise(Error(File_not_found obj_name)) in
+    let ic = open_in_bin file_name in
+    try
+***************
+*** 78,110 ****
+           Read the relocation information to see which modules it
+           requires. *)
+!       let compunit_pos = input_binary_int ic in  (* Go to descriptor *)
+!       seek_in ic compunit_pos;
+!       let compunit = (input_value ic : compilation_unit) in
+!       close_in ic;
+!       List.iter add_required compunit.cu_reloc;
+!       Link_object(file_name, compunit) :: tolink
+!     end
+      else if buffer = cma_magic_number then begin
+        (* This is an archive file. Each unit contained in it will be linked
+           in only if needed. *)
+!       let pos_toc = input_binary_int ic in    (* Go to table of contents *)
+!       seek_in ic pos_toc;
+!       let toc = (input_value ic : compilation_unit list) in
+!       close_in ic;
+!       let required =
+!         List.fold_right
+!           (fun compunit reqd ->
+              if compunit.cu_force_link
+!             or !Clflags.link_everything
+!             or List.exists is_required compunit.cu_reloc
+!             then begin
+!               List.iter remove_required compunit.cu_reloc;
+!               List.iter add_required compunit.cu_reloc;
+!               compunit :: reqd
+!             end else
+!               reqd)
+!           toc [] in
+!       Link_archive(file_name, required) :: tolink
+!     end
+      else raise(Error(Not_an_object_file file_name))
+    with
+--- 133,160 ----
+           Read the relocation information to see which modules it
+           requires. *)
+!         let compunit_pos = input_binary_int ic in  (* Go to descriptor *)
+!         seek_in ic compunit_pos;
+!         let compunit = (input_value ic : compilation_unit) in
+!         close_in ic;
+!         compunit.cu_required <- true;
+!         add_compunit compunit;
+!         Link_object(file_name, compunit) :: tolink
+!       end
+      else if buffer = cma_magic_number then begin
+        (* This is an archive file. Each unit contained in it will be linked
+           in only if needed. *)
+!         let pos_toc = input_binary_int ic in    (* Go to table of contents *)
+!         seek_in ic pos_toc;
+!         let toc = (input_value ic : compilation_unit list) in
+!         close_in ic;
+!         List.fold_right (fun compunit () ->
+              if compunit.cu_force_link
+!               or !Clflags.link_everything
+!               or List.exists is_required compunit.cu_reloc
+!             then compunit.cu_required <- true;
+!             add_compunit compunit;
+!         ) toc ();
+!         Link_archive(file_name, toc) :: tolink
+!       end
+      else raise(Error(Not_an_object_file file_name))
+    with
+***************
+*** 147,150 ****
+--- 197,201 ----
+    let code_block = String.create compunit.cu_codesize in
+    really_input inchan code_block 0 compunit.cu_codesize;
++   Symtable.solve_weakdep compunit;
+    Symtable.patch_object code_block compunit.cu_reloc;
+    if !Clflags.debug && compunit.cu_debug > 0 then begin
+***************
+*** 178,181 ****
+--- 229,233 ----
+      List.iter
+        (fun cu ->
++         if cu.cu_required then
+           let name = file_name ^ "(" ^ cu.cu_name ^ ")" in
+           try
+***************
+*** 191,195 ****
+  let link_file output_fun currpos_fun = function
+      Link_object(file_name, unit) ->
+!       link_object output_fun currpos_fun file_name unit
+    | Link_archive(file_name, units) ->
+        link_archive output_fun currpos_fun file_name units
+--- 243,248 ----
+  let link_file output_fun currpos_fun = function
+      Link_object(file_name, unit) ->
+!       if unit.cu_required then
+!         link_object output_fun currpos_fun file_name unit
+    | Link_archive(file_name, units) ->
+        link_archive output_fun currpos_fun file_name units
+***************
+*** 221,225 ****
+--- 274,280 ----
+  
+  let link_bytecode objfiles exec_name copy_header =
++   init_compunits ();
+    let tolink = List.fold_right scan_file objfiles [] in
++   remove_compunits ();
+    if Sys.os_type = "MacOS" then begin
+      (* Create it as a text file for bytecode scripts *)
+***************
+*** 321,325 ****
+--- 376,382 ----
+  
+  let link_bytecode_as_c objfiles outfile =
++   init_compunits ();
+    let tolink = List.fold_right scan_file objfiles [] in
++   remove_compunits ();
+    let outchan = open_out outfile in
+    try
+diff -r -C 2 ocaml-2.02/bytecomp/emitcode.ml modrec/ocaml-2.02/bytecomp/emitcode.ml
+*** ocaml-2.02/bytecomp/emitcode.ml	Mon Apr  6 11:15:52 1998
+--- modrec/ocaml-2.02/bytecomp/emitcode.ml	Fri Jun 18 07:05:54 1999
+***************
+*** 38,41 ****
+--- 38,44 ----
+      cu_reloc: (reloc_info * int) list;  (* Relocation information *)
+      cu_imports: (string * Digest.t) list; (* Names and CRC of intfs imported *)
++     mutable cu_required : bool;
++     mutable cu_strong_dep : Ident.t list;
++     cu_weak_dep: Ident.t list;
+      cu_primitives: string list;         (* Primitives declared inside *)
+      mutable cu_force_link: bool;        (* Must be linked even if unref'ed *)
+***************
+*** 333,336 ****
+--- 336,342 ----
+        cu_codesize = !out_position;
+        cu_reloc = List.rev !reloc_info;
++       cu_required = false;
++       cu_weak_dep = !Lambda.weaks;
++       cu_strong_dep = !Lambda.strongs;
+        cu_imports = Env.imported_units();
+        cu_primitives = !Translmod.primitive_declarations;
+diff -r -C 2 ocaml-2.02/bytecomp/emitcode.mli modrec/ocaml-2.02/bytecomp/emitcode.mli
+*** ocaml-2.02/bytecomp/emitcode.mli	Thu May 15 15:25:14 1997
+--- modrec/ocaml-2.02/bytecomp/emitcode.mli	Fri Jun 18 07:05:33 1999
+***************
+*** 33,36 ****
+--- 33,39 ----
+      cu_reloc: (reloc_info * int) list;  (* Relocation information *)
+      cu_imports: (string * Digest.t) list; (* Names and CRC of intfs imported *)
++     mutable cu_required : bool;
++     mutable cu_strong_dep : Ident.t list;
++     cu_weak_dep: Ident.t list;
+      cu_primitives: string list;         (* Primitives declared inside *)
+      mutable cu_force_link: bool;        (* Must be linked even if unref'ed *)
+diff -r -C 2 ocaml-2.02/bytecomp/lambda.ml modrec/ocaml-2.02/bytecomp/lambda.ml
+*** ocaml-2.02/bytecomp/lambda.ml	Mon Jun 14 20:04:12 1999
+--- modrec/ocaml-2.02/bytecomp/lambda.ml	Fri Jun 18 17:21:14 1999
+***************
+*** 246,247 ****
+--- 246,422 ----
+    and subst_case (key, case) = (key, subst case)
+    in subst lam
++ 
++ type dep = Initial | Weak | Strong
++   
++ let strongs = ref []
++ let weaks = ref []
++ 
++ module LocalMap = Map.Make (struct
++       type t = Ident.t * int
++       let compare = compare end)
++   
++ (* Find strong and weak dependencies *)
++ let dependencies lam =
++   let lambdas = Hashtbl.create 100 in
++   strongs := [];
++   weaks := [];
++   let ids = ref [] in
++   let locals = ref LocalMap.empty in
++   let rec iter_lambda dep lbd =
++     match lbd with
++       Lprim(Psetfield (i,_), (Lprim (Pgetglobal id, [])) :: [l]) when 
++       !Clflags.native_code ->
++       (* This is not a dependencie ... *)
++       (*        List.iter (iter_lambda dep) l1; *)
++         iter_lambda dep l;
++         locals := LocalMap.add (id,i) l !locals;        
++     | Lprim(Pfield i, [Lprim (Pgetglobal id, [])]) when 
++       !Clflags.native_code ->
++         begin
++           try 
++             let l = LocalMap.find (id,i) !locals in
++             match dep with
++               Strong -> iter_lambda dep l
++             | _ -> ()
++           with Not_found -> 
++               match dep with
++                 Weak ->
++                   if not (List.mem id !weaks) then weaks := id :: !weaks
++               | _ ->
++                   if not (List.mem id !strongs) then strongs := id :: !strongs
++         end
++     | Lvar id -> mark id dep
++     | Lconst _ -> ()
++     | Lapply (l, list) -> 
++         let dep = match dep with
++             Initial -> Strong | _ -> dep
++         in
++         List.iter (iter_lambda dep) (l::list)
++     | Lfunction (kind, idents, l) -> 
++         begin
++           match dep with Initial -> () | _ -> iter_lambda dep l
++         end
++     | Llet (kind, id, l, body) ->
++         begin
++           match dep with
++             Initial -> 
++               Hashtbl.add lambdas id (ref Initial,l);
++               ids := id :: !ids; iter_lambda dep l;
++           | _ -> iter_lambda dep l
++         end;
++         iter_lambda dep body
++     | Lletrec (list, body) ->
++         List.iter (fun (id,l) ->
++             match dep with
++               Initial -> 
++                 Hashtbl.add lambdas id (ref Initial,l);
++                 ids := id :: !ids; iter_lambda dep l
++             | _ -> iter_lambda dep l) list;
++         iter_lambda dep body        
++     | Lprim (prim, list) -> 
++         let dep = match prim, dep with
++             Pgetglobal id, Weak -> 
++               if not (List.mem id !weaks) then weaks := id :: !weaks;
++               Weak
++           | Pgetglobal id, _ -> 
++               if not (List.mem id !strongs) then strongs := id :: !strongs;
++               dep
++           | Pccall _, Weak -> Weak
++           | Pccall _, _ -> Strong
++           | _ -> dep
++         in
++         List.iter (iter_lambda dep) list
++     | Lswitch (l, switch) ->
++         iter_lambda dep l;
++         List.iter (fun (_,l) -> iter_lambda dep l) switch.sw_consts;
++         List.iter (fun (_,l) -> iter_lambda dep l) switch.sw_blocks;
++     | Lstaticfail -> ()
++     | Lcatch (l1,l2) ->
++         iter_lambda dep l1;
++         iter_lambda dep l2;
++     | Ltrywith (l1,_,l2) ->
++         iter_lambda dep l1;
++         iter_lambda dep l2;
++     | Lifthenelse (l1,l2,l3) ->
++         iter_lambda dep l1;
++         iter_lambda dep l2;
++         iter_lambda dep l3;
++     | Lsequence (l1,l2) ->
++         iter_lambda dep l1;
++         iter_lambda dep l2;        
++     | Lwhile  (l1,l2) ->
++         iter_lambda dep l1;
++         iter_lambda dep l2;
++     | Lfor (_, l1 ,l2,_,l3) ->
++         iter_lambda dep l1;
++         iter_lambda dep l2;
++         iter_lambda dep l3;
++     | Lassign (_,l) -> 
++         let dep = match dep with
++             Initial -> Strong | _ -> dep
++         in iter_lambda dep l
++     | Lsend (l1,l2,list) ->
++         let dep = match dep with
++             Initial -> Strong | _ -> dep
++         in
++         List.iter (iter_lambda dep) (l1::l2::list)        
++     | Levent (l,_) -> iter_lambda dep l
++     | Lifused (_, l) -> iter_lambda dep l
++   
++   and mark id dep =
++     match dep with
++       Weak | Initial -> ()
++     | Strong ->
++         try let dep, l = Hashtbl.find lambdas id in
++           if !dep <> Strong then
++             begin
++               dep := Strong;
++               iter_lambda Strong l;
++             end
++         with Not_found -> ()
++   in
++   (* FIRST: step the root of the graph and add (ident,expr) to 
++   the table of non-computed values *)
++   iter_lambda Initial lam;
++ 
++   let rec iter () =
++     match !ids with [] -> () | id :: tail -> ids := tail; 
++         (try let dep, l = Hashtbl.find lambdas id in
++           if !dep <> Strong then iter_lambda Initial l;
++           with Not_found -> ());
++         iter ()
++   in
++   (* SECOND, inspect all idents and check computations in all the 
++   (ident,expr) in the table. Do it recursively until all idents have been
++   checked. An expr can be marked twice: one time with Initial, the second 
++   time with Strong. *)
++   iter ();
++   
++   Hashtbl.iter (fun id (dep,l) -> 
++       if !dep <> Strong then ids := id :: !ids) lambdas;
++   let rec iter () =
++     match !ids with [] -> () | id :: tail -> ids := tail; 
++         (try let dep, l = Hashtbl.find lambdas id in
++           if !dep <> Strong then iter_lambda Weak l;
++           with Not_found -> ()); 
++         iter ()
++   in
++   (* THIRD, all expr marke as Initial can be marked with Weak *)
++   iter ();
++   
++   weaks := List.fold_left (fun weaks ele ->
++       if List.mem ele !strongs then weaks else ele :: weaks
++   ) [] !weaks;
++   
++   if !Clflags.dump_lambda then
++     begin
++       Printf.printf "Weaks dep:"; print_newline ();
++       List.iter (fun s -> Printf.printf "%s " (Ident.name s)) !weaks;
++       print_newline ();
++       Printf.printf "Strongs dep:"; print_newline ();
++       List.iter (fun s -> Printf.printf "%s " (Ident.name s)) !strongs;
++       print_newline ();
++     end;
++   lam
++   
++   
+diff -r -C 2 ocaml-2.02/bytecomp/lambda.mli modrec/ocaml-2.02/bytecomp/lambda.mli
+*** ocaml-2.02/bytecomp/lambda.mli	Mon Jun 14 20:04:12 1999
+--- modrec/ocaml-2.02/bytecomp/lambda.mli	Fri Jun 18 06:41:09 1999
+***************
+*** 137,138 ****
+--- 137,141 ----
+  
+  val subst_lambda: lambda Ident.tbl -> lambda -> lambda
++ val dependencies: lambda -> lambda
++ val weaks: Ident.t list ref
++ val strongs: Ident.t list ref
+diff -r -C 2 ocaml-2.02/bytecomp/symtable.ml modrec/ocaml-2.02/bytecomp/symtable.ml
+*** ocaml-2.02/bytecomp/symtable.ml	Wed Feb 24 16:21:44 1999
+--- modrec/ocaml-2.02/bytecomp/symtable.ml	Fri Jun 18 08:41:49 1999
+***************
+*** 62,66 ****
+  
+  let slot_for_setglobal id =
+!   enter_numtable global_table id
+  
+  let slot_for_literal cst =
+--- 62,69 ----
+  
+  let slot_for_setglobal id =
+!   try
+!     find_numtable !global_table id
+!   with Not_found ->
+!       enter_numtable global_table id
+  
+  let slot_for_literal cst =
+***************
+*** 126,131 ****
+--- 129,136 ----
+  
+  (* Initialization for batch linking *)
++ let solved = ref []
+  
+  let init () =
++   solved := List.map snd Predef.builtin_values;
+    (* Enter the predefined exceptions *)
+    Array.iter 
+***************
+*** 177,180 ****
+--- 182,198 ----
+    String.unsafe_set buff (pos + 3) (Char.unsafe_chr (n asr 24))
+  
++ let solve_weakdep cu =
++   List.iter (fun id ->
++       if not (List.mem id !solved) then
++         failwith (Printf.sprintf "%s has a strong dependency on %s"
++             cu.cu_name (Ident.name id))
++   ) cu.cu_strong_dep;
++   List.iter (fun id ->
++       if not (List.mem id cu.cu_strong_dep) then
++         let _ = 
++           try slot_for_getglobal id with 
++             _ -> 
++               slot_for_setglobal id in ()) cu.cu_weak_dep
++   
+  let patch_object buff patchlist = 
+    List.iter
+***************
+*** 184,188 ****
+        | (Reloc_getglobal id, pos) ->
+            patch_int buff pos (slot_for_getglobal id)
+!       | (Reloc_setglobal id, pos) ->
+            patch_int buff pos (slot_for_setglobal id)
+        | (Reloc_primitive name, pos) ->
+--- 202,207 ----
+        | (Reloc_getglobal id, pos) ->
+            patch_int buff pos (slot_for_getglobal id)
+!     | (Reloc_setglobal id, pos) ->
+!         solved := id :: !solved;
+            patch_int buff pos (slot_for_setglobal id)
+        | (Reloc_primitive name, pos) ->
+diff -r -C 2 ocaml-2.02/bytecomp/symtable.mli modrec/ocaml-2.02/bytecomp/symtable.mli
+*** ocaml-2.02/bytecomp/symtable.mli	Tue Apr 14 16:48:31 1998
+--- modrec/ocaml-2.02/bytecomp/symtable.mli	Fri Jun 18 07:51:23 1999
+***************
+*** 19,22 ****
+--- 19,23 ----
+  
+  val init: unit -> unit
++ val solve_weakdep: compilation_unit -> unit
+  val patch_object: string -> (reloc_info * int) list -> unit
+  val require_primitive: string -> unit
+diff -r -C 2 ocaml-2.02/driver/compile.ml modrec/ocaml-2.02/driver/compile.ml
+*** ocaml-2.02/driver/compile.ml	Fri Nov  6 16:39:41 1998
+--- modrec/ocaml-2.02/driver/compile.ml	Fri Jun 18 06:41:09 1999
+***************
+*** 132,135 ****
+--- 132,136 ----
+      ++ Simplif.simplify_lambda
+      ++ print_if Clflags.dump_lambda Printlambda.lambda
++     ++ Lambda.dependencies
+      ++ Bytegen.compile_implementation modulename
+      ++ print_if Clflags.dump_instr Printinstr.instrlist
+diff -r -C 2 ocaml-2.02/driver/optcompile.ml modrec/ocaml-2.02/driver/optcompile.ml
+*** ocaml-2.02/driver/optcompile.ml	Fri Nov  6 16:39:42 1998
+--- modrec/ocaml-2.02/driver/optcompile.ml	Fri Jun 18 08:48:07 1999
+***************
+*** 130,133 ****
+--- 130,134 ----
+    +++ Simplif.simplify_lambda
+    +++ print_if Clflags.dump_lambda Printlambda.lambda
++   +++ Lambda.dependencies
+    ++ Asmgen.compile_implementation prefixname;
+    Compilenv.save_unit_info (prefixname ^ ".cmx");
+
+
+

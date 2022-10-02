@@ -1,0 +1,200 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA17750; Sun, 2 Dec 2001 14:26:03 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA17834 for caml-list@pauillac.inria.fr; Sun, 2 Dec 2001 14:26:02 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA14455 for <caml-list@pauillac.inria.fr>; Sun, 2 Dec 2001 06:07:30 +0100 (MET)
+Received: from tcsnpop1.tcsn.uswest.net (tcsnpop1.tcsn.uswest.net [207.108.112.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with SMTP id fB257S121985
+	for <caml-list@inria.fr>; Sun, 2 Dec 2001 06:07:29 +0100 (MET)
+Received: (qmail 79738 invoked by uid 50); 2 Dec 2001 05:07:27 -0000
+Delivered-To: fixup-caml-list@inria.fr@fixme
+Received: (qmail 79722 invoked by uid 0); 2 Dec 2001 05:07:26 -0000
+Received: from 216-161-146-248.customers.uswest.net (HELO dylan) (216.161.146.248)
+  by tcsnpop1.tcsn.uswest.net with SMTP; 2 Dec 2001 05:07:26 -0000
+Message-ID: <002201c17aef$5a33c840$210148bf@dylan>
+From: "David McClain" <barabh@qwest.net>
+To: <caml-list@inria.fr>
+References: <000701c17a4e$8a289e00$210148bf@dylan>
+Subject: Re: [Caml-list] Re: SysThreads and DLL's
+Date: Sat, 1 Dec 2001 22:08:16 -0700
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="Windows-1252"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 5.00.2919.6600
+X-MimeOLE: Produced By Microsoft MimeOLE V5.00.2919.6600
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+After another day spent experimenting, I have a wonderfully working system
+with OCaml now. I spawn a thread to perform OCaml initialization and then
+sit in an event loop looking for request messages. These messages, sent with
+PostThreadMessage() from any old thread to the OCaml event loop thread, are
+simply forwarded to the OCaml DLL code. The message carries a tag indicating
+which DLL routine to run, the wParam carries the ThreadID of the calling
+thread. The lParam of the message carries a pointer to the actual C
+arguments, and this is bundled up as an opaque type for OCaml. Inside the
+DLL OCaml unmarshalls those parameters as need be.
+
+This event loop needs to have the GetMessage() call surrounded by
+enter_blocking_section() and leave_blocking_section(), as I rediscovered
+last night. This isn't mentioned in the documentation, but there are a few
+comments in the OCaml sources. Thanks so much for providing these sources!!
+Those comments indicate, as one might expect, that only one Windows thread
+at a time is permitted to churn about inside OCaml. This is achieved by
+means of a Mutex object used backwards... enter_blocking_section() releases
+this Mutex, and leave_blocking_section waits until the Mutex can be grabbed
+again. Very cute!
+
+Inside the DLL, OCaml can keep a stable full of threads, as it wishes, and
+the incoming DLL requests can be spawned off on as many threads as you like.
+After each DLL request is finished working, they need to send back a simple
+reply to the waiting threads. This is done by passing an HRESULT via another
+PostThreadMessage() call to the calling thread's ID as passed along in the
+original request message.
+
+The result really churns along and appears to satisfy all my needs for
+interfacing with arbitrary foreign threads.
+
+Not very messy at all, actually. The startup of a special initialization and
+marshalling thread only takes a few lines of C (maybe 20 in all). The
+protocol of sending messages and waiting for a response is maybe another 20
+lines of C.
+
+OCaml is sheer pleasure to program!!
+
+Cheers,
+
+- David McClain, Sr. Scientist, Raytheon Systems Co., Tucson, AZ
+
+----- Original Message -----
+From: "David McClain" <barabh@qwest.net>
+To: <caml-list@inria.fr>
+Sent: Saturday, December 01, 2001 2:57 AM
+Subject: [Caml-list] Re: SysThreads and DLL's
+
+
+> Okay, after some experimenting here is what I found out about OCaml and
+> LispWorks Lisp...
+>
+> 1. I set up a test in both languages that executes a nearly infinite loop
+to
+> generate massive amounts of garbage -- hence to force many GC operations.
+> Threading is not explicitly used in either of these two programs, although
+> the OCaml program was compiled with the -thread option and linked with the
+> native thread libraries. However, since I never initialize the threading
+> package (I have them initialize only when used with the Lazy.force trick),
+> the threading engine of OCaml should not be running.
+>
+> 2. I packaged these two programs up as DLL's for Win/NT 4.0
+>
+> 3. I wrote a simple C driver program to link to these DLL's, initialize
+> them, and the spawn a raft of threads to exercise that infinite loop all
+at
+> the same time....
+>
+> 4. LispWorks Lisp survives this test indefinitely. Unfortunately, a
+positive
+> result here is actually indeterminate. All I can say is that it hasn't
+blown
+> yet....
+>
+> 5. OCaml survives briefly and then gives GC failures. The test is
+> nondeterministic, and so the failures occur at varying durations of the
+> test, but OCaml always shows early failures, relative to the Lisp.
+>
+> 6. Realizing that the OCaml GC must make use of thread specific
+information,
+> and hence, rendering this test invalid, I set up an umbilical chord
+between
+> incoming thread requests and one thread started up explicitly to handle
+all
+> OCaml DLL requests. This is simply two event loops, one on a thread
+started
+> specially to initialize OCaml and perform all calls into the OCaml code,
+and
+> the other is used by the calling thread to await a result from the OCaml
+> thread. DLL calls are relayed to the OCaml thread by means of
+PostMessage().
+>
+> 7. Doing this works great! BUT!!! Only one thread at a time can exercise
+the
+> OCaml code. And if the code is an infinite loop, none of the other threads
+> get a chance to run.
+>
+> 8. I suppose that I could have OCaml spawn a bunch of worker threads and
+> have them ready and waiting for assignments as they come in. I seem to
+> remember the X-kernel doing something similar for marshalling network
+> packets up and down the protocol stack. The idea would be to never allow
+> these threads to die. When they finish an assignment they go back to the
+> stable to await the next assignment. So that will be my next experiment.
+>
+> I find it interesting that LispWorks is able to survive this kind of
+> punishment -- at least for as long as the few minutes duration that I
+> watched. But, again, this is an indeterminate kind of answer. At least
+with
+> OCaml I *know* where I stand!
+>
+> BTW, the whole point of this exercise is to find a way to seriously shrink
+> an oppressively burdensome code base written in frightful C/C++ with
+> STL/ATL/COM/OLE and a bunch of other junk. I have already seen that both
+> OCaml and Lisp produce roughly comparable shrinkages with improved
+> capabilities to boot. The shrinkage is roughly 6 to 1.
+>
+> My test case is a COM/OLE server for translating network system wide
+> filenames using recursive prefix mappings like Ousterhout used in the
+Sprite
+> OS. The C/C++ code is roughly 3 KLOC that I wrote several years ago, plus
+a
+> host of machine generated code to go with it. The Lisp and OCaml versions
+> are roughly 600 LOC.
+>
+> Interestingly, OCaml is terser than Common Lisp, despite the lack of
+> built-in richness that Lisp posesses. The syntax of Lisp is just more
+wordy.
+> So despite the lack of built-in library routines in OCaml, which I had to
+> develop by hand, the overall result is roughly the same size between them.
+> That even included writing an OCaml version of a Lisp-like PATHNAME module
+> to parse and represent generalized pathnames. In a sense, OCaml is
+> comparable to typical Scheme languages when it comes to built-in functions
+> (probably better!).
+>
+> My experiments with LispWorks have been fruitful, but I have reservations
+> about using it because of the extreme lack of documentation, and a
+> demonstrated failure to be robust against punishment. Despite the results
+of
+> the test described above, whenever I generate the DLL for the pathname
+> translations, it always fails to run properly the first time. I have to
+kill
+> the process and start up again. Thereafter it runs reliably as far as I
+can
+> tell.
+>
+> But with the OCaml version, it runs first time, every time. Like a real
+> champ! The only drawback is the need for greater amounts of C wrapper code
+> to make it into a DLL, and the need to produce a Makefile.
+>
+> My aim is code base reduction, and ease of generation, because I want to
+> unload about 300 KLOC onto some unsuspecting maintenance programmer. I
+need
+> to get out from under this code burden!!!! So the jury is still out on
+which
+> way to go... Code base reduction is the same, ease of use is somewhat
+better
+> in Lisp, but robustness is significantly better in OCaml... It also helps
+to
+> have the source code!!
+>
+> Cheers,
+>
+> - D.McClain, Sr. Scientist, Raytheon Systems Co., Tucson, AZ.
+> -------------------
+> Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ:
+http://caml.inria.fr/FAQ/
+> To unsubscribe, mail caml-list-request@inria.fr  Archives:
+http://caml.inria.fr
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

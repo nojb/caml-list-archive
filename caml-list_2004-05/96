@@ -1,0 +1,220 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA15298; Tue, 4 May 2004 23:31:19 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA14469 for <caml-list@pauillac.inria.fr>; Tue, 4 May 2004 23:31:17 +0200 (MET DST)
+Received: from rabelais.socialtools.net (rabelais.socialtools.net [81.2.94.243])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i44LVGEV030465
+	for <caml-list@inria.fr>; Tue, 4 May 2004 23:31:16 +0200
+Received: by rabelais.socialtools.net (Postfix, from userid 108)
+	id 59DEC232DD; Tue,  4 May 2004 22:31:16 +0100 (BST)
+Received: from socialtools.net (chaucer.socialtools.net [81.2.94.242])
+	by rabelais.socialtools.net (Postfix) with ESMTP
+	id BFFBF232DA; Tue,  4 May 2004 22:31:14 +0100 (BST)
+Message-ID: <40980BA2.1010102@socialtools.net>
+Date: Tue, 04 May 2004 22:31:14 +0100
+From: Benjamin Geer <ben@socialtools.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.6) Gecko/20040113
+X-Accept-Language: en-gb, en, fr, it
+MIME-Version: 1.0
+To: "Vladimir N. Silyaev" <vsilyaev@mindspring.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Common IO structure
+References: <20040503061212.GA64216@server.vns.oc.ca.us>
+In-Reply-To: <20040503061212.GA64216@server.vns.oc.ca.us>
+Content-Type: multipart/mixed;
+ boundary="------------020805020503080601060307"
+X-Spam-Checker-Version: SpamAssassin 2.63 (2004-01-11) on 
+	rabelais.socialtools.net
+X-Spam-Status: No, hits=-4.9 required=5.0 tests=BAYES_00 autolearn=ham 
+	version=2.63
+X-Miltered: at nez-perce with ID 40980BA4.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 encodings:01 non-blocking:01 non-blocking:01 figuring:01 buffer:01 buffer:01 async:01 val:01 val:01 char:01 char:01 async:01 struct:01 blit:01 
+X-Attachments: name="buf.ml" name="buf.ml" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This is a multi-part message in MIME format.
+--------------020805020503080601060307
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+
+Vladimir N. Silyaev wrote:
+> If you felt interested, please look into the attached file io.ml.
+
+This looks like a good start to me; what do others think?
+
+I have two questions about it:
+
+First, I think that rather than having to hard-code the use of the UTF8 
+module in an application in order to handle UTF-8 characters, it would 
+be more useful to be able to specify encodings using string arguments; 
+the choice of encoding is often determined by reading a configuration 
+file.  Would there be a way to support this?
+
+Second, I'm wondering if this design can be adapted to accommodate 
+non-blocking I/O.  The 'get' function has to return a character, but on 
+a non-blocking socket, there might not be any character to return.  I've 
+attached a sketch of an approach that might be more suitable for 
+non-blocking I/O; I'd like to add it to your design, but I'm having 
+trouble figuring out how.  I would be very interested in your thoughts 
+on this.
+
+Ben
+
+--------------020805020503080601060307
+Content-Type: text/plain;
+ name="buf.ml"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline;
+ filename="buf.ml"
+
+exception Buffer_underflow
+exception Buffer_overflow
+
+module type Async =
+sig
+  type t
+  val create : unit -> t
+  val get : t -> char
+  val put : t -> char -> unit
+  val read : t -> string -> int -> int -> int
+  val write : t -> string -> int -> int -> unit
+  val from_fd : t -> Unix.file_descr -> unit
+  val to_fd : t -> Unix.file_descr -> unit
+  val clear : t -> unit
+  val flip : t -> unit
+  val compact : t -> unit
+  val rewind : t -> unit
+  val limit : t -> int
+  val position : t -> int
+  val remaining : t -> int
+  val contents : t -> string
+end
+
+module AsyncBuffer : Async =
+struct
+  type t = {
+    buf : string;
+    mutable pos : int;
+    mutable limit: int;
+  }
+  
+  let create () =
+    let capacity = 1024 in
+      {
+        buf = String.create capacity;
+        pos = 0;   
+        limit = capacity;
+      }
+  
+  let limit b =
+    b.limit
+
+  let position b =
+    b.pos
+
+  let remaining b =
+    b.limit - b.pos
+
+  let contents b =
+    String.sub b.buf b.pos (remaining b)
+
+  let get b =
+    let c = b.buf.[b.pos] in
+      if b.pos < b.limit then
+        (b.pos <- b.pos + 1; c)
+      else
+        raise Buffer_underflow
+
+  let put b c =
+    if b.pos < b.limit then
+      (b.buf.[b.pos] <- c;
+       b.pos <- b.pos + 1)
+    else
+      raise Buffer_overflow
+
+  let read b dst offset len =
+    let real_len =
+      if len > remaining b then
+        remaining b
+      else
+        len in
+      String.blit b.buf b.pos dst offset real_len;
+      b.pos <- b.pos + real_len;
+      real_len
+
+  let write b src offset len =
+    if len <= remaining b then
+      let result =
+        String.blit src offset b.buf b.pos len in
+        b.pos <- b.pos + len;
+        result
+    else
+      raise Buffer_overflow
+
+  let from_fd b fd =
+    try
+      let len = Unix.read fd b.buf b.pos (remaining b) in
+        b.pos <- b.pos + len;
+        if len = 0 then
+          raise End_of_file
+    with Unix.Unix_error (err, _, _) as e ->
+      match err with
+          Unix.EAGAIN | Unix.EWOULDBLOCK -> ()
+        | _ -> raise e
+          
+  let to_fd b fd =
+    try
+      let len = Unix.write fd b.buf b.pos (remaining b) in
+        b.pos <- b.pos + len
+    with Unix.Unix_error (err, _, _) as e ->
+      match err with
+          Unix.EAGAIN | Unix.EWOULDBLOCK -> ()
+        | _ -> raise e
+      
+  let clear b =
+    b.pos <- 0;
+    b.limit <- String.length b.buf
+  
+  let flip b =
+    b.limit <- b.pos;
+    b.pos <- 0
+
+  let compact b =
+    String.blit b.buf b.pos b.buf 0 (remaining b)
+  
+  let rewind b =
+    b.pos <- 0
+end
+
+let copy_fd in_fd out_fd =
+  let b = AsyncBuffer.create () in
+    try
+      while (true) do
+        AsyncBuffer.from_fd b in_fd;
+        AsyncBuffer.flip b;
+        AsyncBuffer.to_fd b out_fd;
+        AsyncBuffer.compact b
+      done
+    with End_of_file -> ()
+
+let copy_file input_filename output_filename =
+  let in_fd = Unix.openfile input_filename
+                [ Unix.O_RDONLY; Unix.O_NONBLOCK ] 0o644 in
+  let out_fd = Unix.openfile output_filename
+                 [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_TRUNC; Unix.O_NONBLOCK ] 0o644 in
+  let output_data = String.create 10 in
+    copy_fd in_fd out_fd;
+    Unix.close in_fd;
+    Unix.close out_fd
+
+let _ =
+  copy_file "input.txt" "output.txt"
+
+--------------020805020503080601060307--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

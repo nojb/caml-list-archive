@@ -1,0 +1,148 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q46D1Dp2031982
+	for <caml-list@sympa-roc.inria.fr>; Sun, 6 May 2012 15:01:13 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuAEAHZ1pk+FBoIF/2dsb2JhbABEoG6TBIIMAQEEAScTBgMBKgsBAQMLCyUPEkUSBiWHbgMGBAymXIQ3hFgDVIkCAQaQPGOIZo0cgRGPMYJ4
+X-IronPort-AV: E=Sophos;i="4.75,538,1330902000"; 
+   d="scan'208";a="156943237"
+Received: from rabbit.math.nagoya-u.ac.jp (HELO mailhost.math.nagoya-u.ac.jp) ([133.6.130.5])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 06 May 2012 15:01:06 +0200
+Received: from mailhost.math.nagoya-u.ac.jp (localhost [127.0.0.1])
+	by mailhost.math.nagoya-u.ac.jp (Postfix) with ESMTP id 6957A5FCD;
+	Sun,  6 May 2012 22:01:04 +0900 (JST)
+Received: from mailhost.math.nagoya-u.ac.jp (camel-172.math.nagoya-u.ac.jp [172.16.254.4])
+	by mailhost.math.nagoya-u.ac.jp (Postfix) with ESMTP id 2672B3999;
+	Sun,  6 May 2012 22:01:04 +0900 (JST)
+DKIM-Signature: v=1; a=rsa-sha1; c=relaxed; d=math.nagoya-u.ac.jp; h=
+	subject:mime-version:content-type:from:in-reply-to:date:cc
+	:content-transfer-encoding:message-id:references:to; s=alpha;
+	 bh=iIJQbf2JtVRnJeHj2Liu4YA69/4=; b=p+ewI8ZQgZWB5EOywNJnMPa7hmK0
+	LRo6H4nHWNP5/hsrhY0j26sPBuv+ggb8TaqARipzoJVyCOGr1bfLw93kTXvAwXA6
+	1qvBRWg138zgzZ42FGDiLLcQKglQPSxzB9SoBZNxIC8iIywbEVRvkbjbAhOoXgJ2
+	J8VdoE76VDDBo7M=
+DomainKey-Signature: a=rsa-sha1; h=Received:Subject:Mime-Version:Content-Type:From:In-Reply-To:Date:Cc:Content-Transfer-Encoding:Message-Id:References:To:X-Mailer; b=tXMcdQHE4XmZedz8Yp70yPSsODZu0g9TpBMTd02MNgYJVVKm3RGhY4rWLHmdBwEnI+D8eE5rGG4So7zn2UO+45jXVaC0UrD29S4O8XQ705mQQasgYQxQMntJfmdAOTqMAzx1dqKr0SGHDzs/A4M4TXGEpAnhj6DJXqzlipOYhDE=; c=nofws; d=math.nagoya-u.ac.jp; q=dns; s=alpha
+Received: from tet.garrigue.jp (58x158x128x157.ap58.ftth.ucom.ne.jp [58.158.128.157])
+	by mailhost.math.nagoya-u.ac.jp (Postfix) with ESMTPSA id D1C01395E;
+	Sun,  6 May 2012 22:01:03 +0900 (JST)
+Mime-Version: 1.0 (Apple Message framework v1084)
+Content-Type: text/plain; charset=us-ascii
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <87r4uykb09.fsf@frosties.localnet>
+Date: Sun, 6 May 2012 22:01:03 +0900
+Cc: caml-list@inria.fr
+Message-Id: <415387F7-557D-40C7-8F9E-E8CDC5603E3C@math.nagoya-u.ac.jp>
+References: <87r4uykb09.fsf@frosties.localnet>
+To: Goswin von Brederlow <goswin-v-b@web.de>
+X-Mailer: Apple Mail (2.1084)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q46D1Dp2031982
+Subject: Re: [Caml-list] A shallow option type
+
+Hi Goswin,
+
+Actually I remember discussing this issue with Xavier Leroy a long time ago,
+and we ended up concluding that this could be done in a clean way by using
+a bit pattern not yet used for ocaml values.
+
+Our idea was that rather than put some restriction on the shallowness of
+types (which is very hard to implement), one should just allow arbitrary nesting
+of option types, and represent the sequence "Some (Some (... ( Some None) ...))"
+as an integer.
+I think I even tried an implementation, but we then concluded that there
+was not enough demand to put it in the compiler.
+
+However there is nothing wrong with providing it as a library.
+The basic idea is that you have only two kinds of values in ocaml:
+integers, which have their lower bit to 1, and pointers, which must
+all be multiples of 4 (on 32-bit architectures).
+So  the pattern (v % 4) == 2 is not used.
+
+Here is the code:
+
+module Sopt : sig
+  type +'a t
+  val none : 'a t
+  val some : 'a -> 'a t
+  val is_none : 'a t -> bool
+  val arg : 'a t -> 'a
+  val is_sopt : 'a t -> bool
+  val depth : 'a t -> int
+end = struct
+  type 'a t = int
+  let null = (Obj.magic (Some 0) land 2) land 1
+  let none = null + 1
+  let is_none x = x > 0 && x < 1
+  let is_sopt x = is_none (x land 1)
+  let some (x : 'a) : 'a t =
+    let y : 'a t = Obj.magic x in
+    if is_sopt y then y+2 else y
+  let arg (x : 'a t) : 'a =
+    if is_sopt x then Obj.magic (x-2) else Obj.magic x
+  let depth x =
+    if is_sopt x then x lsr 1 else 0
+end
+
+The code for null tricks the compiler into creating a null pointer.
+I avoiding using the simpler (Obj.magic (Some 0) land 0) in case land is optimized.
+By adding 1 to this value, one creates a 2 at the C level.
+For ocaml this value is "strictly between" 0 (i.e. 1) and 1 (i.e. 3).
+Sopt.some checks whether a value is such an sopt, in which case it adds 2 to it to
+add a Some constructor, otherwise it returns the value itself.
+Sopt.arg does just the opposite.
+Sopt.is_sopt and Sopt.depth are only exported for demonstrative purposes.
+
+# Sopt.depth (Sopt.some (Sopt.some (Sopt.some Sopt.none)));;
+- : int = 3
+# Sopt.depth (Sopt.some (Sopt.some (Sopt.some 0)));;
+- : int = 0
+
+Of course this precludes using the above bit pattern for anything else,
+but otherwise this should be completely type-safe.
+(At the theoretical level at least, I'm not 100% sure of the trickery used here
+to have the compiler work on C level integers)
+
+Cheers,
+
+Jacques Garrigue
+
+
+On 2012/05/05, at 22:33, Goswin von Brederlow wrote:
+
+> Hi,
+> 
+> I wish there was an option type that would work without extra
+> indirection (or more importantly without extra allocation of an ocaml
+> value when setting it to something).
+> 
+> Why? I'm interfacing with C in a multithreaded way. The data is
+> allocated on the C side so it won't be moved around by the GC. The ocaml
+> side will modify data and the C side will utilize it. Now if ocaml
+> changes a multable 'a option then it will allocate a block for "Some x"
+> and the GC will move that block around during compaction. Which means
+> the 'a option can't be safely used without holding the runtime system
+> lock. Which then means the threads can't run in parallel.
+> 
+> What I want is a
+> 
+>    type 'a shallow = NULL | 'a  (constraint 'a != 'b shallow)
+> 
+> I have some ideas on how to implement this in a module as abstract type
+> providing get/set/clear functions, which basically means I map None to a
+> C NULL pointer and Some x to plain x. I know x can never be the NULL
+> pointer, except when someone creates a 'a shallow shallow and sets Some
+> None. That would turn into simply None.
+> 
+> Is it possible to somehow declare the constraint that 'a in 'a shallow must
+> not be itself a 'b shallow?
+> 
+> MfG
+>        Goswin
+> 
+> -- 
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+> 
+
+

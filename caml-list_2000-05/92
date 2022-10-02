@@ -1,0 +1,93 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA06811 for caml-red; Mon, 22 May 2000 18:13:22 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA04864 for <caml-list@pauillac.inria.fr>; Mon, 22 May 2000 17:29:23 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e4MFSZD09541;
+	Mon, 22 May 2000 17:28:35 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA04339; Mon, 22 May 2000 17:28:25 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200005221528.RAA04339@pauillac.inria.fr>
+Subject: Re: reference initialization
+To: maxs@in.ot.com.au (Max Skaller)
+Date: Mon, 22 May 2000 17:28:25 +0200 (MET DST)
+Cc: caml-list@inria.fr
+In-Reply-To: <3924E53B.88287AC5@in.ot.com.au> from "Max Skaller" at mai 19, 2000 04:54:51 
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> Pierre Weis wrote:
+> > 
+> > Finally I think I've done the ``Further work part'' I mentioned for
+> > vector initialization!
+> 
+> > let initialize n x0 f =
+> 
+> x0 is both a problem and unnecesary: it is hard to pick
+> a sensible x0 sometimes, and it is not necessary, since
+> Obj.magic can be used internally: there is no loss of
+> safety, since the code checks all usage, and such a magic
+> value cannot be accessed.
+>
+> John (Max) Skaller at OTT [Open Telecommications Ltd]
+> mailto:maxs@in.ot.com.au      -- at work
+> mailto:skaller@maxtal.com.au  -- at home
+
+You're right, getting rid of this x0 would be better. Still, I don't
+understand how you can manage to write the f function if you cannot
+figure out at least one random value of the type of the elements of
+the vector you want f to initialize. Also, I don't like to use Obj.magic
+to create an heterogeneous vector, even if I can prove that no Caml
+program can observe it: it breaks some invariants that the runtime
+system, the memory manager, or the debugger could observe.
+
+However, since we know that the function f gives plenty of suitable initial
+values: in particular at the first call to the set function.
+
+So, adding a test to detect this case we can initialize the vector
+properly, without using Obj.magic.
+
+exception Not_yet_initialized of int;;
+exception Already_initialized of int;;
+exception Never_initialized of int;;
+
+let initialize n f =
+ if n = 0 then [||] else
+ let init_v = Array.make n false in
+ let v = ref [||] in
+ let get i = if init_v.(i) then !v.(i) else raise (Not_yet_initialized i) in
+ let set i ei =
+   if !v = [||] then v := Array.make n ei;
+   if not init_v.(i) then (!v.(i) <- ei; init_v.(i) <- true) else
+   raise (Already_initialized i) in
+ (f get set : unit);
+ for i = 0 to n - 1 do if not init_v.(i) then raise (Never_initialized i) done;
+ !v;;
+
+(*
+val initialize :
+ int -> ((int -> 'a) -> (int -> 'a -> unit) -> unit) -> 'a array
+ [initialize n f] returns a fresh array of length [n],
+ with elements initialized by function [f].
+ All the elements of the new array must be assigned once and only
+ once by the function [f]. [f] received two functions as arguments,
+ one to access elements of the new array, and the other to set the
+ elements of the new array. [f] can access to element [i] of the new
+ array provided [f] has already properly initialized element [i].
+ Raise [Not_yet_initialized i] if element [i] is accessed before being
+ assigned.
+ Raise [Already_initialized i] if element [i] is assigned twice.
+ Raise [Never_initialized i] if element [i] has never been assigned at
+ the end of initialization.
+ [Array.initialize n f] uses [2 n] words of heap space.
+*)
+
+Thanks for your simulating remark.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

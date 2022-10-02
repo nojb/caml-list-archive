@@ -1,0 +1,102 @@
+Received: by margaux.inria.fr, Tue, 6 Oct 92 13:52:57 +0100
+Received: from pomerol.inria.fr by margaux.inria.fr, Tue, 6 Oct 92 13:26:24 +0100
+Received: by pomerol.inria.fr, Tue, 6 Oct 92 13:26:22 +0100
+From: Xavier Leroy <xleroy@pomerol>
+Message-Id: <9210061226.AA16903@pomerol.inria.fr>
+Subject: Lazy evaluation in Caml Light
+To: caml-list@margaux
+Date: Tue, 6 Oct 92 13:26:22 MET
+Cc: rbrena@mtecv2.mty.itesm.mx
+Sender: weis@margaux
+Status: O
+
+I've been asked questions about lazy evaluation in Caml Light several
+times already, so I'd like to summarize.
+
+- It is straightforward to implement delayed expressions, as with the
+"delay" function in Scheme, using mutable data structures. I have
+enclosed a sample implementation below. This solution is certainly not
+elegant --- the user's code is cluttered by explicit "freeze" and
+"unfreeze" operations --- but at least you can really understand
+what's going on.
+
+- As pointed out by Michel Mauny, streams do not provide a general
+lazy evaluation mechanism: granted, they are lazily evaluated, but the
+"discard after use" semantics for stream matching is generally not
+what you want to implement e.g. potentially infinite data structures.
+
+- I'm reluctant to integrate lazy evaluation in the Caml Light system,
+not only because I'd like Caml Light to remain small and simple, but
+also because there is no obvious, universally accepted way to
+integrate lazy evaluation within a strict language. Also,
+understanding the interaction between lazy evaluation and side-effects
+is quite hard; the best way I know is to think in terms of the
+underlying implementation in terms of mutable structures --- just as
+in the first point above.
+
+- Xavier Leroy
+
+(* The poor man's lazy evaluation in CAML Light *)
+
+(* Interface file: lazy.mli *)
+
+type 'a suspension;;
+
+value freeze : (unit -> 'a) -> 'a suspension
+  and unfreeze : 'a suspension -> 'a;;
+
+(* Implementation file: lazy.ml *)
+
+type 'a suspension =
+  { mutable state: 'a suspension_state }
+and 'a suspension_state =
+    Unevaluated of (unit -> 'a)
+  | Evaluated of 'a
+;;
+
+let freeze expr =
+  { state = Unevaluated expr }
+;;
+
+let unfreeze susp =
+  match susp.state with
+    Unevaluated f ->
+      let val = f () in
+        susp.state <- Evaluated val; val
+  | Evaluated val ->
+      val
+;;
+
+(* An example: lazy streams *)
+
+type 'a stream =
+  { head : 'a;
+    tail : 'a stream suspension }
+;;
+
+(* Getting the Nth element of a stream *)
+
+let rec nth_stream stream n =
+  if n <= 0 then stream.head else nth_stream (unfreeze stream.tail) (n-1)
+;;
+
+(* Mapping on a stream *)
+
+let rec map_stream f stream =
+  { head = f stream.head;
+    tail = freeze(fun () -> map_stream f (unfreeze stream.tail)) }
+;;
+
+(* The stream of all positive integers *)
+
+let rec positive_integers =
+  { head = 0;
+    tail = freeze(fun () -> map_stream (fun x -> x+1) positive_integers) }
+;;
+
+nth_stream positive_integers 10;;
+positive_integers;;
+
+
+
+

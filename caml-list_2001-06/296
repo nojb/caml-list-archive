@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA31181; Sat, 16 Jun 2001 19:31:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA31381 for <caml-list@pauillac.inria.fr>; Sat, 16 Jun 2001 19:31:25 +0200 (MET DST)
+Received: from iiserv.iis.sinica.edu.tw (iiserv.iis.sinica.edu.tw [140.109.20.250])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f5GHVJn22662
+	for <caml-list@inria.fr>; Sat, 16 Jun 2001 19:31:24 +0200 (MET DST)
+Received: from iis.sinica.edu.tw (iists03 [140.109.21.214])
+	by iiserv.iis.sinica.edu.tw (8.11.1/8.11.1) with ESMTP id f5GHXMX07173;
+	Sun, 17 Jun 2001 01:33:22 +0800 (CST)
+Message-ID: <3B2B9947.4B5EF0C3@iis.sinica.edu.tw>
+Date: Sun, 17 Jun 2001 01:37:11 +0800
+From: Tyng-Ruey Chuang <trc@iis.sinica.edu.tw>
+Organization: Inst. of Information Science, Academia Sinica, Taiwan
+X-Mailer: Mozilla 4.72 [en] (Win98; U)
+X-Accept-Language: en,pdf
+MIME-Version: 1.0
+To: caml <caml-list@inria.fr>
+CC: trc@iis.sinica.edu.tw
+Subject: Re: [Caml-list] Weird types
+References: <20010616013618.A13696@localhost.localdomain>
+Content-Type: text/plain; charset=big5
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Berke Durak wrote:
+> 
+> I have a type
+> 
+> type ('a,'b,'c,'d,'e,'f,'g) sigma =
+>         I of 'a * 'b * 'c * 'd * 'e * 'f * 'g
+>   | T of ('b,'a,'c,'d,'e,'f,'g) sigma
+>   | P of ('b,'c,'d,'e,'f,'g,'a) sigma
+> 
+> and a function
+> 
+> let rec gamma = function
+>         I _ -> 0 |
+>         T x -> 1 + (gamma x) |
+>         P x -> 1 + (gamma x)
+> 
+> and want a version of gamma that works on the following data
+> 
+> type t1 = X1 and t2 = X2 and t3 = X3 and
+> t4 = X4 and t5 = X5 and t6 = X6 and t7 = X7
+> 
+> let data = I(X1,X2,X3,X4,X5,X6,X7)
+> 
+> and that is under 10K of length. Any clever way to solve this ? ....
+
+
+I am not sure people at INRIA will recommend this, but one can
+use Obj.magic to coerce the compiler to accept unsafe value definitions.
+For example, 
+
+	let rec gamma s =
+	    match s with 
+	          I _ -> 0
+	        | T x -> 1 + Obj.magic gamma x
+	        | P x -> 1 + Obj.magic gamma x
+                 
+will be inferred as
+
+	val gamma : ('a, 'b, 'c, 'd, 'e, 'f, 'g) sigma -> int = <fun>
+
+In this particular case, function gamma is safe to have the above type
+because, by its definition, values of types 'a, 'b, 'c, 'd, 'e, 'f, and
+'g
+are always ignored.
+
+If we define 
+
+	let i = I (X1, X2, X3, X4, X5, X6, X7)
+	let rec t  n = if n <= 0 then i   else T (t' (n-1))
+	    and t' n = if n <= 0 then T i else T (t  (n-1)) 
+
+then (t (2*k)) will return a "length (2*k)" sigma value, and
+(t' (2*k+1)) will return a "length (2*k+1)" sigma value. Functions t
+and t' are nicely inferred by the compiler to have types
+
+	val t :  int -> (t1, t2, t3, t4, t5, t6, t7) sigma = <fun>
+	val t' : int -> (t2, t1, t3, t4, t5, t6, t7) sigma = <fun>
+
+Troubles are, (t (2*k-1)) also has length (2*k).
+Also, (t' (2*k)) has length (2*k+1). This is no good,
+but one probably cannot do better.
+
+It can also be inferred that sigma values of the same length may
+not have the same type. (P (t (2*k))) and (t' (2*k+1)) both have
+length (2*k+1), but with different types:
+
+	let t'10k1 = t' 10001
+	let t10k   = t  10000
+	let pt10k  = P  t10k
+
+	let (u, v) = (gamma pt10k, gamma t'10k1) 
+
+We get
+
+	val t'10k1 : (t2, t1, t3, t4, t5, t6, t7) sigma = ...
+	val t10k   : (t1, t2, t3, t4, t5, t6, t7) sigma = ...
+	val pt10k  : (t7, t1, t2, t3, t4, t5, t6) sigma = ...
+	val u : int = 10001
+	val v : int = 10001
+
+
+By the way, people call type constructors like sigma "irregular":
+sigma is applied to different type expresions at the two sides 
+of the its own type equation.
+
+A self-contained code fragment is appended for your amusement.
+Have fun!
+
+Tyng-Ruey Chuang
+
+--------------------
+
+type ('a, 'b, 'c, 'd, 'e, 'f, 'g) sigma =
+     I of 'a * 'b * 'c * 'd *'e * 'f * 'g
+  |  T of ('b, 'a, 'c, 'd, 'e, 'f, 'g) sigma
+  |  P of ('b, 'c, 'd, 'e, 'f, 'g, 'a) sigma
+
+let rec gamma s =
+    match s with 
+          I _ -> 0
+        | T x -> 1 + Obj.magic gamma x
+        | P x -> 1 + Obj.magic gamma x
+                 
+type t1 = X1 
+ and t2 = X2
+ and t3 = X3
+ and t4 = X4
+ and t5 = X5
+ and t6 = X6
+ and t7 = X7
+
+let i = I (X1, X2, X3, X4, X5, X6, X7)
+let rec t  n = if n <= 0 then i   else T (t' (n-1))
+    and t' n = if n <= 0 then T i else T (t  (n-1)) 
+
+let t'10k1 = t' 10001
+let t10k   = t  10000
+let pt10k  = P  t10k
+
+let (u, v) = (gamma pt10k, gamma t'10k1)
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

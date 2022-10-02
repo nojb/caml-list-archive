@@ -1,0 +1,153 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA21999 for caml-red; Mon, 5 Jun 2000 15:57:14 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA09030 for <caml-list@pauillac.inria.fr>; Mon, 5 Jun 2000 15:56:26 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e55DuPD19841;
+	Mon, 5 Jun 2000 15:56:25 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA17512; Mon, 5 Jun 2000 15:56:20 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200006051356.PAA17512@pauillac.inria.fr>
+Subject: Re: Typing of patterns
+In-Reply-To: <20000601152339.A23433@miss.wu-wien.ac.at> from Markus Mottl at "Jun 1, 100 03:23:39 pm"
+To: mottl@miss.wu-wien.ac.at (Markus Mottl)
+Date: Mon, 5 Jun 2000 15:56:20 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> I would like to know something about the typing rules of identifiers that
+> are bound in pattern matching:
+
+The typing rule specifies that identifiers bound in a pattern get
+monomorphic types (or unifiable ``unknowns'', or type variables): it
+means that all the type constraints found in the program for this
+identifier accumulate on the type of the identifier.
+
+[...]
+> The problem arises in this line:
+> 
+>   | Num n as num -> num
+[...]
+
+> To correct the problem, we can write:
+> 
+>   | Num n -> Num n
+> 
+> But isn't this a bit strange that an identifier cannot be used in a context
+> where replacing it syntactically with its bound value would be perfectly
+> ok?
+
+Yes it is strange, but this is exactly what ML polymorphism specifies:
+polymorphism is introduced by the let-binding construct, and only
+occurrences of let-bound identifiers can be used with different
+types. Since your ``num'' above is not let-bound it is monomorphic and
+constraints are accumulating.
+
+In contrast, the Num constructor is considered let-bound (by the type
+definition it is defined in), hence Num is assigned a fresh instance
+of its type scheme, hence the more general typing of the function.
+
+I first encountered an instance of your problem in a very simple
+function, that roughly read as follows:
+
+let ensure_nil = function
+  | x :: l -> failwith "Not nil"
+  | l -> l;;
+val ensure_nil : 'a list -> 'a list = <fun>
+
+Unfortunately here, the result has been assigned the same type as the
+argument.  However, writing | [] -> [] instead of | l -> l lead us to
+the more general 'a list -> 'b list typing:
+
+let ensure_nil = function
+  | x :: l -> failwith "Not nil"
+  | [] -> [];;
+val ensure_nil : 'a list -> 'b list = <fun>
+
+As in your example, adding a ``as'' synonymous to the pattern argument
+once more connects the input and the output type of the function:
+
+let ensure_nil = function
+  | x :: l -> failwith "Not nil"
+  | [] as l -> l;;
+val ensure_nil : 'a list -> 'a list = <fun>
+
+> Or has experience shown that using more general types in such cases leads
+> to more programming errors?
+
+No problem in the exact situation you mentioned: num can be safely
+generalized because there is nothing bound to its type variable
+encapsulated into the value bound to num. More generally this should
+be done for type variables of synonymous identifiers that are ``free''
+in the type of the pattern that bind them: if the identifier id is
+bound in the pattern pat and id has type t, then any type variable 'a
+that appears in t can be generalized if it does not occur in the type
+of any identifier of the pattern pat (intuitively 'a is free in the
+sense that no constraints on identifiers appearing in pat can involve
+'a).
+
+For instance, in fun [] as l -> e, the type of l is 'a list, and it
+can be generalized to all 'a. 'a list during the type-checking of e.
+In contrast, in fun x :: l as mylist -> e,
+the type 'a list of identifier mylist cannot be generalized, since 'a
+is the type of x and also occurs in the type of l. 
+
+> One can, of course, always explicitely restrict the type of an identifier,
+> but in the upper example we want to have the opposite, i.e. have it more
+> general. One side effect of this problem is that we cannot efficiently
+> return the value "as is": we have to construct it again, which may come
+> with a not insignficant performance penalty...
+
+You're right, that's the main reason to try to solve this problem.
+
+> Are there any deeper insights behind this rationale? (The given code works
+> without problems if polymorphic variants are used instead).
+
+We can observe the same kind of behaviour with polymorphic variants:
+
+type 'a pliste = [`Nil | `Cons of 'a * 'a pliste];;
+
+Connection between input and output:
+
+let (ensure_nil : 'a pliste -> 'b pliste) = function
+  | `Cons (x, l) -> failwith "Not nil"
+  | l -> l;;
+val ensure_nil : 'a pliste -> 'a pliste = <fun>
+
+Deconnection with explicit copy:
+
+let (ensure_nil : 'a pliste -> 'b pliste) = function
+  | `Cons (x, l) -> failwith "Not nil"
+  | `Nil -> `Nil;;
+val ensure_nil : 'a bliste -> 'b bliste = <fun>
+
+However, we get a strange difference in typing since, as you
+mentioned, the explicit ``as clause'' does not set up a typing
+connection between input and output :
+
+let (ensure_nil : 'a pliste -> 'b pliste) = function
+  | `Cons (x, l) -> failwith "Not nil"
+  | `Nil as l -> l;;
+val ensure_nil : 'a pliste -> 'b pliste = <fun>
+
+Jacques may explain us if the above suggested generalization scheme is
+used for identifiers bound in as clauses of patterns (and if not,
+which scheme is used ?)...
+
+Conclusion: this strongly suggests to generalize the typing of
+synonymous identifiers in patterns, in order to obtain the same typing
+assignments for pattern matching on ``closed'' polymorphic variants
+and pattern matching on their (semantically equivalent) sum data types
+counterparts.
+
+Thank you for your interesting remark and question.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

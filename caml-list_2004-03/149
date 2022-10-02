@@ -1,0 +1,165 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA01305; Wed, 17 Mar 2004 08:25:56 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA01372 for <caml-list@pauillac.inria.fr>; Wed, 17 Mar 2004 08:25:52 +0100 (MET)
+Received: from mail-in-01.arcor-online.net (mail-in-01.arcor-online.net [151.189.21.41])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i2H7PpHd013647
+	for <caml-list@inria.fr>; Wed, 17 Mar 2004 08:25:52 +0100
+Received: from diebuntekuh.de (dialin-212-144-208-112.arcor-ip.net [212.144.208.112])
+	by mail-in-01.arcor-online.net (Postfix) with ESMTP id B6917A93698
+	for <caml-list@inria.fr>; Wed, 17 Mar 2004 08:25:49 +0100 (CET)
+Received: by diebuntekuh.de (Postfix, from userid 500)
+	id 2CAA5608F04; Wed, 17 Mar 2004 08:31:18 +0100 (CET)
+To: OCaml List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Better option to read a file
+References: <E2DFEE92-7790-11D8-938F-000393B21E00@ctima.uma.es>
+From: Christoph Bauer <c_bauer@informatik.uni-kl.de>
+Date: Wed, 17 Mar 2004 08:31:17 +0100
+In-Reply-To: <E2DFEE92-7790-11D8-938F-000393B21E00@ctima.uma.es> 
+ =?utf-8?q?=28Agust=C3=ADn?= Valverde's message of "Tue, 16 Mar 2004 22:28:37 +0100")
+Message-ID: <m34qso53qy.fsf@diebuntekuh.de>
+User-Agent: Gnus/5.1006 (Gnus v5.10.6) Emacs/21.3 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 bauer:01 bauer:01 agust:01 line':01 pietro:01 reuse:01 splitted:01 char:01 buffer:01 buffer:01 char:01 splitted:01 generic:01 agust:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 149
+
+Hi Agust=C3=ADn,
+
+I'm not quite sure, what you want.  `leer' reads a whole file (this
+whitout a upper limit on `long' a bad idea), `unir' doesn't work and
+`leer2' is `read the first line of file and don't close the file'.
+(Do you mean `let leer2 =3D input_line'?)
+
+Because of `leer2', I assume you have a parser operating on lines.  As
+Pietro I suggest the use of streams. A slightly more general approach
+could improve the reuse of your code.
+
+
+A file is a stream of chars but mostly you want to access whole lines
+or words. Therefore we write this three functions:
+
+
+let splitted_stream ~on_words char_stream =3D=20
+  let buf =3D Buffer.create 256 in
+  let this_string () =3D=20
+    let str =3D Buffer.contents buf in
+      Buffer.reset buf; str in
+  let rec accumulate =3D
+    parser=20
+	[< ''\n'; rest >] -> [< '(this_string ()); remove_cr rest >]
+      | [< '' ' | '\t' as c; rest >] ->=20
+	  if on_words then [< '(this_string ()); accumulate rest >]=20
+	  else (
+	    Buffer.add_char buf c;
+	    accumulate rest
+	  )
+      | [< 'c; rest >] ->
+	  Buffer.add_char buf c;
+	  accumulate rest
+      | [< >] -> [< >]
+  and remove_cr =3D=20
+    parser=20
+	[< ''\r'; rest >] -> accumulate rest
+      | [< rest >] -> accumulate rest
+  in accumulate char_stream
+
+
+let line_stream =3D splitted_stream ~on_words:false
+let word_stream =3D splitted_stream ~on_words:true
+
+
+Please note, that the input Stream could be obtained by Stream.of_channel,
+Stream.of_string or Stream.from. The next function should apply your parser.
+
+let rec stream_map f =3D
+  parser
+      [< 'a; rest >] -> [< '(f a); iter f rest >]
+    | [< >] -> [< >]
+
+
+The functions so far should be put in a generic library.
+
+Assummed your parser is a function
+
+parse_line: string -> 'a
+
+then you can get the desired 'a Stream with
+
+  let astream =3D stream_map parse_line (line_stream (Stream.of_channel (op=
+en_in fl)))
+
+Regards,
+Christoph Bauer
+
+
+
+
+> Hi
+>
+> In a program  I need to read the input data from a file and I have
+> written several options. I want to obtain the string of characters
+> from a text file and I don't know what is the better option. Among
+> others, I have written the following:
+>
+> First option:
+>
+> let leer_file fl =3D
+>       let form =3D ref "" in
+>       let arch =3D open_in fl in
+>       let long =3D in_channel_length arch in
+>       form :=3D String.create (long-1);
+>       really_input arch (!form) 0 (long-1);
+>       close_in arch;
+>       !form;;
+>
+> Second:
+>
+> let rec unir c ac =3D unir ac^(Char.escaped c);;
+>
+> let leer2 fl =3D
+>       let form =3D ref "" in
+>       let c =3D ref '-' in
+>       let arch =3D open_in fl in
+>       (try
+>         (while true do (c :=3D input_char arch); (if !c !=3D '\n' then
+> (form :=3D unir !c !form) else ()) done)
+>       with End_of_file -> close_in arch);
+>       !form;;
+>
+> I also have a parser to convert the string, could I to improve these
+> functions merging them with the parser in some way?
+>
+> Thanks for your help
+>
+> Agust=C3=ADn Valverde
+> Department of Applied Mathematics
+> University of Malaga, Spain
+>
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inr=
+ia.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr=
+/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>
+
+--=20
+beginfig(1)u=3D3cm;draw fullcircle scaled 2u;x0=3Dx1=3Dy1=3Dx2=3Dy3=3D0;-y0=
+=3Dy2=3Dx3=3D1u;
+filldraw z0..{left}z1{left}..z2{curl 1}..z3..z0..cycle;def t(expr p)=3Dfull=
+circle
+scaled .25u shifted(0,p*u);enddef;unfill t(.5);fill t(-.5);endfig;bye
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

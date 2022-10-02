@@ -1,0 +1,125 @@
+Return-Path: <farr@MIT.EDU>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.5 required=5.0 tests=SPF_SOFTFAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 72E16BBAF
+	for <caml-list@yquem.inria.fr>; Fri, 28 Aug 2009 22:33:07 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnUAAFLcl0oSBwdQkWdsb2JhbACbIAEBAQEJCwoHEwWua4cYiEqEGQWBVA
+X-IronPort-AV: E=Sophos;i="4.44,292,1249250400"; 
+   d="sig'?scan'208";a="31861855"
+Received: from biscayne-one-station.mit.edu ([18.7.7.80])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 28 Aug 2009 22:33:06 +0200
+Received: from outgoing.mit.edu (OUTGOING-AUTH.MIT.EDU [18.7.22.103])
+	by biscayne-one-station.mit.edu (8.13.6/8.9.2) with ESMTP id n7SKX37d012810
+	for <caml-list@inria.fr>; Fri, 28 Aug 2009 16:33:04 -0400 (EDT)
+Received: from [10.0.1.2] (c-24-13-85-138.hsd1.il.comcast.net [24.13.85.138])
+	(authenticated bits=0)
+        (User authenticated as farr@ATHENA.MIT.EDU)
+	by outgoing.mit.edu (8.13.6/8.12.4) with ESMTP id n7SKX21Q023790
+	(version=TLSv1/SSLv3 cipher=AES128-SHA bits=128 verify=NOT)
+	for <caml-list@inria.fr>; Fri, 28 Aug 2009 16:33:03 -0400 (EDT)
+Message-Id: <D3041D62-4F8D-4121-8CEF-5EE810D8FFA6@MIT.EDU>
+From: Will M Farr <farr@MIT.EDU>
+To: caml-list@inria.fr
+Content-Type: multipart/signed; protocol="application/pgp-signature"; micalg=pgp-sha1; boundary="Apple-Mail-2-453952378"
+Content-Transfer-Encoding: 7bit
+Mime-Version: 1.0 (Apple Message framework v936)
+Subject: Optimizing Float Ref's
+Date: Fri, 28 Aug 2009 15:32:55 -0500
+X-Pgp-Agent: GPGMail 1.2.0 (v56)
+X-Mailer: Apple Mail (2.936)
+X-Scanned-By: MIMEDefang 2.42
+X-Spam: no; 0.00; ref's:01 ocaml:01 dims:01 dims:01 ocamlopt:01 matrices:01 arrays:01 arrays:01 ref's:01 unboxed:01 compiler:01 bug:01 eliminates:98 assert:01 assert:01 
+X-Attachments: type="application/pgp-signature" name="PGP.sig" name="PGP.sig" 
+
+This is an OpenPGP/MIME signed message (RFC 2440 and 3156)
+--Apple-Mail-2-453952378
+Content-Type: text/plain; charset=US-ASCII; format=flowed; delsp=yes
+Content-Transfer-Encoding: 7bit
+
+Hello all,
+
+I'm running OCaml 3.11.1, and I noticed something strange in some  
+native code for matrix multiply today.  The code was
+
+let mmmul store m1 m2 =
+   let (ni,nk) = dims m1 and
+       (nk2,nj) = dims m2 and
+       (sni,snj) = dims store in
+   assert(nk=nk2);
+   assert(ni=sni);
+   assert(nj=snj);
+   for i = 0 to ni - 1 do
+     let row1 = m1.(i) and
+         srow = store.(i) in
+     for j = 0 to nj - 1 do
+       let sum = ref 0.0 in   (* Un-boxed float ref? *)
+       for k = 0 to nk - 1 do
+         let row2 = Array.unsafe_get m2 k in
+         let x = Array.unsafe_get row1 k and
+             y = Array.unsafe_get row2 j in
+         sum := !sum +. x*.y
+       done;
+       Array.unsafe_set srow j !sum
+     done
+   done;
+   store
+
+(I compiled with ocamlopt.)  It multiplies the matrices (represented  
+as arrays of arrays of floats) m1 and m2 together and puts the result  
+into the matrix store.  Profiling the code, I noticed a call to  
+caml_modify during the execution of this function!  Turns out that the  
+culprit was the float ref "sum".  Changing to the following code  
+(which eliminates the float ref, and uses the <- and .( ) operators  
+instead of unsafe_set and unsafe_get) eliminated that call, and sped  
+things up tremendously:
+
+let mmmul store m1 m2 =
+   let (ni,nk) = dims m1 and
+       (nk2,nj) = dims m2 in
+   for i = 0 to ni - 1 do
+     let row1 = m1.(i) and
+         srow = store.(i) in
+     for j = 0 to nj - 1 do
+       srow.(j) <- 0.0;
+       for k = 0 to nk - 1 do
+         let row2 = Array.unsafe_get m2 k in
+         let x = row1.(k) and
+             y = row2.(j) in
+         srow.(j) <- srow.(j) +. x*.y
+       done
+     done
+   done;
+   store
+
+But, I thought that float ref's were automatically unboxed by the  
+compiler when they didn't escape the local context.  Is this a  
+complier bug, is there a bad interaction with unsafe_get and  
+unsafe_set, or is there something else going on that I don't  
+understand?  Any enlightenment would be appreciated.
+
+Thanks!
+Will
+
+--Apple-Mail-2-453952378
+content-type: application/pgp-signature; x-mac-type=70674453;
+	name=PGP.sig
+content-description: This is a digitally signed message part
+content-disposition: inline; filename=PGP.sig
+content-transfer-encoding: 7bit
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG/MacGPG2 v2.0.12 (Darwin)
+
+iEYEARECAAYFAkqYPv0ACgkQ1IoZbWY+dGxQ/gCglb3oIkeEKyKygzawtk8hR/Vp
+V8MAoJ+AD4Gpfh0LBqtjMI6bHLfs9Mxp
+=piXb
+-----END PGP SIGNATURE-----
+
+--Apple-Mail-2-453952378--
+

@@ -1,0 +1,230 @@
+Return-Path: <ocaml@optimojoe.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 17BFFBC57
+	for <caml-list@yquem.inria.fr>; Mon, 24 May 2010 06:09:54 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AscAAPeY+UtCbwQZi2dsb2JhbACReQGMFhUBAQEKCwoHDwYevAsFhRM
+X-IronPort-AV: E=Sophos;i="4.53,289,1272837600"; 
+   d="scan'208";a="51715108"
+Received: from out1.smtp.messagingengine.com ([66.111.4.25])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 24 May 2010 06:09:53 +0200
+Received: from compute2.internal (compute2.internal [10.202.2.42])
+	by gateway1.messagingengine.com (Postfix) with ESMTP id EEE58F7952
+	for <caml-list@inria.fr>; Mon, 24 May 2010 00:09:51 -0400 (EDT)
+Received: from heartbeat1.messagingengine.com ([10.202.2.160])
+  by compute2.internal (MEProxy); Mon, 24 May 2010 00:09:51 -0400
+DKIM-Signature: v=1; a=rsa-sha1; c=relaxed/relaxed; d=messagingengine.com; h=date:from:to:subject:message-id:mime-version:content-type; s=smtpout; bh=ZCbNLQfkFAytaudKuw9FVM8ccWc=; b=GvyPKdgqhQTVsUSo0beOOnlOLA2S71nxW9kn0Fsx75E4rmo8duTGm+BOGJpKjybMEvk+REDeCdofztr0lrCVBaaEKjFmCSbXYTc6k+O+U/mIHkHmgRNxUSIwsuopawHDF7SVEBWBKVS9Y3TFOHoDEFEkmZByUm4DVYLkDTbb+QY=
+X-Sasl-enc: +ZCf3p7xjlp8J/5ftYYwB0tQ8VncEj1YqQABvXvXPbJq 1274674191
+Received: from [192.168.0.3] (unknown [207.251.51.55])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id 4807D4D7DDC
+	for <caml-list@inria.fr>; Mon, 24 May 2010 00:09:51 -0400 (EDT)
+Date: Mon, 24 May 2010 05:46:22 +0200 (CEST)
+From: Joseph Young <ocaml@optimojoe.com>
+X-X-Sender: josyoun@myhome
+To: caml-list@inria.fr
+Subject: Two Different Exception Behaviors in camlp4 on the toplevel
+Message-ID: <Pine.LNX.4.64.1005240532130.6622@myhome>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Spam: no; 0.00; ocaml:01 camlp:01 toplevel:01 camlp:01 toplevel:01 unify:01 ocaml:01 ill-typed:01 ill-typed:01 runtime:01 concretely:01 -rectypes:01 dynlink:01 cmo:01 val:01 
+
+Hi,
+ 	At the moment, I'm receiving two different exception behaviors in 
+camlp4 on the toplevel and I would like to unify them.  As some 
+background, I would like to implement a small DSL where I insert OCaml 
+code using quotations.  This causes some difficulty with type checking 
+since it may or may not be possible to type check an expression when it 
+contains a quotation.  For example, we can immediately determine 
+that expressions such as "1+true" are ill-typed whereas the expression 
+"1+$x$" may or may not be ill-typed.  It depends on the value of x.  Since 
+I would like to return an error to the user as soon as possible, I can 
+partially type check expressions at compile time and then check the rest 
+at run time.  Normally, camlp4 provides a nice exception handling 
+function:
+
+Loc.raise loc Some_exception
+
+which will underline the offending piece of code when executed at the 
+toplevel.  However, this function only seems to work when called during 
+macro expansion.  In the case of type checking above, this works function 
+works well when a type error can be determined at compile time, but does 
+not work well when a type error is discovered at runtime.
+
+ 	More concretely, I have the following behavior (code follows 
+below):
+
+---------------------------------------
+$ rlwrap ocaml -rectypes dynlink.cma camlp4o.cma calc.cmo
+         Objective Caml version 3.11.2
+
+         Camlp4 Parsing version 3.11.2
+
+# open Calc;;
+# open CamlSyntax;;
+# let x= <:calc< 1+2 >>;;
+val x : Calc.calc =
+   Nonterm (<abstr>, `Add, [Term (<abstr>, `Int 1); Term (<abstr>, `Int 
+2)])
+# let y= <:calc< true or 1 + 2 >>;;
+Error: While expanding quotation "calc" in a position of "expr":
+   Camlp4: Uncaught exception: Calc.Type_error
+
+
+# let z= <:calc< true or $"x"$ >>;;
+Exception: Loc.Exc_located (<abstr>, Calc.Type_error).
+---------------------------------------
+
+Although it doesn't show up in an ascii email, the definition of y 
+underlines the string "true or 1" as the exception is thrown.  The 
+definition of z does not hilight any text.
+
+ 	The code that generates this behavior is below:
+
+---------------------------------------
+$ cat calc.ml
+open Camlp4.PreCast;;
+module CamlSyntax=
+     Camlp4OCamlParser.Make(
+         Camlp4OCamlRevisedParser.Make(
+             Camlp4.PreCast.Syntax));;
+
+(* The AST for the small calculator *)
+type loc=CamlSyntax.Loc.t
+type nonterminal=[`Add | `Sub | `Or | `And ];;
+type terminal=[`Int of int | `Bool of bool | `Ocaml of (loc*string)];;
+type calc=
+| Nonterm of loc*nonterminal*(calc list)
+| Term of loc*terminal;;
+
+(* Grammar for a simple calculator *)
+module CalcGram = Camlp4.PreCast.MakeGram(Camlp4.PreCast.Lexer);;
+let (term:calc CalcGram.Entry.t)= CalcGram.Entry.mk "term";;
+let term_eoi = CalcGram.Entry.mk "Simple calculator quotation";;
+EXTEND CalcGram
+     GLOBAL: term term_eoi;
+     term:
+     [ "alg"
+         [ e1 = SELF; "+"; e2 = SELF -> Nonterm(_loc,`Add,[e1;e2])
+         | e1 = SELF; "-"; e2 = SELF -> Nonterm(_loc,`Sub,[e1;e2])]
+     | "bool"
+         [ e1 = SELF; "or"; e2 = SELF -> Nonterm(_loc,`Or,[e1;e2])
+         | e1 = SELF; "and"; e2 = SELF -> Nonterm(_loc,`And,[e1;e2])]
+     | "simple"
+         [ "$"; `STRING (e,_); "$" -> Term(_loc,`Ocaml (_loc,e))
+         | `INT (i, _)  -> Term(_loc,`Int i)
+         | "true" -> Term(_loc,`Bool true)
+         | "false" -> Term(_loc,`Bool false)
+         | "("; e = term; ")" -> e ]
+     ];
+     term_eoi:
+     [[ t = term; `EOI -> t ]];
+END;;
+
+(* Generates an expression with the location information *)
+let expr_of_loc _loc=
+     let (a, b, c, d, e, f, g, h) = CamlSyntax.Loc.to_tuple _loc in
+     <:expr< Loc.of_tuple ($`str:a$, $`int:b$, $`int:c$, $`int:d$,
+         $`int:e$, $`int:f$, $`int:g$, $`bool:h$) >>
+;;
+
+(* Generates an expression with the nonterminal information *)
+let expr_of_nonterm _loc e=
+     match e with
+     | `Add -> <:expr< `Add >>
+     | `Sub -> <:expr< `Sub >>
+     | `Or -> <:expr< `Or >>
+     | `And -> <:expr< `And >>
+;;
+
+(* Generates an expression with the terminal information *)
+let expr_of_term _loc e=
+     match e with
+     | `Int i -> <:expr< `Int($`int:i$) >>
+     | `Bool b -> <:expr< `Bool($`bool:b$) >>
+     | `Ocaml(l,e) -> CamlSyntax.Gram.parse_string CamlSyntax.expr_eoi l e
+;;
+
+(* Generates an expression list from a list of expressions *)
+let rec expr_of_list _loc es=
+     match es with
+     | e :: es -> <:expr< $e$ :: $expr_of_list _loc es$ >>
+     | [] -> <:expr< [] >>
+;;
+
+(* Strips out the location information *)
+let loc_of_ast e=
+     match e with
+     | Nonterm (loc,_,_) | Term (loc,_) -> loc
+;;
+
+(* Program types.  Need types to deal with quotations *)
+type wild=[`Wild];;
+type myint=[wild | `Int];;
+type mybool=[wild | `Bool];;
+type typ=[wild | myint | mybool];;
+exception Type_error;;
+
+(* Type check the AST *)
+let rec type_ast e : typ=
+     let same_type t es=
+         let ts=List.map type_ast es in
+         if List.for_all (fun x-> x=t or x=`Wild) ts then
+             t
+         else
+             let loc=loc_of_ast e in
+             CamlSyntax.Loc.raise loc Type_error
+     in
+     match e with
+     | Nonterm (_,`Add,es) | Nonterm (_,`Sub,es) -> same_type `Int es
+     | Nonterm (_,`Or,es) | Nonterm (_,`And,es) -> same_type `Bool es
+     | Term(_,`Int _) -> `Int
+     | Term(_,`Bool _) -> `Bool
+     | Term(_,`Ocaml _ ) -> `Wild
+;;
+
+
+(* Converts a calculator AST into an OCaml AST *)
+let to_expr base_loc prog=
+     let e=CalcGram.parse_string term_eoi base_loc prog in
+     let _= type_ast e in
+     let rec to_expr e=
+         let _loc=loc_of_ast e in
+         let expr_loc=expr_of_loc _loc in
+         match e with
+         | Nonterm (_,name,nodes) ->
+             let name= expr_of_nonterm _loc name in
+             let nodes= expr_of_list _loc (List.map to_expr nodes) in
+             <:expr< Nonterm ($expr_loc$,$name$,$nodes$) >>
+         | Term(_,`Ocaml e) ->
+             let e=expr_of_term _loc (`Ocaml e) in
+             <:expr< $e$ >>
+         | Term (_,data) ->
+             let data= expr_of_term _loc data in
+             <:expr< Term ($expr_loc$,$data$) >>
+     in
+     let e= to_expr e in
+     let _loc=base_loc in
+     <:expr< let _ = type_ast $e$ in $e$ >>
+;;
+
+let expand_calc_quot loc lopt e= to_expr loc e;;
+
+Syntax.Quotation.add "calc" Syntax.Quotation.DynAst.expr_tag 
+expand_calc_quot;;
+
+---------------------------------------
+
+$  cat Makefile
+all:
+         ocamlc -c -I +camlp4 -I +camlp4/Camlp4Parsers -pp camlp4of -o 
+calc.cmo calc.ml
+
+---------------------------------------
+
+ 	If possible, I would like to have the offending, ill-typed code 
+hilighted in both cases.  Thanks for the help.
+
+Joe
+

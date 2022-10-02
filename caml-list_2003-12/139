@@ -1,0 +1,95 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA09763; Fri, 12 Dec 2003 20:04:32 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA09750 for <caml-list@pauillac.inria.fr>; Fri, 12 Dec 2003 20:04:30 +0100 (MET)
+Received: from smtp3.pp.htv.fi (smtp3.pp.htv.fi [213.243.153.173])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBCJ4T119902
+	for <caml-list@inria.fr>; Fri, 12 Dec 2003 20:04:29 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp3.pp.htv.fi (Postfix) with ESMTP id 5C56527BD0E
+	for <caml-list@inria.fr>; Fri, 12 Dec 2003 21:04:29 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBCJ4ST03570
+	for <caml-list@inria.fr>; Fri, 12 Dec 2003 21:04:28 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AUsaQ-0008AP-00
+	for <caml-list@inria.fr>; Fri, 12 Dec 2003 21:04:26 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] Freeing dynamically loaded code
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Fri, 12 Dec 2003 21:04:24 +0200
+Message-ID: <87d6at97t3.fsf@naked.iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; dynamically:01 dynlink:01 bytecomp:01 byterun:01 dynlink:01 loadfile:01 buffer:01 alloc:01 allocates:01 andrieu:01 statically:01 pointers:01 statically:01 annotations:01 pointers:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+So, I went down the dirty depths of Dynlink and friends, and bytecomp
+and byterun, and all that - and I think I have a rather good image of
+the problem.
+
+I would wish for Dynlinkable code to be garbage collected.
+==========================================================
+
+When a file is loaded with Dynlink.loadfile, most of what's read and
+executed and handled is stored in the normal OCaml heap - and hence
+garbage collected properly when there are no references anymore.
+
+But, the actual executable code isn't. Basically what is done to that
+is that the buffer is allocated by Meta.static_alloc, the code is read
+there, and then Meta.reify_bytecode is invoked on it - which merely
+wraps the pointer in a Closure_tag block it allocates.
+
+So, this means that the code is allocated outside Ocaml heap - and as
+such ignored by the garbage collector. Huge thanks to Olivier Andrieu
+for helping me out in IRC sorting out this stuff.
+
+What could be done to fix the situation then?
+=============================================
+
+I can think of two solutions, neither sound too easy right now though.
+
+The first choice would be to add the statically alloced block to a
+"special" list of code blocks - and when the garbage collector
+encounters references to blocks outside Ocaml heap, it would handle
+these blocks specially and manually free them when there are no
+references - a bit like custom blocks, but having it all implicit,
+since there's no block header or anything.
+
+The problem is that closure code pointers into the statically
+allocated block most likely will not point to the beginning of it -
+but instead somewhere inside the allocated block. Which would mean
+that the garbage collector would have to check if the pointer is
+*inside* a certain range, or somehow add all possible pointer places
+from inside the block with annotations of the start of the block to
+the list. And both sound rather horrible in many ways.
+
+The second choice would be to allocate all of the code actually inside
+the Ocaml heap somehow, and let the garbage collector handle it like
+everything else. But right now I don't have too good of an idea how
+this should be done.
+
+And it also has the same problem - what to do with pointers that fall
+inside the code block, and not at the start of it where the headers
+are. I see there's some code for Infix tags, which look like they
+would be tags inside blocks that tell where the actual block header
+lies - but this was starting to go quite a bit over my comprehension.
+
+Ofcourse there's a bunch of "yet another choices" - like making a
+special area for loaded code, and special-case that once again - and
+so on.
+
+===
+
+So, I'd very much like to hear any comments on the matter - I am still
+very new to Ocaml, so I'm way over my head here.
+
+- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

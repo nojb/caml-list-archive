@@ -1,0 +1,115 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA25829; Sat, 16 Oct 2004 22:16:02 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA25852 for <caml-list@pauillac.inria.fr>; Sat, 16 Oct 2004 22:16:01 +0200 (MET DST)
+Received: from mproxy.gmail.com (rproxy.gmail.com [64.233.170.205])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9GKG0X8009519
+	for <caml-list@inria.fr>; Sat, 16 Oct 2004 22:16:01 +0200
+Received: by mproxy.gmail.com with SMTP id 79so70484rnk
+        for <caml-list@inria.fr>; Sat, 16 Oct 2004 13:16:00 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:references;
+        b=W1G5V6vIllS/Ro1EgTa4JCBqvXs+ODj8rnog1AkLG/GOwPmo97GDT3yrRKHe4f7HN3zAQyRtkIEhBNpJPDMHvZ+jFIQHD5oNBSBpKJK5BShfnkbKtur+zct0FseYETV4mjkna0P3ZfHZGq6SdhOkeLdyakT6eyzs2/zIldhTl3g
+Received: by 10.38.78.34 with SMTP id a34mr671360rnb;
+        Sat, 16 Oct 2004 13:16:00 -0700 (PDT)
+Received: by 10.38.14.54 with HTTP; Sat, 16 Oct 2004 13:16:00 -0700 (PDT)
+Message-ID: <d849ad2a0410161316194e9d74@mail.gmail.com>
+Date: Sat, 16 Oct 2004 16:16:00 -0400
+From: John Prevost <j.prevost@gmail.com>
+Reply-To: John Prevost <j.prevost@gmail.com>
+To: Yamagata Yoriyuki <yoriyuki@mbg.ocn.ne.jp>
+Subject: Re: [Caml-list] Flush behavior of baseic I/O class type
+Cc: caml-list@inria.fr
+In-Reply-To: <20041017.025148.11606687.yoriyuki@mbg.ocn.ne.jp>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <20041017.005256.41640390.yoriyuki@mbg.ocn.ne.jp>
+	 <87brf2tyrz.fsf@linux-france.org>
+	 <20041017.025148.11606687.yoriyuki@mbg.ocn.ne.jp>
+X-Miltered: at nez-perce with ID 41718180.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 non-blocking:01 multibyte:01 bug:01 multi-byte:01 multi-byte:01 buffer:01 non-blocking:01 api:01 nio:99 fflush:01 errno:01 api:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 4168
+Lines: 76
+
+> It may be ok for non-blocking I/O, but it will cause "busy-waiting" ,
+> so perhaps a user does not like it.  Moreover, for example, if the
+> channel is actually a filter, and it needs more inputs to determine
+> the next output, then it will stuck forever.  (See the case of the
+> multibyte charcter code converter in the previous mail)
+> 
+> The easiest way (from the implementer's point of the view) would be
+> 1), or 1') do the best effort to output, but nothing is guaranteed.
+> However I'm afraid that it will cause a subtle I/O bug.
+
+If there is an explicit "flush" call, then the only reasonable thing
+to do is to block until everything that may be written has been
+written.  In fact, the flush call on a filter should write everything,
+and then tell the next level down to also flush.
+
+For the MBCS implementation that you describe, you're right that
+things are slighlty more complicated.  In that case, the MBCS
+implementation could choose to *either* "break" the incomplete
+multi-byte character somehow (in a similar way to how it would have to
+somehow deal with an incomplete multi-byte character when the file is
+closed), or it might choose to flush everything up to that incomplete
+multi-byte character, but keep the incomplete character in the buffer.
+ My choice would probably be to "break" it.  Either way, the
+implementation should describe what it does.
+
+Finally, you mention difficulties with blocking vs. non-blocking I/O
+here.  You are correct that there is a problem with flush in this
+case--and the problem (to me) seems to be in the API design for these
+I/O classes.  If you look at the design for Java I/O, you'll notice
+that the java.io output classes contain flush methods but do not
+support non-blocking I/O, and the java.nio classes support
+non-blocking I/O but do not support flush methods.  In C, the fflush
+call "may also fail and set errno for any of the errors specified for
+the routine write(2)."  And write may return EAGAIN in order to
+indicate that the write would block.  And finally, it's worth noting
+that the "write" family of calls make a lot more sense in a
+non-blocking situation than the "fwrite" family of calls.
+
+So I would suggest that the solution for non-block I/O here is that
+the API should be changed.  One choice is that either flush must be
+able to return a result or it must be able to raise an exception that
+indicates that not all of the output has yet been written (and it's
+important that callers don't see the "broken MBCS character" above as
+something they can re-try).
+
+The other choice is that there should be a slightly different set of
+operations on blocking and non-blocking streams.  In that case:
+
+Non-blocking output operations should always be attempted immediately,
+and return a result indicating that there is a problem if they cannot
+write everything.  Non-blocking I/O should therefore not have a flush
+operation. (If I am writing an application that uses non-blocking I/O,
+this is the API I want: I am doing my own buffering, and need to know
+exactly what has been written and what still needs to be written.)
+
+Blocking output should never return until every character has either
+been written completely, or has been placed in an intermediate buffer.
+ And the flush operation should block until all output has been
+written (and the MBCS implementor must make the choice I described
+above.)  (If I am writing an application that uses blocking I/O, this
+is again the API I want: I do not want to worry about buffering, and
+either don't care about blocking or am handling it with multiple
+threads.  When I want to make sure that everything has been written, I
+am happy to call flush.)
+
+Finally, one might argue that if an *output* channel of multi-byte
+characters has received a partial character, then a type error has
+occurred.  I understand, however, that there may be issues of
+expediency that prevent you from making each character atomic.
+
+John.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

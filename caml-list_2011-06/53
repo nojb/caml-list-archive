@@ -1,0 +1,100 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p5AKwSR1015570
+	for <caml-list@sympa-roc.inria.fr>; Fri, 10 Jun 2011 22:58:28 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhICAD6E8k3RVaE2kGdsb2JhbAA8AQMShEmhfAgUAQEBAQkJDQcUBCGoF4t7gn+EQIkdAQEDBoElg26BCgSRK4taPIExgiw
+X-IronPort-AV: E=Sophos;i="4.65,348,1304287200"; 
+   d="scan'208";a="110933459"
+Received: from mail-fx0-f54.google.com ([209.85.161.54])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 10 Jun 2011 22:58:22 +0200
+Received: by fxm11 with SMTP id 11so3807080fxm.27
+        for <caml-list@inria.fr>; Fri, 10 Jun 2011 13:58:22 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:sender:in-reply-to:references:date
+         :x-google-sender-auth:message-id:subject:from:to:content-type;
+        bh=HSRsoJdsy/H/wXeKbAw/XlxjW4WE8CjDL8VqI/FshsQ=;
+        b=feQq836spzpUl+1yLPZDOaUl+3Gzk42DVou1svr9pKUxDelpwOhnE6+iRWgKf/lJfb
+         bPykDI8WZ64faueSicdd/zM6dR4+YCn4Q9ycI4Xbz84PzratzeilGo5+5L1BY+BfRE31
+         5mEWVsTCsFNzACx69M85IDDd0i473KKmzZnVw=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:sender:in-reply-to:references:date
+         :x-google-sender-auth:message-id:subject:from:to:content-type;
+        b=TgppAF0gJroB9zHRFTtoubULi9xUlTM5Pi0ll6M5c8ISstU+wKmhD5SdlvAxUyJCcA
+         Un8HR82fcnZenUDvikHbSdqn/rprZzVDXRC8ziRrIwEBgD1mgAGP2+yuxxJP3gKp3KSK
+         44ldDb8KkMHUJrbJdChY8N5KwNEIiCwwOdbVE=
+MIME-Version: 1.0
+Received: by 10.223.14.137 with SMTP id g9mr2487834faa.8.1307739502746; Fri,
+ 10 Jun 2011 13:58:22 -0700 (PDT)
+Sender: till.varoquaux@gmail.com
+Received: by 10.223.72.13 with HTTP; Fri, 10 Jun 2011 13:58:22 -0700 (PDT)
+In-Reply-To: <BANLkTi=nyaRvpoy-vJJDuKy4n-Ka--M9Xg@mail.gmail.com>
+References: <BANLkTi=nyaRvpoy-vJJDuKy4n-Ka--M9Xg@mail.gmail.com>
+Date: Fri, 10 Jun 2011 16:58:22 -0400
+X-Google-Sender-Auth: uJJibzpuBhrgBd3Pngdlw3jtppo
+Message-ID: <BANLkTi=ZDwDuR7h0mMpiZC6ihON0DgLxuw@mail.gmail.com>
+From: Till Varoquaux <till@pps.jussieu.fr>
+To: Caml-list List <caml-list@inria.fr>
+Content-Type: text/plain; charset=UTF-8
+X-Validation-by: till@pps.jussieu.fr
+Subject: [Caml-list] Re: Using a custom ocamldoc html with ocamlbuild
+
+On Fri, Jun 10, 2011 at 12:00 PM, Till Varoquaux <till@pps.jussieu.fr> wrote:
+> Hello everyone.
+>
+> I am currently trying to cajole ocamlbuild into using a custom
+> generator. Adding the extra command line arguments to load the
+> generator isn't hard:
+>
+> flag ["doc";"ocaml"] & S[A"-i";A "+custom";A "my_gen.cmo"]
+>
+> The tricky part is removing the -html flag that is passed to ocamldoc.
+> As far as I can tell there's no easy to do so (Flags.remove does not
+> actually allow you to do that). Maybe there's a way I could remove the
+> "extension:html" tag and therefore avoid triggering the rule that adds
+> -html?
+>
+> All best,
+> Till
+>
+
+As suggested by Christophe Troestler the solution seemed indeed to
+write my own rule. The hack is to dynamically remove the
+"extension:html" tag from the list...
+
+    open Ocamlbuild_pack
+
+    let ocdoc_plus =
+       let base = My_unix.run_and_read "ocamlfind query ocamldoc_htmlplus" in
+       (* TODO: check that we are indeed stripping the trailling nl. *)
+       String.sub base 0 (String.length base -1)
+
+    (* calls out to Ocaml_tools.ocamldoc_l_dir but filters out the
+"extension:html"
+       flag which causes  -html to be added to the ocamldoc command line.*)
+    let my_ocamldoc tags deps docout docdir =
+      let tags = tags -- "extension:html" in
+      Ocaml_tools.ocamldoc_l_dir tags deps docout docdir
+
+    (* copy of the normal ocamldoc rule that uses our custom generator. *)
+    let () = Rule.rule
+     "ocamldoc: document ocaml project odocl & *odoc -> docdir (html+)"
+     ~insert:`top
+     ~prod:"%.docdir/index.html"
+     ~stamp:"%.docdir/html.stamp"
+     ~dep:"%.odocl"
+     (Ocaml_tools.document_ocaml_project
+         ~ocamldoc:my_ocamldoc
+         "%.odocl" "%.docdir/index.html" "%.docdir");
+
+     dep  ["doc";"ocaml";"intro"] ["lib/intro.txt"];
+     flag ["doc";"ocaml"] & S[A"-i";A
+ocdoc_plus;A"-g";A"ocamldoc_htmlplus.cma"];
+     flag ["doc";"ocaml";"intro"] & S[A"-intro";A"lib/intro.txt"]
+
+All in all this isn't actually as bad as I thought it might be. If
+anyone can think of any cleaner way to proceed I am all ears...
+
+Thanks,
+Till

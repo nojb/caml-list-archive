@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA27384; Sun, 15 Dec 2002 22:44:14 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA27459 for caml-list@pauillac.inria.fr; Sun, 15 Dec 2002 22:44:14 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA21674 for <caml-list@pauillac.inria.fr>; Sun, 15 Dec 2002 17:08:01 +0100 (MET)
+Received: from postfix3-2.free.fr (postfix3-2.free.fr [213.228.0.169])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id gBFG80923790
+	for <caml-list@inria.fr>; Sun, 15 Dec 2002 17:08:00 +0100 (MET)
+Received: from univ-savoie.fr (grenoble-1-a7-62-147-1-253.dial.proxad.net [62.147.1.253])
+	by postfix3-2.free.fr (Postfix) with ESMTP id D9A2417EEF
+	for <caml-list@inria.fr>; Sun, 15 Dec 2002 17:07:54 +0100 (CET)
+Message-ID: <3DFCB6B3.70608@univ-savoie.fr>
+Date: Sun, 15 Dec 2002 17:06:59 +0000
+From: Christophe Raffalli <Christophe.Raffalli@univ-savoie.fr>
+Organization: =?ISO-8859-1?Q?Universit=E9_de_Savoie?=
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.1) Gecko/20020826
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+Cc: caml-list@inria.fr
+Subject: [Caml-list] Continuations: an implementation
+References: <20021210184936.GA9279@mrtall.compsoc.man.ac.uk> <87bs3rlr7q.fsf@ketanu.dyndns.org>
+X-Enigmail-Version: 0.65.2.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: multipart/signed; micalg=pgp-sha1;
+ protocol="application/pgp-signature";
+ boundary="------------enigE6A51AC5F9B65F9671B176A4"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This is an OpenPGP/MIME signed message (RFC 2440 and 3156)
+--------------enigE6A51AC5F9B65F9671B176A4
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+
+Here is an implementation of callcc for OCaml using fork.
+
+The only problems are:
+- I did not test it (but it should work)
+- The limited number of fork calls
+
+Note: the implementation of fork on Linux, makes a minimum of page copying, so
+it should be reasonably fast
+
+-- callcc.mli --
+(* callcc fn: standard callcc, uses exit code 3 for internal use. *)
+
+val callcc : (('a -> 'b) -> 'a) -> 'a
+----------------
+
+-- callcc.ml ---
+open Unix
+open Sys
+
+let all_signals = [
+   sigabrt;   (* Abnormal termination *)
+   sigalrm;   (* Timeout *)
+   sigfpe;    (* Arithmetic exception *)
+   sighup;    (* Hangup on controlling terminal *)
+   sigill;    (* In id hardware instruction *)
+   sigint;    (* Interactive interrupt (ctrl-C) *)
+   sigkill;   (* Termination (cannot be ignored) *)
+   sigpipe;   (* Broken pipe *)
+   sigquit;   (* Interactive termination *)
+   sigsegv;   (* In id memory reference *)
+   sigterm;   (* Termination *)
+   sigusr1;   (* Application-defined signal 1 *)
+   sigusr2;   (* Application-defined signal 2 *)
+(*  sigchld;       Child process terminated, do not ignore that one !*)
+   sigcont;   (* Continue *)
+   sigstop;   (* Stop *)
+   sigtstp;   (* Interactive stop *)
+   sigttin;   (* Terminal read from background process *)
+   sigttou;   (* Terminal write from background process *)
+   sigvtalrm; (* Timeout in virtual time *)
+   sigprof   (* Profiling interrupt *)
+]
+
+let ignore_all_signals () =
+   let previous = List.map (fun s -> try signal s Signal_ignore with Sys_error 
+_ -> Signal_ignore) all_signals in
+   fun () ->
+     List.iter2 (fun s b -> try set_signal s b with Sys_error _ -> ()) 
+all_signals previous
+
+
+let callcc (fn : ('a -> 'b) -> 'a) =
+   let filename = Filename.temp_file "callcc" "val" in
+   let gn (x : 'a) =
+     let ch = open_out filename in
+     Marshal.to_channel ch x [Marshal.Closures];
+     close_out ch;
+     exit 3
+   in
+   let restore_signals = ignore_all_signals () in
+   let pid = fork () in
+   if pid = 0 then begin
+     restore_signals ();
+     fn gn
+   end else
+     let rec kn pid =
+       match waitpid [] pid with
+	_, WEXITED 3 ->
+	  let ch = open_in filename in
+	  let r = Marshal.from_channel ch in
+	  close_in ch;
+	  remove filename;
+	  let pid = fork () in
+	  if pid = 0 then (restore_signals (); r) else kn pid
+       | _, WEXITED n -> exit n
+       | _, _ -> exit 1
+     in kn pid
+----------------
+
+
+
+
+-- 
+Christophe Raffalli
+Université de Savoie
+Batiment Le Chablais, bureau 21
+73376 Le Bourget-du-Lac Cedex
+
+tél: (33) 4 79 75 81 03
+fax: (33) 4 79 75 87 42
+mail: Christophe.Raffalli@univ-savoie.fr
+www: http://www.lama.univ-savoie.fr/~RAFFALLI
+---------------------------------------------
+IMPORTANT: this mail is signed using PGP/MIME
+At least Enigmail/Mozilla, mutt or evolution
+can check this signature
+---------------------------------------------
+
+--------------enigE6A51AC5F9B65F9671B176A4
+Content-Type: application/pgp-signature
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.0.7 (GNU/Linux)
+Comment: Using GnuPG with Mozilla - http://enigmail.mozdev.org
+
+iD8DBQE9/La4SQDyWB/+xBwRAkMbAKC2X5FhlmSSrvgARj5fKVOmEdRtuQCgzvWk
+/1ODugWFy4m0VjdMci9fNzg=
+=sMsJ
+-----END PGP SIGNATURE-----
+
+--------------enigE6A51AC5F9B65F9671B176A4--
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

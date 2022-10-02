@@ -1,0 +1,166 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA24419; Tue, 27 Nov 2001 18:03:56 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA24415 for <caml-list@pauillac.inria.fr>; Tue, 27 Nov 2001 18:03:55 +0100 (MET)
+Received: from web14609.mail.yahoo.com (web14609.mail.yahoo.com [216.136.224.241])
+	by concorde.inria.fr (8.11.1/8.11.1) with SMTP id fARH3rf07814
+	for <caml-list@inria.fr>; Tue, 27 Nov 2001 18:03:54 +0100 (MET)
+Message-ID: <20011127170352.63710.qmail@web14609.mail.yahoo.com>
+Received: from [151.203.16.231] by web14609.mail.yahoo.com via HTTP; Tue, 27 Nov 2001 09:03:52 PST
+Date: Tue, 27 Nov 2001 09:03:52 -0800 (PST)
+From: Neil Inala <inalan@yahoo.com>
+Subject: [Caml-list] bytegen.comp_expr error when doing object copying
+To: caml-list@inria.fr
+In-Reply-To: <20011127102130.A16765@pauillac.inria.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Perhaps this should go to caml-bugs only, but I thought discussions
+on the list might disambiguate some assumptions I'm making.  Also
+I'm not sure it's a bug.  In the code below (section 1), everything
+seems to work fine.  The code compiles with no problems.  In the
+almost-identical code section 2, the compiler emits the following:
+
+v/64
+>> Fatal error: Bytegen.comp_expr: var v_64
+Uncaught exception: Misc.Fatal_error
+
+Now, I know why this happens; in code section 2, the val v is
+declared only after the definition of make_altered_self.  So when
+the compiler gets to the object copying expression {< v = 5 >},
+it has no variable v available to it.  It seems to me, however,
+that the compiler should either not give an error or emit a
+different error.
+
+Not giving an error would fit with my intuition that, in defining
+the code for the object, I should be able to reference variables
+defined anywhere in the same scope.  (note: I haven't experimented
+here with modules or signatures, but I have the feeling that
+if I were to declare signatures first the code in section 2
+would compile fine).
+
+As for giving a different error, some experimentation indicates
+what might be a better way of reporting this.  If we replace the
+{< v = 5 >} with {< v2 = 5 >}, for example, the compiler says
+"Unbound instance variable v2".  If we replace the {< v = 5 >}
+with {< v = 5.0 >}, the error is "This expression has type float
+but is here used with type int".  These are both more informative,
+and neither is of the same class of error as
+"Fatal error: Bytegen.comp_expr".  This is because the compiler
+does type checking before it does byte code generation, and does
+so based on the entire section of code that it slurps in, as we
+see in code section 3, excerpted from
+ocaml-src-3.02/driver/compile.ml.  Yet byte generation can only
+generate code based on what it has already seen added to its
+available environment.  This is made clear when examining the
+lambda and rawlambda dumps from the compiler.
+
+It seems like the compiler type checks the source in section 2
+just fine, so thinks it's ok to proceed to code generation.  Then,
+when the variable isn't available, the compiler thinks something
+has gone badly wrong and so emits a rather uninformative Fatal_error.
+
+So lacking requisite knowledge of the object/type theory involved,
+I must ask you all whether it makes sense to treat class definition
+in the same way recursive definitions are treated (or maybe like
+prototypes/forward declarations, ugh), and read in all defined
+variables before code is emitted; or simply to modify the
+code in section 4 (from ocaml-src/bytecomp/bytegen.ml) to say
+something along the lines of "variable v not found" rather than
+just Fatal_error.  The problem with the latter solution, while
+it is more informative for the programmer, is that it seems like
+the wrong kind of error (a fatal error rather than a typing or
+'unbound' error).  Maybe I'm being too nitpicky?  Have I made
+any wrong assumptions here?
+
+Thanks for any feedback!                          -- Neil Inala
+
+
+==== begin code section 1 =========
+class virtual foo =
+  object (_: 'a)
+    method virtual make_altered_self : unit -> 'a
+  end
+
+class bar =
+  object (self)
+    inherit foo
+    val v = 3
+    method make_altered_self () = {< v = 5 >}
+  end
+==== end code =====================
+
+==== begin code section 2 =========
+class virtual foo =
+  object (_: 'a)
+    method virtual make_altered_self : unit -> 'a
+  end
+
+class bar =
+  object (self)
+    inherit foo
+    method make_altered_self () = {< v = 5 >}
+    val v = 3
+  end
+
+==== end code =====================
+
+==== begin code section 3 =========
+  try
+    parse_file inputfile Parse.implementation ast_impl_magic_number
+    ++ print_if ppf Clflags.dump_parsetree Printast.implementation
+    ++ Typemod.type_implementation sourcefile prefixname modulename
+env
+    ++ Translmod.transl_implementation modulename
+    ++ print_if ppf Clflags.dump_rawlambda Printlambda.lambda
+    ++ Simplif.simplify_lambda
+    ++ print_if ppf Clflags.dump_lambda Printlambda.lambda
+    ++ Bytegen.compile_implementation modulename
+    ++ print_if ppf Clflags.dump_instr Printinstr.instrlist
+    ++ Emitcode.to_file oc modulename;
+    Warnings.check_fatal ();
+    remove_preprocessed inputfile;
+    close_out oc;
+  with x ->
+    close_out oc;
+    remove_file objfile;
+    raise x
+
+==== end code =====================
+
+==== begin code section 4 =========
+  match exp with
+    Lvar id ->
+      begin try
+        let pos = Ident.find_same id env.ce_stack in
+        Kacc(sz - pos) :: cont
+      with Not_found ->
+      try
+        let pos = Ident.find_same id env.ce_heap in
+        Kenvacc(pos) :: cont
+      with Not_found ->
+      try
+        let ofs = Ident.find_same id env.ce_rec in
+        Koffsetclosure(ofs) :: cont
+      with Not_found ->
+        Format.eprintf "%a@." Ident.print id;
+        fatal_error ("Bytegen.comp_expr: var " ^ Ident.unique_name
+id)
+      end
+==== end code =====================
+
+
+
+
+
+
+__________________________________________________
+Do You Yahoo!?
+Yahoo! GeoCities - quick and easy web site hosting, just $8.95/month.
+http://geocities.yahoo.com/ps/info1
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

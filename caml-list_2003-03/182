@@ -1,0 +1,179 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id GAA22730; Fri, 14 Mar 2003 06:49:51 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA21823 for <caml-list@pauillac.inria.fr>; Fri, 14 Mar 2003 06:49:49 +0100 (MET)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from giynz (vp191026.reshsg.uci.edu [128.195.191.26])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h2E5nmf07039
+	for <caml-list@inria.fr>; Fri, 14 Mar 2003 06:49:48 +0100 (MET)
+Received: from albro by giynz with local (Exim 3.36 #1 (Debian))
+	id 18ti43-0001MM-00
+	for <caml-list@inria.fr>; Thu, 13 Mar 2003 21:49:07 -0800
+Subject: Re: [Caml-list] OCaml popularity
+From: "Daniel M. Albro" <albro@humnet.ucla.edu>
+To: caml-list@inria.fr
+In-Reply-To: <15985.1204.814698.939943@h00045a4799d6.ne.client2.attbi.com>
+References: <1047539347.1603.32.camel@giynz> <3E70F854.7020705@1969.ws>
+	 <1047591735.1866.5.camel@giynz>
+	 <15985.1204.814698.939943@h00045a4799d6.ne.client2.attbi.com>
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Message-Id: <1047620947.1866.21.camel@giynz>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 
+Date: 13 Mar 2003 21:49:07 -0800
+X-Spam: no; 0.00; ucla:99 caml-list:01 laughing:01 exiting:01 0.120:99 incr:01 passing:01 struct:01 0.350:99 neel:01 krishnaswami:01 printf:01 ints:01 ocaml:01 rec:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+	I imagine everyone was laughing at me when they saw the timing
+tests I did -- they weren't doing the same thing!  D'oh.  Here they are
+again with comparable code (the conclusion is basically the same,
+though -- use tail recursive functions if you want speed in OCaml,
+at least if you're going to be exiting the loop early):
+
+Break simulated with exceptions:
+----------------------------------------------
+exception Break
+
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+    for i = 1 to 1_000_000_000 do
+      try
+        for j = 0 to 9 do
+          if ary.(j) = 5 then
+            raise Break
+        done
+      with Break -> ()
+    done
+
+real    0m35.123s
+user    0m34.600s
+sys     0m0.120s
+-----------------------------------------------
+
+Break by causing the while test to fail
+-----------------------------------------------
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+  let j = ref 0 in
+    for i = 1 to 1_000_000_000 do
+      j := 0;
+      while !j < 10 do
+        if ary.(!j) = 5 then
+          j := 10
+        else
+          incr j
+      done
+    done
+
+real    0m40.135s
+user    0m39.600s
+sys     0m0.200s
+------------------------------------------------
+
+Break simulated by tail recursive functions
+------------------------------------------------
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+  let rec loop j =
+    if j = 10 then 
+      ()
+    else if ary.(j) = 5 then
+      ()
+    else
+      loop (j + 1)
+  in
+    for i = 1 to 1_000_000_000 do
+      loop 0
+    done
+
+real    0m27.075s
+user    0m26.940s
+sys     0m0.120s
+------------------------------------------------
+
+Break simulated by continuation passing (I think that's
+what this is -- it looks like a call/cc to me, anyway)
+------------------------------------------------
+let escape body =
+  let module Fail = struct exception T end in
+  let datum = ref None in
+  let throw v =
+    begin
+      datum := Some v;
+      raise Fail.T
+    end
+  in
+    try
+      body throw
+    with
+        Fail.T -> (match !datum with Some v -> v | None -> assert false)
+
+
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+    for i = 1 to 1_000_000_000 do
+      escape (fun exit ->
+                for j = 0 to 9 do
+                  if ary.(j) = 5 then exit()
+                done)
+    done
+
+real    1m50.006s
+user    1m49.470s
+sys     0m0.350s
+------------------------------------------------
+
+
+On Thu, 2003-03-13 at 14:22, Neel Krishnaswami wrote:
+> Daniel M. Albro writes:
+> > 
+> > Hmm...  Apparently I'm a liar.  OK, I take it back.  Doing your
+> > version 1 billion times takes 25 seconds on my machine, and my
+> > version takes 29 seconds.  I still think a break statement would
+> > look nicer.
+> 
+> Use the power of higher order functions!
+> 
+> let escape body =
+>   let module Fail = struct exception T end in
+>   let datum = ref None in
+>   let throw v =
+>     begin
+>       datum := Some v;
+>       raise Fail.T
+>     end
+>   in
+>   try
+>     body throw
+>   with
+>     Fail.T -> (match !datum with Some v -> v | None -> assert false)
+> 
+> Now you can bail out of any computations early, by using an escape:
+> 
+> escape (fun exit ->
+>   for i = 1 to 100 do
+>     Printf.printf ".";
+>     if i = 25 then exit();
+>   done)
+> 
+> What's nice about this is that it gives you a multi-level break, and
+> that you can return values from it, too. Suppose you want to multiply
+> the numbers in a list; you can use an escape to stop computing if we
+> ever see a 0 in the list.
+> 
+> let multiply_ints lst =
+>   escape (fun exit -> 
+>     List.fold_left
+>       (fun acc n -> if n = 0 then exit 0 else n * acc)
+>       1 
+>       lst)
+-- 
+Daniel M. Albro <albro@humnet.ucla.edu>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

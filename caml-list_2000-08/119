@@ -1,0 +1,138 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA29684 for caml-red; Wed, 30 Aug 2000 10:04:50 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA32299 for <caml-list@pauillac.inria.fr>; Tue, 29 Aug 2000 01:12:16 +0200 (MET DST)
+Received: from smtp8.xs4all.nl (smtp8.xs4all.nl [194.109.127.134])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e7SNCGf25408
+	for <caml-list@inria.fr>; Tue, 29 Aug 2000 01:12:16 +0200 (MET DST)
+Received: from TDAANL2 (dc2-modem2017.dial.xs4all.nl [194.109.135.225])
+	by smtp8.xs4all.nl (8.9.3/8.9.3) with SMTP id BAA06881;
+	Tue, 29 Aug 2000 01:12:04 +0200 (CEST)
+Message-ID: <005701c01145$69865200$c38a6dc2@redmond.corp.microsoft.com>
+From: "Daan Leijen" <daan@cs.uu.nl>
+To: "John Max Skaller" <skaller@maxtal.com.au>
+Cc: <caml-list@inria.fr>
+References: <000d01c00bb8$fb3e3560$210148bf@dylan> <39A36758.E474CC1E@maxtal.com.au> <20000824111226.28393@pauillac.inria.fr> <39A58286.81AEAF47@maxtal.com.au> <39A641CB.FB5091D9@ps.uni-sb.de> <39A98F7C.9498CD96@maxtal.com.au>
+Subject: Re: Language Design
+Date: Tue, 29 Aug 2000 01:11:29 +0200
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 5.00.2919.6700
+X-MimeOLE: Produced By Microsoft MimeOLE V5.00.2919.6700
+Sender: weis@pauillac.inria.fr
+
+> Thanks. Now, somewhere linked to the Haskell web site,
+> is an article about 'Arrows', which explains why it was found
+> Monads are inadequate. I recall the issue was related
+> to interfacing to CGI scripts and preserving state between
+> interactions. Sorry I don't have URL handy :-(
+
+Hello John,
+
+The excellent article about arrows was written by John Hughes:
+http://www.cs.chalmers.se/~rjmh/
+
+I don't think that the article says that "Monads are inadequate"
+(since monads are more general than arrows) but you can say
+that Arrows are sometimes a better choice than monads depending
+on your problem domain.
+
+I think that in general Monads are easier to use (and understand) than arrows
+and would urge you to try the monadic way first.  I believe that there are
+only 2 significant reasons why one should prefer arrows over monads.
+
+*The first reason is about control over evalutation time. Let me elaborate
+this with an example of an arrow-style parser (1) and a monadic style parser (2).
+The main operators of the monadic parser are return and bind:
+
+return :: a -> Parser a
+(>>=) :: Parser a -> (a -> Parser b) -> Parser b
+
+The main operators of the arrow style parser are also a return (succeed) and some flavor of bind:
+
+succeed :: a -> Parser a
+(<*>)    :: Parser a -> Parser (a->b) -> Parser b
+
+Now, from the type of the monadic bind, it becomes clear that a program can never access the
+second parser (Parser b) until you have executed the first one, since the second one depends on
+the returned runtime value 'a'.  Not so for the arrow style combinator. Allthough you still have to
+execute the parsers to get the runtime values, it is possible to do something with the "Parser x"
+data type before actually parsing anything.
+This is exactly what Doaiste Swierstra does in his paper (1) to construct parse tables before
+running the parser.
+
+Arrow style parser can only parse context-free grammars  (since a parser cannot depend on the result
+of another parser) whereas Monadic style parsers can parse any (even a context-sensitive) grammar.
+
+The second reason for choosing arrow style combinators is for finer control about life-times.
+I will elaborate on this using the CGI example. The example of John Hughes is something
+like this:
+
+test = arr (\z -> "give the question ?") >>> ask >>>
+         (arr id &&& ask) >>>
+         arr (\(q,a) -> "The answer to '" ++ q ++ "' is " ++ a)
+
+it first sends the string "give the question" over to the client (ask), the response is kept in two
+places (&&&), one just to send it to the third action (arr id) and one where the response is
+immediately send to the client (ask), the result of this ((q,a)) is then printed.
+
+Note that the lifetime of each value is kept within the function in the 'arr' combinator. (=
+succeed).
+That is why we need to explicitly thread the response through the second action with the "arr id"
+expression,
+in order to get it finally in the "q" of the last action. By being so explicit about the lifetimes,
+it is possible
+to only save the minimal state necessary between client/server interactions in the CGI problem
+domain.
+
+With monads, each time we bind a value, the values will be accessible by all following actions. The
+same
+CGI example in monadic style looks easier in my opinion:
+
+test   = do{ question <- ask "what is the question ?"
+                ; answer   <- ask question
+                ; return ("the answer to '" ++ question ++ "' is " ++ answer)
+                }
+
+The same techniques to implement the CGI server work also with the monadic style, the only
+difference is
+that we now always save the entire set of values that could be accessed, instead of a more minimal
+set.
+For example, we don't have to thread the value of "question" around, it can be immediately accessed
+on the third action.  (I have a small example implementation of both a monadic and arrow style CGI
+framework
+that works with Hugs, if you are interested in the different approaches it might be interesting to
+look at it,
+just send me an email)
+
+
+ Pheew, I hope this helps you in determining the best implementation technique.
+For now, I would advise you to stick with monads and adapt later if necessary.
+
+All the best,
+    Daan.
+
+(1) Doaitse Swierstra and Luc Duponcheel. (1996)
+Deterministic, Error-Correcting Combinator Parsers.
+Advanced Functional Programming. LNCS 1129: 185-207.
+http://www.cs.uu.nl/groups/ST/Software.
+
+(2) Graham Hutton and Erik Meijer. (1996)
+Monadic Parser Combinators.
+Technical report NOTTCS-TR-96-4. Department of Computer Science, University of Nottingham.
+http://www.cs.nott.ac.uk/Department/Staff/gmh/monparsing.ps.
+(this article is highly recommended :-)
+
+
+
+> --
+> John (Max) Skaller, mailto:skaller@maxtal.com.au
+> 10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+> checkout Vyper http://Vyper.sourceforge.net
+> download Interscript http://Interscript.sourceforge.net
+>
+>
+
+

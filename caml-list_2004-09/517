@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA30257; Wed, 29 Sep 2004 16:53:17 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA13461 for <caml-list@pauillac.inria.fr>; Wed, 29 Sep 2004 16:53:15 +0200 (MET DST)
+Received: from herd.plethora.net ([205.166.146.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id i8TEr2TH022413
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Wed, 29 Sep 2004 16:53:07 +0200
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.13.1/8.12.11) with ESMTP id i8TEqAqk016727
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Wed, 29 Sep 2004 09:52:21 -0500 (CDT)
+Date: Wed, 29 Sep 2004 10:02:54 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Jonathan Bryant <jtbryant@valdosta.edu>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Primitive sizes
+In-Reply-To: <1096440210.6626.9.camel@localhost>
+Message-ID: <Pine.LNX.4.44.0409290938040.5809-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at concorde with ID 415ACC4E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 unboxed:01 faq:01 floats:01 ignoring:01 interfacing:01 preferable:01 interfacing:01 char:01 char:01 floats:01 unboxed:01 type-:01 aligned:01 aligned:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 29 Sep 2004, Jonathan Bryant wrote:
+
+> I would like to know the sizes of the "primitive" types in OCaml (I
+> assume that they vary per platform, but one can hope that they are
+> standard...)  
+
+ints are either 31 or 63 bits, depending upon if you're on 32 or 64 bit 
+machines (one bit is stolen for the tag bit).  Int32 and Int64 have the 
+obvious bit size, but they are boxed integers (as opposed to ints, which 
+are unboxed).  Chars are 8 bits and unboxed- but can't be used as short 
+integers directly.
+
+This should be a FAQ, if it isn't already.  We just recently had a 
+discussion on this very mailing list on why ints are one bit short- I'd 
+search the archives and read the discussion before bringing that 
+discussion up again.
+
+> If they do vary , is there any way to define new types
+> (similar to C typedef macro)?  I would like to create 8-, 16-, 32-, and
+> 64-bit integers, 32- and 64-bit floats, and 16-bit characters.  I know i
+> could just create Int32s and Int64s and manipulate the bits ignoring the
+> ones I don't need, but is there a way to allocate just the necessary
+> memory without interfacing to C?  If not, can anyone point me in a good
+> direction to learn how to interface with C (by "good" I mean that a
+> tutorial is better/more preferable than a language specification...)?
+
+The Ocaml manual has a good section on interfacing to C.  But I have to 
+ask the question: why bother?  Especially with the integers?
+
+First off, Ocaml holds all variables in single words- which are defined as 
+the size of a pointer on the current machine.  If you have a char list, 
+every single char in that list takes up three words- one word for the list 
+element tag, one word for the next pointer, and the char itself takes up 
+one word.  Likewise, if you have a char array, every element in the array 
+takes up one whole word (this is why strings are not char arrays).  This 
+allows Ocaml to share code- a function that handles a 'a array can now 
+handle an array of chars, ints, floats, booleans, or foos.  If the type 
+isn't unboxed (int, char, boolean) the array or list holds a reference to 
+the type- which is still just a word.
+
+The humorous thing is that C doesn't save as much as most people think it 
+does in using smaller types- this is because pretty much all C compilers 
+these days pad the data.  Accessing data that is aligned is signifigantly 
+faster than accessing data that isn't aligned (and on many CPUs, you can't 
+access misaligned data), so the C compiler inserts padding- unused bytes- 
+to keep the data aligned.  For example, how large is the following 
+structure on a 32-bit platform (ints are 4 bytes)?
+
+struct foo {
+    char c;
+    int i;
+};
+
+You might say five bytes- four for the int and one for the char.  You'd be
+wrong- the compiler will almost certainly add three bytes of padding
+between c and i to keep i aligned- meaning the size of the structure is
+actualy 8 bytes.  The char takes up a full four bytes all by it's 
+lonesome.
+
+Changing the order doesn't help.  Consider the following structure:
+
+struct foo2 {
+    int i;
+    char c;
+};
+
+Now, the int doesn't follow the char.  The char can't be misaligned, so 
+you don't need padding, do you?  Well, yes you still do need padding.  The 
+C standard says the size of a structure will be padded out so that arrays 
+of the structure are still aligned- effectively, that given a pointer p, 
+the access:
+    ((struct foo2 *) p)->i
+to i is still aligned.  So again, the size of the structure is still 8 
+bytes, and the char is still taking up a full four bytes.
+
+Padding also shows up on local variables and function arguments in C.  
+Consider the function:
+
+void bar (char c) {
+    char t;
+    ...
+
+How much memory does the argument c and the local variable t take up?  
+Again- the compiler needs to keep the stack aligned, so variables and 
+arguments get padded- both take up a full word.
+
+If you have multiple variables of the same type, the shorter types do save 
+some memory.  For example, this structure also only takes up two words of 
+memory:
+struct foo3 {
+    int i;
+    char c;
+    char d;
+};
+
+But this requires you sort your variables, and happens less often than
+people think.  This is why Ocaml isn't the memory hog a naive analysis
+might make you think it is.
+
+In nine years of professional C programming and 15 years of hobbyist 
+programming, I have come to the conclusion that the main use of the 
+various C int types- which, by the way, not only includes char, short, 
+int, and long in both signed and unsigned varieties, but also size_t, 
+ssize_t, off_t, ptrdiff_t, pid_t, etc.- is to introduce bugs by allowing 
+you to pick the wrong int type.
+
+So the question becomes- why do you need the other integer types?
+
+
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

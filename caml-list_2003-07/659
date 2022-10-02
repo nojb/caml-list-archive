@@ -1,0 +1,114 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA05240; Thu, 31 Jul 2003 19:31:58 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA23367 for <caml-list@pauillac.inria.fr>; Thu, 31 Jul 2003 19:31:57 +0200 (MET DST)
+Received: from aomori.annexia.org (annexia.force9.co.uk [212.56.101.183])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h6VHVuT04786;
+	Thu, 31 Jul 2003 19:31:56 +0200 (MET DST)
+Received: from rich by aomori.annexia.org with local (Exim 3.36 #1 (Debian))
+	id 19iHHP-0005EX-00; Thu, 31 Jul 2003 18:31:55 +0100
+Date: Thu, 31 Jul 2003 18:31:55 +0100
+To: caml-list@inria.fr
+Cc: xavier.leroy@inria.fr
+Subject: Re: [Caml-list] Dynlink problems
+Message-ID: <20030731173155.GA20099@redhat.com>
+References: <20030728094918.GA19609@redhat.com> <005201c354f2$1f2df430$ca00a8c0@warp> <20030728174154.GA19639@redhat.com> <20030729174830D.garrigue@kurims.kyoto-u.ac.jp> <20030729154345.GA32764@redhat.com> <20030729162843.GB32764@redhat.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20030729162843.GB32764@redhat.com>
+User-Agent: Mutt/1.5.4i
+From: Richard Jones <rich@annexia.org>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 dynlink:01 bug:01 debugging:01 3.06.:01 bytecomp:01 symtable:01 3.06:01 mli:01 val:01 otherlibs:01 loadfile:01 freshmeat:01 bin:01 ltd:98 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+The following patch to OCaml fixes this bug in Dynlink. It allows you
+to specify an alternate executable name, and also improves debugging
+by printing a useful message if the system tries to use
+Sys.executable_name when it is empty.
+
+Rich.
+
+----------------------------------------------------------------------
+diff -ur ocaml-3.06.orig/bytecomp/symtable.ml ocaml-3.06/bytecomp/symtable.ml
+--- ocaml-3.06.orig/bytecomp/symtable.ml	2002-02-11 14:08:43.000000000 +0000
++++ ocaml-3.06/bytecomp/symtable.ml	2003-07-31 18:16:48.000000000 +0100
+@@ -243,10 +243,10 @@
+ 
+ (* Initialize the linker for toplevel use *)
+ 
+-let init_toplevel () =
++let init_toplevel_from_executable filename =
+   (* Read back the known global symbols and the known primitives
+      from the executable file *)
+-  let ic = open_in_bin Sys.executable_name in
++  let ic = open_in_bin filename in
+   begin try
+     Bytesections.read_toc ic;
+     ignore(Bytesections.seek_section ic "SYMB");
+@@ -267,6 +267,11 @@
+   (* Initialize the Dll machinery for toplevel use *)
+   Dll.init_toplevel dllpath
+ 
++let init_toplevel () =
++  if Sys.executable_name = "" then
++    fatal_error "Sys.executable_name is \"\"";
++  init_toplevel_from_executable Sys.executable_name
++
+ (* Find the value of a global identifier *)
+ 
+ let get_global_position id = slot_for_getglobal id
+diff -ur ocaml-3.06.orig/bytecomp/symtable.mli ocaml-3.06/bytecomp/symtable.mli
+--- ocaml-3.06.orig/bytecomp/symtable.mli	2000-03-06 22:11:11.000000000 +0000
++++ ocaml-3.06/bytecomp/symtable.mli	2003-07-31 18:15:22.000000000 +0100
+@@ -29,6 +29,7 @@
+ (* Functions for the toplevel *)
+ 
+ val init_toplevel: unit -> unit
++val init_toplevel_from_executable: string -> unit
+ val update_global_table: unit -> unit
+ val get_global_value: Ident.t -> Obj.t
+ val assign_global_value: Ident.t -> Obj.t -> unit
+diff -ur ocaml-3.06.orig/otherlibs/dynlink/dynlink.ml ocaml-3.06/otherlibs/dynlink/dynlink.ml
+--- ocaml-3.06.orig/otherlibs/dynlink/dynlink.ml	2002-04-24 08:57:17.000000000 +0100
++++ ocaml-3.06/otherlibs/dynlink/dynlink.ml	2003-07-31 18:17:18.000000000 +0100
+@@ -39,6 +39,9 @@
+ let init () =
+   Symtable.init_toplevel()  
+ 
++let init_from_executable =
++  Symtable.init_toplevel_from_executable
++
+ (* Check that the object file being loaded has been compiled against
+    the same interfaces as the program itself. In addition, check that
+    only authorized compilation units are referenced. *)
+diff -ur ocaml-3.06.orig/otherlibs/dynlink/dynlink.mli ocaml-3.06/otherlibs/dynlink/dynlink.mli
+--- ocaml-3.06.orig/otherlibs/dynlink/dynlink.mli	2001-12-28 23:21:49.000000000 +0000
++++ ocaml-3.06/otherlibs/dynlink/dynlink.mli	2003-07-31 18:18:59.000000000 +0100
+@@ -18,6 +18,12 @@
+ val init : unit -> unit
+ (** Initialize the library. Must be called before [loadfile]. *)
+ 
++val init_from_executable : string -> unit
++(** Initialize the library. Must be called before [loadfile].
++    This version takes the bytecode executable filename as an argument,
++    rather than using Sys.executable_name which will not be defined in
++    all cases (eg. if the main program is a C program or shared library). *)
++
+ val loadfile : string -> unit
+ (** Load the given bytecode object file and link it.
+    All toplevel expressions in the loaded compilation unit
+----------------------------------------------------------------------
+
+-- 
+Richard Jones. http://www.annexia.org/ http://freshmeat.net/users/rwmj
+Merjis Ltd. http://www.merjis.com/ - all your business data are belong to you.
+NET::FTPSERVER is a full-featured, secure, configurable, database-backed
+FTP server written in Perl: http://www.annexia.org/freeware/netftpserver/
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

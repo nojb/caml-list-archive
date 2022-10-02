@@ -1,0 +1,144 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA28932; Tue, 8 Jun 2004 01:17:30 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA28908 for <caml-list@pauillac.inria.fr>; Tue, 8 Jun 2004 01:17:29 +0200 (MET DST)
+Received: from tcs.inf.tu-dresden.de (orchid.inf.tu-dresden.de [141.76.75.101])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i57NHSEV021817
+	for <caml-list@inria.fr>; Tue, 8 Jun 2004 01:17:28 +0200
+Received: from ithif51.inf.tu-dresden.de (ithif51 [141.76.75.51])
+	by tcs.inf.tu-dresden.de (8.12.9/8.12.9) with ESMTP id i57NHROr018662
+	for <caml-list@inria.fr>; Tue, 8 Jun 2004 01:17:27 +0200 (MET DST)
+Received: from tews by ithif51.inf.tu-dresden.de with local (Exim 3.36 #1 (Debian))
+	id 1BXTMt-0003nu-00
+	for <caml-list@inria.fr>; Tue, 08 Jun 2004 01:17:27 +0200
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16580.63367.560204.157305@ithif51.inf.tu-dresden.de>
+Date: Tue, 8 Jun 2004 01:17:27 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] factor 5 speed increase for natively compiled camlp4 parsers
+X-Mailer: VM 7.18 under Emacs 21.3.1
+From: Hendrik Tews <tews@tcs.inf.tu-dresden.de>
+X-Scanned-By: MIMEDefang 2.33 (www . roaringpenguin . com / mimedefang) at tcs.inf.tu-dresden.de
+X-Miltered: at nez-perce with ID 40C4F788.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; natively:01 camlp:01 hendrik:01 tews:01 tews:01 natively:01 camlp:01 howto:01 foo:01 extensible:01 ocamlopt:01 -where:01 -pp:01 mlast:01 cmx:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Dear all,
+
+yesterday I managed to natively compile a custom camlp4
+application. The speed increase was dramatic: from 10 seconds
+down to 1.9 seconds for 1.4 MB of Ocaml code in 121 files. Below
+I describe howto compile your camlp4 parser to native-code.
+Further below there are some questions for the camlp4
+maintainers.
+
+
+HOW TO GET ``camlp4 pa_o.cmo pa_op.cmo foo.cmo'' DOWN TO NATIVE-CODE?
+
+1. Prerequisites: 
+
+   Some of the files you need are not installed in the standard
+   ocaml distribution. Therefore you need a fully configured
+   ocaml source tree. Say its located at ${ocamlsource}. Do a
+   ``make world.opt'' there. (But don't clean!)
+
+2. Compile the camlp4 extensible grammars for ocaml to native-code.
+
+   cp ${ocamlsource}/camlp4/etc/pa_o.ml .
+   ocamlopt -c -I `camlp4 -where` -pp "camlp4r pa_extend.cmo q_MLast.cmo" \
+	-o pa_o.cmx pa_o.ml
+   cp ${ocamlsource}/camlp4/etc/pa_op.ml .
+   ocamlopt -c -I `camlp4 -where` -pp "camlp4r pa_extend.cmo q_MLast.cmo" \
+	-o pa_op.cmx pa_op.ml
+
+   You might want to copy the two cmx files to some ${lib}
+   directory. If this differs from ``ocamlc -where'' you have to
+   add ``-I ${lib}'' in step 4 below.
+
+3. foo.cmx: Compile all the modules you want to load to camlp4 to
+   native-code.
+
+4. Do
+
+   ocamlopt -linkall -I `camlp4 -where` \
+      odyl.cmxa camlp4.cmxa \
+      pa_o.cmx pa_op.cmx \
+      pr_dump.cmx \
+      foo.cmx \
+      ${ocamlsource}/camlp4/odyl/odyl.cmx
+
+   Note the -linkall! The second line is for the camlp4 runtime
+   system. The third line is for standard ocaml syntax (with
+   optimized parsers). The fourth line contains the standard
+   printer (leave it out if you use your own printer). The fivth
+   line is your camlp4 extension. The last line is for the main
+   program.
+
+   If you get wired errors about non-matching interfaces: Make
+   sure your ocaml source tree is in sync with our ocaml
+   installation!
+
+
+4. Try it! I tried it on Otags, the TAGS generator from
+   Jean-Francois Monin. Otags just uses camlp4 parsers and some
+   customized printers (_not_ the usual camlp4 preprocessor to
+   ocamlc approach). My biggest ocaml repository contains 51000
+   lines of code in 121 files (1.4 MB). TAGS generation time
+   drops from 10.4 seconds to 1.9 seconds. (I'll post an Otags
+   patch in a separate email in the near future.)
+
+
+WHAT IF YOU DON'T NEED EXTENSIBLE GRAMMARS?
+
+   Substitute ``${ocamlsource}/camlp4/compile/pa_o_fast.cmx'' for
+   ``pa_o.cmx pa_op.cmx'' in line 3 in step 4 above. 
+
+   Apparently there exists some way to compile camlp4 EXTEND
+   expressions to plain stream parser source code. This is used
+   during the ocaml build to generate pa_o_fast.ml from pa_o.ml
+   and pa_op.ml. camlp4o.opt contains pa_o_fast.cmx.
+
+   Applied to Otags this increases its speed by another factor 
+   of 2. Now it takes mearly 1.2 second to generate the TAGS.
+   This is almost 10 times faster than the original!
+
+
+WHAT ABOUT THE REVISED SYNTAX?
+
+   Leave out step two and substiture ``pa_r.cmx pa_rp.cmx'' in
+   line 3 in step 4 above. 
+
+   There is no pa_r_fast.ml. camlp4r.opt contains extensible
+   grammars. 
+
+
+QUESTIONS TO EXPERTS AND CAMLP4 MAINTAINERS:
+
+1. Why is the -linkall neccessary? Its clear to me that one needs
+   the -linkall when building camlp4o. However, I don't
+   understand why camlp4o.opt needs the -linkall.
+
+2. Is the process that generates pa_o_fast.ml applicable to all
+   camlp4 grammars? Why is it not used for the revised syntax?
+   What is the option -meta_action of pa_extend.cmo doing?
+
+3. Would it be possible to include a ``mknativecamlp4'' script
+   that automates the described procedure in the next
+   distribution? 
+
+   Would it be possible to build and install pa_o.cmx, pa_op.cmx,
+   pa_o_fast.cmx, and odyl.cmx? 
+
+
+Bye,
+
+Hendrik
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

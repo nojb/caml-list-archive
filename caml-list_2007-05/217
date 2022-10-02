@@ -1,0 +1,165 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 9FE45BC69
+	for <caml-list@yquem.inria.fr>; Sat, 12 May 2007 07:45:21 +0200 (CEST)
+Received: from ipmail01.adl2.internode.on.net (ipmail01.adl2.internode.on.net [203.16.214.140])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4C5jJsR019686
+	for <caml-list@yquem.inria.fr>; Sat, 12 May 2007 07:45:20 +0200
+X-IronPort-AV: E=Sophos;i="4.14,525,1170595800"; 
+   d="scan'208";a="126512083"
+Received: from ppp8-148.lns1.syd7.internode.on.net (HELO [192.168.1.201]) ([59.167.8.148])
+  by ipmail01.adl2.internode.on.net with ESMTP; 12 May 2007 15:15:18 +0930
+Subject: Re: [Caml-list] Custom operators in the revised syntax
+From: skaller <skaller@users.sourceforge.net>
+To: Jon Harrop <jon@ffconsultancy.com>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <200705120547.06083.jon@ffconsultancy.com>
+References: <cd67f63a0705101355n2954fd02v9a29cb0a76eb16ee@mail.gmail.com>
+	 <200705120348.50308.jon@ffconsultancy.com>
+	 <1178944803.14691.28.camel@rosella.wigram>
+	 <200705120547.06083.jon@ffconsultancy.com>
+Content-Type: text/plain
+Date: Sat, 12 May 2007 15:45:13 +1000
+Message-Id: <1178948713.14691.89.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4645546F.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; syntax:01 0100,:01 afaik:01 unify:01 unify:01 variants:01 annotation:01 variants:01 constructors:01 constructors:01 ocaml:01 combinators:01 unification:01 overload:01 typedef:01 
+
+On Sat, 2007-05-12 at 05:47 +0100, Jon Harrop wrote:
+
+> > I have only seen one algorithm for this an it was
+> > extremely complicated. If you know a better way I'd
+> > sure like to know what it is.
+> 
+> AFAIK, you just change the unify to intersect sets of types. 
+
+I have no idea how to unify in the presence of (undiscriminated)
+setwise union of polymorphic types. It seems a little easier
+if the types are restricted to a finite set of non-polymorphic
+types.
+
+> I assume the 
+> implementation of polymorphic variants already does this, so take that and 
+> make it enforce a single type contructor at function boundaries (maybe 
+> defaulting in some cases). If you "polymorphic variant" has more than one 
+> constructor then there is an ambiguity and you flag an error asking for a 
+> type annotation.
+
+The difference is that polymorphic variants HAVE constructors.
+But we're talking about types *without* constructors.
+
+In Felix, the (Ocaml) term combinators actually support typesets.
+But the unification engine just throws up when it sees them :)
+
+During overload resolution, you CAN use typesets as constraints.
+For example:
+
+	typedef ints = typesetof(int, long);
+	fun f[t in ints]: t * t -> t = "$1+$2";
+
+	print$ f 1; // OK!
+	print$ f 1L; // OK!
+	print$ f 1.0; // ERROR
+
+	fun g[t in ints](x:t)=> f x; // ERORR
+
+The last line illustrates the lack of propagation: the type
+of x is actually just 't' at the point f is applied,
+and t isn't in the set ints.
+
+The way it works is the argument is first matched against the
+unconstrained type (by unification), and then the constraint
+such as:
+
+	int in typeset(int,long)
+
+is checked: if it fails that overload candidate is rejected
+(but another may still match).
+
+In principle the correct 'subtyping' rule is to use a subset
+(or superset depending on +/- position I guess) so that
+it should be possible in this case to propagate and make
+the function g above work.
+
+The problem is that once you introduce polymorphism,
+the type of one function can depend on the type of another,
+but that type isn't known until that other is actually
+instantiated.
+
+This can not be handled 'properly' by just adding typesets to the 
+type system because that would be too general: it fails to
+record the dependencies. For example in the f/g case above,
+the type of g is NOT
+
+	g: ints -> ints
+
+but rather
+
+	g: { int -> int; long -> long }
+
+and now consider a harder case like:
+
+	t in ints. t * t = { int * int; long * long }
+
+which is quite different to
+
+	ints * ints = { int * int; int * long; long * int; long * long }
+
+So roughly .. we're talking about a unification engine that
+can propagate constraints, and a type system which would
+seem to at least need to be second order. 
+
+As I said I think this is possible for finite ground types,
+but in the presence of polymorphism unification would not be
+able to reduce many terms. In turn, this would make overloading
+such cases impossible.
+
+In Felix, overloading is done polymorphically, and can't
+vary depending on the instantiation of type variables
+(you can do that with typeclasses though).
+
+But unless you instantiate the type variables, you can't
+reduce the terms. It isn't clear it is even possible to
+normalise them for equality check, let alone tell if
+one is a specialisation of another.
+
+The result, in Felix, is that overloading would have to
+return a SET of functions instead of a single one,
+since several functions 'might' match the argument type.
+And the set could be large -- it seems exponential in
+the length of a call chain. Ouch.
+
+If ANYONE knows an algorithm that can do unification with
+sets of types, that is, with a union type, I'd sure like
+to know it!
+
+> .NET provides run-time type information so I assume the compiler specializes 
+> when types are static and resorts to run-time dispatch otherwise.
+
+That seems right. I think G'Caml tried to do that was well.
+
+> > and this kind of constraint, unfortunately, doesn't propagate
+> > (i.e. the above isn't really a type). Propagating ground
+> > type sets is actually easy, but once you have higher orders
+> > it is probably undecidable.
+> 
+> I hadn't thought of that. I just discovered that you cannot add vectors of 
+> vectors in F#, so it is probably 1st order only.
+
+Hmm, that's a bit surprising if your explanation above is correct,
+that is, if it resorts to dynamic typing if it can't resolve
+statically.
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

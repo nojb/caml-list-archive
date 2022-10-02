@@ -1,0 +1,124 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=AWL,NO_REAL_NAME,SPF_FAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id B4974BC6C
+	for <caml-list@yquem.inria.fr>; Thu,  5 Jul 2007 10:23:04 +0200 (CEST)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l658N2m7008177
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Thu, 5 Jul 2007 10:23:04 +0200
+Received: (qmail 8633 invoked by uid 107); 5 Jul 2007 08:16:21 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 5 Jul 2007 08:16:21 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id D090BAD43; Thu,  5 Jul 2007 01:13:38 -0700 (PDT)
+To: psnively@mac.com, skaller@users.sourceforge.net
+Cc: caml-list@inria.fr
+In-reply-to: <FD724B66-A0A4-4889-A32E-D14D2EDDC3A0@mac.com>
+Subject: Re: [Caml-list] Incremental, undoable parsing in OCaml as the
+ general parser inversion
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20070705081338.D090BAD43@Adric.metnet.fnmoc.navy.mil>
+Date: Thu,  5 Jul 2007 01:13:38 -0700 (PDT)
+X-Miltered: at concorde with ID 468CAA66.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 parser:01 oleg:01 monadic:01 delimited:01 syntax:01 re-writing:01 lexer:01 monadic:01 morrisett:01 haskell:01 arbitrarily:01 arbitrarily:01 computations:01 transformers:01 
+
+
+Paul Snively wrote:
+> I've attempted to rewrite this in terms of your  
+> monadic version of delimited continuations, as included in the  
+> pa_monad syntax extension distribution.
+
+I'm afraid that cannot be done. That is, short of re-writing
+make_lexer and all other library functions in the monadic style. 
+
+That is the trouble with the monadic style, well articulated by Greg
+Morrisett in his invited talk at the ML Workshop 2005. In Haskell, we
+essentially need two versions of every function. For example, we need
+a pure map of the type (a->b) -> [a] -> [b] and the monadic version
+mapM, of the type (a->m b) -> [a] -> m [b]. The claim goes that once
+we went into trouble of writing a monadic version, we can instantiate
+it with any monad and so `extend' it arbitrarily. For one thing, not
+arbitrarily: the monadic transformer approach is of limited
+expressiveness and there are practically significant computations that
+cannot be expressed with monad transformers because they impose the
+fixed order of layers. Mainly, monadic meta-language is of limited
+expressiveness itself and is just plain ugly. One can't write guards
+with monadic expressions (for a good reason), a lot of other
+conveniences of Haskell become unavailable.  Therefore, people quite
+often resort to unsafePerformIO -- even in reputable projects like
+Lava. That is really as unsound as it sounds: one has to specifically
+disable compiler optimizations (inlining); so-called lazy IO can lead
+to problems like reading from a file after it was closed
+and so one must _deeply_ force expressions and enforce evaluation
+order, etc. I guess it is clear how much burden monadic notation
+really is if even the high priests and most faithful of Haskell would
+rather commit cardinal sins and forsake the static benefits of Haskell
+-- only to avoid programming extensively in monadic style.
+
+This reminds me of a funny event at the Haskell workshop 2006. One
+participant stood up and sincerely proposed that Haskell' standard
+would find a way to automatically derive a monadic version of a pure
+expression. Chung-chieh Shan recommended that person to take a look at
+OCaml... 
+
+The beauty of delimited continuations is that we take any function
+that accepts some kind of `callback' and pass a specifically
+constructed callback (which is essentially shift f f). Thus we have
+accomplished inversion. The function in question can be a map-like
+traversal combinator (the callback is the function to map), a parser
+(the callback here is the stream, the function that provides data to
+the parser), a GUI system with its own event loop, etc.
+
+An analogy with a debugger might make it easy to understand why it
+all works. The operation (shift f f) is akin to the break point to the
+debugger (INT 3 aka CC for x86 aficionados). When we pass this break
+point as a callback to parse, for example, we drop into the debugger
+whenever parse invokes our callback, that is, whenever it needs a new
+character. Once in the debugger, we can examine our state and resume
+the parser passing it the character of our choice. The form `reset'
+(aka push_prompt) makes it possible for us to `script the debugger' in
+our own program. Thus _delimited_ continuations offer us a
+scriptable debugger. Unlike the free-wheeling debugger like gdb, the
+debugger of delimited continuations respects abstractions and is
+type sound, supporting static invariants of the type system.
+
+John Skaller wrote:
+> If i have an Ocamlyacc parser function f .. how do I control invert
+> it?
+That parser takes stream, which can be (made of) a function. We merely 
+need to create a stream (lexbuf)
+
+  type stream_req = ReqDone | ReqBuf of string * int * (int -> stream_req);;
+
+  Lexing.from_function (fun buffer n -> 
+		shift p (fun sk -> ReqBuf (buffer,n,sk)))
+
+and pass the that stream to the parser. We need to write something
+like the filler in the previous message, the handler for ReqBuf
+requests. The handler will fill the buffer (the first argument of the
+ReqBuf request) and invoke 'sk' passing it the number of placed
+characters.
+
+
+I would be remiss if I don't mention one of the main benefits of the
+monadic style: monadic style converts control flow into data
+flow. Therefore, types (which normally enforce data-flow
+invariants like prohibiting the addition of an integer and a string)
+can be used to _statically_ enforce invariants of control flow, e.g.,
+all accessible file handles are open, all acquired locks are released,
+no blocking operation is attempted while a lock is held, etc. We have
+many working examples of statically enforcing such properties. Without
+monadic style, we need the dual of type systems -- effect systems --
+to provide similar static guarantees. Alas, despite Filinski's
+prescient call for more attention to effect systems 13 years ago,
+hardly any effect system is available in a mainstream functional
+language.
+

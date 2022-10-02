@@ -1,0 +1,133 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q3IHd9QZ008864
+	for <caml-list@sympa-roc.inria.fr>; Wed, 18 Apr 2012 19:39:09 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqQCANb7jk/Y5v4vmGdsb2JhbABEgxyCSahCgxoiAQEBAQEICQ0bJ4IJAQEEASMECwEFFioBEAsYAgIFAxECCwICCQMCAQIBHyYTCAEBGQSHaQQBqBOTDIEvjW6BGASIWo0VhXONPQ
+X-IronPort-AV: E=Sophos;i="4.75,442,1330902000"; 
+   d="scan'208";a="140699075"
+Received: from amout07.alpha-mail.net ([216.230.254.47])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 18 Apr 2012 19:39:02 +0200
+Received: from webarc04.alpha-mail.jp (webarc04 [216.230.254.84])
+	by amout07.alpha-mail.net  with ESMTP id q3IHcwYb030472;
+	Thu, 19 Apr 2012 02:38:58 +0900
+X-Virus-Scanned: amavisd-new at Alpha-Mail Out
+Received: from ltsub01.alpha-mail.net (ltsub01 [216.230.254.29])
+	by webarc04.alpha-mail.jp (Postfix) with ESMTP id 980DE1C080CB;
+	Thu, 19 Apr 2012 02:38:57 +0900 (JST)
+Received: from [192.168.1.4] (FL1-27-127-78-21.aic.mesh.ad.jp [27.127.78.21])
+	by ltsub01.alpha-mail.net (Alpha-mail) with ESMTP id 47E2E3B80A1;
+	Thu, 19 Apr 2012 02:38:57 +0900 (JST)
+Message-ID: <4F8EFC34.7080906@itpl.co.jp>
+Date: Thu, 19 Apr 2012 02:39:00 +0900
+From: Satoshi Ogasawara <ogasawara@itpl.co.jp>
+User-Agent: Mozilla/5.0 (Windows NT 6.1; WOW64; rv:11.0) Gecko/20120327 Thunderbird/11.0.1
+MIME-Version: 1.0
+To: daniel.buenzli@erratique.ch
+Cc: caml-list@inria.fr
+References: <4F8D9D0E.1040007@itpl.co.jp> <F7294E8F02FB474AA2373765B8BCAB57@erratique.ch> <4F8E1FF4.5070702@itpl.co.jp> <B2FE8DD50C9B4611809BC1F6B9CDD2E4@erratique.ch> <4F8EA91C.3060001@itpl.co.jp> <2B372C89CE4F408688B67B090FA5105C@erratique.ch>
+In-Reply-To: <2B372C89CE4F408688B67B090FA5105C@erratique.ch>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 8bit
+Subject: Re: [Caml-list] [ANN] PEC ver. 1.1
+
+
+First of all, I apologize about my first message. Now I understand React can be
+easily adapted to send a value during update cycle by using thunk. To forbid
+sending events during update cycle in React is not restriction but design choice.
+
+(2012/04/18 22:27), Daniel Bünzli wrote:
+ > and now what should the value of e be in the next update cycle ? All the options you 
+have (keep only the first call to sender, keep only the last call to sender, keep both and 
+execute one after the other) break the functional and compositional nature of FRP because 
+it violates the semantics of events.
+
+PEC takes the third option. I understand that the evaluation order of update
+are problematic.
+
+module E = Pec.Event.Make (Pec.EventQueue.DefaultQueueM) (Pec.EventQueue.DefaultQueueI)
+open Printf
+
+let _ =
+   let e, sender = E.make () in
+   let e' = E.map (fun x -> sender 2; x + 1) e in
+   let e'' = E.map (fun x -> sender 3; x + 1) e in
+   let _ = E.subscribe (printf "e=%d\n") e in
+   let _ = E.subscribe (printf "e'=%d\n") e' in
+   let _ = E.subscribe (printf "e''=%d\n") e'' in
+   sender 1;
+   ignore (E.run ());
+   printf "---\n";
+   ignore (E.run ());
+   printf "---\n";
+   ignore (E.run ());
+   printf "end\n"
+
+This program outputs:
+
+e=1
+e'=2
+e''=2
+---
+e=2
+e'=3
+e''=3
+---
+e=3
+e'=4
+e''=4
+end
+
+This result rely on order of applying subscribe function. I think any program
+depending on the evaluation order of updates are not good one.
+
+But I'm not sure why only sending a value to event breaks functional and compos-
+itional nature of FRP. I think all side-effects during update cycle are breaks
+functional and compositional nature of FRP too, because the results of both programs
+are depends on evaluation order of updates.
+
+A:
+let e' = E.map (fun x -> sender 1; x + 1) e in
+let e'' = E.map (fun x -> sender 2; x + 1) e in
+
+B:
+let e' = E.map (fun x -> print_int 1; x + 1) e in
+let e'' = E.map (fun x -> print_int 2; x + 1) e in
+
+Are there any special problem in program A? In other word, program B keeps
+functional and compositional nature of FRP?
+
+>> Yes, weak-pointer-less implementation is one of my purpose. The key point is
+>> that dependency of events are represented by nested variants.
+>
+> That doesn't really answer my question (or at least I don't understand what it means).
+
+Inside PEC, "let e' = E.map f e" is just variant instance.
+
+   let map f e = Wrap {
+     event = e;
+     wrap = f;
+     w_latest = None;
+   }
+
+Another primitive combinator functions also just makes a variant instance.
+
+   and 'a event =
+     | Cell : 'a mcell -> 'a event
+     | Wrap : ('a, 'b) mwrap -> 'b event
+     | Choose : 'a choose -> 'a event
+     | Never : 'a event
+     | Switch : 'a mswitch -> 'a event
+
+So an event value itself is a nested variant instance which can be GCed freely
+when user-level references are disappear. (There are no library level reference.)
+
+When an event is subscribed, the argument function are set in source events of
+subscribed event. This means subscribed events are never GCed until source events
+are GCed.(or until unsubscribe.)
+
+If one of source events are fired, dependent events marked with subscribe functions
+are updated. Weak pointer does not needs in that algorithm.
+
+
+Best Regards,
+  Ogasawara

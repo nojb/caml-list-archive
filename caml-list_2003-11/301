@@ -1,0 +1,119 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA07176; Tue, 18 Nov 2003 19:26:41 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA07177 for <caml-list@pauillac.inria.fr>; Tue, 18 Nov 2003 19:26:40 +0100 (MET)
+Received: from rabelais.socialtools.net (rabelais.socialtools.net [81.2.94.243])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hAIIQd114331
+	for <caml-list@inria.fr>; Tue, 18 Nov 2003 19:26:39 +0100 (MET)
+Received: by rabelais.socialtools.net (Postfix, from userid 108)
+	id 9C7E623327; Tue, 18 Nov 2003 18:26:38 +0000 (GMT)
+Received: from socialtools.net (chaucer.socialtools.net [81.2.94.242])
+	by rabelais.socialtools.net (Postfix) with ESMTP id 2DEA8232DA
+	for <caml-list@inria.fr>; Tue, 18 Nov 2003 18:26:34 +0000 (GMT)
+Message-ID: <3FBA6459.3000000@socialtools.net>
+Date: Tue, 18 Nov 2003 18:26:33 +0000
+From: Benjamin Geer <ben@socialtools.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.5) Gecko/20031007
+X-Accept-Language: en-gb, en, fr, it
+MIME-Version: 1.0
+To: Caml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] GC and file descriptors
+References: <Pine.LNX.4.44.0311171422420.5009-100000@localhost.localdomain> <1069168323.18363.83.camel@pelican> <3FBA4D97.9060309@dcs.qmul.ac.uk>
+In-Reply-To: <3FBA4D97.9060309@dcs.qmul.ac.uk>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Checker-Version: SpamAssassin 2.60 (1.212-2003-09-23-exp) on 
+	rabelais.socialtools.net
+X-Spam-Status: No, hits=-4.9 required=5.0 tests=BAYES_00 autolearn=ham 
+	version=2.60
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 unhandled:01 neglected:01 stones:99 subtypes:01 subtypes:01 recursively:01 catch-all:01 handler':01 crashing:01 unhandled:01 ideally:01 java-like:01 caml's:01 -like:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Martin Berger wrote:
+>> What alternatives are there?
+>> One is to  have exception specifications on functions,
+>> but that is known not to work very well. [...]
+> 
+> but isn't this snowballing exactly what you want?
+
+I think it is.  It's very reassuring to know that the compiler can tell 
+me whether I've left any exceptions unhandled, just as it can tell me 
+whether I've neglected to provide a suitable return value for a function.
+
+ From experience working on fairly large programs in Java, I can say (at 
+the risk of being pelted with stones on this list) that I think the way 
+Java handles this works pretty well.  You can avoid having any methods 
+specify more than two or three exceptions by using hierarchies of 
+exception subtypes (e.g. IOException has subtypes FileNotFoundException, 
+SocketException and so on) and by using nested exception objects (e.g. a 
+FooSubsystemException can contain an instance of any other exception, 
+and can thus be handled by a method that only specifies 
+FooSubsystemException).  Nested exceptions have the useful property that 
+when you get a stack trace from an exception (e.g. in order to log it), 
+it recursively includes the stack traces of any nested exceptions.
+
+In Caml, as in C++, I'm left with a lingering anxiety about what 
+exceptions might be thrown (particularly by libraries, including the 
+standard libraries) but not handled except by a catch-all 'unhandled 
+exception handler', at which point it's too late to do anything useful 
+with them.  (And Caml exceptions lack stack traces.)
+
+Annoying problems arise in Java with unchecked exceptions; things like 
+IndexOutOfBoundsException (which can be thrown by any array access) or 
+ArithmeticException (e.g. division by zero) don't have to be declared in 
+exception specifications, and therefore never are.  Bugs often result in 
+programs crashing with an unhandled NullPointerException (which of 
+course can't happen in Caml).  Ideally, the number of possible unchecked 
+exceptions should be kept to an absolute minimum; I think there are too 
+many in Java.
+
+I wish I knew what the ideal solution was, but I think Caml could do 
+worse than to implement a Java-like approach.  It seems to me that this 
+would be more consistent with Caml's overall focus on type safety than 
+its current C++-like approach.
+
+ > i always wonder if problem would simply disappear with more
+ > expressive typing systems that allow concise specification
+ > of the normal case for exceptions -- where an piece of code is
+ > just a conduit for exceptions -- and appropriate grouping of
+ > exceptions, for example by subtyping.
+
+If the type of a function included its exception specification, could 
+Caml infer exception specifications?  If so, perhaps exception 
+specifications could be added to the language without breaking backwards 
+compatibility.  If I wrote this:
+
+let divide x y = x / y ;;
+let do_work x y = divide x y ;;
+
+the type of both functions would be inferred as having an exception 
+specification containing Division_by_zero.  Now suppose I wrote the 
+following (meaning that the function do_work explicitly specifies the 
+exception Sys_error):
+
+let do_work x [ Sys_error ] = let z = (* ... *) in divide x z ;;
+
+I would get a compile error, because I should have written:
+
+let do_work x [ Sys_error; Division_by_zero ] = let z = (* ... *) in 
+divide x z ;;
+
+When using libraries that were written before the introduction of 
+exception specifications, I could verify that all library exceptions 
+were handled, by calling a library function in the following way:
+
+let do_work x [] = (* Call some library functions that don't have 
+explicit exception specifications *) ;;
+
+The compiler would then tell me which exceptions I'd failed to handle.
+
+Does this seem feasible?
+
+Ben
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

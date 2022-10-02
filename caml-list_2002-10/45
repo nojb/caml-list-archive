@@ -1,0 +1,168 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id GAA01009; Thu, 3 Oct 2002 06:59:29 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA00994 for <caml-list@pauillac.inria.fr>; Thu, 3 Oct 2002 06:59:28 +0200 (MET DST)
+Received: from grover.msi.co.jp ([192.51.53.141])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g934xQD14683
+	for <caml-list@inria.fr>; Thu, 3 Oct 2002 06:59:26 +0200 (MET DST)
+Received: from localhost [127.0.0.1] (ikeda)
+	by grover.msi.co.jp with esmtp (Exim 3.12 #1 (Debian))
+	id 17wy56-0003ov-00; Thu, 03 Oct 2002 13:59:24 +0900
+To: caml-list@inria.fr
+Subject: [Caml-list] Data_custom_val()
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20021003135922G.ikeda@msi.co.jp>
+Date: Thu, 03 Oct 2002 13:59:22 +0900
+From: IKEDA Katsumi <ikeda@msi.co.jp>
+X-Dispatcher: imput version 990905(IM130)
+Lines: 140
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+I use OCaml 3.06 on Linux.
+
+I want to call C malloc() function from OCaml.
+I use alloc_custom() function in C code.
+
+Now, I confuse with Data_custom_val() and Field().
+
+In OCaml source code, I find the following definition.
+
+[form ./byterun/mlvalues.h]
+|  #define Data_custom_val(v) ((void *) &Field((v), 1))
+
+How to use Data_custom_val as lvalue ?
+
+My codes are :
+
+---------------- main.ml ----------------
+(* main.ml *)
+let count = ref 0;;
+
+let main () =
+  print_string "main start\n"; flush stdout;
+  for i = 1 to 100 do
+    for j = 1 to 10 do
+      let r = Foo.record() in
+(*      print_string "count = "; print_int !count; print_newline(); flush stdout;
+      incr count;*)
+      Foo.print(r);
+    done;
+    ignore(Sys.command "ps auxw | grep '[m]ain'")
+  done
+;;
+
+main()
+--------------------------------
+
+---------------- foo.mli ----------------
+(* foo.mli *)
+type record
+val record: unit -> record
+val print: record -> unit
+--------------------------------
+
+---------------- foo.ml ----------------
+(* foo.ml *)
+
+type record
+
+external record: unit -> record = "ocaml_foo_record"
+external print: record -> unit = "ocaml_foo_print"
+--------------------------------
+
+---------------- stubs.c ----------------
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+#include <caml/alloc.h>
+#include <caml/callback.h>
+#include <caml/fail.h>
+#include <caml/custom.h>
+
+
+static void custom_finalize(value rec)
+{
+  CAMLparam1(rec);
+  fprintf(stderr, "custom_finalize() is called.\n");
+#if 0
+  free((void *)Field(rec,1));
+#else
+  free(Data_custom_val(rec));
+#endif
+  CAMLreturn0;
+}
+
+struct custom_operations ops = {
+  "ops",
+  custom_finalize,
+  custom_compare_default,
+  custom_hash_default,
+  custom_serialize_default,
+  custom_deserialize_default,
+};
+
+CAMLprim value ocaml_foo_record(value unit)
+{
+  CAMLparam1(unit);
+  value block;
+  block = alloc_custom(&ops, sizeof(char *), sizeof(char *), 100);
+#if 0
+  Field(block, 1) = (value)malloc(1024*1024);
+#else
+ *((char *)Data_custom_val(block)) = *((char *)malloc(1024*1024));
+#endif
+  CAMLreturn(block);
+}
+
+void ocaml_foo_print(value rec)
+{
+  CAMLparam1(rec);
+#if 0
+  fprintf(stderr, "rec = %p\n", Field(rec, 1));
+#else
+  fprintf(stderr, "rec = %p\n", Data_custom_val(rec));
+#endif
+  CAMLreturn0;
+}
+--------------------------------
+
+---------------- Makefile ----------------
+all: main
+
+main: stubs.o foo.cmo main.ml
+	ocamlc -custom -o main stubs.o foo.cmo main.ml 
+
+foo.cmo: foo.cmi foo.ml
+	ocamlc -c foo.ml
+
+foo.cmi: foo.mli
+	ocamlc -c foo.mli
+
+stubs.o: stubs.c
+	ocamlc -c stubs.c
+
+clean:
+	rm -f main *.cmi *.cmo *.o *~ core
+--------------------------------
+
+Running the above program, Segmentation fault (core dumped)
+is occurred in custom_finalize().
+
+Please teach me how to use Data_custom_val().
+
+Thanks.
+
+-- 
+IKEDA Katsumi  <ikeda@msi.co.jp>
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

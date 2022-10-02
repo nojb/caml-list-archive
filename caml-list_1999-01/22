@@ -1,0 +1,80 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA04030 for caml-redistribution; Wed, 13 Jan 1999 18:49:55 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA13488 for <caml-list@pauillac.inria.fr>; Wed, 13 Jan 1999 14:20:06 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id OAA09294;
+	Wed, 13 Jan 1999 14:20:03 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA10022; Wed, 13 Jan 1999 14:20:03 +0100 (MET)
+Message-ID: <19990113142003.39078@pauillac.inria.fr>
+Date: Wed, 13 Jan 1999 14:20:03 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Michael Hicks <mwh@dsl.cis.upenn.edu>, caml-list@inria.fr
+Subject: Re: thread i/o
+References: <199901122012.PAA16699@codex.cis.upenn.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <199901122012.PAA16699@codex.cis.upenn.edu>; from Michael Hicks on Tue, Jan 12, 1999 at 03:12:32PM -0500
+Sender: weis
+
+> One of the adverisements of OCaml 2.01 was that user-level (not POSIX)
+> thread I/O is made faster.
+
+Change logs are lists of changes, not advertisements.  At any rate:
+
+>  The trick used in the implementation is to make
+> sockets non-blocking, and then only perform a select() when the I/O would
+> have blocked (by signalling EINTR or EWOULDBLOCK).  However, looking at the
+> implementation, it looks like in many cases the select() is performed
+> anyway.
+
+This is not quite right.  What was made faster in 2.01 is the
+interface with select().  In 2.00, the only primitive available for
+suspending a thread until I/O can be done was Thread.select().  That
+primitive is quite expensive in itself (independently of the cost of the
+select() system call), because it builds and destructures lists.
+In 2.01, I added more basic primitives to wait for I/O on one file
+descriptor.  Those primitives involve no list processing and no heap
+allocation.  This causes noticeable speedups on threaded programs that
+do a lot of I/O.
+
+In parallel, the user-level thread package was also made safer by
+handling the EAGAIN or EWOULDBLOCK errors that could occur in the
+following situation:
+        - we select() on some file descriptors;
+        - select() tells us we can e.g. read on file descriptor F;
+        - we read on F and find that actually there is no data to read
+          (maybe another thread has already read from F in the
+           meantime, or select() is a bit sloppy);
+        - an EAGAIN error condition is generated.
+Then, the right thing to do is to retry the select and the read.
+This is a mostly theoretical scenario (I haven't been able to trigger
+it in my test programs), but still the Unix specs allow for it.
+
+> The implementation of Thread.wait_read and Thread.wait_write will perform
+> either a select() or go through the scheduler which will perform the
+> select().  It seems to me that the implementation should be:
+> 
+> let rec read fd buff ofs len =
+>   try Unix.read fd buff ofs len
+>   with Unix_error((EAGAIN | EWOULDBLOCK), _, _) -> 
+>     begin
+>       Thread.wait_read fd;
+>       read fd buff ofs len
+>     end
+> 
+> This way, if I/O is already available, there is no need to do the extra
+> select().  Am I missing something?
+
+No.  You could indeed do this; I just didn't think about it.
+It will run faster than the current implementation if data is
+available most of the time (no need for select()), but slower if data
+is not available most of the time (you'll do a useless read() before
+calling select()).  I'd be interested to know which implementation is
+better on your application.
+
+All the best,
+
+- Xavier Leroy
+
+
+

@@ -1,0 +1,100 @@
+Return-Path: <rich@annexia.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id DC458BBAF
+	for <caml-list@yquem.inria.fr>; Sat,  9 Jan 2010 13:52:26 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ag0EAI0KSEtQRFuwX2dsb2JhbACbUhcLCgQWuDaELwQ
+X-IronPort-AV: E=Sophos;i="4.49,247,1262559600"; 
+   d="scan'208";a="44518388"
+Received: from furbychan.cocan.org ([80.68.91.176])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 09 Jan 2010 13:52:26 +0100
+Received: from rich by furbychan.cocan.org with local (Exim 4.63)
+	(envelope-from <rich@annexia.org>)
+	id 1NTano-0008HL-Co; Sat, 09 Jan 2010 12:52:24 +0000
+Date: Sat, 9 Jan 2010 12:52:24 +0000
+To: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Cc: David Allsopp <dra-news@metastack.com>,
+	'caml-list List' <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] problem creating .cma library
+Message-ID: <20100109125224.GC26610@annexia.org>
+References: <56670.41.177.16.252.1262195331.squirrel@41.177.16.252> <4B3BE288.4030701@citycable.ch> <3EE07409-9559-4B91-BA3E-8787D1378275@inria.fr> <4B47C201.7090201@citycable.ch> <4B47C59C.9080505@starynkevitch.net> <4B47C9BE.4060309@citycable.ch> <001f01ca9101$7ee76850$7cb638f0$@romulus.metastack.com> <4B486974.7060007@citycable.ch>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <4B486974.7060007@citycable.ch>
+User-Agent: Mutt/1.5.13 (2006-08-11)
+From: Richard Jones <rich@annexia.org>
+X-Spam: no; 0.00; 0100,:01 guillaume:01 guillaume:01 ocaml:01 camlparam:01 camlreturn:01 stubs:01 stubs:01 camlparam:01 allocator:01 allocations:01 pointer:01 pointer:01 ocaml:01 allocates:01 
+
+On Sat, Jan 09, 2010 at 12:33:08PM +0100, Guillaume Yziquel wrote:
+> David Allsopp a écrit :
+> >Guillaume Yziquel:
+> >
+> >>So, no allocation of OCaml values (or in place modification, either, I
+> >>guess) implies no need for CAMLparam/CAMLreturn stuff?
+> >
+> >Chapter 18 of the manual in Section 18.5 describes pretty much everything 
+> >you need to know about writing safe stubs that work with the garbage 
+> >collector.  
+> 
+> Yes. It is all I need to know to write safe stubs. But it does not 
+> answer the question above. It does state that you do not need 
+> registration of the result value if there's no allocation going on 
+> between the moment result get its value and the return statement. But it 
+> does not say when you can avoid CAMLparam macros.
+
+The basic problem is that whenever you do an allocation, the allocator
+might need to run the garbage collector.  Allocations from the minor
+heap are normally quick (just comparing and decrementing a pointer),
+but once the minor heap runs out a minor heap collection has to be
+done, and that implies a slice of major heap collection too.
+
+Why is this a problem?  Because you might in your C code have some
+value on the stack.  'value' is (or can be) a pointer.  The OCaml
+garbage collector can move pointed-to-objects around, firstly from the
+minor heap to the major heap, secondly when compacting the major heap.
+So your C value (pointer) *could* become an invalid pointer if what it
+was pointing to got moved.
+
+The way to avoid this small chance is to register the value with the
+garbage collector, which is essentially what the CAMLparam* and
+CAMLlocal* macros do.  So if the GC needs to move that object, it will
+update the pointer for you.
+
+If your function never allocates (and never calls anything which
+allocates), then you don't need to register values, because no
+allocation => they can't be moved.  [In fact there are some other
+exceptions as well where you can prove that an allocation won't move
+your pointer, eg. if you only allocate one thing and immediately
+return the value.]
+
+However it's always safe to use the macros, even if you're not
+allocating, albeit a tiny little bit slower.
+
+You might find my series on the garbage collector interesting if you
+want to look into this further:
+
+http://rwmj.wordpress.com/?s=ocaml+internals
+
+Also if you are calling C functions which don't allocate from OCaml
+code, you might want to read about noalloc:
+
+http://camltastic.blogspot.com/2008/08/tip-calling-c-functions-directly-with.html
+
+> By the way, here's a question I've been wondering about this section. 
+> Rule 3: When I have a Abstract_tag block used to wrap a pointer in the C 
+> heap, it seems to me that you can just do it with a Field(v,0)= 
+> assignment. Do you need Store_field for that?
+
+This is to do with the Remembered Set.  See part 5 of the above
+series.
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat
+

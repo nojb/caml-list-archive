@@ -1,0 +1,139 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA06766 for caml-redistribution; Wed, 19 Nov 1997 10:25:43 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA06727; Wed, 19 Nov 1997 10:24:03 +0100 (MET)
+From: Pierre Weis <weis@pauillac.inria.fr>
+Message-Id: <199711190924.KAA06727@pauillac.inria.fr>
+Subject: Re: Type-checking bug (or feature?) in O'Caml 1.06
+In-Reply-To: <ml200et4h0.fsf@mario.cs.cornell.edu> from Paul Stodghill at "Nov 18, 97 01:57:31 pm"
+To: stodghil@cs.cornell.edu (Paul Stodghill)
+Date: Wed, 19 Nov 1997 10:24:03 +0100 (MET)
+Cc: caml-list@pauillac.inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> [ Pardon, mais non français. ]
+> 
+> Something changed in the way that type checking is done between 1.05 and
+> 1.06. Bug or feature?
+
+What's up, doc ?
+----------------
+
+Yes something has changed: the type of iter functionals in the
+library. The function to be iterated has now to have unit as target
+type, instead of having a polymorphic 'c target. For instance,
+List.iter is now declared as
+
+List.iter : ('a -> unit) -> 'a list -> unit
+
+You may ask why this change has beeen done ? The answer is simply to catch
+more programming errors than before.
+
+In particular, this is useful to avoid iteration of a partially
+evaluated function, that (silently) does nothing at all. As an
+example, consider:
+
+let format_ints i j = printf "%d : %d, " i j;;
+
+With the old prototype for List.iter, you get:
+
+        Objective Caml version 1.05
+
+# [...]
+# List.iter format_ints [1;2;3];;
+- : unit = ()
+
+This bug may be very tedious to find in the middle of a huge
+program. Now, compare with the new version of O'Caml:
+
+        Objective Caml version 1.06
+
+# [...]
+# List.iter format_ints [1;2;3];;
+This expression has type int -> int -> unit but is here used with type
+  int -> unit
+
+The ``effect free'' wrong iteration bug has been statically trapped.
+
+This behaviour is more consistant with the safe programming standards
+of Caml :)
+
+What have I to modify in my existing programs ?
+-----------------------------------------------
+Several cases:
+ (0) : the new prototype for iter find a bug in your program. Thanks
+       the new behaviour of O'Caml and correct your bug.
+ (1) : you already have defined some iter functional in your
+       modules. To be consistent, update their profiles to the new one.
+ (2) : you were iterating functions with the wrong type, that is
+       functions that do not return a unit value. Two possibilities:
+       -- change ``iter f'' into ``iter (function x -> f x; ())'' or better
+          use ``iter (function x -> let _ = f x in ())'' that
+          explicitly throws away the result of f.
+       -- define a new function that returns unit (the pure
+       side-effect part of the old function) and iter that new
+       function. In many cases, this is clearer and may be more
+       efficient. It is also reminiscent of having two functionals for
+       iteration on lists: one for computations (meaningful results)
+       that is map, one for side-effects only List.iter.
+
+That's all what you have to do.
+
+> [...]
+> % ~/usr/sparc-solaris/bin/ocamlc -c caml_map.mli
+> % ~/usr/sparc-solaris/bin/ocamlc -c caml_map.ml
+> The implementation caml_map.ml does not match the interface caml_map.cmi:
+> Values do not match:
+>   val iter : ('a -> 'b -> unit) -> ('a, 'b) t -> unit
+> is not included in
+>   val iter : ('a -> 'b -> 'c) -> ('a, 'b) t -> unit
+
+Nothing strange here, this is a regular typechecking sanity check.
+
+> [...]
+> From caml_map.mli:
+> ---------------------------------------------------------------------------
+> val iter: ('a -> 'b -> 'c) -> ('a, 'b) t -> unit
+> ---------------------------------------------------------------------------
+> 
+> From caml_map.ml:
+> ---------------------------------------------------------------------------
+> let iter f m =
+>   let rec iter = function
+>     Empty -> ()
+>   | Node(l, b, r, _) ->
+>       iter l;
+>       f b.key b.data;
+>       List.iter (f b.key) b.prev;
+>       iter r
+>   in iter m.tree;;
+> ---------------------------------------------------------------------------
+> Paul Stodghill <stodghil@cs.cornell.edu>
+> http://www.cs.cornell.edu/home/stodghil/home.html
+
+Nothing strange as well: the line
+
+>       List.iter (f b.key) b.prev;
+
+constraints f to have a unit target type. Hence Caml_map.iter gets
+type ('a -> 'b -> unit) -> ('a, 'b) t -> unit. Hence the mismatch with
+the declared interface.
+
+You just have to change the interface, according to the more accurate
+type for iteration functions. In interface caml_map.mli, declare iter
+with the appropriate type:
+
+ val iter : ('a -> 'b -> unit) -> ('a, 'b) t -> unit
+
+Best regards,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+
+
+
+

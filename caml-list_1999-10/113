@@ -1,0 +1,108 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA01712 for caml-redistribution; Tue, 12 Oct 1999 16:24:29 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA22620 for <caml-list@pauillac.inria.fr>; Tue, 12 Oct 1999 15:08:51 +0200 (MET DST)
+Received: from post.tepkom.ru (post.tepkom.ru [195.9.10.12])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id PAA11436
+	for <caml-list@pauillac.inria.fr>; Tue, 12 Oct 1999 15:08:49 +0200 (MET DST)
+Received: (from msk@localhost)
+	by post.tepkom.ru (8.9.3/8.9.3) id RAA18857
+	for caml-list@pauillac.inria.fr.ANTIVIRUS; Tue, 12 Oct 1999 17:09:03 +0400
+Received: from localhost (msk@localhost)
+	by post.tepkom.ru (8.9.3/8.9.3) with ESMTP id RAA18824;
+	Tue, 12 Oct 1999 17:08:56 +0400
+X-Authentication-Warning: post.tepkom.ru: msk owned process doing -bs
+Date: Tue, 12 Oct 1999 17:08:56 +0400 (MSD)
+From: Anton Moscal <msk@post.tepkom.ru>
+To: Christophe Raffalli <Christophe.Raffalli@univ-savoie.fr>
+cc: Caml list <caml-list@pauillac.inria.fr>
+Subject: Re: About array
+In-Reply-To: <380324A8.DEB61647@univ-savoie.fr>
+Message-ID: <Pine.LNX.4.03.9910121632410.15489-100000@post.tepkom.ru>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: weis
+
+
+> On Sun, 10 Oct 1999, skaller wrote:
+> > 
+> > > > Assignment to array element can be very ineffictive in O'Caml due to the
+> > > > following reasons:
+> > > >
+> > > > 1)O'Caml uses generational GC.
+> 
+> This is only true for array containning pointer, not array of float or integer.
+
+This is true for array, which CAN contains pointer (i.e. for polymorphic 
+type 'a array this is also true).
+
+> 
+> But this raise the following question:
+> Is the function Array.init implemented to solve the GC problem mentioned above
+> ?
+
+I saw in array.ml sources and found the following implementations of
+Array.init:
+========================
+let init l f =
+  if l = 0 then [||] else
+   let res = create l (f 0) in
+   for i = 1 to pred l do
+     unsafe_set res i (f i)
+   done;
+   res
+=======================
+
+I.e. answer is "No". 
+
+Good implementation (even in assembly) is not so simple: immediately after
+memory allocation we can write to array without `modify'
+function call until first minor GC call. 
+
+Evaluation `f i' can cause GC call -> we must use modify function. Really
+we can check address of our fresh array after each `f i'. While this
+address remains unchanged we have no need to call `modify'. I think this
+will be good.
+
+I made the following experiment:
+
+==============================
+let inc a = 
+  Array.init (Array.length a) (fun i->a.(i)+1);;
+
+let rec test (a:int array) = function
+   0 -> a
+ | n -> test (inc a) (n-1)
+;;
+
+test (Array.create 1000 0) 2000;;
+==============================
+runs 1.44 sec (on 586/133 mHz)
+(with -unsafe option). `init' is exact copy of Array.init.
+
+When I replace standard `init' function by the following code:
+==============================
+let init l f =
+  if l = 0 then [||] else
+  let res = Array.create l (f 0) in
+  let addr = ((Obj.magic res):int) lsr 1 in
+  let res' = ((Obj.magic res):(int array))
+in
+    for i = 1 to pred l do
+      let x = f i in
+      if addr = ((Obj.magic res):int) lsr 1
+then
+        Array.unsafe_set res' i x
+      else
+        Array.unsafe_set res i x
+    done;
+  res
+==============================
+time became 0.97 sec (but this version will not work
+with float arrays)
+
+Regards,
+Anton Moscal
+
+
+
+
+

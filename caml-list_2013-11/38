@@ -1,0 +1,107 @@
+Return-Path: <whitequark@whitequark.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id E0E637EE25
+	for <caml-list@sympa.inria.fr>; Wed,  6 Nov 2013 08:19:10 +0100 (CET)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  whitequark@whitequark.org) identity=pra;
+  client-ip=176.58.103.125;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="whitequark@whitequark.org";
+  x-sender="whitequark@whitequark.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  whitequark@whitequark.org designates 176.58.103.125 as
+  permitted sender) identity=mailfrom;
+  client-ip=176.58.103.125;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="whitequark@whitequark.org";
+  x-sender="whitequark@whitequark.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@mail.whitequark.org) identity=helo;
+  client-ip=176.58.103.125;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="whitequark@whitequark.org";
+  x-sender="postmaster@mail.whitequark.org";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmIOAPjseVKwOmd9/2dsb2JhbABZhxqGR7J7gnqBOXSCJQEBBAEjDwEFOgwLBAUCGgImAgIsKwYbE4dgCpAym16SQIEpiAiGLxaCVYFEA4k6iVWXBIMrNw
+X-IPAS-Result: AmIOAPjseVKwOmd9/2dsb2JhbABZhxqGR7J7gnqBOXSCJQEBBAEjDwEFOgwLBAUCGgImAgIsKwYbE4dgCpAym16SQIEpiAiGLxaCVYFEA4k6iVWXBIMrNw
+X-IronPort-AV: E=Sophos;i="4.93,644,1378850400"; 
+   d="scan'208";a="41167868"
+Received: from fehu.whitequark.org (HELO mail.whitequark.org) ([176.58.103.125])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 06 Nov 2013 08:18:34 +0100
+Received: by mail.whitequark.org (Postfix, from userid 33)
+	id B29964D715; Wed,  6 Nov 2013 11:19:09 +0400 (MSK)
+To: <caml-list@inria.fr>
+X-PHP-Originating-Script: 1000:main.inc
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8;
+ format=flowed
+Content-Transfer-Encoding: 8bit
+Date: Wed, 06 Nov 2013 11:19:09 +0400
+From: Peter Zotov <whitequark@whitequark.org>
+In-Reply-To: <CAHaHOqR6bwy0fnMAFm9KDQGwAH2FSi89p2J4HG9d_SkK6dyNpQ@mail.gmail.com>
+References: <d7f9f3fb65cc0c93ba87569464c80910@whitequark.org>
+ <5278D1D1.4060009@gmail.com>
+ <523e06f6b965a40b16bc8fe69a88e339@whitequark.org>
+ <CAHaHOqR6bwy0fnMAFm9KDQGwAH2FSi89p2J4HG9d_SkK6dyNpQ@mail.gmail.com>
+Message-ID: <a25ea39845a65ea0dae832c692cc0e2a@whitequark.org>
+X-Sender: whitequark@whitequark.org
+User-Agent: Roundcube Webmail/0.8.6
+Subject: Re: [Caml-list] LLVM OCaml bindings
+
+Jeff Meister писал 06.11.2013 01:00:
+> I can call const_int to get an llvalue representing an integer, then
+> pass this llvalue as the first argument to build_call, which expects a
+> function. Since both have type llvalue, the OCaml type checker will
+> not complain, but a segfault or other undefined behavior will likely
+> result at runtime.
+
+As mentioned elsewhere, it's defined in Asserts build. Personally,
+I'm going to ship my compiler with LLVM built in Release+Asserts mode.
+
+> What I did to fix this was reintroduce the inheritance hierarchy
+> present in the C++ code. Using some module system tricks to make
+> OCaml's structural subtyping act like nominal subtyping, I refactored
+> everything into classes. In my version, const_int would return a
+> ConstInt.t, which is a subtype of Value.t, but not compatible with the
+> Function.t required by build_call.
+
+One thing to consider is that the C++ API does not use subtyping for
+this kind of safety, either. Consider the prototype of
+IRBuilder::CreateCall:
+CallInst *CreateCall (Value *Callee, ArrayRef< Value * > Args, const 
+Twine &Name="")
+
+This means that there is no guarantee you can convert the API to use
+the subtyping safety measure you devised. Indeed, there are several
+functions which do not have an equivalent type in hierarchy.
+Llvm.set_volatile expects a [load] or [store], where Llvm.set_alignment
+expects a [load], [store] or a global value, and 
+Llvm.set_atomic_ordering
+expects a [load], [store], [atomicrmw], [fence], or [cmpxchg].
+LLVM itself represents this by trying to explicitly cast the 
+instruction
+to each supported one, and then calling the corresponding method.
+
+Interestingly, this kind of relationship can be expressed better by 
+OCaml's
+structural OO system than C++'s nominative one. I think that a project
+to wrap either LLVM's C or C++ API into OCaml's classes and objects may
+be a good solution to at least part of the problem. I don't have time
+to develop this myself, though.
+
+> I will try to find my code and put it up on GitHub if it would be 
+> useful to you.
+
+I would be interested to look into it, but I probably will not 
+integrate
+it into the bindings.
+
+-- 
+   WBR, Peter Zotov.

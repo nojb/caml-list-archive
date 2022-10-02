@@ -1,0 +1,104 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p5992j9n019033
+	for <caml-list@sympa-roc.inria.fr>; Thu, 9 Jun 2011 11:02:45 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuwBALKL8E3B/BfWkWdsb2JhbABFDYRJogMBAQEBCQsLBxQDIrYfkQuBK4FvgX+BCgSRKoRNiwc
+X-IronPort-AV: E=Sophos;i="4.65,340,1304287200"; 
+   d="scan'208";a="85102537"
+Received: from msa05.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.214])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 09 Jun 2011 11:02:09 +0200
+Received: from [192.168.1.63] ([83.199.85.201])
+	by mwinf5d19 with ME
+	id tl281g00B4Le9Sj03l28eR; Thu, 09 Jun 2011 11:02:09 +0200
+Message-ID: <4DF08C10.1070607@frisch.fr>
+Date: Thu, 09 Jun 2011 11:02:08 +0200
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686 (x86_64); en-US; rv:1.9.2.17) Gecko/20110414 Thunderbird/3.1.10
+MIME-Version: 1.0
+To: Gerd Stolpmann <info@gerd-stolpmann.de>
+CC: Joel Reymont <joelr1@gmail.com>, caml-list <caml-list@inria.fr>
+References: <346B52D2-EE21-43D1-B41E-3AEB3BBF0013@gmail.com>	 <4DD4150E.6080400@frisch.fr> <4DD4D3C3.9050603@frisch.fr>	 <09C897B9-05FC-486C-A126-C644D04BAE94@gmail.com>	 <4DD4F817.9060901@frisch.fr> <1305808801.22800.164.camel@thinkpad>
+In-Reply-To: <1305808801.22800.164.camel@thinkpad>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] optimizing numerical code
+
+On 05/19/2011 02:40 PM, Gerd Stolpmann wrote:
+> Would it make sense to let the developer help when deciding which
+> occurrences of a variable are important and which not? I'm thinking here
+> of a function
+>
+> let rare = identity
+>
+> with the additional pragma that the argument of rare is considered as an
+> expression that is rarely evaluated. In our example:
+>
+> let js_divergence1 v1 v2 =
+>    let acc = ref 0. in
+>    for i = 0 to (Array.length v1) - 1 do
+>      let x = v1.(i)
+>      and y = v2.(i) in
+>      let m = 0.5 *. (x +. y) in
+>      let d1 = x *. log (x /. m)
+>      and d2 = y *. log (y /. m) in
+>      acc := !acc +. d1 +. d2
+>    done;
+>    rare (!acc)              (* HERE *)
+>
+> For the check whether a float can be unboxed, rare occurrences are
+> simply ignored. Maybe it is also helpful for other decisions, e.g.
+> register allocation.
+>
+>> Here is another "lazy" approach that could be worth trying.
+>
+> In some sense, this goes into the same direction, only that rare-ness is
+> determined at runtime.
+
+I think it's good to explore more efficient "generic" compilation 
+schemes first before introducing pragma to drive optimization heuristics 
+(the choice of pragma would anyway depend on the generic compilation 
+scheme).
+
+For instance, it could very well be the case that a compilation scheme 
+which guarantees that "float" variables are always represented in 
+unboxed form within a function's body would improve performance a lot 
+in most common cases and would already be good enough. It remains to 
+decide what to do when the variable needs to be accessed in "boxed" form 
+as well (e.g. when the float is passed to a function which cannot be 
+inlined). Possible choices:
+
+  - Always create a new boxed value at the place the boxed version is 
+needed.
+
+  - Variant: keep a cache of the boxed value; check that the cache is 
+up-to-date when the boxed version is needed (no overhead for 
+assignment). (Optionally, if the assigned value comes in boxed form, 
+e.g. as the result of a function call, keep that as the new value for 
+the cache.)
+
+This can also be combined with a simple analysis that simplifies e.g. 
+cases where the variable is assigned and then necessarily used in boxed 
+form (we can then box early and avoid extra checks when the boxed value 
+is needed).
+
+
+All these variants and optimizations are rather straightforward to 
+implement and I suspect they would give very good results. The only 
+tricky point is actually to detect "float" variables at the level of the 
+"Cmm" intermediate language. Currently, ocamlopt only performs inlining 
+when all uses of the variable are in "float unboxing" contexts. The 
+"more_unboxing" branch assumes that a variable is a float
+when it is accessed at least once in a "float unboxing" context. 
+Unfortunately, this is unsafe in presence of GADTs (because a variable 
+can then have different types in different pattern matching branches 
+within the same function body). A clean solution would be to propagate 
+some (limited) type information from higher-level intermediate languages 
+down to the cmm level. This require some work but is not very difficult 
+(and we need a very limited form of type information here).
+
+Btw, the same kind of unboxing would also be useful for bigarrays. One 
+could "unbox" the underlying data pointer and thus avoid some overhead 
+when accessing individual cells of the bigarray.
+
+
+Alain

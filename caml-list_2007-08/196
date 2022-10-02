@@ -1,0 +1,284 @@
+Return-Path: <rich@annexia.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 19E40BC69
+	for <caml-list@yquem.inria.fr>; Tue, 14 Aug 2007 18:22:11 +0200 (CEST)
+Received: from furbychan.cocan.org (furbychan.cocan.org [80.68.91.176])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l7EGMASZ026849
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Tue, 14 Aug 2007 18:22:10 +0200
+Received: from rich by furbychan.cocan.org with local (Exim 3.35 #1 (Debian))
+	id 1IKz9i-00019q-00
+	for <caml-list@inria.fr>; Tue, 14 Aug 2007 17:22:06 +0100
+Date: Tue, 14 Aug 2007 17:22:06 +0100
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Weak hash table for attaching extra data to an object
+Message-ID: <20070814162206.GA1651@furbychan.cocan.org>
+References: <20070814101535.GA14485@furbychan.cocan.org>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="HlL+5n6rz5pIUxbD"
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <20070814101535.GA14485@furbychan.cocan.org>
+User-Agent: Mutt/1.5.9i
+From: Richard Jones <rich@annexia.org>
+X-Miltered: at discorde with ID 46C1D6B2.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; hash:01 hash:01 stdlib:01 overwritten:01 bindings:01 hastable:01 damien:01 sig:01 val:01 val:01 bool:01 iter:01 hashtbl:01 hashedtype:01 struct:01 
+X-Attachments: cset="utf-8" name="weakMetadata.ml" 
+
+
+--HlL+5n6rz5pIUxbD
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+Attached is my attempt to make a WeakMetadata module (a weak hash
+table where only the key is weak and the value is used to store
+metadata about the key).  It is derived from Remi Vanicat's Hweak
+module, which is itself derived from the weak set in stdlib.
+
+Unfortunately it relies on the following being safe.  I have no idea
+if this is safe or not.
+
+  Array.create 0 (Obj.magic ())
+
+Also it doesn't clean up the extra data (metadata) very aggressively.
+It basically waits for it to get overwritten when further bindings are
+added to a bucket.  So if the metadata is very large it would be worth
+adding some sort of "compact" method.
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat
+
+--HlL+5n6rz5pIUxbD
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: attachment; filename="weakMetadata.ml"
+Content-Transfer-Encoding: 8bit
+
+(***********************************************************************)
+(*                                                                     *)
+(*                           HWeak                                     *)
+(*                                                                     *)
+(*                        Remi Vanicat                                 *)
+(*                                                                     *)
+(*  Copyright 2002 Rémi Vanicat                                        *)
+(*  All rights reserved.  This file is distributed under the terms of  *)
+(*  the GNU Library General Public License, with the special exception *)
+(*  on linking described in the LICENCE file of the Objective Caml     *)
+(*  distribution                                                       *)
+(*                                                                     *)
+(*  Most of this file is an adptation of the implentation of Weak      *)
+(*  Hastable by Damien Doligez that can be found into Objective Caml   *)
+(*  which is Copyright 1997 Institut National de Recherche en          *)
+(*  Informatique et en Automatique and is distributed under the same   *)
+(*  licence                                                            *)
+(*                                                                     *)
+(***********************************************************************)
+
+(* RWMJ: Modified so that only the key is weak. *)
+
+(** Weak array operations *)
+
+(** Weak hash tables *)
+
+module type S = sig
+  type key
+  type 'a t
+  val create : int -> 'a t
+  val clear : 'a t -> unit
+  val add : 'a t -> key -> 'a -> unit
+  val replace : 'a t -> key -> 'a -> unit
+  val remove : 'a t -> key -> unit
+  val merge : 'a t -> key -> 'a -> 'a
+  val find : 'a t -> key -> 'a
+  val find_all : 'a t -> key -> 'a list
+  val mem : 'a t -> key -> bool
+  val iter : (key -> 'a -> unit) -> 'a t -> unit
+  val fold : (key -> 'a -> 'b -> 'b) -> 'a t -> 'b -> 'b
+  val count : 'a t -> int
+  val stats : 'a t -> int * int * int * int * int * int
+end;;
+
+module Make (H : Hashtbl.HashedType) : (S with type key = H.t) = struct
+
+  type key = H.t;;
+
+  let emptykeybucket : key Weak.t = Weak.create 0;;
+
+  type 'a t = {
+    emptydatabucket : 'a array;
+    mutable table : (key Weak.t * 'a array) array;
+    mutable totsize : int;             (* sum of the bucket sizes *)
+    mutable limit : int;               (* max ratio totsize/table length *)
+  };;
+
+  let get_index t d = (H.hash d land max_int) mod (Array.length t.table);;
+
+  let create sz =
+    let sz = if sz < 7 then 7 else sz in
+    let sz = if sz > Sys.max_array_length then Sys.max_array_length else sz in
+    let edb = Array.create 0 (Obj.magic ()) in
+    {
+      emptydatabucket = edb;
+      table = Array.create sz (emptykeybucket, edb);
+      totsize = 0;
+      limit = 3;
+    };;
+
+  let clear t =
+    for i = 0 to Array.length t.table - 1 do
+      t.table.(i) <- (emptykeybucket, t.emptydatabucket);
+    done;
+    t.totsize <- 0;
+    t.limit <- 3;
+  ;;
+
+  let fold f t init =
+    let rec fold_bucket i ((b1, b2) as cpl) accu =
+      if i >= Weak.length b1 then accu else
+      match (Weak.get b1 i, Array.get b2 i) with
+      | (Some v1, v2) -> fold_bucket (i+1) cpl (f v1 v2 accu)
+      | _ -> fold_bucket (i+1) cpl accu
+    in
+    Array.fold_right (fold_bucket 0) t.table init
+  ;;
+
+  let iter f t = fold (fun d1 d2 () -> f d1 d2) t ();;
+
+  let count t =
+    let rec count_bucket i ((b1, b2) as cpl) accu =
+      if i >= Weak.length b1 then accu else
+      count_bucket (i+1) cpl (accu + (if Weak.check b1 i then 1 else 0))
+    in
+    Array.fold_right (count_bucket 0) t.table 0
+  ;;
+
+  let next_sz n = min (3*n/2 + 3) (Sys.max_array_length - 1);;
+
+  let rec resize t =
+    let oldlen = Array.length t.table in
+    let newlen = next_sz oldlen in
+    if newlen > oldlen then begin
+      let newt = create newlen in
+      newt.limit <- t.limit + 100;          (* prevent resizing of newt *)
+      fold (fun f t () -> add newt f t) t ();
+   (* assert Array.length newt.table = newlen; *)
+      t.table <- newt.table;
+      t.limit <- t.limit + 2;
+    end
+
+  and add_aux t k e index =
+    let bucket1, bucket2 = t.table.(index) in
+    let sz = Weak.length bucket1 in
+    let rec loop i =
+      if i >= sz then begin
+        let newsz = min (sz + 3) (Sys.max_array_length - 1) in
+        if newsz <= sz then failwith "Weak.Make : hash bucket cannot grow more";
+        let newbucket1 = Weak.create newsz 
+	and newbucket2 = Array.create newsz e in
+        Weak.blit bucket1 0 newbucket1 0 sz;
+        Array.blit bucket2 0 newbucket2 0 sz;
+        Weak.set newbucket1 i (Some k);
+	(*Array.set newbucket2 i e; -- implied by Array.create above*)
+        t.table.(index) <- (newbucket1, newbucket2);
+        t.totsize <- t.totsize + (newsz - sz);
+        if t.totsize > t.limit * Array.length t.table then resize t;
+      end else begin
+        if Weak.check bucket1 i
+        then loop (i+1)
+        else 
+	  begin
+	    Weak.set bucket1 i (Some k);
+	    Array.set bucket2 i e;
+	  end
+      end
+    in
+    loop 0;
+
+  and add t k e = add_aux t k e (get_index t k)
+  ;;
+
+  let find_or t d ifnotfound =
+    let index = get_index t d in
+    let (bucket1, bucket2) = t.table.(index) in
+    let sz = Weak.length bucket1 in
+    let rec loop i =
+      if i >= sz then ifnotfound index
+      else begin
+        match Weak.get_copy bucket1 i with
+        | Some v when H.equal v d -> Array.get bucket2 i
+        | _ -> loop (i+1)
+      end
+    in
+    loop 0
+  ;;
+
+  let merge t k d = find_or t k (fun index -> add_aux t k d index; d);;
+
+  let find t d = find_or t d (fun index -> raise Not_found);;
+
+  let find_shadow t d iffound ifnotfound =
+    let index = get_index t d in
+    let (bucket1, bucket2) = t.table.(index) in
+    let sz = Weak.length bucket1 in
+    let rec loop i =
+      if i >= sz then ifnotfound else begin
+        match Weak.get_copy bucket1 i with
+        | Some v when H.equal v d
+	    -> iffound bucket1 bucket2 i
+        | _ -> loop (i+1)
+      end
+    in
+    loop 0
+  ;;
+
+  let replace t k d = 
+    if (find_shadow t k 
+	  (fun w1 w2 i -> 
+	     Weak.set w1 i (Some k); Array.set w2 i d; false ) true) 
+    then
+      add t k d
+
+  let remove t d = find_shadow t d
+		     (fun w1 w2 i ->
+			Weak.set w1 i None;
+			(*Array.set w2 i ? -- leave it, it'll be overwritten*))
+		     ()
+
+  let mem t d = find_shadow t d (fun _ _ i -> true) false
+
+  let find_all t d =
+    let index = get_index t d in
+    let (bucket1, bucket2) = t.table.(index) in
+    let sz = Weak.length bucket1 in
+    let rec loop i accu =
+      if i >= sz then accu
+      else begin
+        match Weak.get_copy bucket1 i with
+        | Some v when H.equal v d
+	    -> let v = Array.get bucket2 i in loop (i+1) (v::accu)
+        | _ -> loop (i+1) accu
+      end
+    in
+    loop 0 []
+  ;;
+
+  let stats t =
+    let len = Array.length t.table in
+    let lens = Array.map (fun (b,_) -> Weak.length b) t.table in
+    Array.sort compare lens;
+    let totlen = Array.fold_left ( + ) 0 lens in
+    (len, count t, totlen, lens.(0), lens.(len/2), lens.(len-1))
+  ;;
+
+end;;
+
+--HlL+5n6rz5pIUxbD--
+

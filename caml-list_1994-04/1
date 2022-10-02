@@ -1,0 +1,148 @@
+Received: by pauillac.inria.fr; Wed, 6 Apr 94 13:33:07 +0200
+Received: from margaux.inria.fr by pauillac.inria.fr; Wed, 6 Apr 94 11:20:22 +0200
+Received: from concorde.inria.fr by margaux.inria.fr, Wed, 6 Apr 94 11:20:18 +0200
+Received: from polytechnique.polytechnique.fr (root@polytechnique.polytechnique.fr [129.104.30.1]) by concorde.inria.fr (8.6.8/8.6.6) with ESMTP id LAA03265 for <caml-list@margaux.inria.fr>; Wed, 6 Apr 1994 11:20:16 +0200
+Received: from lix.polytechnique.fr (lix.polytechnique.fr [129.104.11.2]) by polytechnique.polytechnique.fr (8.6.4/8.6.4) with SMTP id LAA24895 for <caml-list@margaux.inria.fr>; Wed, 6 Apr 1994 11:30:07 +0200
+Received: by lix.polytechnique.fr (5.65/5.65c-IDA-polytechnique)
+	id AA12930; Wed, 6 Apr 1994 11:20:34 +0200
+Date: Wed, 6 Apr 1994 11:20:34 +0200
+From: Damien.Doligez@inria.fr (Damien Doligez)
+Message-Id: <9404060920.AA12930@lix.polytechnique.fr>
+To: caml-list@margaux.inria.fr
+Subject: Patch for the Caml-Light runtime.
+Sender: weis@pauillac.inria.fr
+Status: O
+
+This patch will solve the problem of extra arguments being passed to
+executable byte-code files on a variety of Unix systems (Pyramid,
+Sequent, HP-UX, ...)  You need to install this patch if the "fib"
+program in the "examples/basics" directory replies "Bad integer
+constant" even when you give it a correct number as argument.
+
+It is harmless to install this patch on systems where it is not
+needed.
+
+To install this patch, save this mail in your Caml Light source
+directory "src/runtime" as file "patch1", go to that directory and
+type "patch <patch1".  (You will need the "patch" utility, which is
+widely available in source form. (e.g. from ftp.inria.fr))
+Then recompile and reinstall Caml Light.  (If you know what you are
+doing, you can recompile and reinstall only the runtime.)
+
+*** main.c	Mon Jul 19 01:20:51 1993
+--- main.c.new	Tue Apr  5 21:03:34 1994
+***************
+*** 58,75 ****
+  
+  extern char * searchpath();
+  
+! int attempt_open(name, trail)
+       char ** name;
+       struct exec_trailer * trail;
+  {
+    char * truename;
+    int fd;
+    int err;
+  
+    truename = searchpath(*name);
+    if (truename == 0) truename = *name; else *name = truename;
+    fd = open(truename, O_RDONLY | O_BINARY);
+    if (fd == -1) return FILE_NOT_FOUND;
+    err = read_trailer(fd, trail);
+    if (err != 0) { close(fd); return err; }
+    return fd;
+--- 58,82 ----
+  
+  extern char * searchpath();
+  
+! int attempt_open(name, trail, do_open_script)
+       char ** name;
+       struct exec_trailer * trail;
++      int do_open_script;
+  {
+    char * truename;
+    int fd;
+    int err;
++   char buf [2];
+  
+    truename = searchpath(*name);
+    if (truename == 0) truename = *name; else *name = truename;
+    fd = open(truename, O_RDONLY | O_BINARY);
+    if (fd == -1) return FILE_NOT_FOUND;
++   if (!do_open_script){
++     err = read (fd, buf, 2);
++     if (err < 2) return TRUNCATED_FILE;
++     if (buf [0] == '#' && buf [1] == '!') return BAD_MAGIC_NUM;
++   }
+    err = read_trailer(fd, trail);
+    if (err != 0) { close(fd); return err; }
+    return fd;
+***************
+*** 82,87 ****
+--- 89,115 ----
+    "usage: camlrun [-v] [-V] [-g generation size] [-F free mem %] <file> <args>\n";
+  #endif
+  
++ /* Invocation of camlrun: 4 cases.
++ 
++    1.  runtime + bytecode
++        user types:  camlrun [options] bytecode args...
++        arguments:  camlrun [options] bytecode args...
++ 
++    2.  bytecode script
++        user types:  bytecode args...
++     a  arguments: (kernel1)  camlrun ./bytecode args...
++     b  arguments: (kernel2)  bytecode bytecode args...
++ 
++    3.  concatenated runtime and bytecode
++        user types:  composite args...
++        arguments:  composite args...
++ 
++ Algorithm: try to use the first argument as a byte-code file, except when
++ it starts with #! (case 2b).  If that fails (cases 1 and 2a) or if the file
++ starts with #!, parse the line as: (whatever) [options] bytecode args...
++ 
++ */
++ 
+  int main(argc, argv)
+       int argc;
+       char * argv[];
+***************
+*** 108,114 ****
+  #endif
+  
+    i = 0;
+!   fd = attempt_open(&argv[0], &trail);
+  
+    if (fd < 0) {
+  
+--- 136,142 ----
+  #endif
+  
+    i = 0;
+!   fd = attempt_open(&argv[0], &trail, 0);
+  
+    if (fd < 0) {
+  
+***************
+*** 149,155 ****
+        exit(2);
+      }
+  
+!     fd = attempt_open(&argv[i], &trail);
+  
+      switch(fd) {
+      case FILE_NOT_FOUND:
+--- 177,183 ----
+        exit(2);
+      }
+  
+!     fd = attempt_open(&argv[i], &trail, 1);
+  
+      switch(fd) {
+      case FILE_NOT_FOUND:
+
+
+
+
+

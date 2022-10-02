@@ -1,0 +1,157 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA07389; Wed, 11 Jul 2001 13:09:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA07391 for <caml-list@pauillac.inria.fr>; Wed, 11 Jul 2001 13:09:44 +0200 (MET DST)
+Received: from relay.mailbox.co.za (relay.mailbox.co.za [196.2.147.67])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f6BB9XX16940
+	for <caml-list@inria.fr>; Wed, 11 Jul 2001 13:09:34 +0200 (MET DST)
+Received: from imail (iweb2 [192.168.0.12])
+	by relay.mailbox.co.za (8.11.0/8.11.0) with SMTP id f6BBMxI07686
+	for <caml-list@inria.fr>; Wed, 11 Jul 2001 13:22:59 +0200
+Message-Id: <200107111122.f6BBMxI07686@relay.mailbox.co.za>
+Date: Wed, 11 Jul 2001 13:09:30 +0200
+From: "Willem Duminy" <wduminy@webmail.co.za>
+To: caml-list@inria.fr
+X-Mailer: WebMail v2.52R9
+X-Sender-Ip: 196.2.51.73
+X-Account: 75717
+MIME-Version: 1.0
+Content-Type: text/plain
+Subject: Re: [Caml-list] Iterators and lazy lists
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+I am new to OCAML, and I do not know Python.  I do not know what is
+the "preferred" way to do lazy lists.  Maybe someone can comment on my
+code and tell me a better way to handle lazy lists.
+
+I have translated a lazy list solution (which I read in some article)
+from ML to OCAML.  I think it works well, here is the code. The
+function filterq may be what you are looking for.
+
+CODE STARTS HERE
+
+type 'a seq = Nil | Cons of 'a * (unit->'a seq);;
+
+let head = function
+  Cons(h,t) -> h
+  |  Nil -> raise (Failure "sequence is empty");;
+
+let tail = function
+  Cons(_,t) -> t()
+   Nil -> raise (Failure "sequence is empty");;
+
+(* An increasing sequence of integers starting from k: *)
+let rec from k = Cons(k, fun () -> from (k+1));;
+
+(* takeq converts a lazy list to a normal list *)
+let rec takeq (n, sq) =
+  if n = 0 then []
+  else match sq with
+    Nil -> []
+  | Cons(x,xf) -> x::takeq(n-1,xf());;
+
+(* The squares function shows how construct a lazy list using "from"
+*)
+let rec squares sq = match sq with
+  Nil -> Nil
+  | Cons(x,xf) -> Cons(x*x,fun () -> squares(xf()));;
+
+(* Here is a function that adds the elements of 2 lazy lists to
+produce
+   a third list *)
+let rec addq (sq1, sq2) = match (sq1,sq2) with
+  (Nil,_) -> sq2
+| (_,Nil) -> sq1
+| (Cons(x1,xf1),Cons(x2,xf2)) ->
+      Cons(x1+x2,fun () -> addq(xf1(),xf2()));;
+
+(* Appendq builds a new list from a finiate list and another list *)
+let rec appendq (sq1,sq2) = match (sq1,sq2) with
+  (Nil,_) -> sq2
+  | (Cons(x1,xf1),_) ->
+    Cons(x1,fun () -> appendq (xf1(),sq2));;
+
+(* Iterates generates a sequence [x, f(x), f(f(x)), f(f(f(x))) ...] *)
+let rec iterates f x = Cons(x,fun () -> iterates f (f x));;
+
+(*
+  filterq returns the items in the list that matched the predicate f
+*)
+let rec filterq f sq  = match sq with
+  Nil -> Nil
+  | Cons(x,xf) ->
+  if (f x) then
+    Cons(x,fun () -> filterq f (xf ()))
+  else
+  filterq f (xf ());;
+
+(* Here we create the sequence of prime numbers as an example *)
+let sift p = filterq (fun x -> x mod p <> 0);;
+let rec sieve sq = match sq with
+  Nil -> Nil
+| Cons(x,xf) -> Cons(x, fun () -> sieve(sift x (xf())));;
+let primes = sieve (from 2);;
+(* Show the first ten primes as a normal list *)
+takeq(10,primes);;
+
+(*
+chop n sq chops the first n elements from the sequence and returns
+the rest of the sequence.  An error message is displayed when
+sq has less elements than n.  It may be called with n <= 0.
+In this case the sequence will remain unchanged *)
+let rec chop n sq = match sq with
+  Nil ->
+    raise (Failure "The lazy list is too short")
+  |  Cons (h, tl) ->
+	if n = 0 then tl ()
+	else chop (n-1) (tl ());;
+
+(* Testing chop *)
+(* 11 and higher *)
+let lst_11_to_15 = takeq (5, chop 10 (from 0));;
+(* The 100th and later squares *)
+let square_100_plus = takeq (5, chop 99 (squares (from 0)));;
+(* The 201st and later prime numbers *)
+let bigger_primes = takeq (10, chop 200 primes);;
+
+
+CODE ENDS HERE
+
+On Mon, 09 Jul 2001 22:32:31 -0700 Alexander V. Voinov
+(avv@quasar.ipa.nw.ru) wrote:
+
+>Hi All,
+>
+>I didn't fully understand from the docs, what is the preferred way to
+>generate lazy (e.g., computed on demand) lists in OCaml, like what is
+>achieved in Python via __getitem__. Should I generate a stream for
+this,
+>or define an iterator like in C++?
+>
+>I'd like to find an analog of the following in Python:
+>
+>for item in myCustomDict.lazyItems():
+>	if found(item):
+>		break
+>
+>Certainly, a recursive traversal solution is preferred over a looping
+>one.
+>
+>Thank you in advance
+>
+>Alexander
+>-------------------
+>Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ:
+http://caml.inria.fr/FAQ/
+>To unsubscribe, mail caml-list-request@inria.fr  Archives:
+http://caml.inria.fr
+
+________________________________________________________________
+Mid-year intake! Enrol NOW & stand a chance to win 25% discount
+http://www.milpark.co.za
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

@@ -1,0 +1,91 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA25593; Thu, 11 Sep 2003 17:04:25 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA23317 for <caml-list@pauillac.inria.fr>; Thu, 11 Sep 2003 17:04:24 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h8BF4Nf19220;
+	Thu, 11 Sep 2003 17:04:23 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA25554; Thu, 11 Sep 2003 17:04:22 +0200 (MET DST)
+Date: Thu, 11 Sep 2003 17:04:22 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Christophe Raffalli <christophe.raffalli@univ-savoie.fr>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] GC Question
+Message-ID: <20030911170422.A16344@pauillac.inria.fr>
+References: <25CD01B4-E1E2-11D7-8F1C-00039310CAE8@inria.fr> <3F5CE84F.4030609@univ-savoie.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <3F5CE84F.4030609@univ-savoie.fr>; from christophe.raffalli@univ-savoie.fr on Mon, Sep 08, 2003 at 10:36:31PM +0200
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 ocamlc:01 ocamlopt:01 bytecoded:01 pushes:01 liveness:01 inputfile:01 impl:01 clflags:01 parsetree:01 printast:01 typemod:01 sourcefile:01 modulename:01 translmod:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> in the following kind code :
+> 
+> let l = ... a function building a long list ... in
+> let l' = List.map fn l in (* or fold or anything similar *)
+> ... no more reference to l ...
+> 
+> Once the beginning of l has been read to compute l' (assuming List.map 
+> starts from the beginning of l) is the GC able to collect the beginning 
+> of l ?
+
+Short answer: with ocamlc, no.  With ocamlopt, yes.
+
+Longer answer: in the bytecoded implementation, every value in the VM
+stack is a GC root.  "let x = e in e'" pushes the value of e on the
+stack just before evaluating e', and pops it at the end of e'.  So,
+the value of e remains a live GC root throughout the evaluation of e'.
+
+In the native-code implementation, not all machine stack entries are
+GC roots, but only the stack slots that hold a variable of type
+address that is live at the point where the GC is called.  ("Live"
+here is in the sense of liveness analysis of local variables.)
+In your example, "l" is not live across the call to "List.map fn l".
+
+> If not how to write the code to ensure this behaviour of the GC ?
+
+As other mentioned, removing the outer "let" gives the desired GC
+behavior even in bytecode:
+
+        List.map fn l (... list builder ...)
+
+In the OCaml sources, you can find this strange-looking idiom:
+
+      let (++) x f = f x
+
+      Pparse.file ppf inputfile Parse.implementation ast_impl_magic_number
+      ++ print_if ppf Clflags.dump_parsetree Printast.implementation
+      ++ Typemod.type_implementation sourcefile prefixname modulename env
+      ++ Translmod.transl_implementation modulename
+      ++ print_if ppf Clflags.dump_rawlambda Printlambda.lambda
+      ++ Simplif.simplify_lambda
+      ++ print_if ppf Clflags.dump_lambda Printlambda.lambda
+      ++ Bytegen.compile_implementation modulename
+      ++ print_if ppf Clflags.dump_instr Printinstr.instrlist
+      ++ Emitcode.to_file oc modulename;
+
+which is a nicer way of writing
+
+      Emitcode.to_file oc modulename
+        (print_if ....
+          (Bytegen.compile_implementation ...
+             (print_if ...
+                (...
+                ))))
+
+and gives better GC behavior than the obvious:
+
+      let x1 = Pparse.file ppf inputfile Parse.implementation ast_impl_magic_number in
+      let x2 = print_if ppf Clflags.dump_parsetree Printast.implementation p x1 in
+      let x3 = Typemod.type_implementation sourcefile prefixname modulename env x2 in
+      ...
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

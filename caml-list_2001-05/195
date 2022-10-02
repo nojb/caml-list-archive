@@ -1,0 +1,60 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA22314; Mon, 28 May 2001 15:16:51 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA22241 for <caml-list@pauillac.inria.fr>; Mon, 28 May 2001 15:16:50 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f4SDDQj09483;
+	Mon, 28 May 2001 15:13:26 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA22134; Mon, 28 May 2001 15:13:25 +0200 (MET DST)
+Date: Mon, 28 May 2001 15:13:25 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: David Fox <dsfox@cogsci.ucsd.edu>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] in_channel_length fails for files longer than max_int
+Message-ID: <20010528151325.A21783@pauillac.inria.fr>
+References: <luitj3swez.fsf@hci.ucsd.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <luitj3swez.fsf@hci.ucsd.edu>; from dsfox@cogsci.ucsd.edu on Mon, May 14, 2001 at 09:55:00AM -0700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> The pervasive function in_channel_length fails when the file size is
+> too large for an int, but it doesn't raise an exception.  The code in
+> io.c just checks for lseek errors.  Would a check for end > max_int be
+> worthwhile?
+
+That's one possibility.  The code for channel_size is already less
+portable than it ought to be:
+
+> long channel_size(struct channel *channel)
+> {
+>   long end;
+>   end = lseek(channel->fd, 0, SEEK_END);
+
+The return type of "lseek" is actually off_t, which is specified to be
+"an extended signed integral type".  So, there is no guarantee that a
+"long" can hold a file offset without losing bits, although it happens
+to work on most Unix systems.  The check you suggest would handle this
+case as well.
+
+Then, the conversion of the long into an OCaml "int" loses one more
+bit of precision.  Since off_t is signed, we don't actually lose bits,
+but may end up with a negative file size, which is tolerable for
+printing, but will cause an error if it is passed to "seek".
+
+Chris Hecker suggests:
+
+> Shouldn't all of the file size stuff be converted to int64s now anyway?
+
+That's another option, especially since it would allow "lseek64" or
+"llseek" to be used internally instead of "lseek" when available, thus
+making it possible to work with files bigger than 2Gb on a 32-bit
+platform.  However, we can't break backward compatibility, so we'd
+have to add new functions "long_seek" and "long_{in,out}_channel_length"
+to the OCaml API.
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

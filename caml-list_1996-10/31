@@ -1,0 +1,265 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id QAA07612 for caml-redistribution; Tue, 22 Oct 1996 16:31:28 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id XAA18418 for <caml-list@pauillac.inria.fr>; Mon, 21 Oct 1996 23:48:32 +0200
+Received: from arthur.u-strasbg.fr (boos@arthur.u-strasbg.fr [130.79.6.103]) by nez-perce.inria.fr (8.7.6/8.7.1) with ESMTP id XAA29230 for <caml-list@inria.fr>; Mon, 21 Oct 1996 23:48:30 +0200 (MET DST)
+Received: (from boos@localhost) by arthur.u-strasbg.fr (8.7.5/8.7.3) id XAA08530; Mon, 21 Oct 1996 23:49:10 +0200
+Date: Mon, 21 Oct 1996 23:49:10 +0200
+Message-Id: <199610212149.XAA08530@arthur.u-strasbg.fr>
+From: Christian Boos <boos@arthur.u-strasbg.fr>
+To: caml-list@inria.fr
+Subject: [O'Caml] Proposal for a modified "send" syntax
+Sender: weis
+
+
+
+Summary
+=======
+I'll  expose a  slight  modification of  Objective Caml's  syntax that
+allows  an  easier use of   "functional"  or "applicative" programming
+style for objects, among other things.
+
+Résumé
+======
+En  2 mots, il serait intéressant  de faciliter l'écriture d'appels de
+méthodes  "en cascade". Cela    favoriserait entre autre un   style de
+programmation "fonctionnel" pour les objets.
+
+=============================================================================
+=============================================================================
+
+			       [French]
+
+Bonjour,
+
+J'aimerais  vous présenter  une syntaxe   alternative pour l'appel  de
+méthodes, et vous convaincre de son intérêt !
+
+L'appel  d'une méthode qui renvoit  un  objet doit pouvoir être suivie
+immédiatement d'un appel de  méthode sur l'objet  renvoyé. Il est vrai
+que c'est déjà le cas  actuellement, mais la  syntaxe en est  agréable
+seulement dans le  cas  où  la méthode  en  question  ne comporte  pas
+d'argument.   Si  une  méthode   avec argument est  appelée,  il  faut
+parenthéser  explicitement  cette    expression pour  pouvoir  ensuite
+appeler une  méthode de l'objet résultat,   sinon le compilateur tente
+d'envoyer la méthode à l'argument !
+
+
+Exemple 1: la programmation objet applicative
+=============================================
+Comme un exemple  de code  vaut tous les  discours, je  vais illustrer
+ceci  sur une des classes  de J.  Garrigue (omap), légèrement modifiée
+pour qu'elle ait un style "fonctionnel".
+
+  (* omap.mli *)
+
+  class ('a, 'b) c ('a -> 'a -> int) : 'c =
+	(* [new c compare] creates a new empty map using
+	   compare as comparison function.
+	   This map is imperative, and behaves exactly like
+	   Hashtbl.c, except that previous old bindings for the
+	   same key are not kept *)
+    method clear : 'c
+    method add : 'a -> 'b -> 'c
+    method find : 'a -> 'b
+    method remove : 'a -> 'c
+    method iter : ('a -> 'b -> unit) -> 'c
+  end
+
+
+Actuellement, ce que l'on peut faire avec cela, c'est par exemple :
+
+  let rgb =
+    (((new Omapf.c compare)
+     #add "red" "rouge")
+     #add "blue" "bleu")
+     #add "green" "vert"
+  in ...
+
+La syntaxe alternative permettrait tout simplement d'éviter les parenthèses,
+très fastidieuses dans cette situation :
+
+  let rgb =
+    new Omapf.c compare
+     #add "red" "rouge"
+     #add "blue" "bleu"
+     #add "green" "vert"
+  in ...
+
+-----------------------------------------------------------------------------
+|Note 1.1: l'implémentation de la classe Omapf.c est par exemple :
+|
+| class ('a,'b) c f as self =
+|   val compare = f
+|   val map = Empty
+|   method clear = {< map = Empty >}
+|   method add key data = {< map = add compare key data map >}
+|   method find key = find compare key map
+|   method remove key = {< map = remove compare key map >}
+|   method iter (f : 'a -> 'b -> unit) = iter f map; self
+| end
+
+
+Exemple 2: les configurateurs
+=============================
+La syntaxe alternative autorise encore d'autres choses utiles, par exemple
+ce que l'on pourrait appeler les "configurateurs". Prenons un exemple connu,
+la configuration du Garbage Collector de Caml. L'interface non-objet actuelle
+est celle du module Gc :
+
+  (* extrait de gc.mli *)
+
+  type control = {
+    mutable minor_heap_size : int;
+    mutable major_heap_increment : int;
+    mutable space_overhead : int;
+    mutable verbose : bool
+  }
+
+  external get : unit -> control = "gc_get"
+    (* Return the current values of the GC parameters in a [control] record. *)
+  external set : control -> unit = "gc_set"
+    (* [set r] changes the GC parameters according to the [control] record [r].
+       The normal usage is:
+       [
+	 let r = Gc.get () in    (* Get the current parameters. *)
+	   r.verbose <- true;    (* Change some of them. *)
+	   Gc.set r              (* Set the new values. *)
+       ]
+    *)
+
+
+Un objet "configurateur" pourrait être :
+
+  class control () : 'a =
+    method minor_heap_size : int -> 'a
+    method major_heap_increment : int -> 'a
+    method space_overhead : int -> 'a
+    method verbose : bool -> 'a
+  end
+
+
+... et son utilisation serait la suivant :
+
+  new control #verbose true
+
+ou :
+
+  new control #verbose true #space_overhead 50
+
+
+-----------------------------------------------------------------------------
+|Note 2.1 : l'implémentation correspondante est par exemple :
+|
+| class control () as self =
+|   val r = Gc.get ()
+|
+|   method minor_heap_size s = r.minor_heap_size <- s; Gc.set r; self
+|   method major_heap_increment s = r.major_heap_increment <- s; Gc.set r; self
+|   method space_overhead s = r.space_overhead <- s; Gc.set r; self
+|   method verbose s = r.verbose <- s; Gc.set r; self
+| end
+|
+
+-----------------------------------------------------------------------------
+|Note 2.2 :
+|Cela ne vous rappelle pas quelquechose ?
+|Même pas O'Labl ? :-)
+|
+|A peu de chose  près, on a  là un mécanisme "standard" autorisant  les
+|arguments nommés, placés  dans n'importe quel ordre (voire  optionels
+|!) de O'Labl.  Bien sûr, ici il faut écrire la classe adéquate, ce qui
+|est plus  contraignant que la simple  mention du label, dans O'Labl.
+|Par contre,  le cas des  "arguments  optionels" est, selon moi, mieux règlé
+|par cette technique, surtout si ceux-ci se comptent par dizaines ...
+
+
+Nouvelle sémantique
+===================
+Evidemment, ceci change complétement la sémantique de O'Caml 1.02.
+Ainsi, la phrase :
+
+  f a#x b#y
+
+qui auparavant était analysée comme ceci :
+
+  f (a#x) (b#x)
+
+est, avec la syntaxe alternative, analysé comme cela :
+
+  ((f a)#x b)#y
+
+
+
+Changements nécessités dans le compilateur
+==========================================
+
+2 fois rien (mais ça  m'a quand même  pris l'après-midi ! ...)  En fin
+de fichier, je joins le patch au fichier  parser.mly qui m'a permis de
+tester les exemples précédents. Le seul "effet de bord" consiste en la
+suppression  d'une règle   de  [use_file_tail],  qui  provoquait   des
+conflits reduce/reduce avec mes modifications.
+
+=============================================================================
+=============================================================================
+
+			      [English]
+
+With the current  O'Caml syntax, you can't send  messages one after an
+other without explicit  parenthizing:  the compiler tries to  send the
+message to the last argument of the previous send !
+
+For example, if you have the following valid O'Caml expression :
+
+  ((obj1 #meth1 arg11 arg12) #meth2 arg21 22) #meth3 arg3
+
+You  can't  (for  now)  write  the same,   clearer, expression without
+parenthizing :
+
+  obj1 #meth1 arg11 arg12 #meth2 arg21 22 #meth3 arg3 
+
+The discussion above (in   french) enlightens some advantages of  this
+"syntactic sugar", as   you can see in the   code samples.  The  patch
+below  shows how this   modification   could  be implemented in    the
+compiler.
+
+=============================================================================
+=============================================================================
+
+			       [Patch]
+
+*** parsing/parser.mly	Mon Oct 21 23:42:37 1996
+--- parsing/parser.mly.modif	Mon Oct 21 23:44:31 1996
+***************
+*** 245,249 ****
+    | SEMISEMI toplevel_directive use_file_tail   { $2 :: $3 }
+    | structure_item use_file_tail                { Ptop_def[$1] :: $2 }
+-   | toplevel_directive use_file_tail            { $1 :: $2 }
+  ;
+  
+--- 245,248 ----
+***************
+*** 392,395 ****
+--- 391,401 ----
+    | FOR val_ident EQUAL expr direction_flag expr DO expr DONE
+        { mkexp(Pexp_for($2, $4, $6, $5, $8)) }
++   | expr SHARP label
++       { mkexp(Pexp_send($1, $3)) }
++   | expr SHARP label simple_expr_list
++       { mkexp(Pexp_apply({ pexp_desc = Pexp_send($1, $3);
++ 	                   pexp_loc = { loc_start = Parsing.symbol_start ();
++      		                        loc_end = Parsing.rhs_end 3 } },
++ 	                 List.rev $4)) }
+    | expr COLONCOLON expr
+        { mkexp(Pexp_construct(Lident "::", Some(mkexp(Pexp_tuple[$1;$3])))) }
+***************
+*** 472,477 ****
+    | PREFIXOP simple_expr
+        { mkexp(Pexp_apply(mkoperator $1 1, [$2])) }
+-   | simple_expr SHARP label
+-       { mkexp(Pexp_send($1, $3)) }
+    | NEW class_longident
+        { mkexp(Pexp_new($2)) }
+--- 478,481 ----
+
+
+
+

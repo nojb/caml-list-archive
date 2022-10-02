@@ -1,0 +1,96 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA07246; Mon, 6 Oct 2003 10:07:35 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA10158 for <caml-list@pauillac.inria.fr>; Mon, 6 Oct 2003 10:07:34 +0200 (MET DST)
+Received: from indyio.rz.uni-saarland.de (indyio.rz.uni-saarland.de [134.96.7.3])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h9687X109459
+	for <caml-list@inria.fr>; Mon, 6 Oct 2003 10:07:33 +0200 (MET DST)
+Received: from uni-sb.de (uni-sb.de [134.96.7.230])
+	by indyio.rz.uni-saarland.de (8.12.10/8.12.9) with ESMTP id h9687OKV27278284
+	for <caml-list@inria.fr>; Mon, 6 Oct 2003 10:07:31 +0200 (CST)
+Received: from cs.uni-sb.de (cs.uni-sb.de [134.96.252.31])
+	by uni-sb.de (8.12.10/2003073000) with ESMTP id h967W5UL011466;
+	Mon, 6 Oct 2003 09:32:06 +0200 (CEST)
+Received: from mail.cs.uni-sb.de (mail.cs.uni-sb.de [134.96.254.200])
+	by cs.uni-sb.de (8.12.10/2003091100) with ESMTP id h967VmN3012898;
+	Mon, 6 Oct 2003 09:32:05 +0200 (CEST)
+Received: from mail.st.cs.uni-sb.de (goscinny.cs.uni-sb.de [134.96.235.32])
+	by mail.cs.uni-sb.de (8.12.10/2003073000) with ESMTP id h967SsIa000685;
+	Mon, 6 Oct 2003 09:28:54 +0200 (CEST)
+X-Authentication-Warning: email: Host goscinny.cs.uni-sb.de [134.96.235.32] claimed to be mail.st.cs.uni-sb.de
+Received: from jacobs.cs.uni-sb.de (jacobs.cs.uni-sb.de [134.96.235.135])
+	by mail.st.cs.uni-sb.de (Postfix) with ESMTP
+	id CCD5B34B1A0; Mon,  6 Oct 2003 09:28:53 +0200 (CEST)
+Received: by jacobs.cs.uni-sb.de (Postfix, from userid 7528)
+	id 3CC2A97BF1; Mon,  6 Oct 2003 09:28:53 +0200 (CEST)
+Date: Mon, 6 Oct 2003 09:28:53 +0200
+From: Christian Lindig <lindig@cs.uni-sb.de>
+To: "Rafael 'Dido' Sevilla" <dido@imperium.ph>
+Cc: Caml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] backslashes in ocamllex
+Message-ID: <20031006072853.GE1459@st>
+Mail-Followup-To: Christian Lindig <lindig@cs.uni-sb.de>,
+	Rafael 'Dido' Sevilla <dido@imperium.ph>,
+	Caml Mailing List <caml-list@inria.fr>
+References: <20031006013740.GA2149@imperium.ph>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20031006013740.GA2149@imperium.ph>
+X-No-Archive: yes
+X-URL: http://www.st.cs.uni-sb.de/~lindig/
+User-Agent: Mutt/1.5.4i
+X-DCC-Servercave-Metrics: email 1183; Body=2 Fuz1=2 Fuz2=2
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; lindig:01 lindig:01 uni-sb:01 caml-list:01 rafael:01 'dido':01 ocaml's:01 regex:01 char:01 buffer:01 buffer:01 char:01 uni-sb:01 compiler:01 token:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, Oct 06, 2003 at 09:37:40AM +0800, Rafael 'Dido' Sevilla wrote:
+> Now I'm stuck again.  I'm revising the lexical analyzer for my compiler
+> to enable it to recognize escaped strings, with conventions different
+> from OCaml's.  Currently, I'm using this regex:
+> 
+> '\'' ("\\\\"|"\\'"|[^'\''])* '\''
+> 
+> in an attempt to recognize strings that begin and end with single
+> quotes, but may possibly include sequences like \' that represent
+> escaped quotes, and '\\' that represent escaped backslashes.  -- 
+
+As you discovered, you cannot recognize strings with a single regular
+expression. You need a sub-lexer:
+
+{
+let get         = Lexing.lexeme
+let getchar     = Lexing.lexeme_char
+}
+
+rule token = parse (* main lexer *)
+    eof ->
+  | ...
+  | "'" -> string lexbuf (Buffer.create 80) (* use sub-lexer *)
+
+
+and string = parse (* lexer for strings *)
+    eof     -> { fun buf -> error "EOF in string" } 
+  | '\\' _  -> { fun buf -> let c = getchar lexbuf 1 in
+                            let k = match c with
+                            | 'n'   -> '\n'
+                            | 't'   -> '\t'
+                            | .... 
+                            in
+                                ( Buffer.add_char buf k
+                                ; string lexbuf buf
+                                )
+               }                 
+  | _       -> { fun buf -> string lexbuf (Buffer.add_string (get lexbuf)
+  | "'"     -> { fun buf -> Buffer.contents buf } (* return string *)
+
+-- Christian
+
+--
+Christian Lindig         http://www.st.cs.uni-sb.de/~lindig/
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

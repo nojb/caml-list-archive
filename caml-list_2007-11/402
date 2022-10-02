@@ -1,0 +1,149 @@
+Return-Path: <tf@functionality.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id A1F1FBC69
+	for <caml-list@yquem.inria.fr>; Thu, 22 Nov 2007 00:33:06 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAADdPREfU4367nmdsb2JhbACPMwEBAQEHBAYRGA
+X-IronPort-AV: E=Sophos;i="4.21,448,1188770400"; 
+   d="scan'208";a="6056144"
+Received: from moutng.kundenserver.de ([212.227.126.187])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 22 Nov 2007 00:33:06 +0100
+Received: from [81.151.171.240] (babylon.cip.physik.uni-muenchen.de [141.84.136.30])
+	by mrelayeu.kundenserver.de (node=mrelayeu5) with ESMTP (Nemesis)
+	id 0ML25U-1Iuz3z0iFo-0004IU; Thu, 22 Nov 2007 00:33:05 +0100
+Message-ID: <4744C062.1020605@functionality.de>
+Date: Wed, 21 Nov 2007 23:33:54 +0000
+From: Thomas Fischbacher <tf@functionality.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.8) Gecko/20060904 Debian/1.7.8-1sarge7.2.2
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Andrej.Bauer@andrej.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] caml and python (was: Announcement: ocaml-based magnetism
+ simulation package)
+References: <474481A0.2000703@functionality.de> <4744AAFB.8090703@fmf.uni-lj.si>
+In-Reply-To: <4744AAFB.8090703@fmf.uni-lj.si>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V01U2FsdGVkX19tZaCC5Iz1VeY3/7+Zeo/MzNCwTQAPb7ewr5A
+ GJUSWZY4sEud9so/s5rU8zpk2NtGxCMcYMQzgFcG3JXJ25wKAI
+ 2pQYwCJ4ABMztTjXYvVIA==
+X-Spam: no; 0.00; andrej:01 ocaml:01 ocaml:01 high-level:01 low-level:01 doubly:01 runtime:01 compiler:01 terrific:98 wrote:01 naming:01 symbolic:01 caml-list:01 functions:01 exceptions:01 
+
+
+Andrej Bauer wrote:
+
+>>(The user interface is python, though.) 
+> 
+> I have suspected for a while that writing the computational part in
+> ocaml and the user interface in python is a good combination. What is
+> your experience? Are there any drawbacks? Would you do it again?
+
+We use a modified variant of Art (arty) Yerkes' old "pycaml" module.
+
+Essentially, I had to re-write quite a bit of it, as both reference
+counting on the Python side and Gc management on the OCaml side were
+broken. One impotant issue is that the pycaml module (which also is
+part of Debian) does not recognize properly that python library
+primitives often differ in their behaviour concerning whether they
+increase the reference count of a return value or not.
+
+Also, we added a lot of extra stuff and goodies which allows us to
+interface ML to python quite smoothly. When I call a ML-function from
+python, dynamic type-checking of all the arguments is automatic and
+generates appropriate python exceptions. Here is an example for a
+python-wrapped ML function that uses our extended pycaml module:
+
+let _py_raw_cvode_advance =
+   python_pre_interfaced_function
+     [|CamlpillType; (* the cvode *)
+       CamlpillType; (* the result vector *)
+       FloatType;    (* target time *)
+       IntType;      (* max nr_steps, -1 for "no limit" *)
+     |]
+     (fun args ->
+        let cvode = cvode_from_ocamlpill args.(0) in
+        let FEM_field (_,_,v_result) = field_from_ocamlpill args.(1) in
+        let target_time = pyfloat_asdouble args.(2) in
+        let max_steps = pyint_asint args.(3) in
+        let result_time =
+	 Sundials.cvode_advance cvode target_time v_result max_steps
+	 in
+	 pyfloat_fromdouble result_time)
+;;
+
+It is nice to be able to implement other high-level python/caml
+interface abstractions through functional tricks -- such as a caml
+function constructing and accessing a higher-rank nested-list python
+tensor.
+
+How does it feel? If I had a need for some specific fast low-level
+extension to python, I would prefer using python+ocaml a thousand
+times over python+C. It is just so much nicer not having to worry
+about reference counting issues. Even if you feel you can do it
+right, there is always a bit of doubt. Doubly so if you are not
+the sole developer. I would not let our PhD students write C
+extensions to python, but I have no problems whatsoever letting
+them extend python via ocaml functions.
+
+One sort-of limitation is that we use our own python interpreter.
+(I.e. the main program is written in OCaml and eventually provides
+a python prompt or runs a python script.)
+
+This is necessary in our situation as we also want to support running
+in parallel under MPI control, and the MPI libraries do some nasty
+arg-passing things that upset an unmodified python interpreter. So, we
+do not load some object-code module containing all the ML runtime
+environment system into a standard python interpreter; technically, that
+should be possible as well on many platforms, but it is not relevant in
+our particular case here.
+
+
+On the other hand, of course, if one can completely avoid such
+inter-language interfaces, the better. In principle, both Python
+and OCaml are widely loved because of flexibility they both derive
+from LISP. So, some situations, one may be better off using e.g. the
+Gambit Scheme Compiler instead (which has, by the way, a terrific
+C interface!)
+
+It depends a lot on your constraints. If you want to build something
+that can be easily integrated with lots of data processing libraries
+that are readily available and accessible to casual programmers
+(engineers, physicists, etc.), providing python support seems to be a
+very good choice to me. It is rather popular among engineers these
+days, which I consider mostly a good thing.
+
+Also, if you want your PhD students to be productive at writing code
+that has to run fast, and if they are spoilt enough from previous
+exposure to imperative languages that you cannot really teach them
+Lisp/Scheme within a short amount of time ;-), then ocaml certainly
+is a very good choice. (In terms of what we teach our students about
+caml, this is not much more than the core ML language plus a bit
+about the C interface. They usually pick that up in less than 3 months.
+With C++, they never could be productive after such a short amount
+of time.)
+
+So, I would say: in an ideal computing world, we would all be expert
+Scheme hackers, but in the real world, python+ocaml can be an extremely
+productive and powerful combination. I have used and combined many
+systems in the past, but I would have difficulty naming anything
+else I played with that appeared even remotely as powerful.
+
+I know that in the longer run, we certainly should split nmag and
+ship our new and improved pycaml module separately (after brushing
+it up a bit) -- and a few other modules as well. But for now,
+we are busy dealing with other issues. (We are, after all,
+physicists studying real physical systems, so all this symbolic
+mumbo-jumbo in nmag/nsim is just a tool to us.)
+
+-- 
+best regards,
+Thomas Fischbacher
+tf@functionality.de
+

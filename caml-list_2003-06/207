@@ -1,0 +1,161 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA26593; Thu, 12 Jun 2003 17:15:17 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA26587 for <caml-list@pauillac.inria.fr>; Thu, 12 Jun 2003 17:15:15 +0200 (MET DST)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h5CFFEH06226
+	for <caml-list@inria.fr>; Thu, 12 Jun 2003 17:15:14 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Thu, 12 Jun 2003 10:16:18 -0500
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 12 Jun 2003 10:16:18 -0500
+Date: Thu, 12 Jun 2003 10:33:52 -0500 (CDT)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Richard Jones <rich@annexia.org>
+cc: <caml-list@inria.fr>
+Subject: Re: [Caml-list] How to find out if a function is tail recursive?
+In-Reply-To: <20030612141549.GA14762@redhat.com>
+Message-ID: <Pine.LNX.4.33.0306121004140.14386-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 12 Jun 2003 15:16:18.0162 (UTC) FILETIME=[92A08520:01C330F5]
+X-Spam: no; 0.00; qlogic:01 caml-list:01 recursion:01 printf:01 unmodified:01 modifies:01 overflows:01 accum:01 violates:01 call-:99 wether:01 ocaml:01 rec:01 overflow:02 inner:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 12 Jun 2003, Richard Jones wrote:
+
+> I was writing the section on tail recursion in the OCaml tutorial, and
+> was surprised to find out that the range function (below) isn't tail
+> recursive. Or at least it causes a stack overflow on a
+> large-but-not-unreasonable input value.
+> 
+> let rec range a b =
+>   if a > b then []
+>   else a :: range (a+1) b
+>   ;;
+> 
+> let list = range 1 1000000;;
+> 
+> Printf.printf "length = %d\n" (List.length list);;
+> 
+> Can you tell me why this function isn't tail recursive, and share any
+> useful tips on how to tell whether a function is or is not tail
+> recursive?
+
+A function is tail recursive if it fits both of the following criteria:
+
+1) It returns the value returned by calling itself *unmodified*.  And
+modification of the return value means the functions is not tail
+recursive.  This is where your example fails- it modifies the return value
+br list-prepending a new item to it.  Note that even the simpliest 
+"modifications" defeat tail recursion.  For example, the following code is 
+*not* tail recursive:
+
+let rec sum x = if x > 1 then x + (sum (x-1)) else x
+
+Trying to calculate sum 80000 overflows the stack.  The general pattern 
+for how to fix this is to instead accumulate the modications into a 
+parameter, generally called 'accu' or 'accum' or similiar.  Often times, 
+the recursion is then hidden in an inner function.  So you might rewrite 
+the above function like:
+
+let sum x =
+    let rec loop i accum =
+        if (i > 1) then
+            loop (i-1) (i + accum) (* <-- note this line! *)
+        else
+            i + accum
+    in
+    loop x 0
+
+So now sum 80000 correctly returns 1052556352.  With lists, we can only 
+build lists backwards, not forwards.  So the general pattern is to build 
+the list backwards, then reverse it at the last moment.  So you're example 
+might be written like:
+    let range a b =
+        let rec loop i accum =
+            if i > b then accum
+            else loop (i + 1) (i :: accum)
+        in
+        List.rev (loop a [])
+
+Note, we can put the list reversal either outside of the loop, or inside
+of the loop just before we exit, like:
+
+    let range a b =
+        let rec loop i accum =
+            if i > b then (List.rev accum)
+            else loop (i + 1) (i :: accum)
+        in
+        loop a []
+
+There's really not any difference between the two.  
+
+2) The recursive call is not within a try/with block.
+
+So, let's consider the "classic" problem- reading all the lines of a file 
+into a list of strings.  The naive solution to this is:
+
+let rec read_file chan =
+    try
+        let line = input_line chan in
+        line :: (read_file chan)
+    with
+        End_of_file -> []
+
+The line that reads "line :: (read_file chan)" is not tail recursive- 
+we're modifying our return value (by prepending the current line onto it).  
+This violates condition #1.  So we apply the normal pattern to it, and get 
+try #2:
+
+let read_file chan =
+    let rec loop accum =
+        try
+            let line = input_line chan in
+            loop (line :: accum)
+        with
+            End_of_file -> List.rev accum
+    in
+    loop []
+
+So now we're not modifying the return value.  Instead of prepending the 
+new list element to the return value, we're prepending it to the 
+accumulator.  So we're no longer violating condition #1.  But we're still 
+violating condition #2- the recursion is still within a try/with block.
+
+The try/with block really only needs to surround the input_line call- but 
+it also governs wether we exit the recursion or not.  So my normal pattern 
+for solving this is to set a boolean variable as to wether we have data or 
+not.  So the code now looks like:
+
+let read_file chan =
+    let rec loop accum =
+        let line, eof = 
+            try
+                (input_line chan), false
+            with
+                End_of_file -> "", true
+        in
+        if eof then
+            loop (line :: accum); (* <-- note, recursion now outside *)
+        else
+            List.rev accum
+    in
+    loop []
+
+Now the recursive call is outside the try/with block.  *And*, as we're not 
+modifying the return value at all, we're now tail recursive.
+
+I'm probably missing more constraints, but it's pre-caffiene.  I'll look 
+at this again later.
+
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

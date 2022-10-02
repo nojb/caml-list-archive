@@ -1,0 +1,128 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id LAA09205 for caml-redistribution; Fri, 13 Sep 1996 11:40:48 +0200
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id LAA08573; Fri, 13 Sep 1996 11:02:13 +0200
+From: Xavier Leroy <xleroy@pauillac.inria.fr>
+Message-Id: <199609130902.LAA08573@pauillac.inria.fr>
+Subject: Re: Caml semantics
+To: reichel@tcs.inf.tu-dresden.de (Horst Reichel)
+Date: Fri, 13 Sep 1996 11:02:13 +0200 (MET DST)
+Cc: caml-list@pauillac.inria.fr
+In-Reply-To: <9609121224.AA01164@ithif17.ithi> from "Horst Reichel" at Sep 12, 96 02:24:06 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Content-Length: 4518      
+Sender: weis
+
+
+> What is the formal semantics of recursive data types in Caml and Ocaml?
+> 
+> Since recursive values like d and e defined by
+>    let rec d = 3 :: e  and e = 5 :: d ;;
+> are typed as "int list" values the semantics of recursive type definitions
+> ist not the initial algebra of least fixpoint semantics (as in SML).
+
+Recursive definitions of data structures (as above, and as opposed to
+the usual recursive definitions of functions, let rec f x = ...)
+is a Caml Light / Objective Caml extension that is not part of the
+core Caml language, nor of SML. If you don't use it, you get the least
+fixpoint semantics you mentioned (values of data types are finite
+terms).
+
+With "let rec" over data structures, values of data types are rational
+terms: infinite terms with a finite number of distinct sub-terms.
+Equivalently, these are infinite terms that you can represent as a
+finite graph, and that's exactly how they are implemented (with cycles
+between the memory blocks that represent each constructor application).
+
+Notice that these rational terms are fully evaluated at the time they
+are built. No lazy evaluation of subterms occurs.
+
+> If we take all finite and infinite lists, one would take the
+> terminal co--algebra or greatest fixpoint semantics.
+
+Hmph. If it's not the least fixpoint, it must be the greatest
+fixpoint? No, there are interesting in-betweens.
+
+> In that case I would
+> expect lazy evaluation to get a value also for
+>      head(merge(d,e));;
+> with
+> let rec merge = function ([],l) -> l | (l,[]) -> l
+>                        | (x :: l1,l) -> x :: merge(l,l1) ;;
+> The present implementations get out of memory during evaluation.
+
+Again, there is no lazy evaluation implicit in recursive data structures.
+Programming over these data structures is similar to working with
+graphs: one needs to keep track of the nodes already visited, using
+e.g. pointer equality (==) or an extra identifier field in each node.
+
+For example, here is a simple-minded function that compares two finite
+or infinite lists for equality.
+
+        let list_equal l1 l2 =
+          let rec list_equal_aux l1 l2 seen = 
+            if already_seen l1 l2 seen
+            then true
+            else begin
+              match (l1, l2) with
+                 ([], []) -> true
+               | (h1::t1, h2::t2) ->
+                   h1 = h2 && list_equal_aux t1 t2 ((l1,l2) :: seen)
+               | (_, _) -> false
+            end
+          and already_seen l1 l2 = function
+              [] -> false
+            | (a1, a2) :: rem ->
+                (l1 == a1 && l2 == a2) || already_seen l1 l2 rem
+          in
+            list_equal_aux l1 l2 []
+
+> The present implementations seem to make no difference between
+> inductive data types and co--inductive data types, which are
+> distinguished in CHARITY. In CHARITY  is  co-induction the tool to 
+> define functions on values of co-data types.
+
+Good for CHARITY, but again the Caml datatypes are not co-inductive.
+
+> How I can define
+> functions in Caml or Ocaml which manipulates recursive types like
+> d and e above. A reference to streams is not a satisfying answer, since
+> in the more general situation given by 
+> 
+> type 'a tree = Node of ('a * 'a tree) list ;;
+> let rec a = Node([(1,b);(2,c)]) and
+>         b = Node([(2,c);(3,Node[])]) and
+>         c = Node([(3,a);(4;Node[])]) ;;
+> 
+> one gets a, b c of type "int tree" and the "stream" module does not help
+> any more. Recursive values of type "'a tree" allow the representation
+> of infinite computation trees used in CCS. How one can define the
+> process composing operations of process algebras in Caml for these
+> infinite computation trees?
+
+If your computation trees are rational (i.e. they don't need to be
+lazily evaluated), then you can use the data type definition above and
+operate over values of these types with graph-like algorithms.
+
+Another option is to do lazy evaluation manually, with explicit
+"freeze" and "eval" operations. Something like
+
+        type 'a tree = Node of ('a * 'a tree) delay list
+
+where 'a delay is a type implementing lazily evaluated values of type 'a:
+
+        type 'a delay = { mutable status: 'a status }
+        and 'a status = Delayed of (unit -> 'a) | Evaluated of 'a
+
+But be warned that mixing lazy data structures within an otherwise
+strict language (call-by-value, side-effects) is fairly tricky. If
+what you really need is lazy evaluation, you'd be better off using a
+purely functional language with call-by-need semantics, e.g. Haskell.
+
+Regards,
+
+- Xavier Leroy
+
+
+
+

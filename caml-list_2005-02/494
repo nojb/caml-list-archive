@@ -1,0 +1,106 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 0AC33BC8E
+	for <caml-list@yquem.inria.fr>; Sun, 20 Feb 2005 21:23:04 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j1KKN3Av005838
+	for <caml-list@yquem.inria.fr>; Sun, 20 Feb 2005 21:23:03 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA09659 for <caml-list@pauillac.inria.fr>; Sun, 20 Feb 2005 21:23:03 +0100 (MET)
+Received: from smtp.syd.swiftdsl.com.au (smtp.syd.swiftdsl.com.au [218.214.224.138])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with SMTP id j1KKMwBa013412
+	for <caml-list@inria.fr>; Sun, 20 Feb 2005 21:23:02 +0100
+Received: (qmail 25169 invoked from network); 20 Feb 2005 20:22:57 -0000
+Received: from unknown (HELO coltrane.mega-nerd.net) (218.214.64.136)
+  by smtp.syd.swiftdsl.com.au with SMTP; 20 Feb 2005 20:22:57 -0000
+Received: from coltrane (localhost [127.0.0.1])
+	by coltrane.mega-nerd.net (Postfix) with SMTP id 4E3777AD7
+	for <caml-list@inria.fr>; Mon, 21 Feb 2005 07:22:55 +1100 (EST)
+Date: Mon, 21 Feb 2005 07:22:55 +1100
+From: Erik de Castro Lopo <ocaml-erikd@mega-nerd.com>
+To: caml-list@inria.fr
+Subject: Need for a built in round_to_int function
+Message-Id: <20050221072255.29055ee4.ocaml-erikd@mega-nerd.com>
+Organization: Erik Conspiracy Secret Labs
+X-Mailer: Sylpheed version 1.0.0 (GTK+ 1.2.10; i386-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4218F1A7.003 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 4218F1A2.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; o'caml:01 rounding:01 converts:01 o'caml:01 compiler:01 powerpc:01 sardes:01 inrialpes:01 aschmitt:01 nospam:98 behaviour:01 int:01 int:01 seems:03 float:03 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.2
+X-Spam-Level: 
+
+Hi all,
+
+I am about to port some code from C to O'caml. This code uses the 
+C99 function :
+
+    long int lrint (double d) ;
+
+which performs rounding on the double and then converts that to
+a long int.
+
+In O'caml the only option seems to be:
+
+    let round_to_int f = int_of_float (f +. 0.5) ;;
+
+The problem is that this code on i386 produces really slow code:
+
+    804b385:    dd 44 98 fc        fldl   0xfffffffc(%eax,%ebx,4)
+    804b389:    de c1              faddp  %st,%st(1)
+    804b38b:    83 ec 08           sub    $0x8,%esp
+    804b38e:    d9 7c 24 04        fnstcw 0x4(%esp)
+    804b392:    66 8b 44 24 04     mov    0x4(%esp),%ax
+    804b397:    b4 0c              mov    $0xc,%ah
+    804b399:    66 89 44 24 00     mov    %ax,0x0(%esp)
+    804b39e:    d9 6c 24 00        fldcw  0x0(%esp)
+    804b3a2:    db 1c 24           fistpl (%esp)
+    804b3a5:    8b 04 24           mov    (%esp),%eax
+    804b3a8:    d9 6c 24 04        fldcw  0x4(%esp)
+    804b3ac:    83 c4 08           add    $0x8,%esp
+
+The killer here is the two fldcw (floating point load control word)
+instructions, around the fistpl (which actually does the float to int 
+conversion). Loading the FP control work causes a flush of the FPU
+pipeline. In code with a lot of floating point code interspersed
+with a round to int, there can be a significant slow down due to
+the fldcw instructions.
+
+The lrint function in C, replaces all the above with one fistpl
+and a single mov instruction and leaves the floating point
+control word intact. In C code that moved from:
+
+    (int) floor (f + 0.5)
+
+to
+    lrintf (f)
+
+I have seen an up to 4 fold increase in speed.
+
+I've looked at the code for the O'Caml compiler and I think I 
+know how to implement this, at least for x86 and PowerPC, the two
+architectures I have access to. If I was to supply a patch would
+it be accepted?
+
+
+I know other suggestions like this one :
+
+    http://sardes.inrialpes.fr/~aschmitt/cwn/2003.11.18.html#1
+
+were not viewed favourably, but the addition of a single function
+with an explicit behaviour is a far neater solution.
+
+Regards,
+Erik
+-- 
++-----------------------------------------------------------+
+  Erik de Castro Lopo  nospam@mega-nerd.com (Yes it's valid)
++-----------------------------------------------------------+
+"There are two kinds of large software systems: those that evolved
+from small systems and those that don't work."
+-- Seen on slashdot.org, then quoted by amk
+

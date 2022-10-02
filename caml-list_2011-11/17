@@ -1,0 +1,128 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id pA2MrPqo030622
+	for <caml-list@sympa-roc.inria.fr>; Wed, 2 Nov 2011 23:53:25 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsMBAPnIsU5KfVI0kGdsb2JhbABEmgmPZggiAQEBAQkJDQcUBCGBcgEBAQMBDAYCExkBGxILAQMBCwYFCw0NISEBAREBBQEKEgYTCAoQh2AIl2UKi1SCYIVaPYhwAgUKgzmFTQSUFIo7gn49g3A
+X-IronPort-AV: E=Sophos;i="4.69,446,1315173600"; 
+   d="scan'208";a="116406009"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 02 Nov 2011 23:53:19 +0100
+Received: by wwn31 with SMTP id 31so1195461wwn.9
+        for <caml-list@inria.fr>; Wed, 02 Nov 2011 15:53:19 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=OpVDzPZswDuSXGz7FwT6yRzbgM8aF8bcr5iDcAGuas0=;
+        b=xhALPBLI0FLaD3R+KqbnWfNi4dPI/H6yZqWAAShCtMtULQNywXtDAKb0fzo/KDJBtV
+         PeTHtuT1sZDy/x3oKKoIdqRn7v04jwXYV07XwZZYbxofRjv4jxfNaBgASwEt+bRl977a
+         Ypxc5nWR43g63FLlMsF57IYxsScjVKlXwj+Wg=
+Received: by 10.227.205.78 with SMTP id fp14mr8108500wbb.23.1320274399119;
+ Wed, 02 Nov 2011 15:53:19 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.227.203.134 with HTTP; Wed, 2 Nov 2011 15:52:58 -0700 (PDT)
+In-Reply-To: <CAAoLEWsMkaD2za9P5G65J=g-kUsx+sdF-qwUwnei-bHeTM=iNg@mail.gmail.com>
+References: <CAAoLEWsMkaD2za9P5G65J=g-kUsx+sdF-qwUwnei-bHeTM=iNg@mail.gmail.com>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Wed, 2 Nov 2011 23:52:58 +0100
+Message-ID: <CAPFanBE2QYN54Zg-MYN9k3U63Vucy9M3CMbvf_c2bh5qw7Q0oQ@mail.gmail.com>
+To: Jun Furuse <jun.furuse@gmail.com>
+Cc: caml-list <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id pA2MrPqo030622
+Subject: Re: [Caml-list] Is it possible to extend OCaml lexer rules via Camlp4?
+
+> I have tried to override whole the syntax as follows, but it seems
+> that it changes nothing...:
+
+Camlp4 is designed around mutable state. That you Make module produces
+a new grammar doesn't make it the current grammar used by the
+preprocessor. What need to happen is that the current state of the
+lexer/parser is *mutated* by your Make module (whose evaluation is
+then delayed and controlled by Camlp4 itself thanks to registration
+with Register). This is what EXTEND does at the grammar level.
+
+If it suits your need, you can define your modification as a filter
+that will post-process the output of the original lexer. The Token
+module expose a define_filter function to imperatively update the set
+of such active stream transformers.
+
+This idea was suggested to me by Jérémie Dimino, and works well. It is
+used for example in pa_comprehension to define "[?" and "?]" as new
+OCaml keywords (asking for "["; "?" at the camlp4 grammar level would
+allow spaces in between):
+  https://github.com/ocaml-batteries-team/batteries-included/blob/master/src/syntax/pa_comprehension/pa_comprehension.ml
+
+Below is the relevant code:
+
+  module Make (Syntax : Sig.Camlp4Syntax) = struct
+    open Sig;
+    include Syntax;
+
+
+    (* "[?" and "?]" are not recognized as delimiters by the Camlp4
+      lexer; This token parser will spot "["; "?" and "?"; "]" token
+      and insert "[?" and "?]" instead.
+     Thanks to Jérémie Dimino for the idea. *)
+    value rec delim_filter older_filter stream =
+      let rec filter = parser
+      [ [: `(KEYWORD "[", loc); rest :] ->
+          match rest with parser
+          [ [: `(KEYWORD "?", _) :] -> [: `(KEYWORD "[?", loc); filter rest :]
+          | [: :] -> [: `(KEYWORD "[", loc); filter rest :] ]
+      | [: `(KEYWORD "?", loc); rest :] ->
+          match rest with parser
+          [ [: `(KEYWORD "]", loc) :] -> [: `(KEYWORD "?]", loc); filter rest :]
+          | [: :] -> [: `(KEYWORD "?", loc); filter rest :] ]
+      | [: `other; rest :] -> [: `other; filter rest :] ] in
+      older_filter (filter stream);
+
+    value _ = Token.Filter.define_filter (Gram.get_filter ()) delim_filter;
+
+    (* REST OF THE CAMLP4 EXTENSION ... *)
+  end;
+
+
+On Wed, Nov 2, 2011 at 9:34 PM, Jun Furuse <jun.furuse@gmail.com> wrote:
+> Hi,
+>
+> Is it possible for Camlp4 to implement an OCaml syntax extension (i.e.
+> pa_*) which modifies the lexer of OCaml syntax?
+>
+> I have tried to override whole the syntax as follows, but it seems
+> that it changes nothing...:
+>
+> -----------------------------------------------------------
+> open Camlp4
+>
+> module Id : Sig.Id = struct
+>  let name = "pa_extlex"
+>  let version = "1.0"
+> end
+>
+> module XLexer = Xlexer.Make(PreCast.Token)        (* XLexer
+> reimplements OCaml lexer with some extra rules *)
+> module XGram = PreCast.MakeGram(XLexer)
+>
+> module Make (Syntax : Sig.Camlp4Syntax) = struct
+>  let _ = prerr_endline "Creating OCaml syntax with lexer extension"
+>  module M1 = OCamlInitSyntax.Make(PreCast.Ast)(XGram)(PreCast.Quotation)
+>  module M2 = Camlp4OCamlRevisedParser.Make(M1)
+>  module M3 = Camlp4OCamlParser.Make(M2)
+>  include M3
+> end
+>
+> let module M = Register.OCamlSyntaxExtension(Id)(Make) in ()
+> -----------------------------------
+>
+> Jun
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+

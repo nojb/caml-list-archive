@@ -1,0 +1,105 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA08404; Mon, 6 Aug 2001 11:10:03 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA08394 for <caml-list@pauillac.inria.fr>; Mon, 6 Aug 2001 11:10:03 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f769A1v11782;
+	Mon, 6 Aug 2001 11:10:01 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA08384; Mon, 6 Aug 2001 11:10:00 +0200 (MET DST)
+Date: Mon, 6 Aug 2001 11:10:00 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Kai Kaminski <kok@wtal.de>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Integer arithmetic: mod
+Message-ID: <20010806111000.N7188@pauillac.inria.fr>
+References: <20010804124945.A354@alpha2.tabu.stw-bonn.de>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20010804124945.A354@alpha2.tabu.stw-bonn.de>; from kok@wtal.de on Sat, Aug 04, 2001 at 12:49:46PM +0200
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> I have a question regarding the 'mod' operator in OCaml. While playing
+> around with the toplevel, I found that
+> 
+> -1 mod 10 = -1 instead of -1 mod 10 = 9.
+> 
+> Looking into the Handbook showed me, that the behaviour of 'mod' is
+> platform dependent for negative arguments.
+> Now, I could live with -1 mod 10 = -1, but why is it platform-dependent?
+
+That's a classic "gotcha" of computer arithmetic.  There are three
+natural properties that should hold for / and mod, namely:
+        (a)   (-x) / y = x / (-y) =  - (x / y)
+        (b)   (x / y) * y + x mod y = x
+        (c)   0 <= x mod y < y  if y > 0
+however it's impossible to satisfy all three simultaneously!
+Euclidean division satisfies (b) and (c), but most hardware platforms
+satisfy (a) and (b).
+
+C leaves the behavior of / and mod unspecified for negative arguments,
+and since the bytecode interpreter maps / and mod directly to the C
+/ and % operators, Caml "inherits" the unspecified behavior from C.
+
+> As far as I can see it would be better to specify a certain behaviour
+> and emulate it on platforms, where it is not directly supported by the
+> cpu, especially for a high-level language as OCaml.
+
+That's a reasonable argument.  The counter-argument is that *if* the
+hardware doesn't implement the specified behavior *and* you really
+care for speed *and* you know that you always pass positive arguments
+to / and mod, *then* you're paying an unnecessary overhead.  But
+that's a very weak argument, because all platforms I've seen in the
+last 10 years implement "round toward zero" division, i.e. guarantee
+(a) and (b).  So, specifying it wouldn't cost much.
+
+Marcin Kowalczyk adds:
+
+> In C89 the behavior for negative numbers was left
+> implementation-defined but in C99 it is specified as truncation
+> towards 0.
+
+Interesting information.
+
+> Haskell has both: div & mod truncate downwards, quot & rem truncate
+> towards 0.
+
+So does Ada, I think.  It's probably a good idea to have two sets of
+operators, and document that one of them (those that truncate downwards)
+is a bit less efficient.
+
+John Gerard Malecki adds:
+
+> Does anyone know if the hardware implementation of integer division
+> and/or remainder is faster because the returned value from remainder
+> is sometimes negative?  Maybe its slower but everyone does it the same
+> way for backwards compatibility?
+
+I believe it doesn't make much of a speed difference for a hardware
+implementation (just a few extra gates to handle the signs :-), so the
+hardware designers just implement what everyone else previously
+implemented, i.e. truncation towards 0.  It's actually the right
+choice given that Java and C99 require this behavior.
+
+> One reason for the hardware remainder to be positive is that it allows
+> for easier compiler optimizations.  If the remainder is always
+> positive then the following transformations are always available:
+> 
+> 	 M /   (2**N) == M asr  N
+> 	 M mod (2**N) == M land (2**N-1)
+
+Correct.  C compilers can still implement these transformations for
+unsigned integers.  For signed integers, gcc and ocamlopt implement
+some funny tricks such as
+
+         M / 2^N = (if M >= 0 then M else M + 2^N-1) asr N
+         M mod 2^N = M - ((if M >= 0 then M else M + 2^N-1) land (-2^N))
+
+just to get a consistent behavior with the hardware "mod" instruction!
+
+- Xavier Leroy
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

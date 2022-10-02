@@ -1,0 +1,103 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 81693BB9C
+	for <caml-list@yquem.inria.fr>; Thu, 24 Nov 2005 01:02:44 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jAO02hp3000890
+	for <caml-list@yquem.inria.fr>; Thu, 24 Nov 2005 01:02:43 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA13121 for <caml-list@pauillac.inria.fr>; Thu, 24 Nov 2005 01:02:43 +0100 (MET)
+Received: from ciao.gmane.org (main.gmane.org [80.91.229.2])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jAO02gFt021694
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Thu, 24 Nov 2005 01:02:42 +0100
+Received: from list by ciao.gmane.org with local (Exim 4.43)
+	id 1Ef4Xv-0007KY-Ei
+	for caml-list@inria.fr; Thu, 24 Nov 2005 01:01:03 +0100
+Received: from host5-166.pool8249.interbusiness.it ([82.49.166.5])
+        by main.gmane.org with esmtp (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Thu, 24 Nov 2005 01:01:03 +0100
+Received: from vincenzo_yahoo_addressguard-gmane by host5-166.pool8249.interbusiness.it with local (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Thu, 24 Nov 2005 01:01:03 +0100
+X-Injected-Via-Gmane: http://gmane.org/
+To: caml-list@inria.fr
+From: Vincenzo Ciancia <vincenzo_yahoo_addressguard-gmane@yahoo.it>
+Subject:  Memory leak with ocaml 3.09 but not with ocaml <= 3.08.1 
+Date:  Thu, 24 Nov 2005 01:00:52 +0100
+Lines: 56
+Message-ID:  <dm2vpb$u7h$1@sea.gmane.org>
+Mime-Version:  1.0
+Content-Type:  text/plain; charset=us-ascii
+Content-Transfer-Encoding:  7Bit
+X-Complaints-To: usenet@sea.gmane.org
+X-Gmane-NNTP-Posting-Host: host5-166.pool8249.interbusiness.it
+User-Agent: KNode/0.9.2
+Sender: news <news@sea.gmane.org>
+X-Miltered: at nez-perce with ID 43850323.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 43850322.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 3.09:01 ocaml:01 decoding:01 threads:01 3.09:01 vstring:01 val:01 val:01 bug:01 attenzione:98 l'indirizzo:98 posta:98 nel:98 campo:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Hi all, I have a memory leak in ocamlfuse. Since fuse is based on callbacks,
+and requests should be processed concurrently, I had to invert control, but
+to avoid duplicate code in ocaml and c, I did things like this:
+
+1. ocaml waits for messages from the kernel
+2. then for each message received, ocaml creates an ocaml thread, and then   
+calls C to allow processing of messages
+3. after decoding a message (in an ocaml thread) C performs a callback to a
+C callback for each operation, which in turn calls back ocaml
+
+In this way I allow the fuse C library to decode messages, while I allow
+ocaml to create threads for this purpose. 
+
+Everything was working very well with ocaml 3.08, but using ocaml 3.09 I
+have a memory leak as I said. 
+
+My C callbacks, which then call back ocaml, look like this:
+
+static int ops_OPNAME(ARGS)
+{
+  leave_blocking_section();
+  value vstring;
+  value vpath;
+  value vres;
+  value vtmp;
+  int res=-1;
+  vpath = copy_string(path);
+  
+  [OPERATION SPECIFIC CODE]
+
+  if (Tag_val(vres)==1) /* Result is not Bad */
+     { 
+       [OPERATION SPECIFIC CODE]
+     } 
+  else 
+  { 
+    if (Is_block(Field(vres,0)))  /* This is EUNKNOWNERR of int in ocaml */ 
+        res=-Int_val(Field(Field(vres,0),0));                           
+    else res=-ml2c_unix_error(Int_val(Field(vres,0))); 
+  } 
+  enter_blocking_section(); 
+  return res; 
+}
+
+If someone gives advice on how to discover where the memory leak is, I
+promise to file a bug report if it is the case.
+
+Bye
+
+Vincenzo
+
+-- 
+Please note that I do not read the e-mail address used in the from field but
+I read vincenzo_ml at yahoo dot it
+Attenzione: non leggo l'indirizzo di posta usato nel campo from, ma leggo
+vincenzo_ml at yahoo dot it
+

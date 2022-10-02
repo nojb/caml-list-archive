@@ -1,0 +1,250 @@
+Return-Path: <gregoire.sutre@labri.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id A2B82BBAF
+	for <caml-list@yquem.inria.fr>; Tue, 29 Jun 2010 15:52:57 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvsEANeXKUyT0giP/2dsb2JhbACfO3G/KoUkBA
+X-IronPort-AV: E=Sophos;i="4.53,505,1272837600"; 
+   d="diff'?ml'?scan'208";a="53347044"
+Received: from iona.labri.fr ([147.210.8.143])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 29 Jun 2010 15:52:56 +0200
+Received: from localhost (localhost.localdomain [127.0.0.1])
+	by iona.labri.fr (Postfix) with ESMTP id 7323536B78;
+	Tue, 29 Jun 2010 15:52:56 +0200 (CEST)
+X-Virus-Scanned: amavisd-new at labri.fr
+Received: from iona.labri.fr ([127.0.0.1])
+	by localhost (iona.labri.fr [127.0.0.1]) (amavisd-new, port 10027)
+	with LMTP id YAtrLrqcuxdH; Tue, 29 Jun 2010 15:52:56 +0200 (CEST)
+Received: from [147.210.129.4] (laptop-147-210-129-4.labri.fr [147.210.129.4])
+	(using TLSv1 with cipher DHE-RSA-AES256-SHA (256/256 bits))
+	(Client did not present a certificate)
+	by iona.labri.fr (Postfix) with ESMTP id 448B036B73;
+	Tue, 29 Jun 2010 15:52:56 +0200 (CEST)
+Message-ID: <4C29FAB7.6030201@labri.fr>
+Date: Tue, 29 Jun 2010 15:52:55 +0200
+From: =?ISO-8859-1?Q?Gr=E9goire_Sutre?= <gregoire.sutre@labri.fr>
+Organization: CNRS / LaBRI
+User-Agent: Mozilla/5.0 (X11; U; NetBSD i386; en-US; rv:1.9.1.9) Gecko/20100603 Shredder/3.0.4
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Cc: Alexander Heussner <alexander.heussner@labri.fr>
+Subject: ocamlbuild - missing dependencies at byte-code link with mlpack
+Content-Type: multipart/mixed;
+ boundary="------------010001040702090001040304"
+X-Spam: no; 0.00; gregoire:01 gregoire:01 dependencies:01 byte-code:01 lib:01 cmx:01 lib:01 mli:01 val:01 byte:01 usr:01 ocamldep:01 usr:01 ocamldep:01 mli:01 
+X-Attachments: name="example.diff" name="example.diff" name="patch-ocamlbuild-link-pack-deps.diff" name="patch-ocamlbuild-link-pack-deps.diff" name="myocamlbuild.ml" name="myocamlbuild.ml" 
+
+This is a multi-part message in MIME format.
+--------------010001040702090001040304
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+
+Hi,
+
+I obtain an error `Reference to undefined global ...' with ocamlbuild in
+the following situation (simplified example, attached as example.diff).
+
+[File]				[Contents]
+
+example
+|-- Main.ml			let _ = Pack.Packed.g ()
+|
+|-- Pack.mlpack			pack/Packed
+|
+|-- _tags			<lib>: include
+|				<pack/*.cmx>: for-pack(Pack)
+|
+|-- lib
+|   |-- Lib.ml			let f () = ()
+|   `-- Lib.mli			val f : unit -> unit
+`-- pack
+       `-- Packed.ml		let g () = Lib.f ()
+
+
+$ ocamlbuild -classic-display Main.byte
+/usr/pkg/bin/ocamldep.opt -modules Main.ml > Main.ml.depends
+/usr/pkg/bin/ocamldep.opt -modules pack/Packed.ml > pack/Packed.ml.depends
+/usr/pkg/bin/ocamldep.opt -modules lib/Lib.mli > lib/Lib.mli.depends
+/usr/pkg/bin/ocamlc.opt -c -I lib -o lib/Lib.cmi lib/Lib.mli
+/usr/pkg/bin/ocamlc.opt -c -I pack -I lib -o pack/Packed.cmo pack/Packed.ml
+/usr/pkg/bin/ocamlc.opt -pack pack/Packed.cmo -o Pack.cmo
+/usr/pkg/bin/ocamlc.opt -c -I lib -o Main.cmo Main.ml
+/usr/pkg/bin/ocamlc.opt Pack.cmo Main.cmo -o Main.byte
++ /usr/pkg/bin/ocamlc.opt Pack.cmo Main.cmo -o Main.byte
+File "_none_", line 1, characters 0-1:
+Error: Error while linking Pack.cmo:
+Reference to undefined global `Lib'
+Command exited with code 2.
+
+This is with ocaml 3.11.1, but I obtain the same result with ocaml
+3.12.0+beta1.
+
+
+If I read the code correctly, this comes from the function prepare_link
+in ocaml_compiler.ml which derives the dependencies from the files
+.ml.depends and .mli.depends.  But these files are not generated for
+packs, hence the required dependencies are not build.
+
+The attached small patch (patch-ocamlbuild-link-pack-deps.diff) simply
+treats the .mlpack files as dependency files for packs, which fixes
+the issue.  This has been tested on a larger project with more nested
+dependencies.  But I'm new to ocamlbuild, and I may have overlooked
+something.
+
+
+Alternatively, the problem can be fixed with an ocamlbuild plugin that
+generates appropriate %.ml.depends from %.mlpack. In case it helps
+others encountering the same issue, I attach an implementation of such
+a plugin.
+
+If there is a better/simpler solution to this problem, please let me
+know.
+
+Thanks,
+
+Grégoire Sutre
+
+p.s. This byte-code linking problem with packs was reported to the list
+two years ago [1], but with no answer.
+
+[1] 
+http://caml.inria.fr/pub/ml-archives/caml-list/2008/06/784c154d0f7b53995c0167ac63fc5bb9.en.html
+
+
+
+--------------010001040702090001040304
+Content-Type: text/plain;
+ name="example.diff"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment;
+ filename="example.diff"
+
+diff -Naur example/lib/Lib.ml example/lib/Lib.ml
+--- example/lib/Lib.ml	1970-01-01 01:00:00.000000000 +0100
++++ example/lib/Lib.ml	2010-06-26 18:59:36.000000000 +0200
+@@ -0,0 +1 @@
++let f () = ()
+diff -Naur example/lib/Lib.mli example/lib/Lib.mli
+--- example/lib/Lib.mli	1970-01-01 01:00:00.000000000 +0100
++++ example/lib/Lib.mli	2010-06-26 23:18:01.000000000 +0200
+@@ -0,0 +1 @@
++val f : unit -> unit
+diff -Naur example/Main.ml example/Main.ml
+--- example/Main.ml	1970-01-01 01:00:00.000000000 +0100
++++ example/Main.ml	2010-06-26 23:26:54.000000000 +0200
+@@ -0,0 +1 @@
++let _ = Pack.Packed.g ()
+diff -Naur example/pack/Packed.ml example/pack/Packed.ml
+--- example/pack/Packed.ml	1970-01-01 01:00:00.000000000 +0100
++++ example/pack/Packed.ml	2010-06-26 23:23:27.000000000 +0200
+@@ -0,0 +1 @@
++let g () = Lib.f ()
+diff -Naur example/Pack.mlpack example/Pack.mlpack
+--- example/Pack.mlpack	1970-01-01 01:00:00.000000000 +0100
++++ example/Pack.mlpack	2010-06-26 23:24:30.000000000 +0200
+@@ -0,0 +1 @@
++pack/Packed
+diff -Naur example/_tags example/_tags
+--- example/_tags	1970-01-01 01:00:00.000000000 +0100
++++ example/_tags	2010-06-26 23:24:57.000000000 +0200
+@@ -0,0 +1,4 @@
++# include local sources
++<lib>: include
++
++<pack/*.cmx>: for-pack(Pack)
+
+
+
+--------------010001040702090001040304
+Content-Type: text/plain;
+ name="patch-ocamlbuild-link-pack-deps.diff"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment;
+ filename="patch-ocamlbuild-link-pack-deps.diff"
+
+Index: ocamlbuild/ocaml_compiler.ml
+===================================================================
+--- ocamlbuild/ocaml_compiler.ml	(revision 10605)
++++ ocamlbuild/ocaml_compiler.ml	(working copy)
+@@ -144,6 +144,12 @@
+       (if Pathname.exists (ml-.-"depends") then path_dependencies_of ml else [])
+       (if Pathname.exists (mli-.-"depends") then path_dependencies_of mli else [])
+   in
++  let modules =
++    if (modules = []) && (Pathname.exists (ml^"pack")) then
++      List.map (fun s -> (`mandatory, s)) (string_list_of_file (ml^"pack"))
++    else
++      modules
++  in
+   if modules <> [] && not (Hashtbl.mem cache_prepare_link key) then
+     let () = Hashtbl.add cache_prepare_link key true in
+     let modules' = List.map (fun (_, x) -> expand_module include_dirs x extensions) modules in
+
+
+
+--------------010001040702090001040304
+Content-Type: text/plain;
+ name="myocamlbuild.ml"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment;
+ filename="myocamlbuild.ml"
+
+(* Configuration **************************************************************)
+
+(* Set to the list of directories containing *.mlpack files. *)
+let mlpack_dirs = ["."]
+
+(* Ocamlbuild Plugin Code *****************************************************)
+
+open Ocamlbuild_plugin
+
+module PackageLinkFix =
+struct
+  let packages_in_dir dir =
+    Array.fold_right
+      (fun f l ->
+	 if (Pathname.check_extension f "mlpack") then
+	   (dir / (Pathname.remove_extension f)) :: l
+	 else
+	   l)
+      (Sys.readdir dir)
+      []
+
+  let byte_dep_mlpack arg out env _build =
+    let arg = env arg and out = env out in
+      Echo (([arg; ":"] @
+	       (List.map
+		  (fun s -> " "^s)
+		  (string_list_of_file (arg))) @
+	       ["\n"]), out)
+
+  let after_rules () =
+    begin
+      rule "ocaml dependencies mlpack"
+	~prod:"%.ml.depends"
+	~dep:"%.mlpack"
+	(byte_dep_mlpack "%.mlpack" "%.ml.depends")
+      ;
+      List.iter
+	(fun p ->
+	   dep
+	     ["ocaml"; "byte"; "pack"; "extension:cmo"; "file:"^p^".cmo"]
+	     [p^".ml.depends"])
+	(List.concat (List.map packages_in_dir (List.map Pathname.mk mlpack_dirs)))
+    end
+end
+
+;;
+
+dispatch
+  begin
+    function
+	After_rules -> PackageLinkFix.after_rules ()
+      | _ -> ()
+  end
+
+
+--------------010001040702090001040304--
+

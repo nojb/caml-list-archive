@@ -1,0 +1,134 @@
+Return-Path: <nicolas.pouillard@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id AA7EEBB83
+	for <caml-list@yquem.inria.fr>; Thu,  6 Jul 2006 17:25:57 +0200 (CEST)
+Received: from nf-out-0910.google.com (nf-out-0910.google.com [64.233.182.185])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k66FPwOr017814
+	for <caml-list@yquem.inria.fr>; Thu, 6 Jul 2006 17:25:59 +0200
+Received: by nf-out-0910.google.com with SMTP id y25so235026nfb
+        for <caml-list@yquem.inria.fr>; Thu, 06 Jul 2006 08:25:57 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:sender:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references:x-google-sender-auth;
+        b=WsLLy5RjbZKCH7aBX5JYXCHHkvof7hEpLOwxSihfaFXuZyCHLZpripukLztIjeN61qGifLlIERcvjj3TSFa9gPm769Z29/+w9g3rkHGXTnL+o8WPfO2mBHAn3ZXiY4IZ1CmDDV6rjXUbvhVtuoNwo/zmENHhSsq4Hii6R1HTdyY=
+Received: by 10.78.164.13 with SMTP id m13mr252669hue;
+        Thu, 06 Jul 2006 08:25:57 -0700 (PDT)
+Received: by 10.78.13.17 with HTTP; Thu, 6 Jul 2006 08:25:57 -0700 (PDT)
+Message-ID: <cd67f63a0607060825h7e701760uf10102c0a9233df2@mail.gmail.com>
+Date: Thu, 6 Jul 2006 17:25:57 +0200
+From: "Nicolas Pouillard" <nicolas.pouillard@inria.fr>
+Sender: nicolas.pouillard@gmail.com
+To: "Till Varoquaux" <till.varoquaux@gmail.com>
+Subject: Re: [Caml-list] A global exception handler...
+Cc: "Jonathan Roewen" <jonathan.roewen@gmail.com>,
+	OCaml <caml-list@yquem.inria.fr>
+In-Reply-To: <9d3ec8300607060748s18ad08c6v282af9bc795099c8@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+References: <ad8cfe7e0607060739w557b66f7p1f698ed795896eb4@mail.gmail.com>
+	 <9d3ec8300607060748s18ad08c6v282af9bc795099c8@mail.gmail.com>
+X-Google-Sender-Auth: f12cc97e90d32f13
+X-Miltered: at nez-perce with ID 44AD2B86.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; handler:01 handler:01 toplevel:01 camlp:01 toplevel:01 camlp:01 cvs:01 expr:01 val:01 struct:01 val:01 ocamlc:01 -pp:01 printf:01 printf:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=DNS_FROM_RFC_ABUSE,RCVD_BY_IP 
+	autolearn=disabled version=3.0.3
+
+On 7/6/06, Till Varoquaux <till.varoquaux@gmail.com> wrote:
+> On 7/6/06, Jonathan Roewen <jonathan.roewen@gmail.com> wrote:
+> > Hi,
+> >
+> > Is it possible to register a global exception handler?
+> >
+> > I suppose I could just nest everything inside one giant function if I
+> > really had to, but I like my toplevel expressions ;-)
+> >
+> CamlP4 might come in handy here. I'm guessing you could rewrite your
+> program so that all your toplevel expressions are in one main ()
+> function using camlp4. It would have some limitations though: for
+> instance your exception handler could not use anything defined in main
+> (unless you where using references). I'm guessing it's not so bad
+> because whatever happens you cannot have a global exception handler
+> relying to much on stuff defined in your programm.
+
+Here is a simple Camlp4 filter that written for the new Camlp4 version (CVS) :
+
+$ cat global_handler.ml
+open Camlp4.PreCast;
+
+value ghost = Loc.ghost;
+
+value global_handler_ref = ref <:expr@ghost<>>;
+
+value find_global_handler = object
+  inherit Ast.map as super;
+  method str_item st = do {
+    match st with
+    [ <:str_item< value global_handler = $f$ >> -> global_handler_ref.val := f
+    | _ -> () ];
+    super#str_item st
+  };
+end;
+
+AstFilters.register_str_item_filter
+  (fun st ->
+    let _ = find_global_handler#str_item st in
+    <:str_item@ghost< try let module Main = struct $st$ end in ()
+                      with e -> $global_handler_ref.val$ e >>);
+
+$ ocamlc -I +camlp4 -c -pp camlp4rf global_handler.ml
+
+$ cat global_handler_test.ml
+open Format;;
+let f1 x = printf "f1 %d@." x;;
+let f2 x = printf "f2 %f@." x;;
+let f3 x = printf "f3 %s@." x;;
+f1 1;;
+f2 1.1;;
+f3 "1.1.1";;
+raise (Failure "test");;
+let global_handler e =
+  (* Note that I need to give the complete name for eprintf since
+     Format is not opened in the new environment of global_handler. *)
+  Format.eprintf "global_handler: %s@." (Printexc.to_string e)
+
+$ ocamlc -pp 'camlp4o global_handler.cmo' global_handler_test.ml
+
+$ ./a.out
+f1 1
+f2 1.100000
+f3 1.1.1
+global_handler: Failure("test")
+
+$ camlp4o global_handler.cmo -printer OCaml global_handler_test.ml
+try
+  let module Main =
+    struct
+      open Format
+      let f1 x = printf "f1 %d@." x
+      let f2 x = printf "f2 %f@." x
+      let f3 x = printf "f3 %s@." x
+      let _ = f1 1
+      let _ = f2 1.1
+      let _ = f3 "1.1.1"
+      let _ = raise (Failure "test")
+      let global_handler e =
+        (* Note that I need to give the complete name for eprintf since
+     Format is not opened in the new environment of global_handler. *)
+        Format.eprintf "global_handler: %s@." (Printexc.to_string e)
+    end
+  in ()
+with
+| e ->
+    (fun e -> Format.eprintf "global_handler: %s@." (Printexc.to_string e)) e
+
+Cheers,
+
+-- 
+Nicolas Pouillard
+

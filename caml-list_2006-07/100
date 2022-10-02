@@ -1,0 +1,97 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 7C7E1BB84
+	for <caml-list@yquem.inria.fr>; Wed, 12 Jul 2006 10:43:22 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k6C8hIUr024869
+	for <caml-list@yquem.inria.fr>; Wed, 12 Jul 2006 10:43:18 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA28011 for <caml-list@pauillac.inria.fr>; Wed, 12 Jul 2006 10:43:17 +0200 (MET DST)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k6C8h7kX007326
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Wed, 12 Jul 2006 10:43:16 +0200
+Received: (qmail 24471 invoked by uid 107); 12 Jul 2006 08:43:04 -0000
+Received: from vwmetnet.metnet.navy.mil (192.16.167.21)
+  by selenite.metnet.navy.mil with SMTP; 12 Jul 2006 08:43:04 -0000
+Received: from Adric.metnet.fnmoc.navy.mil ([10.100.105.102])
+ by vwmetnet.metnet.navy.mil (NAVGW 2.5.2.9) with SMTP id M2006071208543727573
+ ; Wed, 12 Jul 2006 08:54:38 GMT
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id EC61DAC97; Wed, 12 Jul 2006 01:40:56 -0700 (PDT)
+To: caml-list@inria.fr
+Cc: Pietro.Abate@anu.edu.au
+Subject: (continuation monad) type problem...
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20060712084056.EC61DAC97@Adric.metnet.fnmoc.navy.mil>
+Date: Wed, 12 Jul 2006 01:40:56 -0700 (PDT)
+X-Miltered: at nez-perce with ID 44B4B626.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 44B4B61B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; oleg:01 struct:01 val:01 struct:01 polymorphism:01 gunter:01 oleg:01 ocaml:01 monadic:01 notation:01 ocaml:01 backtracking:01 monads:01 popl:01 backtracking:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.0.3
+
+
+Pietro Abate wrote about the problem typing the continuation monad.
+The problem is that we have to specifically keep in mind the answer
+type. For example:
+
+let id x = x;;
+
+module CONT = struct
+  (* type 'a m = {cont: 'w . ('a -> 'w) -> 'w } *)
+  type ('w,'a) m = {cont: ('a -> 'w) -> 'w }
+  let return x = {cont = fun k -> k x}
+  let (>>=) m f = {cont = fun k -> m.cont (fun x -> (f x).cont k) }
+  let reset e = {cont = fun k -> k (e.cont id)}
+  let shift e = {cont = fun k -> 
+    (e (fun v -> {cont = fun c -> c (k v)})).cont id}
+  let run m = m.cont id
+end;;
+
+With these shift/reset in place, we can express call/cc (assuming that
+the whole program is wrapped in reset)
+
+let callcc1 proc = CONT.shift (fun f -> 
+  CONT.(>>=) (proc (fun v -> CONT.shift (fun _ -> f v))) f);;
+
+whose inferred type
+
+val callcc1 : (('a -> ('b, 'c) CONT.m) -> ('b, 'a) CONT.m) -> ('b, 'a) CONT.m =
+  <fun>
+
+seems quite right. We can test as follows:
+
+let test1 = let module M = struct
+  open CONT
+  let result = run (
+    let proc k = (k 10) >>= (fun v -> return (v+100)) in
+    reset ((callcc1 proc) >>= (fun v -> return (v + 5)))
+  )
+  end in M.result
+;;
+ (* ==> 15 *)
+
+The lack of polymorphism may be acceptable at times. If not, we have
+to explicitly introduce typed prompts -- as was first proposed by
+Gunter, Remy and Riecke. You can see the implementation of that in
+
+ http://pobox.com/~oleg/ftp/Computation/Continuations.html#caml-shift
+
+(the second solution: cc-monad, which is fully OCaml). The latter is
+included in the monadic notation for OCaml, recently announced on this
+list. 
+
+Pietro Abate's message also showed an attempt to mix the continuation
+and backtracking monad. That seems puzzling: the continuation monad
+can express any other monad that could be expressed at all in the
+language (see Filinski, Representing Monads, POPL94). Thus, the
+continuation monad alone is sufficient for backtracking (as well as
+many other things).
+
+

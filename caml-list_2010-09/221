@@ -1,0 +1,126 @@
+Return-Path: <tews@os.inf.tu-dresden.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id CD4FDBBAF
+	for <caml-list@yquem.inria.fr>; Wed, 29 Sep 2010 10:27:43 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ar4EAKqVokyNTDBjgWdsb2JhbACiGxUBARYiIsgthUQEijqFYQ
+X-IronPort-AV: E=Sophos;i="4.57,252,1283724000"; 
+   d="scan'208";a="59441116"
+Received: from os.inf.tu-dresden.de ([141.76.48.99])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 29 Sep 2010 10:27:13 +0200
+Received: from [2002:8d4c:3001:48:222:68ff:fe19:71d] (helo=blau.inf.tu-dresden.de)
+	by os.inf.tu-dresden.de with esmtpsa (TLSv1:AES256-SHA:256) (Exim 4.72)
+	id 1P0s0N-0002vx-Gu
+	for caml-list@yquem.inria.fr; Wed, 29 Sep 2010 10:27:11 +0200
+Received: from tews by blau.inf.tu-dresden.de with local (Exim 4.72)
+	(envelope-from <tews@blau.inf.tu-dresden.de>)
+	id 1P0s0M-0000r3-Gt
+	for caml-list@yquem.inria.fr; Wed, 29 Sep 2010 10:27:10 +0200
+From: Hendrik Tews <tews@os.inf.tu-dresden.de>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Chain Camlp4 syntax extensions?
+References: <AANLkTi=E_O2gnY=rStjW_UOweTGGBfXO9f_j0VjUkX4B@mail.gmail.com>
+Date: Wed, 29 Sep 2010 10:27:10 +0200
+In-Reply-To: <AANLkTi=E_O2gnY=rStjW_UOweTGGBfXO9f_j0VjUkX4B@mail.gmail.com>
+	(Dmitry Bely's message of "Tue, 28 Sep 2010 17:13:13 +0400")
+Message-ID: <6xiq1posyp.fsf@blau.inf.tu-dresden.de>
+User-Agent: Gnus/5.13 (Gnus v5.13) Emacs/23.2 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Spam: no; 0.00; hendrik:01 tews:01 tews:01 camlp:01 syntax:01 syntax:01 parser:01 camlp:01 ioxml:01 parser:01 val:01 parses:01 val:01 ocamlc:01 -pp:01 
+
+Dmitry Bely <dmitry.bely@gmail.com> writes:
+
+   I have two similar syntax extension that generate some functions for
+   each type in the module:
+
+   EXTEND Gram
+     str_item:
+       [ [ "type"; tdl = LIST1 type_declaration SEP "and" ->
+           ...
+   END;
+
+I would suggest to have an additional module TypeDeclMod where
+you can register functions to modify type declarations. This
+module would also change the str_item parser to call all
+registered functions on tdl. 
+
+Your two modules pa_ext1 and pa_ext2 would then only register one
+function with TypeDeclMod (without changing the grammar).
+
+This is probably more or less what type-conv does.
+
+
+For a type-conv example you can look at sexplib.
+
+
+   And another question. For camlp5 it was possible to inject some code
+   into the beginning of the generated file (the code is taken from IoXML
+   syntax extension):
+
+You can use Camlp4.Register.register_str_item_parser, to my
+surprise it turns out that this requires actually less effort
+than in Camlp5. The only problem is that
+Register.register_str_item_parser changes a reference cell and
+there is no way to get its contents. So the one who registers
+last wins. The default value of that reference is
+Camlp4.PreCast.Syntax.parse_implem, which gets implicitely
+changed by all syntax extensions (because they modify
+PreCast.Syntax). Here is an example:
+
+==============================================================================
+open Camlp4.PreCast
+
+(* Extend or modify the ast of an implementation.
+ *
+ * val extend_ast : Ast.str_item -> Ast.str_item
+ *)
+let extend_ast str_item =
+  let _loc = Loc.ghost in
+  <:str_item< open Bla ; $str_item$ >>
+
+
+(* Implementation parser to be used instead of the default one. To 
+ * be registered with Register.register_str_item_parser.
+ * 
+ * my_parse_implem dir_handler start_loc char_stream  parses char_stream 
+ * with the default parser from the PreCast.Syntax module. Argument 
+ * start_loc is the initial location obtained for example by Loc.mk.
+ * Argument dir_handler is called whenever a top-level directive is 
+ * encountered in the char_stream.
+ * 
+ * val my_parse_implem :
+ *   ?directive_handler:(Syntax.Ast.str_item -> Syntax.Ast.str_item option) ->
+ *   Syntax.Ast.loc -> char Stream.t -> Ast.str_item
+ *)
+let my_parse_implem ?(directive_handler = fun _ -> None) _loc cs =
+  let str_item = Syntax.parse_implem ~directive_handler _loc cs in
+  extend_ast str_item
+
+
+(* Register my_parse_implem as default implementation parser. This
+ * will implicitely change Register.CurrentParser.parse_implem, which
+ * is called by camlp4 to parse an implementation.
+ * 
+ * Note that there is currently (as of 3.12.0) no way to retrieve the
+ * current contents of the reference cell that is changed by
+ * Register.register_str_item_parser. However, currently no standard camlp4 
+ * parser calls Register.register_str_item_parser. So our approach 
+ * to register my_parse_implem which in turn calls Syntax.parse_implem 
+ * works as long we are the only parsing extension which does that. 
+ * If there are more parsing extensions that want to modify the ast 
+ * after parsing they need to synchronize in some way.
+ *)
+let _ = Camlp4.Register.register_str_item_parser my_parse_implem
+==============================================================================
+
+
+Compile with ocamlc -I +camlp4 -c -pp camlp4orf example.ml
+Use with ocamlc -pp 'camlp4o example.cmo'
+
+Bye,
+
+Hendrik
+

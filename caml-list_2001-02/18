@@ -1,0 +1,127 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA22546 for caml-red; Fri, 2 Feb 2001 16:23:00 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA03232 for <caml-list@pauillac.inria.fr>; Thu, 1 Feb 2001 14:57:08 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f11Dv6n07872;
+	Thu, 1 Feb 2001 14:57:06 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA27151; Thu, 1 Feb 2001 14:57:05 +0100 (MET)
+Date: Thu, 1 Feb 2001 14:57:05 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: wester@ilt.fhg.de
+Cc: caml-list@inria.fr
+Subject: Re: Floating point array computations
+Message-ID: <20010201145705.A1034@pauillac.inria.fr>
+References: <200101251034.LAA06543@ilt.fhg.de>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <200101251034.LAA06543@ilt.fhg.de>; from wester@ilt.fhg.de on Thu, Jan 25, 2001 at 11:34:32AM +0100
+Sender: weis@pauillac.inria.fr
+
+> In sample code form the ICFP 200 contest I found:
+> type v = float array
+> is array a build in type?
+
+Yes, it is.
+
+> The functions main1 .. main4 below do the same but take different time for it
+> (compiled with ocamlopt). I expected main2 to be the fastest but main3 is 
+> fastest. main3 300 300 1000 takes on my PC (450 Mhz PI, 520 MB RAM) 
+> 26 sec, this is about twice the time of C++ and about the same as Java.
+> Can somone tell me why main3 is faster than main2 (36 sec) although
+> main3 makes function calls to step?
+
+Here are two possible explanations.  First, with modern processors,
+minor variations in code placement (i.e. insert or delete unused code)
+can result in performance improvements or degradations by as much as 20%,
+due to cache effects, alignment constraints on instruction fetches,
+and what not.  (Predicting accurately the performance of a processor
+such as the PIII is extremely hard; a few Intel engineers are rumored
+to be able to do it :-)
+
+Second, on a register-poor architecture such as the IA32, spilling and
+reloading (moving values between registers and stack locations)
+happens often and has a significant performance impact.  Since OCaml
+follows a callee-save model, function calls act as natural spill hint,
+forcing all live registers to be spilled to the stack before the call,
+then reloaded on demand after the call.
+
+In your "main3" test, the function "step" runs in exactly the 7
+available registers, thus the call to "step" causes a nearly perfect
+placement of spills: spill everything live before the inner loop; run
+the inner loop in registers; reload the spilled data.
+
+In "main2", there is no such function call to help the compiler, and
+the placement of spills and reloads it chooses is not as good
+(although still reasonable).
+
+> I also tried Array.unsafe_get/set in main4. I expected this to be even faster
+> because I have seen it in the ICFP contest sample code. But actually 
+> it is much slower (about 100 sec). Did I make anything wrong?
+
+You hit a rather subtle point in the OCaml compiler, so don't feel too
+bad about it.  Array.unsafe_get/set are not quite regular Caml functions,
+but rather predefined operators (like + or +.) with special
+compilation schemes (e.g. open-coding and type specialization) *when
+the operator is fully applied*.  This means that
+
+        Array.unsafe_get a i
+
+will generate optimized code.  But the following rebinding
+
+        let get = Array.unsafe_get
+
+where Array.unsafe_get is not fully applied, gets compiled as
+
+        let get x y = Array.unsafe_get x y
+
+so subsequent calls to get may incur the cost of a function call
+(although ocamlopt will actually inline the function at point of call).
+More subtly, the definition of "get" is polymorphic, hence no type
+specialization occurs, and it happens that accesses to float arrays
+are compiled much more efficiently if the array is statically known to
+have type "float array".  
+
+In summary, for maximal performance, you should not write
+
+        let get = Array.unsafe_get
+        ... get ... get ...
+
+but instead write
+
+        ... Array.unsafe_get ... Array.unsafe_get ...
+
+With this modification, your "main4" example runs a bit faster than
+"main3" (20-25% faster), because Array.unsafe_get/set do not perform
+array bounds checking.  However, this is unsafe: an error in your
+code, causing an out-of-bound access, can very easily crash the
+program.  So, this is a high price to pay in terms of reliability for
+a relatively small gain in performance, and I'd advise against it.
+
+> Would Bigarray perform better? 
+
+I tried to rewrite your code using a 2-d bigarray, and it was clearly
+slower.  Accessing a 2-d bigarray involves
+        two bound checks
+        one integer multiplication
+        one integer addition
+        one load,
+while accessing a float array array (as returned by Array.make_matrix)
+involves
+        two bound checks
+        two integer additions
+        two loads
+On the Pentium at least, the integer multiplication is much slower
+than the load.  Moreover, OCaml doesn't perform hoisting of loop
+invariant subexpressions, meaning that the multiplication is performed
+at each iteration of the inner loop.  And since the multiplication is
+performed "under the hood" by the compiler, it cannot be manually
+hoisted out of the inner loop, like you did in main2 and main3 for 
+hoisting the outer array access (1 bound check, 1 addition, 1 load).
+
+> I would be very appriciative for your help to clarify this points.
+
+I hope this helps, despite the rather technical explanations.
+
+- Xavier Leroy
+
+

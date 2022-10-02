@@ -1,0 +1,92 @@
+Received: by pauillac.inria.fr; Fri, 10 Dec 93 11:32:43 +0100
+Received: from margaux.inria.fr by pauillac.inria.fr; Thu, 9 Dec 93 20:35:16 +0100
+Received: from concorde.inria.fr by margaux.inria.fr, Thu, 9 Dec 93 20:35:12 +0100
+Received: from sanson.dit.upm.es by concorde.inria.fr; Thu, 9 Dec 1993 20:38:47 +0100
+Received: from yeti.dit.upm.es by sanson.dit.upm.es (5.65c/1.6.22) Thu, 9 Dec 1993 20:36:02 +0100
+Received: by yeti.dit.upm.es (5.65c/1.6.22) Thu, 9 Dec 1993 20:36:02 +0100
+Date: Thu, 9 Dec 1993 20:36:02 +0100
+From: lsanchez@dit.upm.es (Luis Sanchez Fernandez)
+Message-Id: <199312091936.AA04537@yeti.dit.upm.es>
+To: cr@dcs.edinburgh.ac.uk, lsanchez@dcs.edinburgh.ac.uk
+Subject: Re:  Lazy evaluation and caml-light
+Cc: caml-list@margaux.inria.fr
+Sender: weis@pauillac.inria.fr
+Status: O
+
+Hi,
+
+this e-mail is related to the answer to another one that I sent
+a month (more or less) ago. Sorry for the delay. Because of the
+delay, I'm including the previous one to help to fix the ideas.
+
+
+	The problem in your program is this function~:
+
+	let rec recursive sb sd=selec({state=Evaluated (append true sb)},sd,
+	   F(fun ()->distr2(sb,{state=Evaluated (recursive sb sd)})));;
+
+	With the recursive call you compute an infinite number of time 
+	the value of
+	
+	(recusive sb sd) !!!!!
+
+You are right. That was the reason because I sent the first e-mail.
+I didn't know how to do it better.
+
+	Here is a better way to write the same program:
+
+	**********************************************************************
+	type 'a stream_aux = Str of ('a * 'a stream)
+	                   | Unevaluated of (unit -> 'a stream)
+	                   | Not_Ready (* use for fix_point only *)
+
+	and 'a stream == 'a stream_aux ref;;
+
+	let rec Eval p = p := Eval' !p; !p
+	where Eval' = function
+	  Str _ as s -> s
+	| Unevaluated f -> Eval (f ())
+	| Not_Ready -> raise (Failure "Can't evaluate any more")
+	;;
+	  
+	let fix_point f = 
+	  let fp = ref Not_Ready in 
+	  fp := !(f fp);
+	  fp
+	;;
+
+Mmm. I think that now I understand how fix_point works. The trick
+is that the system keeps the local variable fp AFTER 
+fix_point is called. If I call twice to fix_point,
+two different local variables are kept. Am I right?
+
+	let append x ls = ref (Str (x,ls));; (* not usefull *)
+	let append' x f a = ref (Str(x, ref (Unevaluated (fun () -> f a))));;
+	let stop_eval f a = ref (Unevaluated (fun () -> f a));;
+
+	let rec selec (f,g,h) = 
+	match  (Eval f) with Str (sf,rf) -> 
+	  if sf then
+	    match (Eval g) with Str(sg,rg) -> append' sg selec (rf,rg,h)
+	  else
+	    match (Eval h) with Str(sh,rh) -> append' sh selec (rf,g,rh);;
+
+	let rec distr2 (f,g)= 
+	let (Str(sf,rf)) = (Eval f) and (Str(sg,rg)) = (Eval g) in 
+	  if not sf then 
+	    append' sg distr2 (rf,rg)
+	  else 
+	    distr2 (rf,rg);;
+
+	let rec recursive (sb,sd) = 
+	  fix_point f where
+	  f = function x -> selec (
+	        (append true sb),sd,
+	        stop_eval distr2 (sb,x))
+	;;
+
+
+Thanks for the help,
+
+Luis Sanchez.
+

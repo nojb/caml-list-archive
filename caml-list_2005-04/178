@@ -1,0 +1,102 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id E7AD1BC48
+	for <caml-list@yquem.inria.fr>; Wed, 13 Apr 2005 08:55:13 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j3D6tDvb024348
+	for <caml-list@yquem.inria.fr>; Wed, 13 Apr 2005 08:55:13 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA03004 for <caml-list@pauillac.inria.fr>; Wed, 13 Apr 2005 08:55:13 +0200 (MET DST)
+Received: from grisu.bik-gmbh.de (grisu.bik-gmbh.de [217.110.154.194])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j3D6tC4S013406
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Wed, 13 Apr 2005 08:55:12 +0200
+Received: from [192.168.125.193] (prony.bik-gmbh.de [192.168.125.193]) by grisu.bik-gmbh.de (8.13.1/8.13.1) with ESMTP id j3D6t982037578; Wed, 13 Apr 2005 08:55:09 +0200 (CEST).
+Message-ID: <425CC240.3050207@bik-gmbh.de>
+Date: Wed, 13 Apr 2005 08:54:56 +0200
+From: Florian Hars <hars@bik-gmbh.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en-US; rv:1.7.3) Gecko/20040924 Debian/1.7.3-1ubuntu1
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Sven Luther <sven.luther@wanadoo.fr>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] ocaml, int32/64, bigarray and unsigned values ...
+References: <20050411074619.GA26797@pegasos> <20050411125705.GB14415@localhost> <20050411153551.GA10362@pegasos>
+In-Reply-To: <20050411153551.GA10362@pegasos>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 425CC251.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 425CC250.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; florian:01 hars:01 hars:01 bik-gmbh:01 caml-list:01 ocaml:01 bigarray:01 sven:01 luther:01 pervasives:01 compiler:01 integers:01 strangely:01 ocaml:01 integers:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Sven Luther wrote:
+
+> Ok, but it would be nice to tell this black on white in the manual.
+
+It is. "All arithmetic operations over int64 are taken modulo 2^64" ;-)
+
+The core of a solution would be something like
+
+open Int64
+
+let of_uint32 n =
+   if Int32.compare n Int32.zero >= 0 then
+     of_int32 n
+   else
+     add (of_int32 n) 4294967296L
+
+let compare a b =
+   if logand min_int (logxor a b) = min_int then
+     if logand min_int a = min_int then 1 else (-1)
+   else
+     Pervasives.compare a b
+
+let to_string n = format "%u" n
+
+But you can't enter numbers larger than Int64.max_int that way, this would 
+require a C function and a fix to the compiler:
+
+         Objective Caml version 3.08.3
+
+# #load "uInt64.cma";;
+# Int64.compare Int64.max_int (Int64.succ Int64.max_int);;
+- : int = 1
+# UInt64.compare Int64.max_int (Int64.succ Int64.max_int);;
+- : int = -1
+# Int64.of_int32 (Int32.min_int);;
+- : int64 = -2147483648L
+# UInt64.of_uint32 (Int32.min_int);;
+- : int64 = 2147483648L
+# UInt64.of_uint32 (Int32.of_int (-1));;
+- : int64 = 4294967295L
+# UInt64.to_string (-1L);;
+- : string = "18446744073709551615"
+# Int64.of_string (UInt64.to_string (-1L));;
+Exception: Failure "int_of_string".
+# Int64.to_string 18446744073709551615L;;
+Integer literal exceeds the range of representable integers of type int64
+
+See http://pauillac.inria.fr/bin/caml-bugs/feature%20wish?id=2928
+Strangely enough, ocaml accepts max_int + 1 although that literal exceeds the
+range of representable integers, too:
+
+# UInt64.to_string Int64.min_int;;
+- : string = "9223372036854775808"
+# Int64.to_string 9223372036854775808L;;
+- : string = "-9223372036854775808"
+# Int64.to_string 9223372036854775809L;;
+Integer literal exceeds the range of representable integers of type int64
+# min_int;;
+- : int = -4611686018427387904
+# 4611686018427387904;;
+- : int = -4611686018427387904
+# 4611686018427387905;;
+Integer literal exceeds the range of representable integers of type int
+
+
+Yours, Florian.
+

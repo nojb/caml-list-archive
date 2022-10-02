@@ -1,0 +1,148 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA05174; Sat, 6 Jul 2002 16:18:21 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA05190 for caml-list@pauillac.inria.fr; Sat, 6 Jul 2002 16:18:20 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA30094 for <caml-list@pauillac.inria.fr>; Fri, 5 Jul 2002 23:28:35 +0200 (MET DST)
+Received: from tema.sit (host-42.uni.net.ua [213.169.83.42])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g65LSVf10302
+	for <caml-list@inria.fr>; Fri, 5 Jul 2002 23:28:32 +0200 (MET DST)
+Received: (from tema@localhost)
+	by tema.sit (8.9.3/8.9.3) id AAA08596
+	for caml-list@inria.fr; Sat, 6 Jul 2002 00:27:58 +0300
+X-Authentication-Warning: tema.sit: tema set sender to tema@sit.kiev.ua using -f
+Date: Sat, 6 Jul 2002 00:27:58 +0300
+From: Artem Prisyaznuk <tema@sit.kiev.ua>
+To: caml-list@inria.fr
+Subject: [Caml-list] Problem with threads & netclient
+Message-ID: <20020705212758.GA8297@sit.kiev.ua>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=koi8-r
+Content-Disposition: inline
+User-Agent: Mutt/1.3.28i
+X-Operating-System: Linux tema 2.2.14-5.0
+X-Uptime: 11:59pm  up 1 day,  9:49,  5 users,  load average: 0.00, 0.02, 0.11
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I write function for multithread list maping.
+I use it for get some web pages. But sometime it's don't 
+work properly, after get a several hundred pages,
+my program exit by segfault. 
+
+I compile it under Linux, with pthread, and I use netclient
+library, Ocaml version 3.04.
+
+Program here:
+============================================================
+type 'a th_res = Init | Val of 'a | Exn of exn;;
+
+let map ?(max = 10) (fun_t : 'a -> 'b) (lst : 'a list) =
+  let mtx_count = Mutex.create () in
+  let count = ref 0 in
+  let count_incr () =
+    Mutex.lock mtx_count; incr count; Mutex.unlock mtx_count
+  in
+  let count_decr () =
+    Mutex.lock mtx_count; decr count; Mutex.unlock mtx_count
+  in
+  let cond_exit = Condition.create () in
+  let thr_f ref_res f arg =
+    ref_res :=
+      begin try Val (f arg) with
+        ex -> prerr_endline (Printexc.to_string ex); flush stderr; Exn ex
+      end;
+    count_decr ();
+    Condition.signal cond_exit
+  in
+  let thds =
+    List.map
+      (fun arg ->
+         let res = ref Init in
+         Mutex.lock mtx_count;
+         if !count < max then () else Condition.wait cond_exit mtx_count;
+         Mutex.unlock mtx_count;
+         try
+           let r = Some (Thread.create (thr_f res fun_t) arg), res in
+           incr count; r
+         with
+           ex ->
+             prerr_endline (Printexc.to_string ex);
+             flush stderr;
+             res := Exn ex;
+             None, res)
+      lst
+  in
+  List.map
+    (fun (th, res) ->
+       begin match th with
+         Some t -> Thread.join t
+       | None -> ()
+       end;
+       !res)
+    thds
+;;
+let prlog s = print_string s; flush stdout;;
+open Http_client;;
+let http_get link =
+  let get = new get link in
+  let pipe = new pipeline in
+  pipe#add get;
+  begin try pipe#run () with
+    any -> pipe#reset (); raise any
+  end;
+  pipe#reset ();
+  get#get_resp_body ()
+;;
+
+let f (i, adr) =
+  Printf.printf "."; flush stdout; String.length (http_get adr)
+;;
+
+let make_lst adr len =
+  let rec mk_aux len accum =
+    if len = 0 then accum else mk_aux (len - 1) ((len, adr) :: accum)
+  in
+  mk_aux len []
+;;
+ 
+let test count url =
+  let args = make_lst url count in
+  let res = map ~max:4 f args in
+  print_endline "=================\n";
+  List.iter2
+    (fun (i, a) r ->
+       match r with
+         Val r -> Printf.printf "%3d. %s = %d\n" i a r
+       | Init -> Printf.printf "%3d. %s = Init\n" i a
+       | Exn ex ->
+           Printf.printf "%3d. %s = Exn %s\n" i a (Printexc.to_string ex))
+    args res
+;;
+let url = ref "";;
+let count = ref 0;;
+let replay = ref 0;;
+let spec =
+  ["-u", Arg.String (fun s -> url := s), "- url";
+   "-c", Arg.Int (fun i -> count := i), "- size of list";
+   "-r", Arg.Int (fun r -> replay := r), "- count of repaly"]
+;;
+Arg.parse spec (fun _ -> ()) "Test Threads\n";;
+
+for i = 1 to !replay do
+  test !count !url;
+  print_endline "\n\nnext_loop *************************\n\n"
+done;;
+============================================================
+
+I call it:
+
+	./prog -l 3000 -c 3 -u http://localhost/manual/index.html
+
+Where's problem?
+
+-- 
+Artem Prisyaznuk
+tema@sit.kiev.ua
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

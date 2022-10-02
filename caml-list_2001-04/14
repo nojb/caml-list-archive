@@ -1,0 +1,146 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA15464; Sun, 1 Apr 2001 23:09:34 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA11796 for caml-list@pauillac.inria.fr; Sun, 1 Apr 2001 23:09:33 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA09910 for <caml-list@pauillac.inria.fr>; Fri, 30 Mar 2001 20:59:45 +0200 (MET DST)
+Received: from localhost.localdomain (ppp46.dyn146.pacific.net.au [210.23.146.46])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f2UIxZ923883
+	for <caml-list@inria.fr>; Fri, 30 Mar 2001 20:59:39 +0200 (MET DST)
+Received: from ozemail.com.au (IDENT:root@localhost [127.0.0.1])
+	by localhost.localdomain (8.9.3/8.8.7) with ESMTP id EAA32353;
+	Sat, 31 Mar 2001 04:59:16 +1000
+Message-ID: <3AC4D784.93F5F2FB@ozemail.com.au>
+Date: Sat, 31 Mar 2001 04:59:16 +1000
+From: John Max Skaller <skaller@ozemail.com.au>
+X-Mailer: Mozilla 4.7 [en] (X11; I; Linux 2.2.12-20 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: wester@ilt.fhg.de
+CC: caml-list@inria.fr
+Subject: Re: [Caml-list] Why People Aren't Using OCAML? (was Haskell)
+References: <000f01c0b438$e4276850$53c0b3d1@SFOWVCHAK1L7> <200103270857.KAA24323@ilt.fhg.de>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+wester@ilt.fhg.de wrote:
+
+>But probably I still didn't grasp what the real advantages of
+> OCaml compared to C++, Java etc. are. So give me and other OCaml
+> beginners some more help to better understand what makes OCaml
+> superior compared to these main stream languages.
+
+	Ocaml offers (at least :-) two advantages for elementary
+use. The first is a proper concept of union. Here is an Ocaml union
+and a use of it:
+
+	type node = 
+		| Const of int 
+		| Unary of char * node
+		| Binary of char * node * node
+
+	(* print expression tree in reverse polish *)
+	let rp nd = match nd with
+		| Const i -> print_int i
+		| Unary (op , arg) -> 
+			rp arg  ^ " " print_char op
+		| Binary (op, arg1, arg2) ->
+			rp arg1 ^ " " ^ rp arg2 ^ " " ^ print_char op
+
+How would you do this in C/C++?
+
+	In C, you _ought_ to use:
+
+	struct node {
+		enum { Const_tag, Unary_tag, Binary_tag } tag;
+		union {
+			int Const;
+			struct { char op; node *arg; } Unary;
+			struct { char op; node *arg1; node *arg2; } Binary;
+		}
+	};
+
+To use it, you need to write:
+
+	void rp(node *nd) {
+		switch (u.tag) {
+		case Const_tag: printf("%d",u.Const); break;
+		case Unary_tag: 
+			rp(u.Unary.arg); printch(' '); printch(U.Unary.op);
+			break;
+		case Binary_tag: 
+			rp(u.Binary.arg1); printch(' ');
+			rp(u.Binary.arg2); printch(' '); printch(U.Binary.op);
+			break;
+	}
+
+You might leave out the break, and you might accidentally refer to the
+wrong component: you can't make either of these mistakes in Ocaml.
+Although not shown, you'd have problems destroying the structure
+if you forgot a 'free': Ocaml collects garbage automatically.
+
+The above is the 'correctest' solution in C. It won't work in C++,
+however, because unions of constructible types are not allowed.
+So you're forced to use inheritance and a dynamic cast, which is
+very confusing because there is NO abstraction here, and NO
+polymorphism.
+
+The second advantage for elementary programming is that functions
+are first class values. What this means is that you can define
+a function in a scope, and pass the function to some other function,
+and when you invoke it the scope is remembered. The thing you are
+passing is sometimes called a function _closure_. Here is a simple
+example:
+
+	let printit printer = printer () in
+	let f x = 
+		let a = 1 in
+		let p () = print_int a in
+		printit p
+
+Here, the printit function just invokes the printing routine 'printer',
+which is 'p' in the function 'f'. In passing 'p', the value 'a' is not
+forgotten. You can do the equivalent in C++ with functiods: but it 
+is VERY messy (and very hard to get the memory management right).
+Closures are very powerful. 
+
+You do the 'moral equivalent' of the above in C++ using 
+classes .. using about 10 times the number of lines of code, 
+and probably destroying locality. Here is an example:
+
+	let p lst = 
+		let a = 1 in 
+		List.iter (fun x -> print_int (x+a)) lst
+
+In C++:
+
+	struct printer {
+		int a;
+		printer(int aa) : a(aa) {}
+		void operator()(int x); { cout << x + a; }
+	}
+	void p (list<int> l) {
+		int a = 1;
+		for_each(lst.begin(), lst,end(), printer(a));
+	}
+
+but you have to define the 'struct printer' outside
+the 'p' routine, destroying locality. Just try
+replacing a triply indexed loop with three invocations
+of 'for_each' to see what I mean: STL is a great library,
+which is basically useless because functions aren't first
+class citizens.
+
+[This particular example has significance to me: I gave up
+writing a book on generic programming in C++ when I saw
+just how long winded it was to code a triply nested loop
+using 'for_each']
+
+-- 
+John (Max) Skaller, mailto:skaller@maxtal.com.au
+10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+checkout Vyper http://Vyper.sourceforge.net
+download Interscript http://Interscript.sourceforge.net
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

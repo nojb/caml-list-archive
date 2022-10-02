@@ -1,0 +1,183 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p7KGdxiD032068
+	for <caml-list@sympa-roc.inria.fr>; Sat, 20 Aug 2011 18:39:59 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnwEAGPiT07UGyoGlGdsb2JhbABBmDuPUxQBAQEBCQsJCRQDIoFAAQEEAScLATsLBQsLDhMEIQ8dGRIGExIIh1cCArhHhkgEmD6LTg
+X-IronPort-AV: E=Sophos;i="4.68,256,1312149600"; 
+   d="scan'208";a="105931449"
+Received: from smtp6-g21.free.fr ([212.27.42.6])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 20 Aug 2011 18:39:53 +0200
+Received: from UNKNOWN (unknown [172.20.243.134])
+	by smtp6-g21.free.fr (Postfix) with ESMTP id 5420A82294;
+	Sat, 20 Aug 2011 18:39:44 +0200 (CEST)
+Received: by UNKNOWN (Postfix, from userid 0)
+	id 4E2E28821A5BB; Sat, 20 Aug 2011 18:39:43 +0200 (CEST)
+Received: from  ([66.108.127.87]) 
+	by imp.free.fr (IMP) with HTTP 
+	for <pierrchp@172.20.243.55>; Sat, 20 Aug 2011 18:39:43 +0200
+Message-ID: <1313858383.4e4fe34f2d35e@imp.free.fr>
+Date: Sat, 20 Aug 2011 18:39:43 +0200
+From: pierrchp@free.fr
+To: David Allsopp <dra-news@metastack.com>
+Cc: OCaml List <caml-list@inria.fr>
+References: <000701cc5f45$caa14310$5fe3c930$@metastack.com>
+In-Reply-To: <000701cc5f45$caa14310$5fe3c930$@metastack.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+User-Agent: Internet Messaging Program (IMP) 3.2.8
+X-Originating-IP: 66.108.127.87
+Subject: Re: [Caml-list] Module design
+
+Sorry about the duplicates, but I didn't "reply all".
+
+Here is how I would do it:
+
+type 'a connection =  {connection_id:'a ;
+                      (*some other things that needs to be defined*)
+                       }
+                      (* type of connections *)
+let make_connection connid = {connection_id = connid;
+                            (*some other things that needs to be defined*)
+			     }
+
+module type CONN =
+  sig
+  val connect: ('a connection -> bool) option
+  val disconnect: ('a connection -> unit) option
+end
+
+module type BACKEND = functor (C:CONN) ->
+sig
+val connect:'a connection -> bool
+val disconnect:'a connection -> unit
+end
+
+
+module Backend : BACKEND = functor (C:CONN) ->
+ struct
+
+   let default_connect c= false (*implement default connect*)
+   let default_disconnect c= () (* implement default disconnect *)
+
+   let connect c = match C.connect with
+          None -> default_connect c
+         |Some f -> f c
+   let disconnect c= match C.disconnect with
+          None -> default_disconnect c
+         |Some f -> f c
+ end
+
+ Cheers
+
+  -Pierre
+
+
+Selon David Allsopp <dra-news@metastack.com>:
+
+> I'm working on a new version of a framework for a server daemon which can
+> have custom functionality plugged in through different backends. The present
+> version works by passing a record containing lots of options along the lines
+> of:
+>
+> type backend = {b_connect: (connectionID -> bool) option; b_disconnect:
+> (connectionID -> unit) option}
+>
+> which is then passed to a function run which does the actual work, using the
+> callbacks given in the backend record or substituting defaults where None is
+> specified.
+>
+> I'm thinking that a functor would be a much neater way of doing this (and
+> would also allow for passing around more than just a connectionID if
+> required) but wondering what the best way of preserving the ability to have
+> default handlers for functions which a given backend isn't interested in.
+>
+> I've not really used the module system beyond trivial functor applications
+> (Set and Map, etc.) but I've come up with the following:
+>
+> (* Framework.ml *)
+>
+> (* Individual connection identifiers *)
+> type connectionID = int
+>
+> (* Wrapper type for custom connections *)
+> module type CONNECTION = sig
+>   type t
+>   val newConnection : connectionID -> t
+> end
+>
+> (* Actual backend type *)
+> module type BACKEND =
+>   sig
+>     include CONNECTION
+>
+>     (* Toy functions, obviously *)
+>     val connect : t -> bool
+>     val disconnect : t -> unit
+>   end
+>
+> (* Default behaviour defined in these two modules *)
+> module Default = struct
+>   (* Default connection information is just the identifier *)
+>   module Connection : CONNECTION = struct
+>     type t = connectionID
+>     let newConnection connectionID = connectionID
+>   end
+>
+>   (* Default functions *)
+>   module Backend (C : CONNECTION) = struct
+>     let connect _ = (* ... *)
+>     let disconnect _ = (* ... *)
+>   end
+> end
+>
+> module Make (Backend : BACKEND) = struct
+>   let run () = (* ... *)
+> end
+>
+> and so an implementation using default connection IDs could be written:
+>
+> module rec MySimpleBackend : Framework.BACKEND = struct
+>   include Framework.Default.Connection
+>
+>   include Framework.Default.Backend(MySimpleBackend)
+>
+>   let connect _ = (* Alternate behaviour *)
+>   (* Default disconnect is fine *)
+> end
+>
+> and one with more complex connectionIDs could be written:
+>
+> module rec MyComplexBackend : Framework.BACKEND = struct
+>   type t = {ci_id : Framework.connectionID; (* ... *) }
+>   let newConnection id = {ci_id = id; (* ... *) }
+>
+>   include Framework.Default.Backend(MyComplexBackend)
+>
+>   let connect {ci_id; (* ... *)} = (* Alternate behaviour *)
+> end
+>
+> This pattern seems to work OK but is there an even neater way I haven't
+> spotted? I'm presuming that in the following:
+>
+> module Foo = struct let x = true let x = false end
+>
+> the compiler doesn't create a module with two fields one of which is
+> inaccessible which would seem to be important (from an aesthetic sense) with
+> having a module of default functions which get "overridden".
+>
+> Any guidance/comment appreciated!
+>
+>
+> David
+>
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+
+

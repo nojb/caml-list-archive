@@ -1,0 +1,132 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA08615; Sun, 27 May 2001 15:01:23 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA08609 for <caml-list@pauillac.inria.fr>; Sun, 27 May 2001 15:01:22 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f4RD1Jr21664;
+	Sun, 27 May 2001 15:01:19 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA08617; Sun, 27 May 2001 15:01:19 +0200 (MET DST)
+Date: Sun, 27 May 2001 15:01:19 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Miles Egan <miles@caddr.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] lisp -> ocaml
+Message-ID: <20010527150119.A8468@pauillac.inria.fr>
+References: <20010522093341.A97425@caddr.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20010522093341.A97425@caddr.com>; from miles@caddr.com on Tue, May 22, 2001 at 09:33:41AM -0700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Second, the PAIP code makes fairly heavy use of Lisp's symbolic
+> features and uses symbols as a kind of type tag but also as
+> printable strings.  I've been using variants, both traditional and
+> polymorphic, as a substitute, but they're not really quite
+> equivalent.
+
+Right.  The closest OCaml equivalent to a Lisp atom is unique strings,
+which are not provided by the standard library but can easily be
+implemented as a module.
+
+With some trickery, you can even implement atoms with property lists,
+type safe but dynamically typed of course.  See the code below.
+(Warning: the implementation of properties is a real mind-twister,
+using a folklore trick to implement dynamics using references and
+functions that I learnt from Daniel de Rauglaudre, although it's been
+reinvented independently quite a number of times.)
+
+I agree it's best to use variants instead of strings, since this gives
+much better static typing guarantees.  As for printing, it is possible
+to generate printing functions automatically, as others pointed out,
+but it's a bit of a sledgehammer if all your variant constructors are
+constant; a simple association list or hash table works fine, e.g.
+
+let name_table = [ One, "one"; Two, "two"; Three, "three"]
+
+let print_name x =
+  try
+    print_string (List.assoc x name_table)
+  with Not_found ->
+    print_string "???"
+
+Chris Hecker asked:
+
+> Isn't there something that could be done with the toplevel libraries?
+> The toplevel prints variant ctors correctly.
+
+True, but it has access to a wealth of typing information: the
+inferred type for the value to be printed, plus the whole typing
+environment.  This allows it to decipher the machine representation of
+values, using the types to provide symbolic names for constructors and
+record labels.  In a separately-compiled program, this typing
+information is available at compile-time, but not at run-time.
+
+There have been several attempts at making some type information
+available at run-time, e.g. dynamics, or Furuse-Weis' extensional
+polymorphism, but this is still ongoing work.
+
+- Xavier Leroy
+
+(* atoms.mli *)
+
+type atom
+
+val intern: string -> atom
+val name: atom -> string
+
+type 'a property
+
+val new_property: unit -> 'a property
+val put_property: atom -> 'a property -> 'a -> unit
+val get_property: atom -> 'a property -> 'a
+
+(* atoms.ml *)
+
+type atom = { name: string; mutable properties: (unit -> unit) list }
+
+let atom_table = (Hashtbl.create 37 : (string, atom) Hashtbl.t)
+
+let intern s =
+  try
+    Hashtbl.find atom_table s
+  with Not_found ->
+    let a = { name = s; properties = [] } in
+    Hashtbl.add atom_table s a;
+    a
+
+let name atom = atom.name
+
+type 'a property = 'a option ref
+
+let new_property () = ref None
+
+let put_property atom prop value =
+  atom.properties <- (fun () -> prop := Some value) :: atom.properties
+
+let get_property atom prop =
+  let rec get = function
+    [] -> raise Not_found
+  | fn :: rem ->
+      fn();
+      match !prop with
+        None -> get rem
+      | Some v -> prop := None; v
+  in get atom.properties
+
+(* A more careful version of put that erases overwritten properties:
+
+let put_property atom prop value =
+  let rec put = function
+    [] -> [fun () -> prop := Some value]
+  | fn :: rem ->
+      fn();
+      match !prop with
+        None -> fn :: put rem
+      | Some v -> prop := None; (fun () -> prop := Some value) :: rem
+  in atom.properties <- put atom.properties
+
+*)
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

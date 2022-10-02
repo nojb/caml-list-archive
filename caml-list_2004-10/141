@@ -1,0 +1,113 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA18267; Thu, 14 Oct 2004 15:36:46 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA18145 for <caml-list@pauillac.inria.fr>; Thu, 14 Oct 2004 15:36:44 +0200 (MET DST)
+Received: from r-hh.iij4u.or.jp (r-hh.iij4u.or.jp [210.130.0.72])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9EDag4u021076
+	for <caml-list@inria.fr>; Thu, 14 Oct 2004 15:36:43 +0200
+Received: from localhost (h107.p502.iij4u.or.jp [210.149.246.107])
+	by r-hh.iij4u.or.jp (8.11.6+IIJ/8.11.6) with ESMTP id i9EDafi00938
+	for <caml-list@inria.fr>; Thu, 14 Oct 2004 22:36:41 +0900 (JST)
+Date: Thu, 14 Oct 2004 22:58:26 +0900
+From: Takayuki Kazama <kazaan@hh.iij4u.or.jp>
+To: caml-list@inria.fr
+Subject: [Caml-list] ocamlnet doesn't correspond to pcre from 04/29 change onward
+Message-ID: <20041014135826.GA2464@hh.iij4u.or.jp>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-2022-jp
+Content-Disposition: inline
+User-Agent: Mutt/1.5.6+20040818i
+X-Dispatcher: imput version 20040704(IM147)
+X-Miltered: at nez-perce with ID 416E80EA.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; iij:99 ocamlnet:01 pcre:01 onward:99 ocamlnet-:01 0.98:01 pcre:01 2004:99 pcre-ocaml's:01 changelog:01 netencoding:01 0.98:01 netstring:01 mingw:01 mingw:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 2631
+Lines: 79
+
+Hello, all.
+
+I've found the code in ocamlnet-0.98 should be fix to correspond to 
+-new- Pcre.get_substring.
+
+Since 2004-04-29, the function "get_substring" does not return null string
+even if accessed substring was not captured. It raises "Not_found".
+(Check pcre-ocaml's changelog)
+
+So now, it seems that Netencoding.Html.decode don't work right way.
+I've checked this at ...
+	Debian GNU/Linux(sid)	ocaml			3.08.1-1
+				libpcre-ocaml		5.08.1-2
+				libocamlnet-ocaml	0.98-2.1
+and
+	M$ Windows2000		Ocaml-MinGW-Maxi Distibution.
+(Note: netstring/Makefile was changed for ocaml/mingw build
+because of no ocamlmklib in ocaml/mingw)
+
+Problem is like bellow.
+
+shell$ ocaml
+# #use "topfind";;
+# #require "netstring";;
+# Netencoding.Html.encode_from_latin1 "(a<b)&(c>d)";;
+- : string = "(a&lt;b)&amp;(c&gt;d)"
+	(* We could `encode' with propriety. But... *)
+# Netencoding.Html.decode_to_latin1 "(a&lt;b)&amp;(c&gt;d)"
+Exception: Not_found.
+	(* Oops. So now try by the number-encoding -- like &#60 -- *)
+# Netencoding.Html.decode_to_latin1 "(a&#60;b)&#38;(c&#62;d)"
+- : string = "(a<b)&(c>d)"
+	(* Good. So we cannot decode "&[a-zA-Z];" encoding only *)
+
+To fix this problem, change netencoding.ml like bellow (diff -c)
+*** netencoding.ml		Thu Oct 14 20:54:56 2004
+--- netencoding.ml.org		Sat Sep  4 22:20:36 2004
+***************
+*** 1536,1547 ****
+	 (* TODO: avoid String.sub *)
+	 let occurence = occurences.(k) in
+	 let replacement =
+!	   try
+!	     let n = int_of_string (Pcre.get_substring occurence 2) in
+!	       makechar n
+!	   with Not_found ->
+!	     let name = Pcre.get_substring occurence 3 in
+!	       lookup_entity name
+	 in
+	 Buffer.add_string buf replacement;
+	 n := n1;
+--- 1536,1551 ----
+	 (* TODO: avoid String.sub *)
+	 let occurence = occurences.(k) in
+	 let replacement =
+!	   let num = Pcre.get_substring occurence 2 in   (* or " *)
+!	   if num <> "" then begin
+!	     let n = int_of_string num in
+!	     makechar n
+!	   end
+!	   else begin
+!	     let name = Pcre.get_substring occurence 3 in  (* or "" *)
+!	     assert(name <> "");
+!	     lookup_entity name
+!	   end
+	 in
+	 Buffer.add_string buf replacement;
+	 n := n1;
+
+And I suggest that change the functions "matched_string" and "matched_group".
+Because Pcre.get_substring will raise Not_found now 8)
+
+regards.
+
+---
+Takayuki Kazama
+
+mail : kazaan@hh.iij4u.or.jp
+blog : http://kazaan.no-ip.com/~kazaan/ (SORRY JAPANESE ONLY)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

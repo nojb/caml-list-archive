@@ -1,0 +1,154 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA05657 for caml-redist; Tue, 25 Apr 2000 20:18:50 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA22869 for <caml-list@pauillac.inria.fr>; Tue, 25 Apr 2000 20:16:26 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id UAA17434;
+	Tue, 25 Apr 2000 20:16:25 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA13437; Tue, 25 Apr 2000 20:16:24 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200004251816.UAA13437@pauillac.inria.fr>
+Subject: Re: Caml wish list
+To: williamc@paneris.org (William Chesters)
+Date: Tue, 25 Apr 2000 20:16:24 +0200 (MET DST)
+Cc: caml-list@inria.fr
+In-Reply-To: <200004191345.OAA27001@toy.william.bogus> from "William Chesters" at Apr 19, 2000 02:45:06 PM
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> Well, I can't remember offhand how SMJ/NJ handles overloading, but it
+> seems to work reasonably well.  On the other hand, I am nowadays a
+> convert to ocaml's hard line on overloading---it's an absolute curse
+> of many, many C++ programs by coders whose enthusiasm outruns their
+> judgement.
+
+We think many Caml users feel that using different addition function
+(+) and (+.) for integers and floats is a safe way of programming, but
+really frustrating at the same time.
+
+So do we. Therefore we are currently in the effort of adding some kind
+of limited overloading to Caml. This is not a trivial problem, if you
+want something really good both at the expressiveness and the
+efficiency levels.
+
+      *  *  * 
+
+As you mentioned, SML provides a set of overloaded functions such as
+(+), but it is quite limited. In addition, for the sake of efficiency
+and simplicity of the typing and compilation schemes, the overloaded
+functions in SML have a restricted ``functional'' status: you cannot
+abstract pieces of code containing overloaded operators. Hence, you
+cannot define derived overloaded functions using already existing
+overloaded functions.
+
+A simple example that novice SML users often encounter is the double
+function using overloaded (+):
+
+# let double = fun x -> x + x;;
+
+In SML, this double function is not an overloaded function for
+integers and floats, because the type of (+) must always be statically
+deduced from the context, which is impossible here. This definition is
+just either rejected (SML '90), or resolved using a default type
+assignment for overloaded symbols (SML '97): then (+) is typed as its
+default type int -> int -> int, and consequently double gets type int
+-> int.
+
+This way, the compiler always has the precise type of use for each
+occurrence of (+). Therefore occurrences of (+) can be replaced by 
+the corresponding primitives, for example:
+
+        # 1 + 2            ====>   add_int 1 2
+        # 1.0 + 2.0        ====>   add_float 1.0 2.0
+        # fun x -> x + x   ====>   fun x -> add_int x x
+
+Therefore overloaded functions are just "typeful macros" in SML.
+
+We think this is one reasonable solution, since the users will feel
+much less frustration than using the separated functions (+) and (+.),
+and the compilation for these overloaded functions is straightforward
+and has no run time overhead.
+
+      *  *  * 
+
+However, we are not promoting this simple overloading facility,
+because we think the ``abstraction restriction'' to be unnatural in a
+functional setting: even if the definition of new overloaded symbols
+is prohibited, the abstraction over overloaded operators (as in double
+above) should be possible in higher-order functional languages like
+SML or Caml!
+
+Our "extensional polymorphism" framework is a bit more complicated
+than the ``default assigment'' static scheme, but it provides
+abstraction and "real" overloaded functions. (By the way, we call
+those "generic" functions.) Using extensional polymorphism, the double
+function is polymorphic, being defined for ``any argument whose type
+is suitable for (+)''. Thus, you can use it for integers and floats!
+
+# let double = fun x -> x + x;;
+val double : $a -> $a = <fun>
+
+# double 1;;
+- : int = 2 
+
+# double 3.14;;
+- : float = 6.28
+
+We use special type variables $a, $b, ..., called dynamic type
+variables, to denote type parameters abstracted into type schemes for
+polymorphic generic functions. In the definition of double, the
+context of (+) is left unresolved, and double becomes polymorphic. The
+compilation of double abstracts the type context for the internal (+),
+and dynamically passes it to (+) to select the appropriate addition
+primitive.
+
+You may worry about efficient compilation of this feature, since, as
+examplify by the double generic function, some information from the
+typing context has to be passed at run time, and hence double involves
+an extra argument (a type) to be provided to (+) at run time, and also
+an additional pattern matching selection to apply the proper addition
+primitive; undoubtedly, the generic double function is a bit slower
+than its direct non-overloaded counterpart definitions for integers
+and floats, like
+
+# let double_int x = x + x;;
+# let double_float x = x +. x;;
+
+However, writing those two definitions means twice more code, hence
+twice more possibilities of bugs, twice more maintenance, and twice
+more identifiers to remember. This simplification is worth a slight
+efficiency loss ...
+
+Note also that usual simple overloading of operators is still as
+efficient as it can be, since static type annotations allow the
+inlining of the corresponding primitives, at least for the predefined
+set of usual arithmetic operators (+, -, *, ...).
+
+Polymorphic uses of overloaded operators in generic functions need an
+extra type book keeping for dynamic resolution, but there is no
+possible efficiency comparison with other compilation schemes, since
+these functions are completely new in ML and cannot be expressed
+neither in SML nor in Caml.
+
+As a side effect of the extensional polymorphism discipline, we
+manipulate types at run time, and this provides various benefits and
+new features to the lasnguage:
+
+        * safe value I/O (persistent value I/O between different
+          programs, or safe usage of input_value/output_value),
+        * dynamic values,
+        * some limited polymorphic print facility,
+        * a new kind of computation mixing types and values ...
+
+The current prototype is an extension of the 2.04 version of Objective
+Caml; we are planning to release it when it will be fully stable, like
+the label extension in 2.99. We don't know yet which version of
+Objective Caml it will be 3.0, 3.x or 3.99...
+
+Hope this helps,
+
+Jun Furuse & Pierre Weis
+
+
+
+

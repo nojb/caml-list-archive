@@ -1,0 +1,107 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 88C6ABC0B
+	for <caml-list@yquem.inria.fr>; Fri,  2 Feb 2007 03:15:30 +0100 (CET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l122FRXp017968
+	for <caml-list@inria.fr>; Fri, 2 Feb 2007 03:15:29 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.7/8.13.7) with ESMTP id l122FK1v020971;
+	Fri, 2 Feb 2007 11:15:21 +0900 (JST)
+Date: Fri, 02 Feb 2007 11:15:16 +0900 (JST)
+Message-Id: <20070202.111516.126141560.garrigue@math.nagoya-u.ac.jp>
+To: Damien.Pous@ens-lyon.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Marshal, closures, bytecode and native compilers
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <87lkjhogzt.fsf@smtp.ens-lyon.fr>
+References: <87lkjhogzt.fsf@smtp.ens-lyon.fr>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 45C29EBF.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; bytecode:01 damien:01 damien:01 ens-lyon:01 bytecode:01 marshaling:01 argv:01 stdout:01 stdin:01 ocamlc:01 ocamlopt:01 ocamlc:01 -version:01 marshaled:01 marshaled:01 
+
+From: Damien Pous <Damien.Pous@ens-lyon.fr>
+
+> I found some strange difference between the native and bytecode
+> compilers, when Marshaling functional values:
+> 
+> [damien@mostha]$ cat lift.ml
+> let r = ref 0
+> let f =
+>   fun () -> incr r; print_int !r; print_newline()
+> let () = match Sys.argv.(1) with
+>   | "w" ->  Marshal.to_channel stdout f [Marshal.Closures]
+>   | "r" ->
+>       let g = (Marshal.from_channel stdin: unit -> unit) in
+>         g (); f ()
+>   | _ -> assert false
+> 
+> [damien@mostha]$ ocamlc lift.ml; ( ./a.out w | ./a.out r )
+> 1
+> 1
+> [damien@mostha]$ ocamlopt lift.ml; ( ./a.out w | ./a.out r )
+> 1
+> 2
+> [damien@mostha]$ ocamlc -version
+> 3.09.2
+> 
+> In the bytecode version, the reference [r] gets marshaled along with
+> [f] so that the calls [f()] and [g()] respectively affect the initial
+> reference of the reader, and the (fresh) marshaled reference.
+> 
+> On the contrary in the native version, it seems that [f] is not
+> `closed': its code address is directly sent, and the call [g()]
+> affects the initial reference of the reader.
+
+Interesting phenomenon. According to the usual definition of closure,
+the correct solution is probably the bytecode one. But this definition
+seems hardly applicable in practice, since it would also mean bringing
+all dependencies with you. This is not the case even with the bytecode
+version. For instance if you move "let r = ref 0" to r.ml, and replace
+the first line of your program by "open R", you get the same behaviour
+as for native code.
+
+So as a first approximation, the real specification is: local
+variables are transmitted with the closure, but global ones are not.
+The trouble being that the definition of global is different for
+bytecode and native code. With bytecode, definitions from the same
+module are local, while they are global for native code.
+
+Moreover, I believe that, through optimizations, variables that look
+local may turn up to be global.
+
+I'm not sure what would be the right fix.
+A more complete specification would be a good idea.
+A flag to disable optimizations would be rather costly.
+
+For now, a rule of the thumb would be:
+
+* if you want your variable to be handled as global, even in bytecode,
+  either receive it as parameter (after marshalling) or put it in
+  another compilation unit.
+
+* if you want your variable to be handle as local, even in native
+  code, then define or redefine it locally inside your function.
+    let r = ref 0
+    let f =
+      let r = r in
+      fun () -> incr !r; print_int !r; print_newline()
+   For the time being this seems to work.
+
+Maybe it is better just to assume that you should not mix closure
+marshalling with mutable variables. In either case, the semantics
+seems fishy. It seems more reasonable to make such functions receive
+their mutable state explicitly, and choose either to send it
+(obtaining a "fork" behaviour) or not.
+
+Jacques Garrigue
+

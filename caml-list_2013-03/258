@@ -1,0 +1,126 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 7E1537EE7A
+	for <caml-list@sympa.inria.fr>; Thu, 28 Mar 2013 09:47:18 +0100 (CET)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.212;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.212;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.212;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuMAAGsCVFHB/BfUe2dsb2JhbABDgzu8BoJegRkOAQEJDQoIFAMlgh8BAQU4QRALEgYJJQ8COAENBgEMAQcBAYgUvlmPGAeDQAOWZ4V/jhQ
+X-IPAS-Result: AuMAAGsCVFHB/BfUe2dsb2JhbABDgzu8BoJegRkOAQEJDQoIFAMlgh8BAQU4QRALEgYJJQ8COAENBgEMAQcBAYgUvlmPGAeDQAOWZ4V/jhQ
+X-IronPort-AV: E=Sophos;i="4.84,924,1355094000"; 
+   d="scan'208";a="9016278"
+Received: from msa03.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.212])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 28 Mar 2013 09:47:17 +0100
+Received: from [192.168.1.120] ([92.151.115.78])
+	by mwinf5d52 with ME
+	id GwnG1l00d1hZWdG03wnG6H; Thu, 28 Mar 2013 09:47:17 +0100
+Message-ID: <51540395.50202@frisch.fr>
+Date: Thu, 28 Mar 2013 09:47:17 +0100
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:20.0) Gecko/20100101 Thunderbird/20.0
+MIME-Version: 1.0
+To: Philippe Veber <philippe.veber@gmail.com>, 
+ Martin Jambon <martin.jambon@ens-lyon.org>
+CC: caml users <caml-list@inria.fr>
+References: <CAOOOohSzgcZxLOu9qUX1Box1eKyK-DEX7zrEM2GXzjs372jLpQ@mail.gmail.com> <51520CAE.6020009@ens-lyon.org> <CAOOOohTMNd6pW=3Gp8wBc8nggLUCEd9OAEFFV91jz8wEUJMMXg@mail.gmail.com>
+In-Reply-To: <CAOOOohTMNd6pW=3Gp8wBc8nggLUCEd9OAEFFV91jz8wEUJMMXg@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Master-slave architecture behind an ocsigen server.
+
+On 03/28/2013 08:37 AM, Philippe Veber wrote:
+> Hi Martin,
+> nproc meets exactly my needs: a simple lwt-friendly interface to
+> dispatch function calls on a pool of processes that run on the same
+> machine. I have only one concern, that should probably be discussed on
+> the ocsigen list, that is I wonder if it is okay to fork the process
+> running the ocsigen server. I think I remember warnings on having parent
+> and children processes sharing connections/channels but it's really not
+> clear to me.
+
+FWIW, LexiFi uses an architecture quite close to this for our 
+application.  The main process manages the GUI and dispatches 
+computations tasks to external processes.  Some points to be noted:
+
+- Since this is a Windows application, we cannot rely on fork.  Instead, 
+we restart the application (Sys.argv.(0)), with specific command-line 
+flag, captured by the library in charge of managing computations.  This 
+is done by calling a special function in this library; the function does 
+nothing in the main process and in the sub-processes, it starts the 
+special mode and never returns.  This gives a chance to the main 
+application to do some global initialization common to the main and sub 
+processes (for instance, we dynlink external plugins in this 
+initialization phase).
+
+- Computation functions are registered as global values.  Registration 
+returns an opaque handle which can be used to call such a function.  We 
+don't rely on marshaling closures.
+
+- The GUI process actually spawns a single sub-process (the Scheduler), 
+which itself manages more worker sub-sub-processes (with a maximal 
+number of workers).  Currently, we don't do very clever scheduling based 
+on task priorities, but this could easily be added.
+
+- An external computation can spawn sub-computations (by applying a 
+parallel "map" to a list) either synchronously (direct style) or 
+asynchronously (by providing a continuation function, which will be 
+applied to the list of results, maybe in a different process).  In both 
+cases,  this is done by sending those tasks to the Scheduler.  The 
+Scheduler dispatches computation tasks to available workers.  In the 
+synchronous parallel map, the caller runs an inner event loop to 
+communicate with the Scheduler (and it only accepts sub-tasks created by 
+itself or one of its descendants).
+
+- Top-level external computations can be stopped by the main process 
+(e.g. on user request).  Concretely, this kills all workers currently 
+working on that task or one of its sub-tasks.
+
+- In addition to sending back the final results, computations can report 
+progress to their caller and more intermediate results.  This is useful 
+to show a progress bar/status and partial results in the GUI before the 
+end of the entire computation.
+
+- Communication between processes is done by exchanging marshaled 
+"variants" (a tagged representation of OCaml values, generated 
+automatically using our runtime types).  Since we can attach special 
+variantizers/devariantizers to specific types, this gives a chance to 
+customize how some values have to be exchanged between processes (e.g. 
+values relying on internal hash-consing are treated specially to 
+recreate the maximal sharing in the sub-process).
+
+- Concretely, the communication between processes is done through queues 
+of messages implemented with shared memory.  (This component was 
+developed by Fabrice Le Fessant and OCamlPro.)   Large computation 
+arguments or results (above a certain size) are stored on the file 
+system, to avoid having to keep them in RAM for too long (if all workers 
+are busy, the computation might wait for some time being started).
+
+- The API supports easily distributing computation tasks to several 
+machines.  We have done some experiments with using our application's 
+database to dispatch computations, but we don't use it in production.
+
+
+
+
+
+Alain

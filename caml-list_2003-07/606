@@ -1,0 +1,155 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA01502; Mon, 28 Jul 2003 00:33:45 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA01862 for <caml-list@pauillac.inria.fr>; Mon, 28 Jul 2003 00:33:44 +0200 (MET DST)
+Received: from smtp3.hushmail.com (smtp3.hushmail.com [65.39.178.33])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h6RMXhf04285
+	for <caml-list@inria.fr>; Mon, 28 Jul 2003 00:33:43 +0200 (MET DST)
+Received: from mailserver1.hushmail.com (mailserver1.hushmail.com [65.39.178.20])
+	by smtp3.hushmail.com (Postfix) with ESMTP id 47D9666C9
+	for <caml-list@inria.fr>; Sun, 27 Jul 2003 15:33:40 -0700 (PDT)
+Received: from mailserver1.hushmail.com (localhost.hushmail.com [127.0.0.1])
+	by mailserver1.hushmail.com (8.12.6/8.12.3) with ESMTP id h6RMXeC4078384
+	for <caml-list@inria.fr>; Sun, 27 Jul 2003 15:33:40 -0700 (PDT)
+	(envelope-from annan@hushmail.com)
+Received: (from nobody@localhost)
+	by mailserver1.hushmail.com (8.12.6/8.12.3/Submit) id h6RMXe31078380
+	for caml-list@inria.fr; Sun, 27 Jul 2003 15:33:40 -0700 (PDT)
+Message-Id: <200307272233.h6RMXe31078380@mailserver1.hushmail.com>
+Date: Sun, 27 Jul 2003 15:33:39 -0700
+To: caml-list@inria.fr
+Subject: [Caml-list] Thread issue (?)
+From: <annan@hushmail.com>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; gcc-:01 3.06:01 unistd:01 mlvalues:01 callback:01 val:01 camlparam:01 segfault:01 camlreturn:01 pervasives:01 stdout:01 gcc:01 usr:01 ocamlopt:01 -thread:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Hello OCaml listers,
+
+  I sent a message in a week or two ago regarding some behavior I didn't
+understand, and a whole lot of code.  Not getting any responses, I figured
+I'd better get a better understanding of what's going on before asking
+the folks on here about it... So, I managed to reproduce the behaviour
+with the following code (on linux, with gcc-3.2.1, and ocaml-3.06):
+
+***************** oops.c
+#include <pthread.h>
+#include <unistd.h>
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+#include <caml/callback.h>
+
+static value * f = 0;
+static value * v = 0;
+static pthread_t p = 0;
+
+/* so we need a function to call from OCaml that sets the callback, 
+   a function that runs the callback, and a function (called from OCaml)
+
+   that starts the thread that runs the function that runs the callback.
+
+
+   whee.                                                            
+   */
+
+value im_setting_the_callback(value no_val) {
+  CAMLparam1 (no_val);
+
+  f = caml_named_value("segfault_function");
+  v = caml_named_value("segfault_function_val");
+
+  CAMLreturn(Val_unit);
+}
+
+void* look_at_me_segfault(void *arg) {
+  CAMLparam0 ();
+  callback(*f, *v);
+  CAMLreturn0;
+}
+
+value segfault_thread_in_C(value v) {
+  CAMLparam1 (v);
+  pthread_create(&p, NULL, &look_at_me_segfault, NULL);
+  CAMLreturn(Val_unit);
+}
+**********
+
+********** oops.ml
+external set_callback : unit -> unit = "im_setting_the_callback"
+external run_callback_from_C_thread : unit -> unit = "segfault_thread_in_C"
+
+let look_at_me_segfault s = print_string s; flush Pervasives.stdout
+
+let main () = 
+  Callback.register "segfault_function" look_at_me_segfault;
+  Callback.register "segfault_function_val" "oops, i'm segfaulting\n";
+
+  set_callback ();
+  Thread.create run_callback_from_C_thread ();
+
+  Unix.sleep 2;;
+
+main ();;
+**********
+
+build with 
+gcc -c -g -I /usr/local/lib/ocaml -o oops_c.o oops.c
+ocamlopt -o oops -thread -w s -cclib -lpthread unix.cmxa threads.cmxa
+oops_c.o oops.ml
+
+********** gdb output
+bash-2.05b$ gdb oops
+GNU gdb 5.2.1
+Copyright 2002 Free Software Foundation, Inc.
+GDB is free software, covered by the GNU General Public License, and
+you are
+welcome to change it and/or distribute copies of it under certain conditions.
+Type "show copying" to see the conditions.
+There is absolutely no warranty for GDB.  Type "show warranty" for details.
+This GDB was configured as "i386-slackware-linux"...
+(gdb) break posix.c:191
+Breakpoint 1 at 0x8056346: file posix.c, line 191.
+(gdb) run
+The program being debugged has been started already.
+Start it from the beginning? (y or n) y
+
+Starting program: /home/annan/proj/oop_server/oops 
+[New Thread 16384 (LWP 25146)]
+[New Thread 32769 (LWP 25147)]
+[New Thread 16386 (LWP 25148)]
+[New Thread 32771 (LWP 25149)]
+[Switching to Thread 32771 (LWP 25149)]
+
+Breakpoint 1, caml_thread_leave_blocking_section () at posix.c:191
+191       caml_bottom_of_stack= curr_thread->bottom_of_stack;
+1: curr_thread = 0x807cd70
+(gdb) c
+Continuing.
+[New Thread 49156 (LWP 25150)]
+[Switching to Thread 49156 (LWP 25150)]
+
+Breakpoint 1, caml_thread_leave_blocking_section () at posix.c:191
+191       caml_bottom_of_stack= curr_thread->bottom_of_stack;
+1: curr_thread = 0x0
+(gdb) c
+Continuing.
+
+Program received signal SIGSEGV, Segmentation fault.
+caml_thread_leave_blocking_section () at posix.c:191
+191       caml_bottom_of_stack= curr_thread->bottom_of_stack;
+1: curr_thread = 0x0
+************
+ 
+  Can someone help me understand what's going on, and if this is a bug
+in my code (very easily possible), or is this a corner case in OCaml
+that didn't get provided for?  
+
+  Thanks in advance,
+  Annan Harley
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

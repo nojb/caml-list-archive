@@ -1,0 +1,90 @@
+Return-Path: <nogin@metaprl.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 15DA2BC6B
+	for <caml-list@yquem.inria.fr>; Fri, 27 Jul 2007 22:21:35 +0200 (CEST)
+Received: from hub.hrl.com (hub.hrl.com [208.179.241.200])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l6RKLXr7022073
+	for <caml-list@inria.fr>; Fri, 27 Jul 2007 22:21:34 +0200
+Received: from [192.27.172.110] (dangle.hrl.com [192.27.172.110])
+ by hpux03.hrl.com
+ (iPlanet Messaging Server 5.2 HotFix 2.10 (built Dec 26 2005))
+ with ESMTP id <0JLU00IDJTVW4E@hpux03.hrl.com> for caml-list@inria.fr; Fri,
+ 27 Jul 2007 13:21:33 -0700 (PDT)
+Date: Fri, 27 Jul 2007 13:21:32 -0700
+From: Aleksey Nogin <nogin@metaprl.org>
+Subject: In native thread programs,
+ Sys.Break does not get raised inside C blocking sections?
+To: Caml List <caml-list@inria.fr>
+Message-id: <46AA53CC.2040003@metaprl.org>
+Organization: MetaPRL/Mojave Research Group
+MIME-version: 1.0
+Content-type: text/plain; charset=ISO-8859-1; format=flowed
+Content-transfer-encoding: 7BIT
+User-Agent: Thunderbird 1.5.0.12 (X11/20070718)
+X-Miltered: at discorde with ID 46AA53CE.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ctrl-c:01 mlvalues:01 foo:01 ocaml:01 exn:01 printf:01 printexc:01 exn:01 ctrl-c:01 -linkall:01 ocaml:01 real-world:01 threads:01 threads:01 compile:01 
+
+I am having a problem, where the Ctrl-C stops working as soon as I start 
+using the Thread module.
+
+To demonstrate, suppose I have the following code:
+
+------- C --------
+#include <caml/mlvalues.h>
+#include <caml/signals.h>
+
+value sleep_forever(value foo) {
+         caml_enter_blocking_section();
+         while(1) {
+                 sleep(1);
+         }
+         caml_leave_blocking_section();
+}
+------- OCaml -------
+external sleep_forever : unit -> unit = "sleep_forever"
+
+let () =
+    Sys.catch_break true;
+    try
+       sleep_forever ()
+    with exn ->
+       Format.printf "Signal received: %s@." (Printexc.to_string exn)
+---------------------
+
+If I compile it normally, run it, and press Ctrl-C, it prints "Signal 
+received: Sys.Break" and exits. If I compile it with native threads (and 
+  use -linkall to make sure the Thread module is linked in), the exact 
+same code fails to react to Ctrl-C!
+
+As far as I can tell, without threads OCaml interrupt handler raises the 
+exception right away. With threads, however it simply records the fact 
+that Ctrl-C was invoked, and returns back to the C code. When the 
+leave_blocking_section is called, the Sys.Break would finally be raised, 
+but in my example this never happens :-(.
+
+I understand that in multi-threaded programs the leave_blocking_section 
+is needed before returning to OCaml world (as it would acquire the "big 
+OCaml lock"), but why can't the interrupt handler simply force that to 
+happen? Is there any easy way to have Ctrl-C automatically force 
+leave_blocking_section, even in multi-threaded programs?
+
+P.S. The above example is obviously very contrived, but it came from a 
+real-world program (OMake) that may have a single thread waiting 
+"forever" for an external event (filesystem change notification) inside 
+C code...
+
+TIA!
+
+Aleksey
+
+-- 
+Aleksey Nogin, Research Scientist
+Advanced Technologies Department, Information & System Sciences Lab
+HRL Laboratories, LLC, Malibu, CA
+

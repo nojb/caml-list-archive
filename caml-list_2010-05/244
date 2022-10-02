@@ -1,0 +1,93 @@
+Return-Path: <toots@rastageeks.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id B0339BC57
+	for <caml-list@yquem.inria.fr>; Tue, 25 May 2010 18:24:31 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArsDAPaW+0vV+668gWdsb2JhbACReowfAQEWIiLAaIUTBINC
+X-IronPort-AV: E=Sophos;i="4.53,299,1272837600"; 
+   d="scan'208";a="51192636"
+Received: from rastageeks.org (HELO mail.rastageeks.org) ([213.251.174.188])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 25 May 2010 18:24:31 +0200
+Received: from leonard.localnet (unknown [129.81.170.252])
+	(using TLSv1 with cipher DHE-RSA-AES256-SHA (256/256 bits))
+	(No client certificate requested)
+	by mail.rastageeks.org (Postfix) with ESMTPSA id 070712E034
+	for <caml-list@yquem.inria.fr>; Tue, 25 May 2010 18:28:16 +0200 (CEST)
+From: Romain Beauxis <toots@rastageeks.org>
+To: caml-list@yquem.inria.fr
+Subject: Bigarrays and blocking_section..
+Date: Tue, 25 May 2010 11:25:20 -0500
+User-Agent: KMail/1.13.3 (Linux/2.6.30-2-amd64; KDE/4.4.3; x86_64; ; )
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Message-Id: <201005251125.21755.toots@rastageeks.org>
+X-Spam: no; 0.00; bigarrays:01 segfault:01 bigarrays:01 val:01 val:01 camlprim:01 camlparam:01 camlreturn:01 pointer:01 malloc:01 segfault:01 lwp:01 lwp:01 oldify:01 alloc:01 
+
+	Hi all !
+
+I am trying to understand some segfault that we observe and I have a question 
+about the relationships between bigarrays in C and the Gc.
+
+We have the following code:
+
+static frame *frame_of_value(value v, frame *f)
+{
+  f->data = Caml_ba_data_val(Field(v,0));
+  f->width = Int_val(Field(v,1));
+  f->height = Int_val(Field(v,2));
+  f->stride = Int_val(Field(v,3));
+
+  return f;
+}
+
+CAMLprim value caml_rgb_blank(value _rgb)
+{
+  CAMLparam1(_rgb);
+  frame rgb;
+
+  frame_of_value(_rgb,&rgb);
+  caml_enter_blocking_section();
+  rgb_blank(&rgb);
+  caml_leave_blocking_section();
+
+  CAMLreturn(Val_unit);
+}
+
+My understanding is that after the line  "frame_of_value(_rgb,&rgb);", the C 
+object rgb only contains ints and a pointer to a block of memory allocated by 
+malloc. 
+
+Hence, when releasing the global lock, the Gc should not mess with these 
+values. 
+
+However, we observe a segfault in this code:
+
+Thread 5 (Thread 0x7fffe85ce910 (LWP 25190)):
+#0  memset () at ../sysdeps/x86_64/memset.S:1023
+#1  0x00000000006f18e2 in rgb_blank (rgb=0x7fffe85cda20) at stream/rgb_c.c:80
+#2  0x00000000006f19fc in caml_rgb_blank (_rgb=140737119027336) at 
+stream/rgb_c.c:101
+#3  0x0000000000543761 in camlBlank__fun_295 ()
+(...)
+Thread 2 (Thread 0x7fffe9dd1910 (LWP 25185)):
+#0  0x00000000006f98dc in caml_do_local_roots ()
+#1  0x00000000006ed325 in caml_thread_scan_roots ()
+#2  0x00000000006f9fff in caml_oldify_local_roots ()
+#3  0x00000000006fc480 in caml_empty_minor_heap ()
+#4  0x00000000006fc5a9 in caml_minor_collection ()
+#5  0x00000000006fd47d in caml_alloc_string ()
+#6  0x00000000006ff9fb in caml_create_string ()
+#7  0x00000000007094ec in caml_c_call ()
+
+Apparently, the allocation of a string trigers a Gc minor collection which in 
+turns messes with the frame and eventually segfault.
+
+Can you help me understanding this ??
+
+
+Romain
+

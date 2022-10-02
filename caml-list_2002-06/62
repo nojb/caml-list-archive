@@ -1,0 +1,342 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA22706; Fri, 7 Jun 2002 12:24:03 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA22727 for <caml-list@pauillac.inria.fr>; Fri, 7 Jun 2002 12:24:02 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g57AO0H10564
+	for <caml-list@inria.fr>; Fri, 7 Jun 2002 12:24:00 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id TAA03608;
+	Fri, 7 Jun 2002 19:23:55 +0900 (JST)
+To: frisch@clipper.ens.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Comments on type variables
+In-Reply-To: <Pine.SOL.4.44.0206061858320.11096-100000@clipper.ens.fr>
+References: <Pine.SOL.4.44.0206061858320.11096-100000@clipper.ens.fr>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020607192355Y.garrigue@kurims.kyoto-u.ac.jp>
+Date: Fri, 07 Jun 2002 19:23:55 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 311
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Alain Frisch <frisch@clipper.ens.fr>
+
+> I'd like to make a few comments on the manipulation of type variables
+> in OCaml. They range from some points that could be worth mentioning
+> somewhere (FAQ, manual) to "features" that may be considered as bugs,
+> IMHO.
+
+At least I'll try to define what is a feature and what is a bug.
+In Caml named type variables are handled in the following way:
+
+1) Annotations and coercions
+  Type annotations (expr : t), let ... : t = expr, etc are constraints
+  applied to inferred types. As such type variables in them have just
+  an existential meaning, and they only affect sharing. In an alias
+  (t as 'a), 'a is handled as an instance variable.
+  Since sharing can happen with any other annotation in the same
+  expression, we have to be careful when generalizing types. 
+  Caml chooses to only allow generalizing them at the level of the
+  whole expression/definition. That is, just like for recursive
+  functions, named typed variables inside an expression are
+  monomorphic during the typing of this expression.
+  If you don't need sharing, you can use "_" as variable name, which
+  can be generalized as needed.
+
+2) Type definitions
+  All type variables are universally bound in the head of the
+  definition.
+  They may be constrained, but only explicitly. That is, they are
+  quantified universally,
+    type 'a t = texp1 constraint 'a = texp2
+  meaning
+    type t = /\'a < texp2. texp1
+   where 'a is bound to be an instance of texp2.
+
+3) Interfaces
+  The semantics is the same as for type definitions, but the
+  quantification is implicit. Constraint may appear from the use of
+  aliases.
+    val f : (#c as 'a) -> 'a
+  means
+    f : /\'a < #c. 'a -> 'a
+
+4) Classes
+  They mix features from expressions and types, but the semantics of
+  type variables is still the same: they are all bound at the level at
+  the level of the class. Inside a definition group the quantification
+  is existential, even in interfaces (some constraints may be
+  inherited, or appear due to mutual recursion).
+  A small discrepancy appears in constraints on the class type:
+    class [tvars] c : ctype = cexpr
+  Here tvars are shared in both ctype and cexpr, but variables
+  appearing in ctype are not shared with does appearing in cexpr.
+  I'm not sure of why it is so, but Jerome Vouilon may be able to
+  explain.
+
+5) Polymorphic methods
+  They form an exception to above rules.
+  While their types appear inside class definitions or descriptions,
+  they are quantified explicitly at the level of the method:
+    method fold : 'a. (t -> 'a -> 'a) -> 'a -> 'a = ...
+  In interfaces, the quantification is implicit for newly introduced
+  variables
+    method fold : (t -> 'a -> 'a) -> 'a -> 'a
+  As you can see the exception is in the location of the
+  quantification, otherwise they behave like type of  value descriptions.
+
+6) Local modules
+  They do not have any specific behaviour, but definitions inside them
+  have their type variables quantified independently, as you would
+  expect if the module were defined at toplevel.
+
+So there are lots of cases to consider, but I would not describe it as
+messy: the basic idea is the scope is the definition, and you cannot
+generalize before getting out of the scope.
+
+
+> Generalization of explicit variables
+> ------------------------------------
+> 
+> Explicit variables are generalized only at toplevel let-declarations
+> (see bug report 1156:
+> http://caml.inria.fr/bin/caml-bugs/open?id=1156;page=3;user=guest):
+> 
+> # let f (x : 'a) : 'a * 'a = (x,x) in (f 1, f true);;
+> This expression has type bool but is here used with type int
+
+Yes. This is a side-effect of using named variables.
+
+> Variables do not add polymorphism
+> -----------------------------------
+> 
+> Contrary to the intuition one could have, variable never allow
+> more polymorphism (exception for polymorphic methods); indeed, they
+> _restrict_ the polymorphism.
+
+Yes. This is a property of ocaml that dropping parts of a term can
+only improve its polymorphism.
+
+> One could expect polymorphic recursion to be allowed when
+> function interfaces are explicitely given; this is not the case:
+
+Yes. Polymorphic recursion is not a magical feature. The existential
+semantics of type annotations do not allow to infer anything about
+polymorphism from a type annotation.
+
+> A paragraph in the FAQ is somewhat misleading:
+> 
+> << Polymorphism appears when we introduce type schemes, that is types
+>    with universally quantified type variables.
+> ...
+>    The polymorphism is only introduced by the definition of names during
+>    a let construct (either local, or global).
+> >>
+> 
+> The last sentence seems to contradict the first; the programmer doesn't
+> introduce type schemes.
+
+The first instance is about types, the second about terms.
+In fact, to recover symmetry, the first sentence should probably be
+<< Polymorphism appears when we introduce values whose types are
+schemes, ... >>
+
+> Variables do not guaranty polymorphism
+> --------------------------------------
+
+Fully yes for expressions. Partially yes for type definitions and
+interfaces: a variable can only be constrained explicitly. If their is
+no constraint on a variable, then it is guaranteed polymorphic.
+
+> We have to rely on the module system:
+> # module M : sig val f : 'a -> 'a end = struct let f x = x + 1 end;;
+
+Indeed.
+
+> Would it be possible to declare variables that have to remain polymorphic
+> (I don't know how to formalize this; just an idea ...), so as to reject
+> the following ?
+> 
+> let 'a. f (x : 'a) : 'a = x + 1;;
+
+Perfectly possible. But I'm not sure this is sufficient, as we are
+also interested by constrained variables.
+Maybe allow
+  let 'a = texp. f .....
+
+Another way is to integrate it with explicit polymorphism:
+  let f : 'a. 'a -> 'a = ...
+
+The real question is what we are going to do with this information.
+If we don't use it, then interfaces are probably sufficient.
+But we could use it for polymorphism recursion, or first class
+polymorphism.
+
+> Variable scoping rules
+> ----------------------
+> 
+> The scoping rules for type variables do not seem uniform.
+
+There are only two exceptions, and they concern classes.
+Otherwise the scoping is the single phrase, or a group of phrase
+connected by and for term definitions.
+Maybe restricting to a single phrase even for simultaneous term
+definitions would be more uniform.
+ 
+> In a structure, the scope of a variable in an expression is the toplevel
+> element:
+> 
+> # module M = struct let f (x : 'a)  = x   let g (x : 'a) = x + 1 end;;
+> module M : sig val f : 'a -> 'a val g : int -> int end
+> 
+> ... whereas for objects, the scope is the class definition:
+> 
+> # class o = object method f (x : 'a) = x   method g (x : 'a) = x + 1 end;;
+> class o : object method f : int -> int method g : int -> int end
+
+Yes, a class is not a structure. A class is both an expression and a
+type definition, and as such rules common to expressions and type
+definitions apply.
+
+> Interaction with local modules
+> ------------------------------
+> 
+> Inside a local module, type variables introduced outside the module are
+> invisible:
+> 
+> # let f (x : 'a) =
+>     let module M = struct type t = 'a list end in ();;
+> Unbound type parameter 'a
+
+To be expected by the rules above. Functions with local modules are
+not functors. 'a is not a type constructor.
+
+> # let f (x : 'a) =
+>     let module M = Set.Make(struct type t = 'a end) in ();;
+> Unbound type parameter 'a
+
+Idem.
+
+> # let f (x : 'a) =
+>     let module M = struct let g (y : 'a) = y end in M.g 2;;
+> val f : 'a -> int = <fun>
+
+Side-effect of the independence of members in a structure.
+Is there a better semantics?
+
+> Type declaration flushes the introduced variables:
+> 
+> # let f (x : 'a) = let module M = struct type t end in (2 : 'a);;
+> val f : 'a -> int = <fun>
+
+That one is a bug. Bad one. And not immediate to correct, as type
+variables are reset all over the place.
+Thanks for reporting.
+
+> Too bad, when one need such a variable to restrict polymorphism:
+
+Indeed. If class typing were principal, there would be no such
+problem...
+
+> Objects
+> -------
+> 
+> At least it is clear for polymorphic methods where type variables
+> are introduced.
+> 
+> For class types, the explicit quantification is optional:
+> 
+> # class type o = object method f : 'a -> 'a method g : 'b -> 'b end;;
+> class type o = object method f : 'a. 'a -> 'a method g : 'b. 'b -> 'b end
+> # class type ['a] o = object method f : 'a -> 'a method g : 'b -> 'b end;;
+> class type ['a] o = object method f : 'a -> 'a method g : 'b. 'b -> 'b end
+
+Yes
+
+> # type 'a t = { x : 'a; y : 'b };;
+> type 'a t = { x : 'a; y : 'b. 'b; }
+
+That one is not valid any more. In records, one might expect
+quantification to be existential (at the level of the whole record),
+so it seemed better to make the quantification explicit.
+
+> BTW, I don't understand the following error message:
+> 
+> # class type o = object method f : 'a -> 'a method g : 'a -> 'a end;;
+> The method g has type 'a -> 'b but is expected to have type 'c
+
+Such error message occurs when 'a or 'b is a universal variable, and
+you try to unify it with a type variable, against quantification
+rules. I must find a way to get better error messages.
+
+This is the case here because 'a is universal after the typing of f,
+but is reused (and shared) in the typing of g.
+
+I'm undecided about whether reuse on non-explicitly quantified
+universal variables should be allowed. This might be confusing if the
+intent was really sharing.
+
+> Also, why are class parameters enclosed in brackets ?
+> type 'a t = ...
+> but:
+> class ['a] t = ...
+> and not:
+> class 'a t = ...
+
+That's a purely syntactic problem
+  class c = [int] t
+must be distinguished from
+  class c = int t -> ...
+at parsing time.
+
+> '_a variables
+> -------------
+> 
+> It is not possible to specify "impure" type variables:
+> 
+> # let z = let g y = y in g [];;
+> val z : '_a list = []
+> # let z : '_a list = [];;
+> val z : 'a list = []
+
+Indeed, there is no such concept as "impure" variable in input type
+expressions. What it should mean is not so clear.
+
+> Then, how do we specify an interface for the module struct let x = ref [] end ?
+> 
+> #  module M = (struct let x = ref [] end : sig val x : '_a list ref end);;
+
+You must choose a type. Anyway, you will have to choose one at some
+time, so why wait?
+Note that it is illegal to export a non-generic type variable from a
+compilation unit.
+
+> Variable name in error message
+> ------------------------------
+> 
+> Error messages would be more readable if they retained (when possible)
+> variable names:
+> 
+> # let f (a : 'a) (b : 'b list) = b + 1;;
+> This expression has type 'a list but is here used with type int
+
+I see. As Francois Pottier pointed out, it's not clear what it would
+mean when type variables are only quantified existentially, and can be
+merged all over the place.
+Note also that the unification algorithm may introduce new type
+variables, or create type which were not in the input. Hard to follow
+anyway.
+
+Hope this helps.
+
+     Jacques
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

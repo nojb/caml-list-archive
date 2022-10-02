@@ -1,0 +1,112 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA00853 for caml-redistribution; Mon, 22 Feb 1999 13:29:05 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA19876 for <caml-list@pauillac.inria.fr>; Sat, 20 Feb 1999 11:45:45 +0100 (MET)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id LAA27610;
+	Sat, 20 Feb 1999 11:45:43 +0100 (MET)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id LAA11583;
+	Sat, 20 Feb 1999 11:45:38 +0100 (MET)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <199902201045.LAA11583@miss.wu-wien.ac.at>
+Subject: Re: Warnings in ocaml
+To: Pierre.Weis@inria.fr (Pierre Weis)
+Date: Sat, 20 Feb 1999 11:45:38 +0100 (MET)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <199902191832.TAA23736@pauillac.inria.fr> from "Pierre Weis" at Feb 19, 99 07:32:46 pm
+X-Mailer: ELM [version 2.4 PL21]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+Hello,
+
+> > * having a warning when a function doesn't return unit in a sequence
+> > may catch some bugs, but this is a pain with imperative programming
+> > style, where you may not be interested by the result of a function but
+> > just by its side-effects.
+> 
+> Could you please give me some interesting examples (Yes, I know you
+> can write this kind of functions, but I would like some examples where
+> it seems really painful to work it out otherwise).
+
+There are two examples, which fit well to this subject (non-unit-functions
+in a unit-context), where problems arise.
+
+Consider:
+
+  let rec bar = function
+    | [] -> ()
+    | h::t -> h 0; bar t
+
+  let _ =
+    let f n : int = Printf.printf "%d\n" n; n in
+    bar [f;f;f]
+
+The inferred type of "bar" is:
+  val bar : (int -> 'a) list -> unit
+
+In "bar [f;f;f]", where function f is not a unit-function (it has
+side-effects, but returns a value), there is no warning that the return
+value of "f" is actually discarded in "bar", because it occurs in a
+unit-context there.
+One could mark functions like "bar" with an attribute that allows the
+type checker to see that inference of a non-unit type for 'a should
+generate a warning (maybe one can call this a "weak" constraint - I am
+not sure about the correct terminology in this discipline).
+
+Although the first example is not so severe (missing warning only) the
+second example is a bit more of a problem, because in this case type
+inference that yields such a general type ('a) results in an error:
+
+  class foo_incorrect = object (self)
+    method bar = function
+      | [] -> ()
+      | h::t -> h self; self#bar t
+  end
+
+  class foo_correct = object (self)
+    method bar = function
+      | [] -> ()
+      | h::t -> ((h self) : unit); self#bar t
+  end
+
+Error message:
+Some type variables are unbound in this type:
+  class foo_incorrect : object ('a) method bar : ('a -> 'b) list -> unit end
+The method bar has type (< bar : 'a; .. > -> 'b) list -> unit as 'a where 'b
+is unbound
+
+The reason for the error is that the (return-) type of "h" is inferred
+as 'b, which corresponds to the behaviour in the non-OO example.
+But here, the 'b would have to be explicitely bound in the class, which
+is definitely not what the programmer intends -> it is (intuitively)
+obvious that a unit-function is desired in this place.
+
+Of course, one can help the compiler by explicitely telling it the return
+type of h (as in foo_correct). Still, it can be quite difficult to track
+down such "mistakes" in more complicated expressions than those given
+in the example.
+
+I don't know whether there is a truly elegant solution to this. Maybe
+one could proceed as stated above:
+Mark such functions (in this case: methods) as "weakly contrained" to
+unit-values and automatically infer the type of all methods (probably not
+desirable with functions) with all occurrences of the "weakly constrained"
+type parameters replaced by type "unit".
+
+This proposition will probably interact in a bad way with seperate
+compilation: although it is possible to include such information in
+compiled interface files (.cmi), if those are derived not from the
+implementation (.ml) but from the interface (.mli), correct handling
+would require the user to somehow declare such "weak constraints".
+I am not sure whether the effort for such an extension really pays off...
+
+Best regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

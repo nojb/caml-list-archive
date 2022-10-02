@@ -1,0 +1,119 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA15334 for caml-redistribution; Fri, 27 Jun 1997 11:30:37 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA15116 for <caml-list@pauillac.inria.fr>; Fri, 27 Jun 1997 11:15:37 +0200 (MET DST)
+Received: from dwarin.oit.umass.edu (freya.cs.umass.edu [128.119.40.195]) by nez-perce.inria.fr (8.8.5/8.7.3) with ESMTP id LAA12725 for <caml-list@inria.fr>; Fri, 27 Jun 1997 11:15:18 +0200 (MET DST)
+Received: (from ajenkins@localhost)
+	by dwarin.oit.umass.edu (8.8.5/8.8.5) id FAA04748;
+	Fri, 27 Jun 1997 05:13:59 -0400
+Date: Fri, 27 Jun 1997 05:13:59 -0400
+Message-Id: <199706270913.FAA04748@dwarin.oit.umass.edu>
+From: "Adam P. Jenkins" <ajenkins@cs.umass.edu>
+To: caml-list@inria.fr
+Subject: GC Bug?
+Sender: weis
+
+Hi, I've been trying to write a C extension for O'Caml version 1.05,
+on Linux.  I have a C object which I want to be able to pass into
+caml, and manipulate it with the C functions.  I'm having some
+problems with allocation.  Here's the smallest example I can give.
+I've even provided a Makefile, which creates a custom toplevel to test
+this in.
+
+The problem occurs in test_copy (see the C file below).   For my
+abstract type, I just use two integers set to some magic values, which
+should never change.  However, in copy, after I call alloc, sometimes
+the input parameter will change.  Here's a sample session:
+
+> ./testtop
+        Objective Caml version 1.05
+
+# let o = TestMod.create();;
+val o : TestMod.t = <abstr>
+# TestMod.copy o;;
+- : TestMod.t = <abstr>
+# for i = 0 to 10000  do TestMod.copy o done;;
+Uncaught exception: Invalid_argument("TestMod.copy: value changed after alloc")
+# 
+
+I can run TestMod.copy several times and it works, but then if I run
+it several thousand times, the input argument will eventually get
+corrupted during the call to alloc in test_copy.
+
+Can anyone tell me if this is a GC bug, or something I'm doing wrong?
+Should I be using Abstract_tag for my abstract chunk of memory, or
+some other tag?  Thank you for any suggestions.
+
+Adam
+
+--
+Adam P. Jenkins 
+mailto:ajenkins@cs.umass.edu
+
+---------------- testMod.mli --------------
+type t
+external create : unit -> t = "test_create"
+external copy : t -> t = "test_copy"
+    
+--------------- testMod.ml ----------------
+type t
+external create : unit -> t = "test_create"
+external copy : t -> t = "test_copy"
+
+--------------- testmod.c ----------------
+#include <stdio.h>
+#include <caml/mlvalues.h>
+#include <caml/callback.h>
+#include <caml/memory.h>
+#include <caml/alloc.h>
+
+typedef long type;
+
+/* how many words to allocate for a pair of longs */
+#define ALLOC_LEN ((sizeof(type) * 2) / sizeof(value))
+
+value test_create(value v)
+{
+  type *p;
+  value result = alloc(ALLOC_LEN, Abstract_tag);
+  p = (type *)result;
+  p[0] = 0xdeadbeef;   /* these are just magic values */
+  p[1] = 0xfeedbeef;
+  return result;
+}
+
+value test_copy(value v)
+{
+  type *p, a, b;
+  value result;
+  
+  p = (type *)v;
+  a = p[0];
+  b = p[1];
+
+  if (a != 0xdeadbeef || b != 0xfeedbeef)
+    invalid_argument("TestMod.copy: value changed");
+
+  result = alloc(ALLOC_LEN, Abstract_tag);
+
+  /* sometimes v will change after the above alloc call */
+  if (a != p[0] || b != p[1])
+    invalid_argument("TestMod.copy: value changed after alloc");
+
+  p = (type *)result;
+  p[0] = a; p[1] = b;
+  return result;
+}
+
+---------------- Makefile ----------
+testtop:
+	ocamlc -c testmod.c
+	ocamlc -c testMod.mli
+	ocamlc -c testMod.ml
+	ocamlmktop -custom -o testtop testmod.o testMod.cmo
+
+----------- End of files --------------
+
+
+
+
+
+

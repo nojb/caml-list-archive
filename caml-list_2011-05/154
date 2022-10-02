@@ -1,0 +1,152 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p4RDQZHV023229
+	for <caml-list@sympa-roc.inria.fr>; Fri, 27 May 2011 15:26:39 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgsIAJml301QW+UMgWdsb2JhbABUl3oxjg0UAQEWJiXFQ4YeBI4DgkCIYoYz
+X-IronPort-AV: E=Sophos;i="4.65,280,1304287200"; 
+   d="scan'208";a="109701623"
+Received: from lo.gmane.org ([80.91.229.12])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 27 May 2011 15:26:37 +0200
+Received: from list by lo.gmane.org with local (Exim 4.69)
+	(envelope-from <gclci-caml-list@m.gmane.org>)
+	id 1QPx3k-0005mS-09
+	for caml-list@inria.fr; Fri, 27 May 2011 15:26:36 +0200
+Received: from ks368928.kimsufi.com ([94.23.39.26])
+        by main.gmane.org with esmtp (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Fri, 27 May 2011 15:26:35 +0200
+Received: from sylvain by ks368928.kimsufi.com with local (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Fri, 27 May 2011 15:26:35 +0200
+X-Injected-Via-Gmane: http://gmane.org/
+To: caml-list@inria.fr
+From: Sylvain Le Gall <sylvain@le-gall.net>
+Date: Fri, 27 May 2011 13:26:16 +0000 (UTC)
+Lines: 118
+Message-ID: <slrnitv9jo.ks.sylvain@gallu.homelinux.org>
+References: <707567.2845.qm@web111505.mail.gq1.yahoo.com>
+ <833816.58675.qm@web111502.mail.gq1.yahoo.com>
+X-Complaints-To: usenet@dough.gmane.org
+X-Gmane-NNTP-Posting-Host: ks368928.kimsufi.com
+User-Agent: slrn/pre1.0.0-18 (Linux)
+Subject: [Caml-list] Re: Binary logarithm of a power of 2
+
+Hello,
+
+On 27-05-2011, Dario Teixeira <darioteixeira@yahoo.com> wrote:
+> Hi,
+>  
+>> Still, my question is whether this is indeed the optimal solution.
+>> Is there some penalty associated with invoking C functions that may
+>> negate the supposed advantage of __builtin_ctz?
+>
+> Thank you, Till and Goswin, for your suggestions.  Marking the stub
+> as "noalloc" and removing the CAML_ boilerplate did result in a very
+> noticeable speed up in the synthetic benchmarks I tried.  Great!
+>
+
+Friday afternoon exercice ;-)
+
+Here is my code:
+
+external logbin: int32 -> int = "logbin_stub" "noalloc"
+
+let logbin_simple i =
+  let rec find_bit n =
+    if (i lsr n) = 0 then
+      n - 1
+    else
+      find_bit (n + 1)
+  in
+    if i = 0 then
+      0
+    else
+      find_bit 0
+
+let precomp =
+  Array.init
+    256
+    logbin_simple
+
+let logbin_array i32 =
+  let i = Int32.to_int i32 in
+  let rec test shift =
+    let i =
+      0xFF land (i lsr shift)
+    in
+      match Array.unsafe_get precomp i with
+        | 0 ->
+            if shift = 0 then
+              0
+            else
+              test (shift - 8)
+        | n -> n + shift
+  in
+
+  let test32 shift =
+    let i =
+      Int32.to_int
+        (Int32.logand
+           0xFFl
+           (Int32.shift_right i32 shift))
+    in
+      match Array.unsafe_get precomp i with
+        | 0 ->
+            test (shift - 8)
+        | n -> n + shift
+  in
+    if Sys.word_size = 64 then
+      test 24
+    else
+      test32 24
+
+let () =
+  List.iter
+    (fun i ->
+       Printf.printf "logbin_simple %d -> %d\n" i (logbin_simple i);
+       Printf.printf "logbin_array  %d -> %d\n" i (logbin_array (Int32.of_int i));
+       Printf.printf "logbin        %d -> %d\n" i (logbin (Int32.of_int i));
+       Printf.printf "\n\n";
+    )
+    [ 0; 1; 2; 4; 1024; 2048; 4096; 4194304]
+
+
+let () =
+  Benchmark.tabulate
+    (Benchmark.throughputN
+       2
+       [
+         "logbin", (fun () -> logbin 4096l), ();
+         "logbin_simple", (fun () -> logbin_simple 4096), ();
+         "logbin_array",  (fun () -> logbin_array 4096l), ();
+       ])
+
+
+And the results:
+
+Throughputs for "logbin", "logbin_simple", "logbin_array" each running for at least 2 CPU seconds:
+       logbin:  2.14 WALL ( 2.14 usr +  0.00 sys =  2.14 CPU) @ 74191111.86/s (n=158778921)
+logbin_simple:  2.02 WALL ( 2.02 usr +  0.00 sys =  2.02 CPU) @ 27884695.31/s (n=56330598)
+ logbin_array:  2.05 WALL ( 2.05 usr +  0.00 sys =  2.05 CPU) @ 87426949.77/s (n=179411379)
+                    Rate logbin_simple        logbin  logbin_array
+logbin_simple 27884695/s            --          -62%          -68%
+       logbin 74191112/s          166%            --          -15%
+ logbin_array 87426950/s          214%           18%            --
+
+
+The code is not bug proof, you should check it ;-)
+
+You can except at least 18% increase in term of performance on amd64 and a 1% decrease on i386. 
+
+The 4096 value is not very good for logbin_array because it have to loop more
+times, so on greater value, you can expect better performance.
+
+Cheers,
+Sylvain Le Gall
+-- 
+My company: http://www.ocamlcore.com
+Linkedin:   http://fr.linkedin.com/in/sylvainlegall
+Start an OCaml project here: http://forge.ocamlcore.org
+OCaml blogs:                 http://planet.ocamlcore.org
+
+

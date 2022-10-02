@@ -1,0 +1,67 @@
+Return-Path: <mcmillan@cadence.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id D73F7BBA7
+	for <caml-list@yquem.inria.fr>; Fri, 30 Dec 2005 03:01:02 +0100 (CET)
+Received: from mx-sanjose2.Cadence.COM (isvw3.Cadence.COM [158.140.2.61])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jBU211xm010362
+	for <caml-list@yquem.inria.fr>; Fri, 30 Dec 2005 03:01:02 +0100
+Received: from mailhub.Cadence.COM (localhost [127.0.0.1])
+	by mx-sanjose2.Cadence.COM (8.12.9/8.12.9) with ESMTP id jBU210Gm005486
+	for <caml-list@yquem.inria.fr>; Thu, 29 Dec 2005 18:01:00 -0800 (PST)
+Received: from [158.140.90.33] (localhost [127.0.0.1])
+	by mailhub.Cadence.COM (8.12.8/8.8.5) with ESMTP id jBU20xCh017842
+	for <caml-list@yquem.inria.fr>; Thu, 29 Dec 2005 18:00:59 -0800 (PST)
+Message-ID: <43B494DB.20808@cadence.com>
+Date: Thu, 29 Dec 2005 18:00:59 -0800
+From: Ken McMillan <mcmillan@cadence.com>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050317)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Callback.register memory leak
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Received: By mx-sanjose2.Cadence.COM as jBU210Gm005486 at Thu Dec 29 18:01:00 2005
+X-Miltered: at nez-perce with ID 43B494DD.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 garbage:01 camlprim:01 val:01 struct:01 char:01 val:01 hash:01 struct:01 alloc:01 sizeof:01 closures:01 closures:01 referenced:01 int:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+
+I had a strange memory leak in an ocaml program that turned out to be
+caused by Callback.register.  Perhaps this is a bit unusual, but this
+program registered many function closures under the same name.  The
+intention was to override the previously registered callback under
+that name. However, the previously registered closures remained
+referenced and were not garbage collected. The problem is in
+caml_register_named_value:
+
+
+CAMLprim value caml_register_named_value(value vname, value val)
+{
+  struct named_value * nv;
+  char * name = String_val(vname);
+  unsigned int h = hash_value_name(name);
+
+  nv = (struct named_value *)
+         caml_stat_alloc(sizeof(struct named_value) + strlen(name));
+  strcpy(nv->name, name);
+  nv->val = val;
+  nv->next = named_value_table[h];
+  named_value_table[h] = nv;
+  caml_register_global_root(&nv->val);
+  return Val_unit;
+}
+
+Notice that the new value in named_value_table is registered
+as a global root, but the previous value, if there is one,
+is not removed. Thus the memory leak.
+
+Best regards and thanks for a great programming tool...
+
+Ken McMillan
+

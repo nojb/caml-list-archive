@@ -1,0 +1,109 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA20205; Wed, 28 Jul 2004 03:17:36 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA20269 for <caml-list@pauillac.inria.fr>; Wed, 28 Jul 2004 03:17:35 +0200 (MET DST)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i6S1HWEV030199
+	for <caml-list@inria.fr>; Wed, 28 Jul 2004 03:17:33 +0200
+Received: from [192.168.1.200] (ppp205-61.lns1.syd3.internode.on.net [203.122.205.61])
+	by smtp1.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id i6S1HR4Y028530;
+	Wed, 28 Jul 2004 10:47:28 +0930 (CST)
+Subject: Re: [Caml-list] looping recursion
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: John Prevost <j.prevost@gmail.com>
+Cc: Ocaml Mailing List <caml-list@inria.fr>
+In-Reply-To: <d849ad2a04072717381ea7b0ee@mail.gmail.com>
+References: <16646.59534.101085.662305@soggy.deldotd.com>
+	 <d849ad2a04072717275c865d9f@mail.gmail.com>
+	 <d849ad2a04072717381ea7b0ee@mail.gmail.com>
+Content-Type: text/plain
+Message-Id: <1090977446.5870.816.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 28 Jul 2004 11:17:27 +1000
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 4106FEAC.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 recursion:01 sourceforge:01 2004:99 38,:01 prevost:01 admittedly:01 recursion:01 recursions:01 unifies:01 9660:01 glebe:01 compiler:01 unify:01 ocaml:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 2004-07-28 at 10:38, John Prevost wrote:
+
+> 
+> exception Boom2 of int
+> 
+> let rec loop2 x =
+>   try
+>     if x < 100 then loop2 (x + x) else raise (Boom2 0)
+>   with Boom2 y -> raise (Boom2 (y + 1))
+> 
+> let use_loop2 x = try loop2 x with Boom2 y -> y
+> 
+> In this second example, use_loop2 is using the exceptions in loop2 to
+> calculate the result.  (Admittedly, this is a bizarre little setup.)
+
+I'm actually doing something like this (unfortunately)
+in the Felix compiler.
+
+Basically, Felix has overloading and requires the function
+argument type to be specified, but the return type is deduced
+bottom up by actually examining the function's return statement
+argument type.
+
+Unfortunately, this situation is complicated by the fact
+a function can call itself. However, we cant just plug in
+a type variable for the function's return type, calculate
+the result, and then unify to eliminate the variable,
+as Ocaml could, because in Felix functions can be overloaded.
+So to calculate in function f, what the type of f(a) is,
+we again have to do overload resolution. Having done that
+we need the return type of the function .. but we can't
+calculate it because that's what we're already in the middle
+of doing, and we'd get an infinite loop.
+
+you might think a type variable could be introduced here,
+and eliminated when we pop back, but that isn't so.
+The problem is we might have in f:
+
+   return g (f a);
+
+and now, the recursion isn't tail, and we have to have
+a definite type for f a, in order to calculate which g
+is called, in order to calculate the type of f.
+
+So I just throw an exception and ignore that return statement.
+Such recursions (in the client Felix code) usually 
+have conditionals wrapped around them and one branch 
+had better give a result: otherwise
+the client must specify the return type.
+
+[I suspect in terminating code this cannot be needed but
+I'm not sure]
+
+the actual algorithm unifies the specified return
+type (if given) with all the types of return
+statements (which don't lead to infinite recursion).
+
+I have tried to localise exception handling in my
+code but this is one case where I couldn't figure
+out how to do so. It is of course vital that
+the exception handlers stack up here, so the exceptions
+propagate far enough but no further.
+
+[The code is extremely messy and I'm not even sure it 
+gives the correct result when it does succeed :]
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

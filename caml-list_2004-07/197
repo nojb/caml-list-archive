@@ -1,0 +1,145 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA26015; Wed, 14 Jul 2004 23:10:25 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA25998 for <caml-list@pauillac.inria.fr>; Wed, 14 Jul 2004 23:10:24 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i6ELANSH017069;
+	Wed, 14 Jul 2004 23:10:24 +0200
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA25344; Wed, 14 Jul 2004 23:10:23 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200407142110.XAA25344@pauillac.inria.fr>
+Subject: Re: [Caml-list] kprintf with user formatters
+In-Reply-To: <20040630183237.457317c7@mostha> from Damien at "Jun 30, 104 06:32:37 pm"
+To: Damien.Pous@ens-lyon.fr (Damien)
+Date: Wed, 14 Jul 2004 23:10:23 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 40F5A13F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; pierre:01 weis:01 pierre:01 weis:01 caml-list:01 kprintf:01 formatters:01 struct:01 printf:01 kprintf:01 endline:01 val:01 val:01 printf:01 formatter:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+> I am writing a multi-threaded program, so that I need some
+> synchronization when pretty-printing things :
+[...]
+> module Debug = struct
+>   let m = Mutex.create()
+>   let printf x = 
+>   Format.kprintf 
+>     (fun s -> Mutex.lock m; print_endline s; Mutex.unlock m) 
+>    x
+> end;;
+> (*
+> module Debug :  sig 
+>   val m: Mutex.t
+>   val printf : ('a, unit, string, unit) format4 -> 'a 
+> end
+> *)
+> 
+> but now, I can't _nicely_ use my previously defined printers :
+> type t
+> val format_t: Format.formatter -> t -> unit
+> val x: t
+> 
+> I would like to write :
+> <<
+> Debug.printf "val t = %a" format_t x
+> >>
+> 
+> but I cannot since the user printer is expected to be "unit->t->string"
+> (while it is "formatter->t->unit" for the standard Format.printf "%a")
+
+Your problem is thus that the function Debug.printf is not the right
+one (since it has not the right type :)
+
+Hence, you should use another definition for Debug.printf
+
+ let printf fmt =
+   Format.kfprintf (fun ppf -> ()) Format.err_formatter fmt
+
+This way, you get:
+
+printf "%a";;
+- : (Format.formatter -> '_a -> unit) -> '_a -> unit = <fun>
+
+as expected.
+
+However, your problem is simpler than that: you just have to define a
+custom formatter devoted to your debugging purposes. For instance:
+
+module Debug = struct
+   let m = Mutex.create ()
+   let out s idx len =
+     Mutex.lock m;
+     prerr_string (String.sub s idx len); flush stderr;
+     Mutex.unlock m
+   let flush () = flush stderr
+   let dppf = Format.make_formatter out flush
+   let printf fmt = Format.fprintf dppf fmt
+ end;;
+
+Now you can substitute Debug.printf to any well-typed occurrence of
+Format.printf, since we have:
+
+#  Debug.printf;;
+- : ('a, Format.formatter, unit) format -> 'a = <fun>
+# Format.printf;;
+- : ('a, Format.formatter, unit) format -> 'a = <fun>
+
+> currently I use :
+>
+> let (!!) f = (fun () x -> 
+>   f Format.str_formatter x;
+>   Format.flush_str_formatter());;
+> (* val (!!): (Format.formatter -> 'a -> 'b) -> unit -> 'a -> string *)
+> 
+> Debug.printf "val t = %a" !!format_t x
+>
+> this seems to be working, but I wonder if :
+>  - there is a better solution
+
+See above: a custom formatter is probably simpler and more elegant.
+
+>  - this use of the global value "Format.str_formatter" is really
+> 	thread-safe (I would say no...)
+
+I'm afraid I could not answer for sure to this one: let's say that
+using Format.str_formatter is as thread safe as using a Buffer.t value
+and the Buffer.add_* functions.
+
+Also, can we consider in the first place that using any printf variant
+could be thread safe ? If the answer is no, you would need to stick to
+pp_* versions of the basic primitives and this would be a major
+modification of your code.
+
+>  - I missed something
+
+May be you missed the fact that Format was designed from the beginning
+to support formatting in parallel to user's defined pretty-printing
+engines.
+
+>  - printf could not understand a conversion character 'A' that would
+> 	always need a _general_ user-formatter (of type formatter->t->unit)
+
+Once more, I cannot answer to this question: I need some time to
+figure out what it mean in term of typing (and semantics of printf)...
+
+Tell me if the suggested solution solves your problem.
+
+Best regards,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

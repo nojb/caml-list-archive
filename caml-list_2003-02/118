@@ -1,0 +1,200 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA01355; Fri, 14 Feb 2003 00:03:31 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA01993 for <caml-list@pauillac.inria.fr>; Fri, 14 Feb 2003 00:03:30 +0100 (MET)
+Received: from mallaury.noc.nerim.net (smtp-102.noc.nerim.net [62.4.17.102])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h1DN3Tf09005
+	for <caml-list@inria.fr>; Fri, 14 Feb 2003 00:03:29 +0100 (MET)
+Received: from hector.lesours (lesours.starynkevitch.net [80.65.224.217])
+	by mallaury.noc.nerim.net (Postfix) with ESMTP id 31EF162DD7
+	for <caml-list@inria.fr>; Fri, 14 Feb 2003 00:03:26 +0100 (CET)
+Received: from basile by hector.lesours with local (Exim 3.36 #1 (Debian))
+	id 18jSO8-0005UD-00
+	for <caml-list@inria.fr>; Fri, 14 Feb 2003 00:03:28 +0100
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+Message-ID: <15948.9278.643920.241443@hector.lesours>
+Date: Fri, 14 Feb 2003 00:03:26 +0100
+To: caml-list@inria.fr
+Subject: [Caml-list] feature wish: warmup in compiled code (symetrical of at_exit)
+X-Mailer: VM 7.07 under Emacs 21.2.2
+From: Basile STARYNKEVITCH <basile@starynkevitch.net>
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Dear All
+
+I have a simple wish for next Ocaml, and partly implemented it.
+
+It would be to provide a function [at_warm_up] in pervasives which is given a
+warming function and register it to be executed after all modules have been
+loaded; and a function [do_warm_up] which when explicitly called
+execute all the warming functions (not yet executed). And do_warm_up
+should be implicitly called by the system after loading of all user
+supplied (and library linked) modules.
+
+For example with Caml files
+
+################==> a.mli <==
+(* file a.mli *)
+val afun : unit -> unit
+(* eof a.mli *)
+
+################==> b.mli <==
+(* file b.mli *)
+val bfun: unit -> unit
+(* eof b.mli *)
+
+################==> a.ml <==
+(* file a.ml *)
+print_endline "in a.ml";;
+let afun () = print_endline "in a.ml afun";;
+at_warm_up ~descr: "inside a" (fun () -> print_endline "a.ml warmup");;
+(* eof a.ml *)
+
+################==> b.ml <==
+(* file b.ml *)
+print_endline "in b.ml before do_warm_up";
+do_warm_up ~prelude: (fun n -> Printf.printf "prelude of %S\n" n) ();;
+let bfun () = print_endline "in b.ml bfun";;
+at_warm_up ~descr: "inside b warmup" (fun () -> print_endline "b.ml warmup");;
+print_endline "at end of b.ml";;
+(* eof b.ml *)
+
+################==> c.ml <==
+(* file c.ml *)
+print_endline "in c.ml";;
+A.afun ();;
+B.bfun ();;
+print_endline "end c.ml";;
+(* eof c.ml *)
+
+################################################################
+
+Then I compile with (using my patched version of Ocaml)
+
+ocamlc=/usr/local/bin/ocamlc
+
+$ocamlc -c a.mli
+$ocamlc -c b.mli
+
+$ocamlc -c a.ml
+$ocamlc -c b.ml
+$ocamlc -c c.ml
+
+$ocamlc -o _tryabc a.cmo b.cmo c.cmo
+
+################################################################
+
+Then I would like that
+  ./_tryabc 
+produces
+
+
+in a.ml
+in b.ml before do_warm_up
+prelude of "inside a"
+a.ml warmup
+at end of b.ml
+in c.ml
+in a.ml afun
+in b.ml bfun
+end c.ml
+b.ml warmup
+
+
+in pervasives.mli I added
+
+################################################################
+(** {6 Warmup support} *)
+
+val at_warm_up : ?descr: string -> (unit -> unit) -> unit
+(** [at_warm_up descr f] registers the given function to be called at 
+    program warm up, when all object files has been loaded and their 
+    code executed; The optional [descr] is a descriptive string *)
+
+val do_warm_up : ?prelude: (string -> unit) -> ?exhandler: (exn -> unit) -> unit -> unit
+(** [do_warm_up ~prelude: p ~exhandler: exh ()] where both [prelude] 
+    and [exhandler] are optional execute all the warming functions 
+    registered with [at_warm_up] in ``first in, first out'' order 
+    and clear the list of warming functions; so user code can call do_warm_up 
+    several times; *)
+
+################################################################
+
+
+
+
+In pervasives.ml I added at end
+
+################################################################
+let warmup_list = ref []
+
+let at_warm_up ?(descr="") f =
+  warmup_list := (descr, f) :: !warmup_list;;
+
+let do_warm_up ?prelude ?(exhandler= raise) () =
+  let rec doall = 
+    function 
+	(descr, f) :: rest ->
+	  begin
+	    try 
+	      begin
+		match prelude with None -> () | Some p -> p descr
+	      end;
+	      f ();
+	      doall rest
+	    with ex -> begin exhandler ex; doall rest end
+	  end
+      | [] -> ()
+  in 
+  let wl = !warmup_list in
+  let rec revloop l r = (* a list reversal *)
+    match l with [] -> r | h::t -> revloop t (h::r) 
+  in
+  warmup_list := [];
+  doall (revloop wl []);;
+
+################################################################
+The same above code should also go into the
+extralib/threads/pervasives.ml also
+
+The only thing that is missing is to incorporate into driver/main.ml
+(and optmain.ml) the stuff which links after all user supplied (and
+library linked) modules - so the compiler generates the equivalent of
+the compiled form of a file _end.ml containing only 
+   do_warm_up ();;
+and adds the _end.cmo after all user & library stuff.
+
+Actually this _end.ml could contain something like
+
+
+  let curd = ref "" in
+  Pervasives.do_warm_up 
+    ~prelude: (fun d -> curd := d)
+    ~exhandler: 
+    (fun ex -> eprintf "Uncaught exception: %s in warmup %S\n" 
+	(to_string ex)
+	!curd; 
+      flush stderr)
+    ()
+
+
+
+Actually, when coding multi-threaded stuff I find that such a feature
+(which I feel symetrical to at_exit) very useful; in particular, this
+enables to start the threads after having done any useful
+initialisation.
+
+
+-- 
+
+Basile STARYNKEVITCH         http://starynkevitch.net/Basile/ 
+email: basile<at>starynkevitch<dot>net 
+alias: basile<at>tunes<dot>org 
+8, rue de la Faïencerie, 92340 Bourg La Reine, France
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

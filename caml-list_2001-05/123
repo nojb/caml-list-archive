@@ -1,0 +1,105 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA18167; Sun, 13 May 2001 23:26:13 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA18164 for <caml-list@pauillac.inria.fr>; Sun, 13 May 2001 23:26:12 +0200 (MET DST)
+Received: from smtp8.xs4all.nl (smtp8.xs4all.nl [194.109.127.134])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f4DLQB128500
+	for <caml-list@inria.fr>; Sun, 13 May 2001 23:26:11 +0200 (MET DST)
+Received: from beertje.william.bogus (williamc.xs4all.nl [213.84.56.92])
+	by smtp8.xs4all.nl (8.9.3/8.9.3) with ESMTP id XAA12414;
+	Sun, 13 May 2001 23:26:08 +0200 (CEST)
+Received: (from williamc@localhost)
+	by beertje.william.bogus (8.11.2/8.11.2/SuSE Linux 8.11.1-0.5) id f4DLTOA29583;
+	Sun, 13 May 2001 23:29:24 +0200
+X-Authentication-Warning: beertje.william.bogus: williamc set sender to williamc@paneris.org using -f
+From: William Chesters <williamc@paneris.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15102.64692.46611.769408@beertje.william.bogus>
+Date: Sun, 13 May 2001 23:29:24 +0200 (CEST)
+To: caml-list@inria.fr
+Subject: [Caml-list] How hard would more inlining, more unboxed floats be?
+X-Mailer: VM 6.75 under 21.1 (patch 14) "Cuyahoga Valley" XEmacs Lucid
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+ocaml is nearly a marvellous tool for abstract numerical programming.
+By that I mean the ability to write Matlab or Fortran 90-style
+expressions, and express the natural abstractness of algorithms using
+functors.
+
+   In C++ these highly desirable goals _can_ be achieved with
+intricate template techniques (Blitz++, PETE/POOMA, MTL, ...), but
+they are only marginally feasible, and in practice it's questionable
+whether they save more in expressiveness than they cause in trouble.
+
+   Now, ocaml is very good---within a compilation unit---at
+inlining, partial evaluation, and elimination of temporary objects,
+which are the essential optimisations required.
+
+   And the backend code generator can do amazing things with a bit of
+help.  For example, I tried the following code for a dot product:
+
+    type floatref = { mutable it: float }
+
+    let dot x x0 x1 y y0 =
+      let j = ref 0 and acc = { it = 0. } in
+      for i = x0 to x1 - 1 do
+        acc.it <- acc.it +. Array.unsafe_get x i *. Array.unsafe_get y !j;
+        incr j
+      done;
+      acc.it
+
+Note use of specialised all-"float" record (record_representation =
+Record_float) --- otherwise it's impossible to avoid allocation of a
+boxed float in the inner loop, whether expressed imperatively or
+tail-recursively ...  On a Pentium, it compiles to
+
+    .L101:
+            fldl    -4(%ebp, %ebx, 4)
+            fmull   -4(%edx, %esi, 4)
+            faddl   (%edi)
+            fstpl   (%edi)
+            addl    $2, %esi
+            addl    $2, %ebx
+            cmpl    %ecx, %ebx
+            jle     .L101
+
+By contrast, the best gcc can do is this:
+
+    .L6:
+            fldl (%esi,%eax,8)
+            fmull (%ebx,%edx,8)
+            incl %eax
+            incl %edx
+            faddp %st,%st(1)
+            cmpl %ecx,%eax
+            jl .L6
+
+which tests maybe 10% faster.  Actually I think on a Pentium one can
+get a few more percent out by using direct pointer increments, but
+most people don't do that, not least because it's actually slower on
+most RISCs.
+
+   (Glasgow Haskell is impressive in many ways, but completely misses
+this level of performance---its own code generator is not very
+ambitious, and the C code it can alternatively feed to gcc is too
+low-level, tries to micro-manage the stack and ends up obscuring
+what is really going on, so that gcc ends up using no register
+variables at all ...)
+
+   Arguably, all that's standing between ocaml-3.01 and a killer
+language for scientific computing is:
+
+     -- inlining and partial evaluation _across_ compilation
+        boundaries, and in particular through modules/functors
+
+     -- explicit user control of inlining
+
+     -- facilities for handling unboxed floats directly, and/or
+        elision of box/unbox in tail calls, so that recursive
+        "loops" don't incur allocation penalty
+
+How hard would it be to get these things happening?
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

@@ -1,0 +1,260 @@
+Return-Path: <tf@functionality.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id CB4E3BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 18:38:54 +0200 (CEST)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.183])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5RGcshl021940
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 18:38:54 +0200
+Received: from [141.84.136.30] (helo=[152.78.96.56])
+	by mrelayeu.kundenserver.de (node=mrelayeu3) with ESMTP (Nemesis),
+	id 0MKxQS-1I3aXd20yt-00087M; Wed, 27 Jun 2007 18:38:54 +0200
+Message-ID: <468292AA.3040009@functionality.de>
+Date: Wed, 27 Jun 2007 17:39:06 +0100
+From: Thomas Fischbacher <tf@functionality.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.12) Gecko/20060607 Debian/1.7.12-1.2
+X-Accept-Language: en
+MIME-Version: 1.0
+To: =?ISO-8859-1?Q?Qu=F4c_Peyrot?= <chojin@lrde.epita.fr>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] The Implicit Accumulator: a design pattern using
+ optional arguments
+References: <200706271314.35134.jon@ffconsultancy.com>	<1A1D6F56-B3DB-4552-969C-9859482175AC@lrde.epita.fr>	<46826C69.5060802@functionality.de> <F2BC247F-45B1-4BD3-A006-D214D635ABC6@lrde.epita.fr>
+In-Reply-To: <F2BC247F-45B1-4BD3-A006-D214D635ABC6@lrde.epita.fr>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+X-Provags-ID: V01U2FsdGVkX1+bfH8brJHhnQJC+v0tXxPE/YvA9cTZqH6XTeA
+ I86Eic+VtHYEyKG9g5PxQ4iCW8+XNCoJmg+8MMLBnKArxaG7qj
+ /MnMlm46VgSpGHlwSpOoQ==
+X-Miltered: at concorde with ID 4682929E.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; allocating:01 ocaml:01 hash:01 memoizing:01 defines:01 memoization:01 memoizing:01 memoization:01 memoized:01 lexically:01 defvar:01 key-:01 val:01 lambda:01 val:01 
+
+
+Quôc Peyrot wrote:
+
+>> There are many many way more advanced tricks one would want to play
+>> with the idea of "allocating buffers at the appropriate time". For
+>> example, if this were LISP, one could often use dynamically scoped (in
+>> the sense of (declare (dynamic-extent buffer-stack))) contextual
+>> variables for great benefit (and these gory details often can also be
+>> hidden quite conveniently under a few (maybe even in-place macrolet)
+>> macros...), but unfortunately, OCaml does not support anything like
+>> that. Of course, re-entrantness of your code may always become an
+>> issue if you move buffers to higher scopes.
+> 
+> I didn't get that part, but I'm not familiar with Lisp.
+
+One example: what you can do quite easily in LISP is to introduce
+a global lookup thingy MEMOIZATIONS (say, a list of hash tables
+or something like that) and define macros WITH-LOCAL-MEMORY and
+MEMOIZING where WITH-LOCAL-MEMORY defines a new dynamic
+memoization scope, and MEMOIZING wraps up a few functions in such
+a way that they use memoization. Result: we can have both
+memoization on functions as well as defined behaviour with respect
+to when memoized values are being forgotten again (namely, when
+we are finished with the evaluation of the form
+
+(WITH-LOCAL-MEMORY ...)).
+
+Note that functions dynamically called from functions lexically scoped
+inside this construct will ALSO use the same local memoization table!
+In other words, when control flow exits the WITH-LOCAL-MEMORY block
+(in whatever way it does so), our memoizing information is returned to
+precisely the state it was in before we entered that block. That is
+the magic of dynamic scoping.
+
+In code:
+
+(defvar *MEMOIZATIONS* '())
+
+(defun _LOOKUP-MEMO (sym-f args)
+   (let ((f-args (cons sym-f args)))
+     (labels
+	((walk (rest-memo)
+	       (if (null rest-memo)
+		   (values nil nil)
+		 (let ((h (car rest-memo)))
+		   (multiple-value-bind (entry was-present)
+		       (gethash f-args h)
+		     (if was-present
+			 (values entry t)
+		       (walk (cdr rest-memo))))))))
+       (walk *MEMOIZATIONS*))))
+
+
+(defmacro WITH-LOCAL-MEMORY (&body body)
+   `(let ((*MEMOIZATIONS*
+	  (cons (make-hash-table :test 'equal)
+		*MEMOIZATIONS*)))
+      (declare (dynamic-extent *MEMOIZATIONS*))
+      . ,body))
+
+(defmacro MEMOIZING (funs &body body)
+   (let* (($args (gensym "args-"))
+	 ($key (gensym "key-"))
+	 ($val (gensym "val-"))
+	 ($have (gensym "have-"))
+	 (wrap-funcall
+	  (lambda (sym)
+	    `(,sym (&rest ,$args)
+		(let ((,$key (cons ',sym ,$args)))
+		  (multiple-value-bind (,$val ,$have)
+		      (_LOOKUP-MEMO ',sym ,$args)
+		    (if ,$have ,$val
+		      (let ((,$val (apply #',sym ,$args)))
+			(setf (gethash ,$key (car *MEMOIZATIONS*)) ,$val)
+			,$val))))))))
+     `(flet ,(mapcar wrap-funcall funs)
+        . ,body)))
+
+;; Example:
+
+(labels
+     ((foo (x) (+ 1 (* 3 x)))
+      (bar (x) (/ x 2)))
+   (memoizing (foo bar)
+     (labels
+	((check-3x+1 (n nr-steps)
+            (cond
+	    ((= n 1) nr-steps)
+	    ((evenp n) (check-3x+1 (bar n) (+ 1 nr-steps)))
+	    (t (check-3x+1 (foo n) (+ 1 nr-steps))))))
+       (do ((j 1 (+ 1 j))) ((= j 100))
+	(with-local-memory
+	 (print (cons j (check-3x+1 j 0))))))))
+
+> I mean, for someone like me, with quite some experience in the asm/c/c 
+> ++ world (i.e. a garbage collector-less world) but not much in other  
+> languages, it's easy to naively think of a garbage collector as a  fancy 
+> feature to prevent from having to call "free/delete". But I'm  starting 
+> to realize there is a whole new set of powerful design  patterns which 
+> come along. It has been said multiple times on this  mailing list, but I 
+> think we really miss a book about these design  patterns and 
+> optimization tricks often specific to a given (or a set  of) feature 
+> (functional, lazy computations, garbage collector...).
+
+Two comments about this: First, one should not think along the lines of
+"design patterns" here, as if this were Something Universally Good(TM).
+Rather, a "design pattern" very often is the equivalent of a clever way
+to open a tin with a pair of scissors: an "industry best practice"
+workaround that deals with a problem created by the language that should
+not be there in the first place! (Paul Graham wrote a nice article on
+this.)
+
+Whenever you discover a "design pattern" in your work, it pays to think
+about it like this: why does such a pattern occur? Is it because I try
+to work around a problem such as wanting to tell the machine about X but
+not being able to express it the way I like to think about it myself?
+
+If so, it is often a good idea to consider introducing a language
+extension (quite simple if your language provides you with some
+meta-linguistic capabilities, ideally: dirty macros plus a code-walker)
+to deal with this evidently linguistic limitation.
+
+This brings me to my second comment: it does take a lot of experience
+to advance to the level of a language-shaping wizard: there are many
+pitfalls and things that at first look as if they may work, but have
+subtle undesired implications. One has to develop a strong sense for
+important invariants under code transformations to get that bit right.
+
+With this, I suppose, a proper book on both "functional optimization
+strategies" and "ideas that help you to overcome mental barriers with
+respect to what's possible when one can shape the language" would be
+useful, not so much to "teach specific patterns", but to teach people
+how to overcome their mental blockades and learn how to use their
+phantasy to do marvelous things by shaping language. In the
+Permaculture community, there is this proverb that "yield is
+limited only by imagination". I think this holds just as much for
+functional and in particular metalinguistic programming.
+
+(I have been planning for years to eventually write up some
+lengthier introductory text on metalinguistic techniques, but so
+far only managed to write a few articles and give some short courses
+on the subject...)
+
+> I find it ironical that high-level languages (such as ocaml) are  
+> intended (of course that's my interpretation of it) to hide low-level  
+> details and give you more expressiveness in your code, which should  
+> naively make you more productive, and make it easier to program  
+> something. But requires therefore tons of new knowledges and deep  
+> understanding of advanced concepts to be able to actually code  
+> efficient (runtime and memory-wise) code.
+
+Languages such as OCaml are not "intended to hide low-level details".
+
+Rather, there are (at least) two very different notions of "programming"
+around:
+
+(1) Putting information into a mechanically behaving system in order
+     to get some desired behaviour. (This is what asm/C/C++ is about,
+     but actually, this even is a much broader notion that also includes
+     e.g. this: http://amasci.com/amateur/mirror.html)
+
+(2) Formalizing some "mental process" in such a way that one can
+     then use stringent reasoning to analyze its properties. (This is
+     what, in essence, functional programming is about.)
+
+
+Evidently, the more advanced you get, the more important the second
+point of view becomes. But, with people being hedonistic and out for
+quick results, we will keep on re-inventing simple instruction-based
+programming systems over and over again, redoing all the historic
+mistakes of unstructured goto programming, inappropriate checks for
+exceptional conditions (such as overflows), not paying attention to
+dynamical resource management at the level of the framework,
+etc. etc. in novel designs till the dusk of the computing epoch.
+
+>> Other advanced optimization techniques that can be used for benefit
+>> in very specialized situations include (explicit) continuation coding:
+>> rather than returning a value (e.g. a tuple), you take as an argument
+>> a function to which you then pass on your return value(s). This is  quite
+>> useful whenever "execution flow branches out into multiple paths that
+>> have to be taken", and may sometimes (though rarely) also be used for
+>> good as a poor man's VALUES/MULTIPLE-VALUE-BIND substitute.
+> 
+> I didn't get that part at all. I think I would need an example to  
+> understand
+> why it is interesting to pass the function instead of just returning  
+> the tuple
+> and processing it.
+
+Exercise: Write a program that takes as an argument an integer N and
+spits out a string that is a piece of C code which looks as follows
+for N=2:
+
+void sort(int x1, int x2, int *buffer)
+{
+  if(x1>x2)
+   {
+     buffer[0]=x1;
+     buffer[1]=x2;
+   }
+  else
+   {
+    buffer[0]=x2;
+    buffer[1]=x1;
+   }
+}
+
+This should be generalized to higher N, where the constraints are:
+
+* The generated piece of code must only contain ifs, </> comparisons,
+   and assignments to the buffer.
+
+* In the end, buffer must hold the input variables in sorted order.
+
+* The code must use the minimal number of comparisons.
+
+If you do this exercise, you will discover that the idea of continuation
+coding can be very, very helpful.
+
+-- 
+best regards,
+Thomas Fischbacher
+tf@functionality.de
+

@@ -1,0 +1,396 @@
+Return-Path: <psnively@mac.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id D289CBC69
+	for <caml-list@yquem.inria.fr>; Thu,  5 Jul 2007 01:42:44 +0200 (CEST)
+Received: from smtpout.mac.com (smtpout.mac.com [17.250.248.174])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l64NghNL015554
+	for <caml-list@inria.fr>; Thu, 5 Jul 2007 01:42:44 +0200
+Received: from mac.com (smtpin06-en2 [10.13.10.151])
+	by smtpout.mac.com (Xserve/smtpout04/MantshX 4.0) with ESMTP id l64NggSq013522;
+	Wed, 4 Jul 2007 16:42:42 -0700 (PDT)
+Received: from [192.168.0.100] (dsl092-032-215.lax1.dsl.speakeasy.net [66.92.32.215])
+	(authenticated bits=0)
+	by mac.com (Xserve/smtpin06/MantshX 4.0) with ESMTP id l64NgdR3014469;
+	Wed, 4 Jul 2007 16:42:40 -0700 (PDT)
+In-Reply-To: <D691E383-3CEA-4617-9D2B-0F5232B75516@mac.com>
+References: <20070703113836.2317EAD43@Adric.metnet.fnmoc.navy.mil> <D691E383-3CEA-4617-9D2B-0F5232B75516@mac.com>
+Mime-Version: 1.0 (Apple Message framework v752.2)
+Content-Type: multipart/mixed; boundary=Apple-Mail-2--873071331
+Message-Id: <FD724B66-A0A4-4889-A32E-D14D2EDDC3A0@mac.com>
+Cc: oleg@pobox.com, caml-list@inria.fr
+From: Paul Snively <psnively@mac.com>
+Subject: Re: [Caml-list] Incremental,	undoable parsing in OCaml as the general parser inversion
+Date: Wed, 4 Jul 2007 16:42:38 -0700
+To: Paul Snively <psnively@mac.com>
+X-Mailer: Apple Mail (2.752.2)
+X-Brightmail-Tracker: AAAAAA==
+X-Brightmail-scanned: yes
+X-Miltered: at concorde with ID 468C3073.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 parser:01 oleg:01 monadic:01 delimited:01 syntax:01 ocaml:01 toploop:01 topfind:01 camlp:01 cmo:01 recursive:01 recursive:01 oleg:01 parser:01 
+X-Attachments: type="application/octet-stream" name="incremental-parsing.ml" name="incremental-parsing.ml" 
+
+
+--Apple-Mail-2--873071331
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain;
+	charset=US-ASCII;
+	delsp=yes;
+	format=flowed
+
+I think I made some boneheaded mistakes in my previous code. I think  
+I've rectified them, but the code still doesn't compile. I've  
+attached my new code, which at least fails to compile in consistent,  
+suggestive ways, (hopefully) instead of being trivially ridiculous.
+
+Thanks,
+Paul
+
+
+--Apple-Mail-2--873071331
+Content-Transfer-Encoding: 7bit
+Content-Type: application/octet-stream;
+	x-unix-mode=0644;
+	name=incremental-parsing.ml
+Content-Disposition: attachment;
+	filename=incremental-parsing.ml
+
+open Cc;;
+open Stream;;
+open Printf;;
+
+let lexer = Genlex.make_lexer ["+";"-";"*";"/";"let";"="; "("; ")"];;
+
+let stream_fn1 str = fun pos ->
+  (* printf "stream_fn1: asked for char #%d\n" pos; *)
+  if pos < String.length str then Some str.[pos] else None;;
+
+let show_token_stream = Stream.iter (function 
+  | Genlex.Kwd s    -> printf "Stream elem: Kwd %s\n" s
+  | Genlex.Ident s  -> printf "Stream elem: Ident %s\n" s
+  | Genlex.Int d    -> printf "Stream elem: int %d\n" d
+  | Genlex.Float f  -> printf "Stream elem: float %g\n" f
+  | Genlex.String s -> printf "Stream elem: \"%s\"\n" s
+  | Genlex.Char c   -> printf "Stream elem: '%c'\n" c
+);;
+
+let test1 = show_token_stream (lexer (Stream.from (stream_fn1 
+   "let x = 1 + 2 in (* comment *) \"xxx\" ^ x")));;
+
+type stream_req = ReqDone | ReqChar of (char option -> stream_req) Cc.m;;
+let stream_inv p = fun pos -> run (shiftP p (fun sk -> ReqChar (pos,sk)));;
+
+let rec filler buffer buffer_pos = function ReqDone -> ReqDone
+  | ReqChar (pos,k) as req ->
+  let pos_rel = pos - buffer_pos in
+  let _ = 
+    (* we don't accumulate already emptied buffers. We could. *)
+    assert (pos_rel >= 0) in
+  if pos_rel < String.length buffer then
+    (* desired char is already in buffer *)
+    filler buffer buffer_pos ((run k) (Some buffer.[pos_rel]))
+    else
+    (* buffer underflow. Ask the user to fill the buffer *)
+    req
+;;
+
+let finish (ReqChar (pos,k)) = filler "" pos ((run k) (return None));;
+
+let cont str (ReqChar (pos,k) as req) = filler str pos req;;
+let finish (ReqChar (pos,k)) = filler "" pos ((run k) (return None));;
+
+let test2c0 = perform
+  p <-- new_prompt ();
+  return (pushP p (return
+    (filler "" 0 (
+    show_token_stream (lexer (Stream.from (stream_inv p))); ReqDone))));;
+
+let test2c1 = cont "let x = 1 + 2 " test2c0;;
+
+--Apple-Mail-2--873071331
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain;
+	charset=US-ASCII;
+	delsp=yes;
+	format=flowed
+
+
+On Jul 4, 2007, at 12:41 PM, Paul Snively wrote:
+
+> Oleg,
+>
+> Thanks for this! I've attempted to rewrite this in terms of your  
+> monadic version of delimited continuations, as included in the  
+> pa_monad syntax extension distribution. I'm attaching my effort so  
+> far, which I have run in an OCaml 3.09.3 toploop in which I've done:
+>
+> #use "topfind";;
+> #camlp4o;;
+> #require "monad";;
+> #load "cc.cmo";;
+>
+> I'm having some difficulty, I think, due to stream_req being a  
+> recursive type that I need to turn into a type that sometimes  
+> represents a computation that returns the (recursive) type. Any  
+> advice you (or others) might have would be most welcome.
+>
+> Many thanks and best regards,
+> Paul Snively
+>
+> <incremental-parsing.ml>
+> On Jul 3, 2007, at 4:38 AM, oleg@pobox.com wrote:
+>
+>>
+>> This message is to show that the incremental parsing in OCaml is a
+>> solved problem -- essentially for any parser. Moreover, the procedure
+>> to convert from a regular parser to an incremental one is independent
+>> of the parser implementation. The incremental parsing lets us parse
+>> from a stream that is only partially known. The parser may
+>> report what it can and will ask for more input. When more input is
+>> supplied, the parsing resumes. No OS threads are required. The
+>> solution to control inversion is to use delimited continuations --
+>> which are designed for the purpose of giving fine control over
+>> continuations in direct-style programs.
+>>
+>> skaller wrote:
+>>> This problem is not restricted to parsers .. it's a general
+>>> problem with Ocaml and also C, C++, and most other languages.
+>>>
+>>> My language Felix solves this problem for procedures with
+>>> user space threading .. but it doesn't work with functions.
+>>> [And the builtin GLR parser is purely functional:]
+>>
+>> The solution below works especially well with functions. That is, if
+>> the parser maintains no visible state, the parsing is not only
+>> incremental but is also undoable and restartable. If, after ingesting
+>> the current chunk of input the parser reported a problem, we can `go
+>> back' and supply a different.
+>>
+>>> Other languages like Scheme and I think Haskell and MLton
+>>> have more general solutions because they're not restricted
+>>> to the archaic concept of a linear stack.
+>>
+>> Linear or segmented stack is an implementation detail. The central
+>> issue is delimited continuations. In fact, OCaml has a rare
+>> distinction of being the first system with widely available native
+>> delimited continuations (the native implementation of `control' was
+>> announced for Scheme48 back at ICFP02, but it was not included in the
+>> Scheme48 distribution). So, OCaml is well ahead of the pack.
+>>
+>> The solution is illustrated below. For simplicity, we'll be using
+>> Genlex.make_lexer of OCaml 3.09 as our parser (it is quite
+>> inconvenient for me at the moment to upgrade to OCaml 3.10).  Code
+>> fragments (cut and pasted from the eshell buffer) are given below
+>> within [[ ... ]] brackets.
+>>
+>> First, preliminaries:
+>>
+>> [[
+>>
+>> (* Open the DelimCC library
+>>   http://pobox.com/~oleg/ftp/Computation/Continuations.html#caml- 
+>> shift
+>> *)
+>> open Delimcc;;
+>> let shift p f = take_subcont p (fun sk () ->
+>>   push_prompt p (fun () -> (f (fun c ->
+>>     push_prompt p (fun () -> push_subcont sk (fun () -> c))))))
+>> ;;
+>>
+>> open Stream;;
+>> open Printf;;
+>> ]]
+>>
+>> First, we define the lexer and demonstrate non-incremental  
+>> parsing. We
+>> apply the lexer to a sample stream and print out the produced tokens.
+>> We use the standard library Stream.iter function.
+>>
+>> [[
+>> let lexer = Genlex.make_lexer ["+";"-";"*";"/";"let";"="; "("; ")"];;
+>>
+>> let stream_fn1 str = fun pos ->
+>>   (* printf "stream_fn1: asked for char #%d\n" pos; *)
+>>   if pos < String.length str then Some str.[pos] else None;;
+>>
+>> let show_token_stream = Stream.iter (function
+>>   | Genlex.Kwd s    -> printf "Stream elem: Kwd %s\n" s
+>>   | Genlex.Ident s  -> printf "Stream elem: Ident %s\n" s
+>>   | Genlex.Int d    -> printf "Stream elem: int %d\n" d
+>>   | Genlex.Float f  -> printf "Stream elem: float %g\n" f
+>>   | Genlex.String s -> printf "Stream elem: \"%s\"\n" s
+>>   | Genlex.Char c   -> printf "Stream elem: '%c'\n" c
+>> );;
+>> ]]
+>>
+>> Evaluating
+>> [[
+>> let test1 = show_token_stream (lexer (Stream.from (stream_fn1
+>>    "let x = 1 + 2 in (* comment *) \"xxx\" ^ x")));;
+>> ]]
+>>
+>> produces the expected result
+>>
+>> 	Stream elem: Kwd let
+>> 	Stream elem: Ident x
+>> 	Stream elem: Kwd =
+>> 	Stream elem: int 1
+>> 	Stream elem: Kwd +
+>> 	Stream elem: int 2
+>> 	Stream elem: Ident in
+>> 	Stream elem: "xxx"
+>> 	Stream elem: Ident ^
+>> 	Stream elem: Ident x
+>> 	val test1 : unit = ()
+>>
+>>
+>> We now invert the parser, in the following two lines:
+>> [[
+>> type stream_req = ReqDone | ReqChar of int * (char option ->  
+>> stream_req);;
+>> let stream_inv p = fun pos -> shift p (fun sk -> ReqChar (pos,sk));;
+>> ]]
+>>
+>> That is it. If we wish to ask the user for chunks (rather than
+>> characters) of data, we need a simple buffering layer.
+>>
+>> [[
+>> let rec filler buffer buffer_pos = function ReqDone -> ReqDone
+>>   | ReqChar (pos,k) as req ->
+>>   let pos_rel = pos - buffer_pos in
+>>   let _ =
+>>     (* we don't accumulate already emptied buffers. We could. *)
+>>     assert (pos_rel >= 0) in
+>>   if pos_rel < String.length buffer then
+>>     (* desired char is already in buffer *)
+>>     filler buffer buffer_pos (k (Some buffer.[pos_rel]))
+>>     else
+>>     (* buffer underflow. Ask the user to fill the buffer *)
+>>     req
+>> ;;
+>>
+>>
+>> let cont str (ReqChar (pos,k) as req) = filler str pos req;;
+>> let finish (ReqChar (pos,k)) = filler "" pos (k None);;
+>>
+>> ]]
+>>
+>> We are all set. Please compare the iterator below with test1 above.
+>> The composition "show_token_stream (lexer (Stream.from" is exactly as
+>> before. We merely replaced the stream function stream_fn with
+>> stream_inv. In calculus terms, we replaced "x" with "x+dx".
+>>
+>> [[
+>> let test2c0 =
+>>   let p = new_prompt () in
+>>   push_prompt p (fun () ->
+>>     filler "" 0 (
+>>     show_token_stream (lexer (Stream.from (stream_inv p)));  
+>> ReqDone));;
+>> ]]
+>>
+>> Now, the result is
+>>           val test2c0 : stream_req = ReqChar (0, <fun>)
+>>
+>> That is, the parser is suspended, awaiting the character number 0. We
+>> now feed the parser chunks of input. The chunks do
+>> not have to contain complete lexems. For example, a comment may start
+>> in one chunk and end in another.
+>>
+>> [[
+>> let test2c1 = cont "let x = 1 + 2 " test2c0;;
+>> ]]
+>> 	Stream elem: Kwd let
+>> 	Stream elem: Ident x
+>> 	Stream elem: Kwd =
+>> 	Stream elem: int 1
+>> 	Stream elem: Kwd +
+>> 	Stream elem: int 2
+>> 	val test2c1 : stream_req = ReqChar (14, <fun>)
+>>
+>> The parser ate the chunk, produced some tokens, and waits for more
+>> input.
+>>
+>> [[
+>> let test2c2 = cont "in (* com " test2c1;;
+>> ]]
+>>
+>> 	Stream elem: Ident in
+>> 	val test2c2 : stream_req = ReqChar (24, <fun>)
+>>
+>> Here, the chunk contains a non-terminating comment.
+>>
+>> [[
+>> let test2c3 = cont "ment *) " test2c2;;
+>> ]]
+>> 	val test2c3 : stream_req = ReqChar (32, <fun>)
+>>
+>> [[
+>> let test2c4 = cont "\"xx" test2c3;;
+>> ]]
+>> 	val test2c4 : stream_req = ReqChar (35, <fun>)
+>>
+>> [[
+>> let test2c5 = cont "x\" " test2c4;;
+>> ]]
+>> 	Stream elem: "xxx"
+>> 	val test2c5 : stream_req = ReqChar (38, <fun>)
+>>
+>> Finally the parser produced something, because it got the matching
+>> double quote.
+>>
+>> [[
+>> let test2c6 = cont " ^ x" test2c5;;
+>> ]]
+>>
+>> 	Stream elem: Ident ^
+>> 	val test2c6 : stream_req = ReqChar (42, <fun>)
+>> [[
+>> let test2c7 = finish test2c6;;
+>> ]]
+>>
+>> 	Stream elem: Ident x
+>> 	val test2c7 : stream_req = ReqDone
+>>
+>> And we are finished. As we said earlier, the parser can be
+>> restartable and undoable. Suppose, we have changed our mind and
+>> decided to continue parsing after the checkpoint test2c6:
+>>
+>> [[
+>> let test2c71 = cont "yx * 10" test2c6;;
+>> let test2c8  = finish test2c71;;
+>> ]]
+>>
+>> 	Stream elem: Ident xyx
+>> 	Stream elem: Kwd *
+>> 	val test2c71 : stream_req = ReqChar (49, <fun>)
+>> 	Stream elem: int 10
+>> 	val test2c8 : stream_req = ReqDone
+>>
+>> and so we get an `alternative' parse, of an alternative stream. We  
+>> can go
+>> back to any checkpoint test2c1, test2c2, etc. and continue parsing
+>> from that point.
+>>
+>> _______________________________________________
+>> Caml-list mailing list. Subscription management:
+>> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+>> Archives: http://caml.inria.fr
+>> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+
+
+--Apple-Mail-2--873071331--
+

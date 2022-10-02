@@ -1,0 +1,114 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA07725; Tue, 23 Mar 2004 00:13:20 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA07983 for <caml-list@pauillac.inria.fr>; Tue, 23 Mar 2004 00:13:18 +0100 (MET)
+Received: from mail.physik.uni-muenchen.de (mail.physik.uni-muenchen.de [192.54.42.129])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i2MNDHHd012634
+	for <caml-list@inria.fr>; Tue, 23 Mar 2004 00:13:18 +0100
+Received: from localhost (unknown [127.0.0.1])
+	by mail.physik.uni-muenchen.de (Postfix) with ESMTP
+	id 76B1020289; Mon, 22 Mar 2004 23:13:17 +0000 (UTC)
+Received: from mail.physik.uni-muenchen.de ([127.0.0.1])
+ by localhost (mail.physik.uni-muenchen.de [127.0.0.1]) (amavisd-new, port 10024)
+ with LMTP id 25857-01-42; Tue, 23 Mar 2004 00:13:14 +0100 (CET)
+Received: from mailhost.cip.physik.uni-muenchen.de (kaiser.cip.physik.uni-muenchen.de [141.84.136.1])
+	by mail.physik.uni-muenchen.de (Postfix) with ESMTP
+	id 9D5702027E; Tue, 23 Mar 2004 00:13:14 +0100 (CET)
+Received: from seekar.cip.physik.uni-muenchen.de (seekar.cip.physik.uni-muenchen.de [141.84.136.52])
+	by mailhost.cip.physik.uni-muenchen.de (Postfix) with ESMTP
+	id 36DCF8514F; Tue, 23 Mar 2004 00:13:14 +0100 (CET)
+Received: by seekar.cip.physik.uni-muenchen.de (Postfix, from userid 3092)
+	id 2EEC179FD; Tue, 23 Mar 2004 00:13:14 +0100 (CET)
+Received: from localhost (localhost [127.0.0.1])
+	by seekar.cip.physik.uni-muenchen.de (Postfix) with ESMTP
+	id 2CB3679FB; Tue, 23 Mar 2004 00:13:14 +0100 (CET)
+Date: Tue, 23 Mar 2004 00:13:14 +0100 (CET)
+From: Thomas Fischbacher <Thomas.Fischbacher@Physik.Uni-Muenchen.DE>
+To: Remi Vanicat <remi.vanicat@laposte.net>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Hashtbl and destructive operations on keys
+In-Reply-To: <871xnky9zk.dlv@vanicat.homelinux.org>
+Message-ID: <Pine.LNX.4.58.0403222348530.30579@seekar.cip.physik.uni-muenchen.de>
+References: <Pine.LNX.4.58.0403221904350.9046@seekar.cip.physik.uni-muenchen.de>
+ <871xnky9zk.dlv@vanicat.homelinux.org>
+X-BOFH: Daemons did it
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavisd-new at physik.uni-muenchen.de
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; physik:01 caml-list:01 hashtbl:01 val:01 hashtbl:01 abstr:01 val:01 intending:01 accum:01 accum:01 consing:01 hash:01 re-use:01 hash:01 cip:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 310
+
+
+On Mon, 22 Mar 2004, Remi Vanicat wrote:
+
+> > So, could I please get this officially sanctioned? :-)
+> 
+> This is not an official answers, but it is what ocaml tell me :
+> 
+> # let tbl = create 10;;
+> val tbl : ('_a, '_b) Hashtbl.t = <abstr>
+> # let r = ref 10;;
+> val r : int ref = {contents = 10}
+> # replace tbl r 50;;
+> - : unit = ()
+> # r := 1;;
+> - : unit = ()
+> # find tbl r;;
+> Exception: Not_found.
+
+Please look closely at my original posting. This is not what I was 
+intending to do.
+
+What I rather want to do is roughly along the following lines:
+
+
+let nonconsing_accum f_combine f_copy ht h_key h_val =
+  if Hashtbl.mem ht h_key
+  then Hashtbl.replace ht h_key 
+      (f_combine (Hashtbl.find ht h_key) h_val)
+  else Hashtbl.add ht (f_copy h_key) h_val
+;;
+
+let result =
+  (
+   let ht = Hashtbl.create 10 in
+   let arr = Array.make 4 0 in
+   for i = 0 to 1000 do
+     for k = 0 to 4-1 do
+       arr.(k) <- Random.int 5;
+     done;
+     nonconsing_accum (+) Array.copy ht arr 1;
+   done;
+   Hashtbl.fold (fun k v so_far -> (k,v)::so_far) ht [];
+  )
+;;
+
+Former experience with CMU CL tells me that this technique of not 
+unnecessarily consing hash keys can easily lead to a performance gain of 
+a factor of 10 - depending on the application, of course.
+
+But I have a very bad feeling about it as long as I do not have any 
+guarantee that I really can re-use the corpus of a hash key passed to 
+Hashtbl.replace.
+
+Yes, one answer certainly is "just make the hash value a ref and work on 
+its contents". But there are indeed some crazy situations where one is 
+better off using the above technique.
+
+-- 
+regards,               tf@cip.physik.uni-muenchen.de              (o_
+ Thomas Fischbacher -  http://www.cip.physik.uni-muenchen.de/~tf  //\
+(lambda (n) ((lambda (p q r) (p p q r)) (lambda (g x y)           V_/_
+(if (= x 0) y (g g (- x 1) (* x y)))) n 1))                  (Debian GNU)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

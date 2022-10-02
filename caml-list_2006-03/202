@@ -1,0 +1,126 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id E0EECBB81
+	for <caml-list@yquem.inria.fr>; Mon, 20 Mar 2006 13:37:45 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k2KCbj4F032316
+	for <caml-list@yquem.inria.fr>; Mon, 20 Mar 2006 13:37:45 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA06264 for <caml-list@pauillac.inria.fr>; Mon, 20 Mar 2006 13:37:44 +0100 (MET)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.176])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k2KCbitR032312
+	for <caml-list@inria.fr>; Mon, 20 Mar 2006 13:37:44 +0100
+Received: from [212.227.126.160] (helo=mrelayng.kundenserver.de)
+	by moutng.kundenserver.de with esmtp (Exim 3.35 #1)
+	id 1FLJdm-00019U-00; Mon, 20 Mar 2006 13:37:42 +0100
+Received: from [84.58.140.254] (helo=gate.lan.gerd-stolpmann.de)
+	by mrelayng.kundenserver.de with asmtp (Exim 3.35 #1)
+	id 1FLJdm-0001fb-00; Mon, 20 Mar 2006 13:37:42 +0100
+Received: from flakew.lan.gerd-stolpmann.de (flakew.lan.gerd-stolpmann.de [192.168.0.32])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id 7F011C018;
+	Mon, 20 Mar 2006 13:37:41 +0100 (CET)
+Subject: Re: [Caml-list] Severe loss of performance due to new signal
+	handling
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Oliver Bandel <oliver@first.in-berlin.de>
+Cc: caml-list@inria.fr
+In-Reply-To: <20060320103919.GA1167@first.in-berlin.de>
+References: <f8560b80603171039o2a49a4du561a5726e34016bf@mail.gmail.com>
+	 <441E760D.6010801@inria.fr>  <20060320103919.GA1167@first.in-berlin.de>
+Content-Type: text/plain
+Date: Mon, 20 Mar 2006 13:37:39 +0100
+Message-Id: <1142858260.31624.24.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: kundenserver.de abuse@kundenserver.de auth:a6865a839c0178d9aa0ce41878507ea2
+X-Miltered: at nez-perce with ID 441EA219.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 441EA218.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; gerd:01 stolpmann:01 bandel:01 ocaml:01 3.08.4:01 threads:01 ocaml:01 proble:01 unix:01 c-api:01 handler:01 handler:01 o'caml:01 runtime:01 initialized:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+Am Montag, den 20.03.2006, 11:39 +0100 schrieb Oliver Bandel:
+> On Mon, Mar 20, 2006 at 10:29:49AM +0100, Xavier Leroy wrote:
+> > > It seems that changes to signal handling between OCaml 3.08.4 and 3.09.1
+> > > can lead to a very significant loss of performance (up to several orders
+> > > of magnitude!) in code that uses threads and performs I/O (tested on 
+> > Linux).
+> > > [...]
+> > > Maybe some assembler guru can repeat this result and explain to us
+> > > what's going on...
+> > 
+> > Short explanation: atomic instructions are dog slow.
+> > 
+> > Longer explanation:
+> > 
+> > OCaml 3.09 fixed a number of long-standing bugs in signal handling
+> > that could cause signals to be "lost" (not acted upon).  The fixes,
+> 
+> I'm not clear about what your proble is with lost signals,
+> but when using signals on Unix/Linux-systems, you can use
+> UNIX-API, with sigaction/sigprocmask etc. you can do things well,
+> and with the signal-function which C provides things are bad/worse.
+> The C-API signal-function signal(3) clears out the signal handler
+> after a call to it. In the sigaction/sigprocmask/... functions
+> the handler remains installed.
+
+The problem is the following: The O'Caml runtime cannot handle signals
+immediately because this would break memory management (e.g. imagine a
+signal happens when memory has just been allocated but not initialized).
+To get around this the signal handler sets just a flag, and the compiler
+emits instructions that regularly check this flag at safe points of
+execution (i.e. memory is known to be initialised). These instructions
+are now atomic in 3.09. In 3.08, you have basically
+
+if "flag is set" then (
+  (*)
+  "clear flag";
+  "call the signal handler function"
+)
+
+If another signal happens at (*) it will be lost.
+
+As you mention sigprocmask: Of course, you can block signals before
+checking the flag and allow them again after clearing it, but this would
+be even _much_ slower than the solution in 3.09, because sigprocmask
+needs a context switch to do its work (it is a kernel function).
+
+I don't know what Xavier has in mind to solve the problem, but I would
+think about reducing the frequency of the atomic check.
+This could work as follows:
+
+- Revert the check to the 3.08 solution
+- Use the alarm clock timer to regularly call a signal_manager
+  function at a certain frequency (i.e. the signal flag is set
+  at a certain frequency)
+- Only the alarm clock timer signal is left unblocked. The
+  other signals are normally blocked.
+- In signal_manager, it is checked whether there are other
+  pending signals, and if so, their functions are called.
+
+Of course, it is again possible that alarm clock signals are lost, but
+this is harmless, because it is a repeatedly emitted signal. The other
+signals cannot be lost, but their execution is deferred to the next
+alarm clock event.
+
+> But if this is what you think about (and how it will be done
+> on windows or other systems) I don't know, but maybe this is
+> a hint that matters.
+> 
+> BTW: I saw that in the Unix-module the unix-signalling functions are
+>      now included... (the ywere not on older versions of Ocaml).
+
+They have been included for a long time. New is Thread.sigmask.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

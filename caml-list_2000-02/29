@@ -1,0 +1,170 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA29576 for caml-redistribution; Sun, 13 Feb 2000 22:12:54 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA20995 for <caml-list@pauillac.inria.fr>; Sat, 12 Feb 2000 23:32:34 +0100 (MET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id XAA26107
+	for <caml-list@inria.fr>; Sat, 12 Feb 2000 23:32:31 +0100 (MET)
+Received: from tet.kurims.kyoto-u.ac.jp (isdnppp2.kurims.kyoto-u.ac.jp [130.54.16.103])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id HAA01093;
+	Sun, 13 Feb 2000 07:32:27 +0900 (JST)
+Received: from localhost (localhost [127.0.0.1])
+	by tet.kurims.kyoto-u.ac.jp (8.9.3/8.9.3) with ESMTP id HAA68584;
+	Sun, 13 Feb 2000 07:34:04 +0900 (JST)
+	(envelope-from garrigue@kurims.kyoto-u.ac.jp)
+To: alliot@recherche.enac.fr, caml-list@inria.fr
+Subject: Re: Typing problem
+In-Reply-To: Your message of "Fri, 11 Feb 2000 11:17:49 +0100"
+	<20000211111749.34427@pauillac.inria.fr>
+References: <20000211111749.34427@pauillac.inria.fr>
+X-Mailer: Mew version 1.93 on Emacs 20.4 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20000213073403Q.garrigue@kurims.kyoto-u.ac.jp>
+Date: Sun, 13 Feb 2000 07:34:03 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 980905(IM100)
+Lines: 139
+Sender: weis
+
+From: Jean-Marc Alliot <alliot@recherche.ena.fr>
+> We recently found a quite annoying problem with the typing system in
+> ocaml 2.99, and Jacques Garrigue explained it to us very kindly. Other
+> people might be be interested however.
+> 
+> The problem is summarized in the following code:
+> 
+> First let's define two types:
+> type t1 = (?l:int -> unit -> unit)
+> type t = Toto of t1
+> 
+> Then the function:
+> let f1 g =
+>   g l:3 ();
+>   (Toto g);;
+> 
+> This function doesn't compile and the compiler error message is somewhat
+> cryptic at first sight:
+> File "toto.ml", line 11, characters 8-9:
+> This expression has type int -> unit -> 'a but is here used with type
+>   t1 = ?l:int -> unit -> unit
+>
+> We would very much like to see this clearly documented in ocaml 2.99
+> reference manual, as it is a serious change in the behavior of the
+> typing system. Determinism is lost, as typing f1 would succeed if typing
+> was done in reverse order (from last line to first line).
+
+Sorry, I overlooked this point the manual.
+
+As Pierre pointed out, what is lost here is not determinism but
+completeness. The compiler may fail to type some correct programs, but
+when it gives a result this will always be the same type.
+
+To be more precise, ocaml 2.99 added two features to function
+application:
+
+* out-of-order parameter passing (with labels)
+* optional arguments
+
+Both of these features require type information to be available at
+application point. For the first one, this is only required for
+efficient compilation, but for the second one type inference cannot be
+done without it.
+
+So you have to put a type annotation on g for the program to be
+accepted.
+
+# let f1 (g : t1) =
+    g l:3 ();
+    (Toto g);;
+val f1 : t1 -> t = <fun>
+
+The choice here has been to keep backwards compatibility: all programs
+that do not use extended application will be typed. That is, by
+default the compiler supposes that there are no optional arguments, and
+that all arguments are in the right order.
+
+As for the incompleteness problem, we have the theoretical foundation
+to solve it. That is, we could modify the type system so as to refuse
+the opposite order also, which is somehow wrongly accepted.
+
+# let f1 g = ignore(Toto g); g l:3 ();;
+val f1 : t1 -> unit = <fun>
+
+But I'm not sure refusing such cases would help a lot in practice.
+This is not done currently because this check would badly slow down
+the compiler.
+
+> Perhaps also a different error message from the compiler would help in
+> detecting such problems.
+
+The above error message tells almost all the compiler knows. That is,
+you mixed an optional and a non-optional argument, which is
+illegal. The non-optional label disappears in the printed type because
+in classic mode it is irrelevant for unification. I believe the
+problem was that you didn't know that such a problem may occur at all.
+
+In this particular case, by analyzing the two incompatible types, we
+may discover that they both use the label l:, in its optional an
+non-optional forms. So, with quite a bit of work, we could also have a
+message:
+
+Optional label ?l: and non-optional label l: are incompatible.
+
+But we must then also think about out-of-order application, omitted
+parameters... Which all need a specific treatment.
+
+Do you think this would help a lot?
+
+From: Pierre Weis <Pierre.Weis@inria.fr>
+> Hence, a language level fix could simply be to allow the user to write
+> the question mark with the label as:
+> 
+> let f1 g =
+>     g ?l:3 ();
+>     (Toto g);;
+> 
+> Now, in conjontion with the -modern option, this would be perfectly clear to
+> understand why g l:3 is rejected while g ?l:3 is not.
+> 
+> Unfortunately, this last program is not yet handled properly by the
+> compiler, since it causes an assertion failure into the typechecker:
+> 
+> # let f1 g =
+>       g ?l:3 ();
+>       (Toto g);;
+> This expression has type ?l:Uncaught exception: File
+> "typing/printtyp.ml", line 0, characters 6649-6661: Assertion failed
+
+In fact, this feature is already available in ocaml 2.99. However the
+above program is ill-typed, and due to a hole in the type checker,
+some invalid type expression makes the pretty printer crash.
+
+With a corrected version of the compiler, you get the following error
+message.
+# let f1 g =
+        g ?l:3 ();
+             ^
+        (Toto g);;  
+This expression has type int but is here used with type 'a option
+
+That is, using a question mark in an application is symmetrical to
+abstraction, and you must provide an optional value (of type int
+option here). This feature is documented in the reference manual.
+
+# let f1 g =
+    g ?l:(Some 3) ();
+    (Toto g);;
+val f1 : t1 -> t = <fun>
+
+This only solves half of the problem, since you still have to pass all
+arguments (included omitted ones), and in the right order.
+
+Regards,
+
+Jacques
+---------------------------------------------------------------------------
+Jacques Garrigue      Kyoto University     garrigue at kurims.kyoto-u.ac.jp
+		<A HREF=http://wwwfun.kurims.kyoto-u.ac.jp/~garrigue/>JG</A>
+
+
+

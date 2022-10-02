@@ -1,0 +1,145 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id pA4ECP4P003826
+	for <caml-list@sympa-roc.inria.fr>; Fri, 4 Nov 2011 15:12:28 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AoYCAKbxs05KfVI0kGdsb2JhbABEFpoJjkSBGAgiAQEBAQkJDQcUBCGBcgEBAQQSAhMZARsSCwEDDAYFCw0NGgciAREBBQEKAREGExIJB4dol3IKi1SCYYVBPYhwAgUKgz2FZASUHI06PYNw
+X-IronPort-AV: E=Sophos;i="4.69,455,1315173600"; 
+   d="scan'208";a="128412639"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 04 Nov 2011 15:12:28 +0100
+Received: by wwn31 with SMTP id 31so4224602wwn.9
+        for <caml-list@inria.fr>; Fri, 04 Nov 2011 07:12:28 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=AbYq8eO9+wuVxrCFUPzgXI3kkAHpK6t8tsf+xohkCic=;
+        b=wJdJBEeMqb+pctI2/WoLbn9kN84MfESsrwvbDLqMZ99ZuOJ/nruyUsziM2H8SKPnYx
+         yzw6nm1zPNASZeQQDziLpu4tLefuK/LrCzmGIvueFECdDnJN58C6NWm8hak8S1uTwEYT
+         g+QQmD3IayCH6DCLAF079Pn3Oed7XPkwG8KPg=
+Received: by 10.227.204.204 with SMTP id fn12mr18072529wbb.21.1320415948172;
+ Fri, 04 Nov 2011 07:12:28 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.227.203.134 with HTTP; Fri, 4 Nov 2011 07:12:07 -0700 (PDT)
+In-Reply-To: <20111104134342.GA9248@pps.jussieu.fr>
+References: <64822.143.164.102.13.1320411983.squirrel@webmail.mwn.de> <20111104134342.GA9248@pps.jussieu.fr>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Fri, 4 Nov 2011 15:12:07 +0100
+Message-ID: <CAPFanBGcb5oWoF-0rSS+XwOGq0MM9NhROaOs+NS=0mrHDO4AVg@mail.gmail.com>
+To: Pietro Abate <Pietro.Abate@pps.jussieu.fr>
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id pA4ECP4P003826
+Subject: Re: [Caml-list] elegant subtyping?
+
+In theory, polymorphic variants are the right tool for the job : they
+allow to express exactly what is asked for -- even in presence of
+recursive datatypes, if carefully formulated using open recursion and
+fixpoint. See Jacques Garrigue paper "Code reuse through polymorphic
+variants" for an introduction and interesting examples :
+  http://www.math.nagoya-u.ac.jp/~garrigue/papers/fose2000.html
+
+In practice, they come with the downside of being more difficult to
+use than closed variants. I personally keep using your solution (1) to
+preserve simplicity; that usually means a finite number of
+dumb-looking "| Ast.Assign -> Cfg.Assign" branches in each pattern
+matching, but nothing really problematic for code quality or
+maintenance.
+
+The problem with polymorphic variants is that they are so flexible
+that type inference cannot help you a lot with errors in polymorphic
+variants code. For example, if you mistype one constructor name, the
+compiler won't be able to flag an error, it will only infer a slightly
+different types with the usual constructors, plus the misspelled one.
+Errors will only be spotted later, when you try to combine the faulty
+code with a function with strict assumptions on the variants (closed
+pattern matching), with an unwieldy error message.
+
+My advice for polymorphic variant beginners is to massively use
+annotations to control type-checking : every time you take a
+polymorphic variant as input, or output one, the function should be
+annotated with a precise type for the variant part. This will shield
+you from most inference issues, and force you to build an expressive
+set of type definitions (as Pietro demonstrated) that can be composed
+and help reason about your program.
+
+
+On Fri, Nov 4, 2011 at 2:43 PM, Pietro Abate
+<Pietro.Abate@pps.jussieu.fr> wrote:
+> hello,
+> using polymorphic variants maybe ?
+>
+> # module Cfg =  struct type statement = [ `Assign | `Guard ] end;;
+> module Cfg : sig type statement = [ `Assign | `Guard ] end
+>
+> # module Ast =  struct type statement = [ Cfg.statement | `Goto | `Label ] end;;
+> module Ast : sig type statement = [ `Assign | `Goto | `Guard | `Label ] end
+>
+> p
+>
+> On Fri, Nov 04, 2011 at 02:06:23PM +0100, Markus Weißmann wrote:
+>> Hello everyone,
+>>
+>> I'm writing on a compiler and want to subtype the "statements" that can
+>> occur in my code:
+>> At first I have an abstract syntax tree that can hold any statement of the
+>> language. From that I create a control flow graph that will only have
+>> non-control-flow statements (a true subset of the Ast-statements).
+>> Whats the best way to realize that?
+>>
+>> Basically I have:
+>>
+>> module Ast: type statement = Assign | Guard | Goto | Label
+>> module Cfg: type statement = Assign | Guard
+>>
+>>
+>> I see three -- not so elegant -- solutions to this:
+>>
+>> 1.) type-safe but imho quite ugly code:
+>> module Cfg: type statement = Assign | Guard
+>> module Ast: type statement = Base of Cfg.statement | Goto | Label
+>>
+>> 2.) use the same type for both and give up the safety that wrong types
+>> cannot show up in the Cfg
+>>
+>> 3.) use objects
+>>
+>> Did I miss the type-safe, elegant, module-based solution somehow? Or is
+>> 1.) as good as it gets?
+>>
+>>
+>> Best regards
+>>
+>> -Markus
+>>
+>> --
+>> Markus Weißmann, M.Sc.
+>> Institut für Informatik
+>> Technische Universität München
+>> Raum 03.07.054, Boltzmannstr. 3, 85748 Garching
+>>
+>> Tel. +49 (89) 2 89-1 81 05
+>> Fax +49 (89) 2 89-1 81 07
+>>
+>> mailto:markus.weissmann@in.tum.de
+>>
+>>
+>> --
+>> Caml-list mailing list.  Subscription management and archives:
+>> https://sympa-roc.inria.fr/wws/info/caml-list
+>> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+> --
+> ----
+> http://en.wikipedia.org/wiki/Posting_style
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+

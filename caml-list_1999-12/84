@@ -1,0 +1,255 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA04502 for caml-redistribution; Fri, 17 Dec 1999 22:54:41 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA21675 for <caml-list@pauillac.inria.fr>; Thu, 16 Dec 1999 18:32:12 +0100 (MET)
+Received: from mail3.microsoft.com (mail3.microsoft.com [131.107.3.123])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with SMTP id SAA07104
+	for <caml-list@inria.fr>; Thu, 16 Dec 1999 18:32:10 +0100 (MET)
+Received: from 157.54.9.100 by mail3.microsoft.com (InterScan E-Mail VirusWall NT); Thu, 16 Dec 1999 03:40:23 -0800 (Pacific Standard Time)
+Received: by INET-IMC-03 with Internet Mail Service (5.5.2650.21)
+	id <Y0K2J2KK>; Thu, 16 Dec 1999 03:40:23 -0800
+Message-ID: <7CD674FF54FBD21181D800805F57CD5488B201@RED-MSG-44>
+From: Andrew Kennedy <akenn@microsoft.com>
+To: "'Judicael Courant'" <Judicael.Courant@lri.fr>,
+        Daniel de Rauglaudre
+	 <daniel.de_rauglaudre@inria.fr>
+Cc: Norman Ramsey <nr@eecs.harvard.edu>, caml-list@inria.fr,
+        Nick Benton
+	 <nick@microsoft.com>
+Subject: RE: A common use of try ... with
+Date: Thu, 16 Dec 1999 03:40:21 -0800
+X-Mailer: Internet Mail Service (5.5.2650.21)
+Sender: weis
+
+Interestingly enough, Nick Benton and I came up with precisely the same
+construct for different reasons. We observed that using the traditional
+"handle" construct (Caml's try...with) in our MLj compiler's typed
+intermediate language was preventing certain rewrites - or at least, the
+rewrite would have to introduce hacks of the kind that you describe (case on
+a sum type). For example (excuse the syntax), in
+
+  let g = (f y handle E => \w.5+w)  
+  in g 6
+
+we'd like to "float" the handler out. This is especially important if a
+beta-reduction occurs as a result (as is the case here). But there's no way
+of doing the rewrite without introducing some superfluous construct such as
+a case (the same thing can be done using another exception, or a
+continuation). But now considering expressing handle in terms of a more
+general try construct (as has been suggested on this thread):
+
+  M handle E => N          ==          try z = M catch E => N in z
+
+where the construct
+
+  try z = M catch E => N in P
+
+is interpreted as "Evaluate M. If successful, bind the result to z and
+evaluate P. Otherwise, if exception E is raised, evaluate the exception
+handler N, or if some other exception is raised, pass it on." (The most
+general form has a set of exception handlers). 
+
+Now we can rewrite the above expression:
+
+  let g = (try z = f y catch E => \w.5+w in z)
+  in g 6
+
+(float the try)
+-->
+
+  try z = f y catch E => (let g = \w.5+w in g 6)
+  in 
+    let g = z in g 6
+
+(beta)
+-->
+  
+  try z = f y catch E => 11
+  in z 6
+
+Also observe that the "tail-ness" of function application is immediately
+clear: clearly f y is not a tail call (as this expression is not a
+"continuation") whereas z 6 is.
+
+We do in fact use this new construct in our intermediate language, MIL
+(monadic intermediate language). See our ICFP'98 paper, or for more detail,
+our recent HOOTS paper
+(http://research.microsoft.com/users/akenn/papers/index.html). In the latter
+we present another, theoretical argument in favour of the try construct:
+that it permits a structurally-inductive definition of termination to be
+expressed directly in the syntax of terms.
+
+Finally, as a programmer I have also fallen across examples similar to those
+cited in this thread. Here's a function (in SML, sorry!) that reads the
+first file that opens successfully:
+
+fun lookup (n::ns) = 
+    case ((SOME (TextIO.openIn n)) handle IO.Io _ => NONE) of
+      NONE => lookup ns
+    | SOME f => readIt f
+
+Now in terms of a (putative) try construct:
+
+fun lookup (n::ns) =
+    try f = TextIO.openIn n catch IO.Io _ => lookup ns
+    in
+      readIt f
+    end
+
+Much nicer.
+
+Nick and I are currently writing a short paper that discusses this new
+construct from three perspectives: the programmer's (as has been discussed
+on this thread), the compiler writer's (our original motivation), and the
+theorist's. Watch this space!
+
+- Andrew.
+> -----Original Message-----
+> From: Judicael Courant [mailto:Judicael.Courant@lri.fr]
+> Sent: Thursday, December 16, 1999 7:45 AM
+> To: Daniel de Rauglaudre
+> Cc: Norman Ramsey; caml-list@inria.fr
+> Subject: A common use of try ... with
+> 
+> 
+> 
+> [french version below]
+> In his message of Wed December 15, 1999, Daniel de Rauglaudre writes: 
+> > To resolve this problem, instead of:
+> > 
+> >      try
+> >        let x = exp in
+> >        f x
+> >      with Exception -> y
+> 
+> I noticed that this programming pattern is quite common in Caml,
+> i.e. you frequently want to compute an exp that may raise an
+> exception, then do something with the value of this expression or
+> handle the exception (typically read a file, then either compute
+> something from what you have read or handle IO errors).
+> 
+> Of course, you can rewrite it as you mentionned. But should not there
+> be a construct to handle this kind of pattern in caml ?
+> 
+> This new construct (let us call it tryeval) would permit us to write
+> things like this :
+> 
+> tryeval exp
+> val x -> f x (* this case is evaluated only when exp 
+> evaluates to a value *)
+> with
+> (* possible exceptions *)
+> | Exception1 -> ...
+> | Exception2 y -> ...
+> ...
+> 
+> which is IMHO more readable and general than the workaround you
+> mentionned.
+> 
+> In fact, this new construct could even be only a generalization of the
+> current try with :
+> 
+> try e with E1 -> e1 | ...
+> 
+> is indeed equivalent to
+> 
+> tryeval e val x -> x
+> with
+>   E1 -> e1
+> | ...
+> 
+> So that there is no need for a new keyword tryeval : one could just
+> reuse the existing "try" keyword, generalizing this construct.
+> 
+> 
+> For the moment, the easiest way for implementing this new behavior is
+> probably syntactic sugar : the previous example would expand to :
+> 
+> match (try Left exp with e -> Right e) with
+> | Left x -> f x
+> | Right Exception1 -> ...
+> | Right (Excepion2 y) -> ...
+> 
+> with definition :
+> 
+> type ('a,'b) sum =
+> | Left of 'a
+> | Right of 'b
+> 
+> Is not there anything like this in the righteous syntax yet ?
+> 
+> [english version above]
+> 
+> Dans son message du mercredi 15 décembre 1999 Daniel de Rauglaudre
+> écrit : 
+> > To resolve this problem, instead of:
+> > 
+> >      try
+> >        let x = exp in
+> >        f x
+> >      with Exception -> y
+> 
+> J'ai remarqué que ce "motif" est assez courant en Caml : il arrive
+> fréquemment qu'on veuille calculer une expression et gérer l'exception
+> levée s'il y en a une ou utiliser la valeur calculée s'il n'y a pas eu
+> d'exception (cas typique : lecture d'un fichier, puis calcul d'une
+> valeur ou gestion des erreurs d'entrées-sorties).
+> 
+> On peut bien sûr toujours écrire l'expression de la façon que tu
+> mentionnes mais ne devrait-il pas y avoir une construction 
+> primitive de
+> Caml pour effectuer ce genre d'opération ?
+> 
+> Cette nouvelle construction (qu'on peut appeler tryeval) s'utiliserait
+> ainsi :
+> 
+> tryeval exp
+> val x -> f x (* évalué seulement si exp ne lève pas d'exception, dans
+> ce cas x est la valeur de exp *)
+> with
+> (* exceptions possibles *)
+> | Exception1 -> ...
+> | Exception2 y -> ...
+> ...
+> 
+> C'est à mon humble avis plus lisible et général que le truc que tu
+> donnes.
+> 
+> Cette nouvelle construction pourrait même être en fait une simple
+> généralisation de l'actuelle construction try ... with :
+> 
+> try e with E1 -> e1 | ...
+> 
+> serait en fait juste du sucre syntaxique pour 
+> 
+> tryeval e val x -> x
+> with
+>   E1 -> e1
+> | ...
+> 
+> Donc pas besoin d'un nouveau mot-clé : au lieu d'appeler cette
+> nouvelle construction tryeval, il suffit de l'appeler try.
+> 
+> Une façon simple d'implanter ce nouveau comportement serait de mettre
+> un tout petit peu de sucre syntaxique. L'exemple donné précédemment
+> donnerait :
+> 
+> match (try Left exp with e -> Right e) with
+> | Left x -> f x
+> | Right Exception1 -> ...
+> | Right (Excepion2 y) -> ...
+> 
+> à condition d'avoir au préalable défini :
+> 
+> type ('a,'b) sum =
+> | Left of 'a
+> | Right of 'b
+> 
+> Ca n'existe pas encore dans la syntaxe righteous ?
+> 
+> Judicaël.
+> -- 
+> Judicael.Courant@lri.fr, http://www.lri.fr/~jcourant/
+> [Computing timetable constraints..................done: 0 solution(s)]
+> 
+
+
+

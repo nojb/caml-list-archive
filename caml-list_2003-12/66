@@ -1,0 +1,104 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA01879; Sun, 7 Dec 2003 18:22:59 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA00845 for <caml-list@pauillac.inria.fr>; Sun, 7 Dec 2003 18:22:58 +0100 (MET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hB7HMvr02128
+	for <caml-list@inria.fr>; Sun, 7 Dec 2003 18:22:57 +0100 (MET)
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id hB7HMfC17988;
+	Sun, 7 Dec 2003 11:22:43 -0600 (CST)
+Date: Sun, 7 Dec 2003 12:23:20 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Object-oriented access bottleneck
+In-Reply-To: <871xrhe4hb.fsf@iki.fi>
+Message-ID: <Pine.LNX.4.44.0312071153380.5009-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 bottleneck:01 bottleneck:01 derives:01 foo:01 foo:01 hash:01 struct:01 struct:01 hash:01 checker:01 misses:01 compiler:01 compiler:01 typedef:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 7 Dec 2003, Nuutti Kotivuori wrote:
+
+> This message identical to the post I made to comp.lang.ml a while back
+> - but I think it will have a better audience over here, now that I
+> decided to join the list.
+> 
+> ---
+> 
+> Lately I've been having a bit of a dilemma caused by a bottleneck from
+> object-oriented access in Ocaml. The problem derives from the
+> implementation of method calls through lazy binding.
+> 
+> Compiled languages which offer an object oriented system usually
+> provide a way for methods to short-circuit the lazy binding (or
+> virtual function table) system. In C++, non-virtual functions do this,
+> in Java, declaring a method final gives the compiler a hint about
+> this. In this case, the compiler can inline the method into the
+> caller.
+
+I don't think there can be.  Consider the function:
+
+let f c = c#foo 3 ;;
+
+In O'caml, this has type:
+< foo : int -> 'a; .. > -> 'a
+which basically means it accepts any object with a foo member function.
+
+So what happens if we define two classes, which don't relate to each other 
+except each has a foo member function.  Only in one class foo is a virtual 
+function, and in the second class foo is a non-virtual function.  How 
+would you implement f in this case?
+
+A better alternative would be, I think, to spend a little time optimizing 
+virtual function calls, so that they are faster.
+
+I like the idea of implementing virtual function tables as hash tables.
+Require that every VFT is a power of two elements in size, and you could 
+implement f above in C something like:
+
+typedef unsigned long word_t;
+
+typedef struct {
+    word_t mask;
+    struct {
+        word_t hashval;
+        word_t (*fun)();
+    } table[1];
+} vft_t;
+
+word_t f(word_t c) {
+    word_t * c_p = (word_t *) c; /* C is a pointer to an object */
+    vft_t * vft_p = (word_t *) (c_p[-1]); /* VFT is at offset -1 */
+    static word_t foo_hash = hash_value("foo"); /* never changes */
+    word_t i = foo_hash & vft_p->mask;
+
+    while (vft_p->table[i].hashval != foo_hash) {
+        i = (i + 1) & vft_p->mask;
+    }
+    return vft_p->table[i].fun((word_t) 3);
+}
+
+Note that the type checker gaurentees the while loop exits- better than
+half the time the while loop body won't execute at all.  The most likely
+cost then is two loads, one branch, and one indirect call.  Biggest cost 
+is likely to be the cache misses on the loads, followed by mispredicted 
+branchs.  Virtual function calls won't be as fast as normal function 
+calls, but they'll be close enough to stop worrying about them.
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

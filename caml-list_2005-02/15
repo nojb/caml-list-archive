@@ -1,0 +1,105 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 91DA4BC88
+	for <caml-list@yquem.inria.fr>; Tue,  1 Feb 2005 15:31:10 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j11EVATA006562
+	for <caml-list@yquem.inria.fr>; Tue, 1 Feb 2005 15:31:10 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA10503 for <caml-list@pauillac.inria.fr>; Tue, 1 Feb 2005 15:31:09 +0100 (MET)
+Received: from will.iki.fi (will.iki.fi [217.169.64.20])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j11EV9RG005592
+	for <caml-list@inria.fr>; Tue, 1 Feb 2005 15:31:09 +0100
+Received: from acerf.exomi.com (fa-3-0-0.fw.exomi.com [217.169.64.99])
+	by will.iki.fi (Postfix) with ESMTP id 274EC13B;
+	Tue,  1 Feb 2005 16:31:09 +0200 (EET)
+Subject: Re: [Caml-list] timer
+From: Ville-Pertti Keinonen <will@exomi.com>
+To: Anastasia Gornostaeva <ermine@ermine.pp.ru>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <20050201122213.GA82702@ermine.home>
+References: <20050103015835.GA22656@ermine.home>
+	 <41D9ED2A.8080906@compiler.kaist.ac.kr>
+	 <20050131193324.GA77148@ermine.home> <1107244235.669.11.camel@localhost>
+	 <20050201122213.GA82702@ermine.home>
+Content-Type: text/plain
+Date: Tue, 01 Feb 2005 16:30:55 +0200
+Message-Id: <1107268256.669.87.camel@localhost>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.0.3 FreeBSD GNOME Team Port 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 41FF92AE.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 41FF92AD.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 wrote:01 libc:01 libpthread:01 libc:01 ocaml:01 misbehavior:01 ocaml:01 handler:01 handler:01 modifies:01 sig:01 sig:01 struct:01 memcpy:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+On Tue, 2005-02-01 at 15:22 +0300, Anastasia Gornostaeva wrote:
+
+> I have different FreeBSDs, 5.2rc2 and 5.3-release. 
+> On 5.2rc2 using libc_r is by default but just now I use libmap.conf only for 
+> ocaml-compiled programs to use pthreads. 
+
+Does it work correctly for you when using libpthread on 5.2rc2 (it
+might've still been called libkse)?
+
+Does it work correctly with 5.3-release?  (I'd definitely expect it to.)
+
+> I still dont believe it is only freebsd related problem if i use 
+> freebsd 5.2rc2 for long time and with wide range of sowtware without 
+> problems. For example, on my machine there is running Zope based on python 2.1,
+> that is linked against libc_r. Well, i dont know if it uses signals ...
+
+libc_r works most of the time, including signals, but OCaml makes a
+particular misbehavior easy to trigger.
+
+This is getting somewhat off-topic, but it still relates to getting
+OCaml programs to work correctly, so...
+
+Based on a quick look at the libc_r sources, it seems that what actually
+happens is when entering a signal handler, the signal being delivered is
+masked (as is sa_mask), and when leaving the handler, the original
+signal mask is restored...as long as it hasn't been changed by the
+signal handler.  OCaml always modifies the signal mask inside the
+handler.
+
+This seems like a misreading of the standard.  According to SUS3:
+
+    When a signal is caught by a signal-catching function installed
+    by sigaction(), a new signal mask is calculated and installed for
+    the duration of the signal-catching function (or until a call to
+    either sigprocmask() or sigsuspend() is made).
+
+    ...
+
+    If and when the user's signal handler returns normally, the
+    original signal mask is restored.
+
+Apparently the author of libc_r interpreted the "or until a call to
+either sigprocmask() or sigsuspend() is made" to also cancel the
+restoration of the original mask.
+
+If you must use libc_r, the following modification might fix the problem
+(disclaimer - I haven't tested it):
+
+--- uthread_sig.c.orig  Wed Dec  3 08:54:40 2003
++++ uthread_sig.c       Tue Feb  1 15:52:53 2005
+@@ -1112,12 +1112,14 @@
+     struct pthread_signal_frame *psf)
+ {
+        memcpy(&thread->ctx, &psf->ctx, sizeof(thread->ctx));
++#if 0
+        /*
+         * Only restore the signal mask if it hasn't been changed
+         * by the application during invocation of the signal handler:
+         */
+        if (thread->sigmask_seqno == psf->saved_state.psd_sigmask_seqno)
++#endif
+                thread->sigmask = psf->saved_state.psd_sigmask;
+        thread->curframe = psf->saved_state.psd_curframe;
+        thread->wakeup_time = psf->saved_state.psd_wakeup_time;
+        thread->data = psf->saved_state.psd_wait_data;
+
+

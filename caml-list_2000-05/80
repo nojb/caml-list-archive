@@ -1,0 +1,193 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA21758 for caml-red; Wed, 17 May 2000 19:25:42 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA15442 for <caml-list@pauillac.inria.fr>; Tue, 16 May 2000 15:45:33 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e4GDjW524104
+	for <caml-list@inria.fr>; Tue, 16 May 2000 15:45:32 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id PAA18243;
+	Tue, 16 May 2000 15:45:27 +0200 (MET DST)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <200005161345.PAA18243@miss.wu-wien.ac.at>
+Subject: Re: The performance cost of using exceptions?
+To: franka@cs.uu.nl (Frank Atanassow)
+Date: Tue, 16 May 2000 15:45:27 +0200 (MET DST)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <14625.5414.998940.387603@silvester.cs.uu.nl> from "Frank Atanassow" at May 16, 2000 11:30:14 AM
+X-Mailer: ELM [version 2.5 PL2]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Lines: 168
+Sender: weis
+
+> I don't see how this would improve performance. If the element is in the tree,
+> you will be copying the spine until you descend to a point where you discover
+> the node exists. If you then escape via an exception, the copied nodes will be
+> collected. Otherwise (but it depends on your specification, I suppose) the
+> functional way would be to just return the subtree(s) intact, so there would
+> be no need to copy their spines. Either way, you're generating the same amount
+> of garbage.
+
+The spine will not be generated until the insertion into the subtree
+finishes. Only the runtime stack will grow (in any case). You can always
+prevent spine copying by testing for physical equality on substructures,
+but this requires at least one check for each node whereas exceptions need
+not check - they just unwind the stack.
+
+Setting up the exception handler costs a bit time (one time effort!) so
+inserting an element into very small datastructures could be costly. But
+performance normally depends on inserting elements into big datastructures,
+in which case exceptions really excel. The break-even point is surely
+highly dependent on the quality of the exception handling mechanism. In my
+tests it was somewhere around inserting 100 elements (test function below)
+into an unbalanced binary tree.
+
+Let's assume the following test function:
+
+  let test f empty n =
+    let s = ref empty in
+    for i = 1 to n do s := f (Random.int (n/10)) !s done
+
+It just inserts n random integers in the range of 0..n/10 into some
+datastructure.
+
+Take the following straightforward insertion function for binary trees:
+
+  let rec insert1 x = function
+    | `Nil -> `Node (`Nil, x, `Nil)
+    | `Node(l, el, r) as node ->
+        let c = compare x el in
+        if c = 0 then node
+        else if c < 0 then `Node (insert1 x l, el, r)
+        else `Node (l, el, insert1 x r)
+
+Timing for running it with "test insert1 `Nil 100000":
+
+  3.040u 0.040s 0:03.07 100.3%    0+0k 0+0io 133pf+0w
+
+Now the version with exceptions (use insert2 with the test function):
+
+  let rec insert2 x = function
+    | `Nil -> `Node (`Nil, x, `Nil)
+    | `Node(l, el, r) ->
+        let c = compare x el in
+        if c = 0 then raise Exit
+        else if c < 0 then `Node (insert2 x l, el, r)
+        else `Node (l, el, insert2 x r)
+  let insert2 x s = try insert2 x s with Exit -> s
+
+Timing:
+
+  1.950u 0.010s 0:01.95 100.5%    0+0k 0+0io 138pf+0w
+
+Wow! That's much faster!
+
+But not really fair... - the first function copies the spine, the second
+does not. So let's make a fairer comparison:
+
+  let rec insert3 x = function
+    | `Nil -> `Node (`Nil, x, `Nil)
+    | `Node (l, el, r) as node ->
+        let c = compare x el in
+        if c = 0 then node
+        else if c < 0 then
+          let l' = insert3 x l in
+          if l == l' then node
+          else `Node (l', el, r)
+        else
+          let r' = insert3 x r in
+          if r == r' then node
+          else `Node (l, el, r')
+
+This does not use exceptions, but checks for physical equality to prevent
+spine copying. Timing:
+
+  2.070u 0.000s 0:02.07 100.0%    0+0k 0+0io 133pf+0w
+
+Not bad! That's already much faster than the first version, though, not
+quite as good as the version using exceptions. Could be fine for small
+datastructures!
+
+But wait, we can even further improve the speed of the version that uses
+exceptions: the idea is that we do not do the recursive call within the
+constructor parameter but outside! This is possibly a tweak that only works
+with specific compilers. It seems that the OCaml-compiler makes
+arrangements to allocate the constructor in the upper version, which costs
+time: if an exception occurs, this effort is wasted.
+
+Here the fastest version with exceptions:
+
+  let rec insert4 x = function
+    | `Nil -> `Node (`Nil, x, `Nil)
+    | `Node (l, el, r) ->
+        let c = compare x el in
+        if c = 0 then raise Exit
+        else if c < 0 then
+          let l' = insert4 x l in
+          `Node (l', el, r)
+        else
+          let r' = insert4 x r in
+          `Node (l, el, r')
+  let insert4 x s = try insert4 x s with Exit -> s
+
+Timing:
+
+  1.880u 0.030s 0:01.90 100.5%    0+0k 0+0io 139pf+0w
+
+Well, another 2-3%... - not overwhelming, but we don't want to give it away
+either...
+
+As we could see, we can gain quite some performance by making clever use of
+exceptions. This also suggests that the implementation of sets in the
+standard library be revised: the current one not only copies the spine, it
+also unnecessarily calls the balance function each time!
+
+The fastest insertion implementation for our standard sets (balanced binary
+trees - see "set.ml" in the standard library) given the test function above
+is:
+
+  let rec my_add1 x = function
+    | Empty -> Node(Empty, x, Empty, 1)
+    | Node(l, v, r, _) ->
+        let c = Ord.compare x v in
+        if c = 0 then raise Exit
+        else if c < 0 then
+          let l' = my_add1 x l in
+          bal l' v r
+        else
+          let r' = my_add1 x r in
+          bal l v r'
+  let my_add1 x s = try my_add1 x s with Exit -> s
+
+As I mentioned, this version with exceptions might come with a slight
+penalty for tiny sets. But at least the spine copying and redundant balance
+call should be eliminated: this nearly doubles the speed on the above test
+(and even more for more data)!
+
+Here the version without exceptions but with test for physical equality:
+
+  let rec my_add2 x = function
+    | Empty -> Node(Empty, x, Empty, 1)
+    | Node(l, v, r, _) as t ->
+        let c = Ord.compare x v in
+        if c = 0 then t else
+        if c < 0 then
+          let l' = my_add2 x l in
+          if l == l' then t
+          else bal l' v r
+        else
+          let r' = my_add2 x r in
+          if r == r' then t
+          else bal l v r'
+
+Well, that's probably enough now about tweaking algorithms with
+exceptions...
+
+Best regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

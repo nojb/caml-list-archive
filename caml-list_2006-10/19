@@ -1,0 +1,178 @@
+Return-Path: <don.syme@microsoft.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: ***
+X-Spam-Status: No, score=3.4 required=5.0 tests=DNS_FROM_RFC_ABUSE,
+	DNS_FROM_RFC_POST,SPF_SOFTFAIL autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 778D5BC68
+	for <caml-list@yquem.inria.fr>; Tue,  3 Oct 2006 01:38:05 +0200 (CEST)
+Received: from mail-eur.microsoft.com (mail-eur.microsoft.com [213.199.128.145])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k92Nc4w5009169
+	for <caml-list@inria.fr>; Tue, 3 Oct 2006 01:38:04 +0200
+Received: from EUR-MSG-11.europe.corp.microsoft.com ([65.53.193.197]) by mail-eur.microsoft.com with Microsoft SMTPSVC(6.0.3790.1830);
+	 Tue, 3 Oct 2006 00:38:03 +0100
+X-MimeOLE: Produced By Microsoft Exchange V6.5
+Content-class: urn:content-classes:message
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+Subject: RE: [Caml-list] More problems with memoization
+Date: Tue, 3 Oct 2006 00:37:37 +0100
+Message-ID: <D5DD834CDA73854DA0ADC8B3C953C68105FE723F@EUR-MSG-11.europe.corp.microsoft.com>
+In-Reply-To: <20061002172902.93z4c75nj4c8c884@webmail.etu.upmc.fr>
+X-MS-Has-Attach: 
+X-MS-TNEF-Correlator: 
+Thread-Topic: [Caml-list] More problems with memoization
+Thread-Index: AcbmOE/smCFOBpVySwGsbEX4nOLLTQAPkPTw
+From: "Don Syme" <Don.Syme@microsoft.com>
+To: "Diego Olivier FERNANDEZ PONS" <diego.fernandez_pons@etu.upmc.fr>,
+	"Jon Harrop" <jon@ffconsultancy.com>
+Cc: <caml-list@inria.fr>
+X-OriginalArrivalTime: 02 Oct 2006 23:38:03.0549 (UTC) FILETIME=[CDD804D0:01C6E67B]
+X-Miltered: at concorde with ID 4521A2DC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; memoization:01 syme:01 syme:01 entcs:01 dsyme:01 fib:01 fib:01 recursive:01 argues:01 unreasonable:01 apis:01 ocaml:01 ocaml:01 recursion:01 haskell:01 
+
+
+
+Hi Diego,
+
+You may be interested in the approach to this kind of problem discussed
+in http://dx.doi.org/10.1016/j.entcs.2005.11.038 (see also tech report
+at http://research.microsoft.com/users/dsyme/papers/valrec-tr.pdf).
+Under that approach you get to write the code in a natural way as shown
+below: fib_mem is defined recursively, but the "cache" function has the
+natural "(a -> b) -> (a -> b)" type and is abstract and reusable (no
+details as to the nature of the internal table are revealed). =20
+
+let cache f =3D
+  let table =3D ref [] in
+  fun n ->
+     try
+       List.assoc n !table
+     with Not_found ->
+       let f_n =3D f n in
+	  table :=3D (n, f_n) :: !table;
+	  f_n
+
+let rec fib_mem =3D=20
+   cache (function=20
+	    | 0 -> 0
+	    | 1 -> 1
+	    | n -> fib_mem (n - 1) + fib_mem (n - 2))
+
+
+The use of a computation on the right of a "let rec" is allowed by
+systematically introducing initialization holes using lazy values and
+forces.  There are disadvantages to this approach, as it introduces a
+potential for initialization unsoundness somewhat similar to those in
+most designs and implementations of recursive modules.  However the
+paper argues that in the balance it is not unreasonable for a strict
+language to accept this in order to gain modularity and localize the
+potential for unsoundness.  It is even more compelling when often
+working with abstract APIs such as Java and .NET GUI libraries.
+
+While this isn't OCaml, and may not ever be the right design for OCaml,
+I've found it a useful technique to know even when doing C#, C++ and
+OCaml programming, as a broad range of recursion puzzles can be
+addressed by modelling the problem the "natural" way (e.g. more like
+Haskell) and then using a translation that introduces initialization
+holes systematically.  The translation of your sample into OCaml using
+"lazy" initialization holes is shown below (for single recursion you can
+also just use a "option ref").  Note "cache" does not change,
+maintaining the property that the caching function is abstract and
+reusable.
+
+let (!!) x =3D Lazy.force x
+let rec fib_mem' =3D lazy=20
+   cache (function=20
+	    | 0 -> 0
+	    | 1 -> 1
+	    | n -> !!fib_mem' (n - 1) + !!fib_mem' (n - 2))
+  =20
+let fib_mem =3D !!fib_mem'
+
+FWIW it is well known that laziness can be used in essentially this way,
+e.g. see Michel Mauny's early papers on laziness in OCaml.  However I've
+not seen a paper that argues the case for making this the default
+interpretation of "let rec" in a strict language.
+
+Cheers
+Don
+
+=20
+  =20
+
+
+-----Original Message-----
+From: caml-list-bounces@yquem.inria.fr
+[mailto:caml-list-bounces@yquem.inria.fr] On Behalf Of Diego Olivier
+FERNANDEZ PONS
+Sent: 02 October 2006 16:29
+To: Jon Harrop
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] More problems with memoization
+
+     Bonjour,
+
+Quoting Jon Harrop <jon@ffconsultancy.com>:
+> I believe you want to "untie the knot" of recursion, creating an  =20
+> higher-order, auxiliary fibonacci function fib_aux that accepts the =20
+> recursive call as an argument:
+>
+> # let rec fib_aux fib =3D function
+>     | 0 | 1 as n -> n
+>     | n -> fib(n - 1) + fib(n - 2);;
+> val fib_aux : (int -> int) -> int -> int =3D <fun>
+>
+[...]
+> You can recover the ordinary fibonacci function using the Y
+combinator:
+[...]
+> You can write a higher-order memoization function that accepts an
+argument
+> with the type of fib_aux:
+> # memoize fib_aux 35;;
+> - : int =3D 9227465
+
+Your solution is similar to Andrej Brauer's one which is exactly what =20
+I was trying to avoid because it is too much intrusive. When you break =20
+the recursion in two functions you change the type of [fib] from
+[fib : int -> int] to [fib : (int -> int) -> int -> int)].
+
+In my first example you keep the type of [fib] and add a second =20
+function [fib_mem]. You can use anyone indifferently and hide the =20
+latter with the .mli
+val fib : int -> int =3D <fun>
+val fib_mem : int -> int =3D <fun>
+
+When you compare your solution with what I am trying to do you see =20
+there is a big difference in locality and transparency
+
+let rec fib =3D function
+   | 0 -> 0
+   | 1 -> 1
+   | n -> fib (n - 1) + fib (n - 2)
+
+transformed into
+
+let rec fib =3D function
+   | 0 -> 0
+   | 1 -> 1
+   | n -> fib_mem (n - 1) + fib_mem (n - 2)
+and fib_mem =3D make_mem fib
+
+The latter could even be done automatically by a source to source =20
+transformation (if it worked).
+
+         Diego Olivier
+
+_______________________________________________
+Caml-list mailing list. Subscription management:
+http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+Archives: http://caml.inria.fr
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+Bug reports: http://caml.inria.fr/bin/caml-bugs
+

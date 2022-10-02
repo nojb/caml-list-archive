@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA29263; Tue, 21 Sep 2004 10:03:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA28457 for <caml-list@pauillac.inria.fr>; Tue, 21 Sep 2004 10:03:43 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id i8L83fid014845
+	for <caml-list@inria.fr>; Tue, 21 Sep 2004 10:03:42 +0200
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2-20030924/3.7W) with ESMTP id RAA25473
+	for <caml-list@inria.fr>; Tue, 21 Sep 2004 17:03:39 +0900 (JST)
+Date: Tue, 21 Sep 2004 17:03:39 +0900 (JST)
+Message-Id: <20040921.170339.118021840.garrigue@kurims.kyoto-u.ac.jp>
+Subject: [Caml-list] Re: OCAML Downcasting?
+To: caml-list@inria.fr
+From: Jacques GARRIGUE <garrigue@kurims.kyoto-u.ac.jp>
+References: <ci7tcf$qqf$1@wolfberry.srv.cs.cmu.edu>
+ <ci9ggm$i6p$1@wolfberry.srv.cs.cmu.edu>
+X-Mailer: Mew version 4.0.64 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 414FE05D.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; downcasting:01 jacques:01 matthias:01 ocaml's:01 supertype:01 supertype:01 oo-languages:01 abort:01 oo-languages:01 downcasting:01 subtyping:01 subtyping:01 runtime:01 downcast:01 downcast:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Reposted from comp.lang.ml:
+
+Matthias Kretschmer <mccratch@gmx.net> writes:
+
+> Roy Patrick Tan schrieb:
+>
+> > I'm trying to learn about ocaml's object-oriented features. It seems
+> > like you can coerce an object of one type to a supertype, but not from
+> > a supertype to a subtype. But what if I need to recover the original
+> > type?
+> 
+> I am a bit curious why it is that unsafe that it is completely 
+> forbidden. Of course type-checks can't be done at elaboration time and 
+> have to be postponed to the evaluation time, but most other OO-languages 
+> just implement this and if it is impossible, they raise an exception or 
+> abort the program. At least something like Oberon's WITH-statement would 
+> sometimes be very handy.
+
+There are two important differences between ocaml and other
+OO-languages that have downcasting.
+
+- inheritance is not subtyping. The subtyping relation being
+  structural, a full fledge typecast would not only require to keep
+  type information at runtime, but to embark a large part of the
+  compiler to check subtyping. This might also be incredibly slow.
+
+  As a result, downcast is only reasonable when we have both
+  inheritance and subtyping. You're suddenly losing a large part of
+  the language.
+
+  Worse, even if you have a module interface
+     class b :
+       object
+         inherit a
+         ....
+       end
+  in ocaml this does _not_ mean that b inherits from a, just that it
+  has at least a's methods and fields.
+  So the semantics of downcast would not allow abstraction.
+
+- classes may have type parameters. Assume a situation like
+    class ['a] a = object ... end
+  Then we cannot downcast any runtime object to "a", because we don't
+  know what is its type parameter. Again, downcast would not mix well
+  with other features of the language.
+
+So, while this is somehow unfortunate, there is no downcast in ocaml.
+
+There are various ways to simulate it, but at first this is a bit
+confusing for people used to languages with reflection.
+
+> On the other hand, one can overcome this by using sum-types: e.g. You 
+> know about button widgets and label widgets. Of course there can be 
+> other widgets, so we have 3 different types to distinguish:
+> - buttons
+> - labels
+> - others
+> =>
+> type mywidget = Button of button_widget
+>                | Label of label_widget
+>                | Other of widget
+
+This is indeed the standard way to do it, as it mixes best with a
+functional programming language.
+
+> In some circumstances this is nice, because you can simply use pattern 
+> matching to extract the type you want. On the other hand, when defining 
+> this type you have to know excactly what types you want to handle. So it 
+> might get very ugly and clumsy.
+
+Phrased this way, this sounds like you have no way to modify the above
+type when you need to add a new subtype.
+The straightforward thing to do is to use your editor and add a new
+case to the above list. Then the compiler will tell you all the places
+you need to modify to take this new case into consideration --
+something most OO compilers wouldn't bother to tell you: they would
+force you to have a default case, which may be relevant or not, and
+you would only discover this at runtime.
+
+For the more special cases where you can't modify the original code,
+there are still various ways to simulate downcast, from keeping
+objects in hashtables to advanced uses of parametric polymorphism.
+
+Just for fun, here is an example of the second approach:
+
+class virtual ['a] widget = object
+  method virtual raw : 'a
+end
+
+class ['a] button = object (self)
+  inherit ['a] widget
+  method raw = `Button self
+  method press = prerr_endline "pressed"
+end
+
+class ['a] label = object (self)
+  inherit ['a] widget
+  method raw = `Label self
+  val mutable text = ""
+  method set_text s = text <- s
+end
+
+let l = [(new button :> _ widget); (new label :> _ widget)]
+
+let f = function
+    `Button b -> b#press
+  | `Label l -> l#set_text "Hello" 
+
+let test () =
+  List.iter (fun o -> f o#raw) l
+
+Such a programming pattern lets you use downcasting in a refined way,
+without any language support. It even avoids the first limitation I
+described above (label need not really inherit from widget). But the
+fact you must keep 'a polymorphic makes it advanced.
+
+Jacques Garrigue
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

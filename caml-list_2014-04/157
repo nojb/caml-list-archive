@@ -1,0 +1,169 @@
+Return-Path: <romain@cryptosense.com>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 0F9067F71A
+	for <caml-list@sympa.inria.fr>; Tue, 22 Apr 2014 10:03:18 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  romain@cryptosense.com) identity=pra; client-ip=93.93.130.6;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="romain@cryptosense.com";
+  x-sender="romain@cryptosense.com";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  romain@cryptosense.com) identity=mailfrom;
+  client-ip=93.93.130.6;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="romain@cryptosense.com";
+  x-sender="romain@cryptosense.com";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@balrog.mythic-beasts.com) identity=helo;
+  client-ip=93.93.130.6;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="romain@cryptosense.com";
+  x-sender="postmaster@balrog.mythic-beasts.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqMBAAsiVlNdXYIGnGdsb2JhbABZxTKEJRYOAQEBAQEGDQkJFCiCU1E9FhgDAgECAUsNCAKIQZl7sj4XkxUBA59Jjyw
+X-IPAS-Result: AqMBAAsiVlNdXYIGnGdsb2JhbABZxTKEJRYOAQEBAQEGDQkJFCiCU1E9FhgDAgECAUsNCAKIQZl7sj4XkxUBA59Jjyw
+X-IronPort-AV: E=Sophos;i="4.97,902,1389740400"; 
+   d="scan'208";a="58206236"
+Received: from balrog.mythic-beasts.com ([93.93.130.6])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES128-SHA; 22 Apr 2014 10:03:05 +0200
+Received: from [194.254.61.161] (port=11705 helo=[10.1.202.10])
+	by balrog.mythic-beasts.com with esmtpsa (TLS1.0:DHE_RSA_AES_128_CBC_SHA1:128)
+	(Exim 4.80)
+	(envelope-from <romain@cryptosense.com>)
+	id 1WcVfJ-0005DC-9Z
+	for caml-list@inria.fr; Tue, 22 Apr 2014 09:03:03 +0100
+Message-ID: <5356225B.1090305@cryptosense.com>
+Date: Tue, 22 Apr 2014 10:03:39 +0200
+From: Romain Bardou <romain@cryptosense.com>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:24.0) Gecko/20100101 Icedove/24.4.0
+MIME-Version: 1.0
+To: Ocaml Mailing List <caml-list@inria.fr>
+X-Enigmail-Version: 1.6
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-BlackCat-Spam-Score: -28
+X-Mythic-Debug: Threshold =  On = 
+X-Validation-by: romain@cryptosense.com
+Subject: [Caml-list] Obj.magic for polymorphic identifiers
+
+Hello,
+
+I'm considering using Obj.magic and as the type-checker can no longer
+ensure type safety, I decided to come here for advice.
+
+I want to implement the trick with GADTs where you test equality of
+unique identifiers, and if they match this adds an equality constraint
+on types. I want this code to be small and well abstracted in a module
+so that if this module is safe, then using this module cannot cause a
+seg fault.
+
+Here is the signature of my module:
+
+(************************************************************************)
+(** Polymorphic identifiers. *)
+
+(** The type of identifiers associated to type ['a]. *)
+type 'a t
+
+(** Make a new, fresh identifier.
+    This is the only way to obtain a value of type [t]. *)
+val fresh: unit -> 'a t
+
+(** Type constraint which is conditioned on identifier equality. *)
+type (_, _) equal =
+  | Equal: ('a, 'a) equal
+  | Different: ('a, 'b) equal
+
+(** Equality predicate. *)
+val equal: 'a t -> 'b t -> ('a, 'b) equal
+
+(** Convert an identifier to an integer.
+    The integer is guaranteed to be unique for each call to {!fresh}. *)
+val to_int: 'a t -> int
+(************************************************************************)
+
+and here is the implementation:
+
+(************************************************************************)
+type 'a t = int
+
+let fresh =
+  let counter = ref (-1) in
+  fun () ->
+    incr counter;
+    !counter
+
+type (_, _) equal =
+  | Equal: ('a, 'a) equal
+  | Different: ('a, 'b) equal
+
+let equal (type a) (type b) (a: a t) (b: b t): (a, b) equal =
+  if a = b then
+    (Obj.magic (Equal: (a, a) equal): (a, b) equal)
+  else
+    Different
+
+let to_int x =
+  x
+(************************************************************************)
+
+Finally, here is a test program:
+
+(************************************************************************)
+open Polid
+
+let () =
+
+  let x = fresh () in
+  let y = fresh () in
+
+  let eq (type a) (type b) (t: a t) (u: b t) (a: a) (b: b) =
+    match equal t u with
+      | Equal ->
+          if a = b then "true" else "false"
+      | Different ->
+          "false"
+  in
+
+  print_endline (eq x y 5 "salut"); (* false *)
+  print_endline (eq x x 5 5); (* true *)
+  print_endline (eq x x 5 9); (* false *)
+  print_endline (eq y y "test" "salut"); (* false *)
+  print_endline (eq y y "test" "test"); (* true *)
+  print_endline (eq y x "salut" 5); (* false *)
+  (* print_endline (eq x x 5 "salut"); (\* type error *\) *)
+  (* print_endline (eq y y "salut" 5); (\* type error *\) *)
+
+  ()
+(************************************************************************)
+
+It relies heavily on the fact that "fresh ()" cannot be generalized as
+'a t is abstract.
+
+A typical use case is as follows: I have two heterogeneous association
+lists (using GADTs for existential types). As I iterate on one of those
+lists, I need to find the corresponding item in the other list. As I
+unpack the existential, the type-checker cannot prove that the
+existential types are equal, hence the need for a runtime check (a call
+to Polid.equal).
+
+Can you find any reason why this would not be safe, or any better way to
+implement this?
+
+Thank you,
+
+-- 
+Romain Bardou
+-- 
+Romain Bardou
+Cryptosense
+96bis boulevard Raspail, 75006 Paris, France
++33 (0)9 72 42 35 31

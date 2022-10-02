@@ -1,0 +1,99 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id C4E44BBAF
+	for <caml-list@yquem.inria.fr>; Sat, 17 Jul 2010 17:52:47 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhMDADNvQUzZSMDdkWdsb2JhbACfbxUBAQEBCQsKBxEDH78qhSUE
+X-IronPort-AV: E=Sophos;i="4.55,219,1278280800"; 
+   d="scan'208";a="54388409"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 17 Jul 2010 17:52:42 +0200
+Received:  from smtp04.web.de  ( [172.20.0.225])
+	by fmmailgate01.web.de (Postfix) with ESMTP id EC8CC164734D7;
+	Sat, 17 Jul 2010 17:52:41 +0200 (CEST)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp04.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #4)
+	id 1Oa9gv-0000JJ-00; Sat, 17 Jul 2010 17:52:41 +0200
+Received: from mrvn by frosties.localdomain with local (Exim 4.72)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1Oa9gu-0007zV-SH; Sat, 17 Jul 2010 17:52:41 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Romain Beauxis <toots@rastageeks.org>
+Cc: caml-list@yquem.inria.fr,
+	Goswin von Brederlow <goswin-v-b@web.de>
+Subject: Re: [Caml-list] Smart ways to implement worker threads
+References: <87sk3mcaeq.fsf@frosties.localdomain>
+	<87hbjy77vk.fsf@frosties.localdomain>
+	<201007171020.58902.toots@rastageeks.org>
+Date: Sat, 17 Jul 2010 17:52:40 +0200
+In-Reply-To: <201007171020.58902.toots@rastageeks.org> (Romain Beauxis's
+	message of "Sat, 17 Jul 2010 10:20:58 -0400")
+Message-ID: <87vd8eqf5j.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1+OrlByNuUHCtLBmoNzqVZLP7zAQ4mqmKiWOD++
+	iRWTsCL1ER4WowiTllbH6+0NemULwVhrU682Ux6CpNRdgdAXg4
+	k8SbPAMFo=
+X-Spam: no; 0.00; syscalls:01 sockets:01 mutexes:01 chunks:01 sockets:01 chunks:01 buffer:01 mutexes:01 waters:98 mfg:98 threads:01 threads:01 unix:01 unix:01 terminate:01 
+
+Romain Beauxis <toots@rastageeks.org> writes:
+
+> Le samedi 17 juillet 2010 05:52:31, Goswin von Brederlow a écrit :
+>> Now I have a queue that I can include in select. The take function can
+>> be used by the worker threads. The main thread can use either take_all
+>> or process to save on syscalls or stick with take to ensure the queue
+>> does not starve the other FDs.
+>> 
+>> Also I think I can use the EventFD to terminate a queue and wake up all
+>> listeners. Closing the EventFD should wake up any thread stuck in read
+>> and prevent any threads from becoming stuck in the future. Haven't
+>> tested that yet though.
+>
+> I don't see why you want to use EventFD and not Condition.wait/signal. In 
+> particular, Condition.broadcast does exactly the last thing you mention.
+
+Not quite. With a Condition.wait I can only wait on exactly one
+condition. With the EventFD I can use the Unix.file_descr together with
+other Unix.file_descr in Unix.select. That means I can wait for both new
+input to come in over the sockets or for results to become available in
+the queue with a single thread, which gets rid of quite some Mutexes.
+
+> Now, I don't understand why you asked for related modules and and the end 
+> discard all of them and post your own implementation. Your issue is not that 
+> complex you could have done that in the first place...
+
+I was fishing for solutions. There were some good ones and tanks for all
+the replies. They were not wasted. But none of them seem like a really
+good fit to the code as I have it in mind. Some reasons why that is so I
+only see now, after tasting the waters and testing things out.
+
+For example, and the reason why EventFD seem like the way to go NOW, I
+noticed that replies to requests are sometimes too large to be written
+out in a single go or simply come too fast to be written out without
+blocking. That means I have to write them out in multiple chunks and
+then sockets need to be protected so chunks from multiple replies don't
+get mixed together from different threads and so on.
+
+If I use a queue with EventFD instead of Condition.t then I can add the
+queue to the select loop and any thread can drop a reply job into that
+queue. The select thread will wake up, take the reply job, add the data
+to the sockets outgoing buffer and add the sockets FD to the select call
+and wait for it to be ready for writing. All without needing Mutexes to
+protect the socket or signals to wake up and restart the select since
+the select thread and only the select thread will be handling the
+sockets.
+
+MfG
+        Goswin
+
+PS: I still haven't 100% decided yet what the best solution is but
+EventFD seems to lead currently. So if anyone has other ideas keep them
+coming.
+

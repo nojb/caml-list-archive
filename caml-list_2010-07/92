@@ -1,0 +1,112 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id DA6D8BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 14 Jul 2010 18:09:51 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am0CALl+PUzZSMDqkWdsb2JhbACTJoxFFQEBAQEJCwoHEQMfwQOCYIJEBA
+X-IronPort-AV: E=Sophos;i="4.55,202,1278280800"; 
+   d="scan'208";a="55550262"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 14 Jul 2010 18:09:50 +0200
+Received:  from smtp08.web.de  ( [172.20.5.216])
+	by fmmailgate03.web.de (Postfix) with ESMTP id 359B515B4078A
+	for <caml-list@yquem.inria.fr>; Wed, 14 Jul 2010 18:09:50 +0200 (CEST)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp08.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #4)
+	id 1OZ4Ws-0006yr-00
+	for caml-list@yquem.inria.fr; Wed, 14 Jul 2010 18:09:50 +0200
+Received: from mrvn by frosties.localdomain with local (Exim 4.72)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1OZ4Wr-00045O-KV
+	for caml-list@yquem.inria.fr; Wed, 14 Jul 2010 18:09:49 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@yquem.inria.fr
+Subject: Smart ways to implement worker threads
+Date: Wed, 14 Jul 2010 18:09:49 +0200
+Message-ID: <87sk3mcaeq.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX18YuMFRHwvZwFqlX3N4fqiD1m6MU1h37RZZWgln
+	8OCo1X3QMdBxmInuwqgPaFNZIcsO/QG2k/mLWsO0tjcHG7K3ov
+	BdLcItAaI=
+X-Spam: no; 0.00; computes:01 bigarrays:01 parses:01 byte:01 overkill:01 signaling:98 mfg:98 threads:01 threads:01 unix:01 unix:01 inline:01 functions:01 minor:01 finalization:01 
+
+Hi,
+
+I'm writing a little programm that, besides some minor other stuff,
+computes a lot of blockwise checksums and blockwise Reed-Solomon
+codes. Both of these are done on BigArrays and in external C functions
+surounded by enter/leave_blocking_section. They would be ideal for doing
+multiple blocks in parallel, one per core.
+
+I'm probably not the first with such a problem, so what are the smart
+ways to implement this?
+
+I think it makes sense to start one thread per core at the start of the
+programm and keep them around till the end. They won't be needed all the
+time, or even most of the time, but when they are needed the responce
+time matters. Or is Thread.create overhead neglible nowadays?
+
+But then I can see multiple possibilities of the top of my head:
+
+1) Have all threads call call Unix.select. Whatever thread wakes up
+parses the incoming request, does the checksum or Reed-Solomon as
+needed, replies and goes back to select.
+
+Problem 1: One of the FDs is a socket accepting new connects. If one
+comes in the number of FDs to listen on changes and I need to signal all
+threads to refresh their FD lists for Unix.select.
+
+Problem 2: I have several global structures that will need locking
+against multiple threads altering them. Might even run the danger of
+deadlocks when structures are locked in different orders in different
+threads.
+
+
+2) Create pure worker threads that only do checksuming and Reed-Solomon
+codes. I create a queue of jobs protected by a Mutex.t and a Condition.t
+to signal worker threads when a job is added to the queue.
+
+Problem: The main thread will usualy be in a Unix.select call while the
+worker threads work. How does a worker thread signal the main thread
+that a job is done? Have a job_done FD and write 1 byte to it? Send a
+signal so the main thread aborts the Unix.select?
+
+Possible solution: The worker threads might be able to reply on their
+own when they are done without signaling the main thread. Not sure how
+that would work with error handling though.
+
+
+3) Like 2 but have an extra Input thread that runs Unix.select. Have two
+queues. The Input thread put incoming requests into the first queue. The
+main thread waits on the first queue and puts jobs for the worker
+threads in the second queue. The worker threads wait on the second queue
+and puts the request back into the first queue for finalization.
+
+
+4) Do some magic with Event.t?
+
+Problem: never used this and I could use a small example how to use
+this.
+
+
+5) Implement lock-free task steeling queues?
+
+Probably overkill for this and I think that would involve a fair bit of
+external C code with some inline asm, right?
+
+
+So far I think option 3 might be the simplest approach. At least I don't
+see any glaring problems with it.
+
+What do you think? Other Ideas? Ready-to-use modules for this?
+
+MfG
+        Goswin
+

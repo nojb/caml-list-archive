@@ -1,0 +1,319 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA01758; Thu, 29 Nov 2001 20:03:42 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA01771 for <caml-list@pauillac.inria.fr>; Thu, 29 Nov 2001 20:03:41 +0100 (MET)
+Received: from paille.inria.fr (paille.inria.fr [128.93.11.15])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id fATJ3eH04113
+	for <caml-list@inria.fr>; Thu, 29 Nov 2001 20:03:40 +0100 (MET)
+Received: (from hirschow@localhost)
+	by paille.inria.fr (8.11.6/8.11.6) id fATK40L30726;
+	Thu, 29 Nov 2001 21:04:00 +0100
+X-Authentication-Warning: paille.inria.fr: hirschow set sender to Tom.Hirschowitz@inria.fr using -f
+From: Tom Hirschowitz <Tom.Hirschowitz@inria.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15366.38064.51477.236909@paille.inria.fr>
+Date: Thu, 29 Nov 2001 21:04:00 +0100
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] limits on mutual recursion and modules?
+X-Mailer: VM 6.97 under Emacs 20.7.1
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+
+ > I'm interested, and I'm sure the rest of the list will be interested too.
+
+Allright, I'll try. 
+People who are not interested by type theory for recursive modules may stop 
+here.
+
+Warning
+-------
+I am far from understanding all the details of what I will
+write. If people are interested in understanding better, we can try.
+Anyway, I'll drop some questions here and there, and any hints are welcome.
+
+Preliminaries 1 : phase splitting
+---------------------------------
+In [1, 2, 3], the authors consider languages that are quite far from
+the concrete syntax, in the sense that type and value components of modules
+may always be separated, thanks to phase-splitting rules, and in the sense 
+that sub-modules are merged in the top level structure. 
+This was first done in [2], once for all.
+So when we try to understand what happens to a program like 
+
+module rec M (X : sig
+		module A : sig type t val f : t -> t end
+		module B : sig type t val g : t -> t end
+	      end) = struct
+  module A = struct 
+    type t = string
+    let f x = x ^ "!"
+  end
+  module B = struct
+    type t = int
+    let g n = (n + 1)
+  end
+end
+
+in their systems, we obtain something like
+
+fix (X : [ 'a : (Type * Type). (('a.1 -> 'a.1)
+                              * ('a.2 -> 'a.2)) ]) =
+[ <string, int>, 
+  (\x . x ^ "!",
+   \n . n + 1) ]
+
+where 'a represents the set of type components of the forwardly declared module X.
+
+Indeed a module is split into type components and value components, and is 
+therefore of the form 
+
+  M ::= s        (* identifier *) 
+      | [ c, e ] (* type constructor, expression *)
+
+while a signature is of the form 
+
+  S ::= [ 'a : K. sigma ] (* type variable 'a of a certain kind K
+                             plus a value type simga *)
+
+This has the advantage that forward dependencies of value components 
+on type components are no longer forward in their calculus.
+For example, see the following recursive signature :
+
+sig rec (X : sig module A : sig type t end
+                 module B : sig type t end) = sig
+  module A : sig
+    type t = ...
+    val f : X.B.t -> int
+  end
+  module B : sig
+    type t 
+end
+
+It becomes
+
+sig rec (s : [ 'a : (Type * Type) , nothing ]) = 
+[ 'b : (Type * Type) ,
+  (Fst s).2 -> int ]
+  ~~~~~~~~~
+(underlined the X.B.t)
+
+which is simply equivalent to 
+
+[ 'a : (Type * Type) ,
+  'a.2 -> int ]
+
+I agree that this simplifies problems, but it makes it hard 
+to imagine what they would look like in the real language, 
+and I ended up not really understanding what each version 
+exactly does. By the way, I think it is mentioned somewhere 
+that it was difficult to adapt the theory to non-split modules.
+
+Preliminaries 2 : equi-recursive type constructors
+--------------------------------------------------
+Somewhere at the base of [1, 3] lies the notion of equi-recursive
+type constructors. 
+This means that the grammar for type constructors has a "mu" entry
+of the form 
+
+  c ::= ... | mu('a). c
+
+and that in the equational theory on types, for all c (modulo some
+side-conditions), 
+
+    mu('a). c = c { (mu('a). c) / 'a }
+
+The problem is that this is an equality of the theory, not an
+isomorphism (ie for example, there are no roll and unroll operations
+needed). And this makes unification of type constructors undecidable
+(or nobody knows, maybe).
+
+Now, there are several attempts in [3] for systems with recursive modules.
+
+1. Opaque recursive modules, version CHP
+----------------------------------------
+The first system exposed in [1].
+The simplest one : add a construct fix (X : S) M to the module language and 
+type the body of the recursive module under the assumption that the forward
+variable is of the declared signature. The body must be of the same signature.
+The rule is basically (dropping the valuability conditions to avoid bad cycles)
+
+    s fresh   C[s : S] |- M : S    C |- S sig
+   ------------------------------------------
+            C |- fix(s : S).M : S
+
+Already here, there is a question. The authors mention that "making S opaque is not 
+an abstraction mechanism", but I honestly don't see why.
+
+Drawback : not very expressive. The list example is not well-typed : 
+
+module type LIST = sig 
+  type t 
+  val nil : t
+  val cons : int * t -> t
+end
+
+module rec List = fix (X : LIST)
+  type t = unit + int * X.t
+  let nil = inl ()
+  let cons (x, l) = inr (x, l)
+end
+
+In the body of List, we have cons : int * List.t -> t, 
+instead of the required int * t -> t.
+
+Of course, this is a bit of a false example, because one could write 
+the known List module directly, but it is theirs.
+The problem seems to be that X.t and t are not identified in the body.
+
+Finally, there seems to be an issue that [1] had not mentioned. The 
+system makes use of equi-recursive type constructors, which makes it
+probably undecidable, so the high-level language should not allow 
+the user to mention them, letting the system deal with them alone.
+This is quite unclear though.
+
+2. Transparent recursive modules version CHP
+--------------------------------------------
+
+For me this is the closest to Russo's system, although the authors 
+seem to consider that they are very different.
+
+There is a notion of recursively dependent signature (rds), which is 
+quite similar to Russo's. 
+This solves the List example by declaring 
+
+module type rec LIST' (X : sig type t end) = 
+  type t = unit + int * X.t
+  ...
+end
+
+module rec List (X : LIST') = 
+  type t = unit + int * X.t
+  ...
+end
+
+so that in the body, we have 
+ X.t = unit + int * X.t (because the rds is transparent).
+
+The user is not allowed to manipulate equi-recursive type constructors, 
+except within rds and fixpoint modules, which encapsulate recursivity.
+To compare this one with 1., 2. is clearly more expressive.
+However, both make use of equi-recursive type constructors, 
+so the real purpose of [3] seems to avoid this.
+
+3. Opaque fixpoint modules, version DHC
+---------------------------------------
+This is a hack to solve the List example.
+It consists in inferring for the body a signature that may be
+different from the forwardly declared one, provided that type 
+components have the same kind and that replacing forward references 
+in it with the corresponding ones in the forward yield an equivalent signature.
+Technically, the typing rule is 
+
+  'a, s fresh
+  C |- S = [ 'a : K. sigma1 ]
+  C[s : S] |- M : [ 'a : K. sigma2 ]
+  C['a : K] |- sigma1 = (sigma2 { 'a / (Fst s) })
+  -----------------------------------------------
+  C |- fix(s : S) M : S
+
+However, it does not solve similar examples where there are forward
+references to types.
+Indeed, we are not able to define a sufficiently precise signature.
+For example :
+
+module type EXPDEC = sig
+  module Exp : sig
+    type exp
+    val make_let : Dec.dec * exp -> exp
+  end
+  module Dec : sig
+    type dec
+    val make_val : identifier * Exp.exp -> dec
+  end
+end
+
+is not well-formed, because of the forward reference to Dec.dec, and
+there doesn't seem to be any way of specifying what we want here,
+still identifying the type of the first argument of make_let with
+Dec.dec. 
+
+4. Opaque RDS's
+---------------
+Yet another construct, which is defined 
+for using in 3. to deal with this problem.
+It is similar to first rds, except that in contrast, it must not 
+show to the outside any recursive dependency.
+The rule is 
+
+  'a, 'b fresh 
+  C |- K kind
+  C['b : K] |- S = [ 'a : K. sigma ]
+  ----------------------------------
+  C |- rec('b).S
+
+and the restriction on dependencies comes from the fact that 
+K must be well-formed under the ambient context, thus without forward
+references. Sor for the ExpDec example, one would declare the
+following opaque rds :
+
+rec(ExpDec). sig
+  module Exp : sig
+    type exp
+    val make_let : ExpDec.Dec.dec * exp -> exp
+  end
+  module Dec : sig
+    type dec
+    val make_val : identifier * Exp.exp -> dec
+  end
+end
+
+This way, it seems that both difficult examples would work.
+Remark :
+the recursive modules system consituted by opaque fixpoint modules and 
+opaque rds's only uses equi-recursiveness in typechecking fixpoint
+modules, not for rds's.
+
+5. Transparent fixed-point modules, version [3]
+-----------------------------------------------
+This is a subtle refinment of 2.
+In 2., both the rules for rds checking and fixpoint module typing 
+required equi-recursive type constructors, but by restricting fixpoint 
+modules to transparent signatures, the authors notice that the
+epxressiveness is retained, while equi-recursiveness is not necessary 
+for fixpoint module typing, and remains only for rds checking.
+So it amounts to localizing equi-recursiveness to transparent rds's.
+
+Conclusion
+----------
+
+This is the first part of the paper, and the conclusions are basically
+that the two systems one should really consider are
+- opaque fixpoint modules and opaque rds's and
+- transparent fixpoint modules and transparent rds's.
+However, the use of equi-recursiveness makes them not suitable for
+practical implementation, and the second part tries to deal with that.
+
+I did not read that second part yet. However, thanks to Brian who
+forced me to dive again into this terrible paper. I understood much better this
+time than before (imagine how it was)! Maybe, it will encourage me to
+read on.
+
+Questions 
+---------
+
+a. Why wouldn't Russo's extension suffer from equi-recursiveness too?
+(think the answer is in the second part somewhere)
+
+b. How exactly is this compatible with separate compilation (cf
+Russos's problems)?
+(there a section about that)
+
+[1] Crary, Harper, Puri. What is a recursive module?
+[2] Harper, Mitchell, Moggi. Higher-order modules and the phase distinction.
+[3] Dreyer, Harper, Crary. Toward a practical type theory for recursive modules.
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

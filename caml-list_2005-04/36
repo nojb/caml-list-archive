@@ -1,0 +1,97 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id D7632BC48
+	for <caml-list@yquem.inria.fr>; Mon,  4 Apr 2005 02:41:09 +0200 (CEST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j340f7qE019932
+	for <caml-list@yquem.inria.fr>; Mon, 4 Apr 2005 02:41:09 +0200
+Received: from localhost (suiren [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.1/8.13.1) with ESMTP id j340ewE0018450;
+	Mon, 4 Apr 2005 09:40:59 +0900 (JST)
+Date: Mon, 04 Apr 2005 09:40:49 +0900 (JST)
+Message-Id: <20050404.094049.35417841.garrigue@math.nagoya-u.ac.jp>
+To: alex@barettadeit.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Parser combinators
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <42501740.1040802@barettadeit.com>
+References: <50130.202.164.198.46.1112418604.squirrel@www.ivorykite.com>
+	<20050402.163851.88994843.garrigue@math.nagoya-u.ac.jp>
+	<42501740.1040802@barettadeit.com>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 42508D23.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 parser:01 combinators:01 baretta:01 corresponds:01 ocaml:01 parsers:01 parsers:01 parser:01 combinators:01 cmo:01 rec:01 concretely:01 parsing:01 expr:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+From: Alex Baretta <alex@barettadeit.com>
+> > Interestingly, your example corresponds exactly to the one in the
+> > ocaml tutorial, where it is solved using stream parsers.
+> > Stream parsers are a bit more involved than just writing yacc rules,
+> > but they give you more control on how to combine rules (you can write
+> > parser combinators.) And they are completely integrated in the
+> > language using camlp4.
+> 
+> Er.. Excuse me for sticking my nose into this, but I think I read 
+> something interesting. Parser combinators? What do you mean? I'm quite 
+> sure I have not seen any operators acting on stream parsers, at least if 
+> by stream parsers you mean the LL1 based on pa_op.cmo camlp4 module.
+
+The point is that you can define them yourself.
+For instance here is the star operator.
+
+let rec star ?(acc=[]) p = parser
+    [< x = p ; s >] -> star ~acc:(x::acc) p s
+  | [< >] -> List.rev acc
+
+More concretely, here is another version of expression parsing, using
+functionals. 
+
+type expr =
+    Num of int
+  | Var of string
+  | Plus of expr * expr
+  | Mult of expr * expr
+
+open Genlex
+
+let rec accumulate parse accu = parser
+  | [< e = parse accu; s >] -> accumulate parse e s
+  | [< >] -> accu
+(* val accumulate : ('a -> Genlex.token Stream.t -> 'a) ->
+                    'a -> Genlex.token Stream.t -> 'a *)
+let left_assoc parse op wrap =
+  let parse' accu =
+    parser [< 'Kwd k when k = op; s >] -> wrap accu (parse s) in
+  parser [< e1 = parse; e2 = accumulate parse' e1 >] -> e2
+(* val left_assoc : (Genlex.token Stream.t -> 'a) ->
+       string -> ('a -> 'a -> 'a) -> Genlex.token Stream.t -> 'a *)
+let rec parse_simple = parser
+  | [< 'Int n >] -> Num n
+  | [< 'Ident x >] -> Var x
+  | [< 'Kwd"("; e = parse_expr; 'Kwd")" >] -> e
+and parse_mult s =
+  left_assoc parse_simple "*" (fun e1 e2 -> Mult(e1,e2)) s
+and parse_expr s =
+  left_assoc parse_mult "+" (fun e1 e2 -> Plus(e1,e2)) s
+(* val parse_simple : Genlex.token Stream.t -> expr
+   val parse_mult : Genlex.token Stream.t -> expr
+   val parse_expr : Genlex.token Stream.t -> expr *)
+
+let lexer = Genlex.make_lexer ["+";"*";"(";")"]
+let parse_string s =
+  match lexer (Stream.of_string s) with parser
+    [< e = parse_expr; _ = Stream.empty >] -> e
+(* val parse_string : string -> expr *)
+
+I leave as exercise how to extend it to handle "-" and "/" in a
+generic way.
+
+Jacques Garrigue
+

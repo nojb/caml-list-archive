@@ -1,0 +1,214 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q46CrLp8031560
+	for <caml-list@sympa-roc.inria.fr>; Sun, 6 May 2012 14:53:21 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsoBAA9zpk/ZSMDqgGdsb2JhbABEsmsiAQELCwsbAySCOhN7NAEEKIgzARKZFZYVH4oLkR8Elw+EUo1K
+X-IronPort-AV: E=Sophos;i="4.75,538,1330902000"; 
+   d="scan'208";a="156942909"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 06 May 2012 14:53:15 +0200
+Received: from moweb001.kundenserver.de (moweb001.kundenserver.de [172.19.20.114])
+	by fmmailgate03.web.de (Postfix) with ESMTP id 6248A1B4631DD
+	for <caml-list@inria.fr>; Sun,  6 May 2012 14:53:15 +0200 (CEST)
+Received: from frosties.localnet ([95.208.118.96]) by smtp.web.de (mrweb002)
+ with ESMTPA (Nemesis) id 0MXpqx-1SciXk106B-00Wpn8; Sun, 06 May 2012 14:53:15
+ +0200
+Received: from mrvn by frosties.localnet with local (Exim 4.77)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1SR0xe-00009V-1n
+	for caml-list@inria.fr; Sun, 06 May 2012 14:53:14 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Date: Sun, 06 May 2012 14:53:14 +0200
+Message-ID: <87sjfd31z9.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Provags-ID:  V02:K0:Ok/464xabS9FYM+HA3xf7kSe8eJwXiHlyEOga7dFLYR
+ yORivv3egEudg5tSQz01Pxttc3o66VSO55KrcZua99NVfI8oz7
+ BRan7cxDl07hp+vb4yXzgagJYxeqzQoCATtGOHMC0OdtQJYWqX
+ oA3p5duhRwIKMzsXSkYt/Lxn+WyiyjHYeQwuGaJlSuw8VXMXuW
+ C9udQTDJwHbxbHOnWmrzA==
+Subject: [Caml-list] Implementation for a (nearly) typesafe shallow option type and a compiler bug?
+
+Hi,
+
+as mentioned earlier I wanted to have a
+
+    type 'a shallow = NULL | 'a
+
+that is like an 'a option but without the indirection.
+
+The first idea was that no ocaml value can be the C NULL pointer (usualy
+all bits set to 0) and the C NULL pointer points outside the ocaml heap
+so the GC is fine with that too. So NULL could be encoded as C NULL
+pointer and 'a used as is.
+
+First problem is that this does not work for an 'a shallow shallow. And
+there is no way to constrain 'a to not be a 'b shallow in the type
+definition.
+
+Second problem is that someone else might define a 'a shallow2 type with
+the same idea and 'a shallow2 shallow would also not work. And with
+abstract types it would be impossible to test for that even if ocaml
+would allow negative constraints.
+
+
+The common problem here is that NULL is not unique for each type. So I
+thought of a way to make it unique. What I came up with is using a 
+functor to create a unique NULL value for each instance. Source code at
+the end.
+
+Output:
+NULL -> None
+Some 5 -> Some 5
+NULL -> None
+Some NULL -> Some None
+Some Some 5 -> Some Some 5
+1 2 3 4 
+a b c d 
+NULL -> Some 70221466564508
+
+As you can see from the output this solves the problem of 'a shallow
+shallow and would also solve the 'a shallow2 shallow case.
+
+But in the last line a new problem appears. Each instance of the functor
+has a unique NULL element. But instances of the functor with the same
+type are compatible. So an IntShallow2.t can be used instead of an
+IntShallow.t but then the NULL does not match.
+
+To me this looks like a bug in ocaml because the resulting type of the
+functor application does not match the type I specified for the functor:
+
+  module type SHALLOW =
+    sig
+      type -'a t
+      val null : 'a t
+      val make : 'a -> 'a t
+      val as_option : 'a t -> 'a option
+    end
+  module Make : functor (Type : TYPE) -> SHALLOW
+
+module IntShallow2 :
+  sig
+    type 'a t = 'a Shallow.Make(Int).t
+    val null : 'a t
+    val make : 'a -> 'a t
+    val as_option : 'a t -> 'a option
+  end
+
+The type I specified has 'a t abstract while the IntShallow2 has the
+type 'a t more concret.
+
+Restricting the type to what it should already be results in the correct
+error:
+
+module IntShallow2 = (Shallow.Make(Int) : Shallow.SHALLOW)
+let () =
+  Printf.printf "NULL -> %s\n" (to_string (IntShallow2.null))
+
+File "shallow.ml", line 91, characters 42-60:
+Error: This expression has type 'a IntShallow2.t
+       but an expression was expected of type
+         int IntShallow.t = int Shallow.Make(Int).t
+
+Why is that?
+
+MfG
+        Goswin
+
+======================================================================
+module Shallow : sig
+  module type TYPE = sig type 'a t end
+  module type SHALLOW =
+    sig
+      type -'a t
+      val null : 'a t
+      val make : 'a -> 'a t
+      val as_option : 'a t -> 'a option
+    end
+  module type SHALLOWFUNCTOR = functor (Type : TYPE) -> SHALLOW
+  module Make : functor (Type : TYPE) -> SHALLOW
+end = struct
+  module type TYPE = sig type 'a t end
+  module type SHALLOW =
+    sig
+      type -'a t
+      val null : 'a t
+      val make : 'a -> 'a t
+      val as_option : 'a t -> 'a option
+    end
+  module type SHALLOWFUNCTOR = functor (Type : TYPE) -> SHALLOW
+
+  module Make_intern =
+    functor (Type : TYPE) ->
+      struct
+	type -'a t
+	(* Dummy object unique to the type *)
+	let null = Obj.magic (ref 0)
+	let make x = Obj.magic x
+	let as_option x = if x == null then None else Some (Obj.magic x)
+      end
+  module Make = (Make_intern :  functor (Type : TYPE) -> SHALLOW)
+end
+
+module Int = struct type 'a t = int end
+  
+module IntShallow = Shallow.Make(Int)
+module IntShallowShallow = Shallow.Make(IntShallow)
+
+let to_string x =
+  match IntShallow.as_option x with
+    | None -> "None"
+    | Some x -> Printf.sprintf "Some %d" x
+
+let to_string2 x =
+  match IntShallowShallow.as_option x with
+    | None -> "None"
+    | Some x -> Printf.sprintf "Some %s" (to_string x)
+
+module List = struct
+  module Item = struct
+    type 'a t = 'a
+  end
+
+  module Shallow = Shallow.Make(Item)
+
+  type 'a item = { mutable next : 'a list; data : 'a; }
+  and 'a list = 'a item Shallow.t
+
+  let null = Shallow.null
+  let cons x y = Shallow.make { next = y; data = x; }
+  let rec iter fn x =
+    match Shallow.as_option x with
+      | None -> ()
+      | Some { next; data; } -> fn data; iter fn next
+end
+
+let () =
+  Printf.printf "NULL -> %s\n" (to_string (IntShallow.null));
+  Printf.printf "Some 5 -> %s\n" (to_string (IntShallow.make 5));
+  Printf.printf "NULL -> %s\n" (to_string2 (IntShallowShallow.null));
+  Printf.printf "Some NULL -> %s\n"
+    (to_string2 (IntShallowShallow.make IntShallow.null));
+  Printf.printf "Some Some 5 -> %s\n"
+    (to_string2 (IntShallowShallow.make (IntShallow.make 5)));
+  let x = List.null in
+  let x = List.cons 4 x in
+  let x = List.cons 3 x in
+  let x = List.cons 2 x in
+  let x = List.cons 1 x in
+  List.iter (Printf.printf "%d ") x;
+  print_newline ();
+  let y = List.null in
+  let y = List.cons "d" y in
+  let y = List.cons "c" y in
+  let y = List.cons "b" y in
+  let y = List.cons "a" y in
+  List.iter (Printf.printf "%s ") y;
+  print_newline ()
+
+module IntShallow2 = Shallow.Make(Int)
+
+let () =
+  Printf.printf "NULL -> %s\n" (to_string (IntShallow2.null))

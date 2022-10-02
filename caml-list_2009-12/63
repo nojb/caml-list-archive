@@ -1,0 +1,199 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 3D8B6BC37
+	for <caml-list@yquem.inria.fr>; Wed,  9 Dec 2009 19:47:45 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgECAPt+H0tV2gB5h2dsb2JhbACEJpc6AQEBCgsIBxWrHJAjgS+CKlMEiRc
+X-IronPort-AV: E=Sophos;i="4.47,369,1257116400"; 
+   d="scan'208";a="51814612"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 09 Dec 2009 19:47:44 +0100
+Received: from [192.168.0.12] (unknown [85.218.92.99])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id CDC64834431;
+	Wed,  9 Dec 2009 19:47:36 +0100 (CET)
+Message-ID: <4B1FF0DD.903@citycable.ch>
+Date: Wed, 09 Dec 2009 19:47:57 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20090707)
+MIME-Version: 1.0
+To: =?UTF-8?B?RGFuaWVsIELDvG56bGk=?= <daniel.buenzli@erratique.ch>
+Cc: caml-list@inria.fr
+Subject: Re: Recursion on React.events.
+References: <4B1F0E3A.3040907@citycable.ch> <91a3da520912082025mf4aba28o2b36884b3b001831@mail.gmail.com>
+In-Reply-To: <91a3da520912082025mf4aba28o2b36884b3b001831@mail.gmail.com>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: quoted-printable
+X-Spam: no; 0.00; guillaume:01 guillaume:01 recursion:01 recursive:01 recursive:01 scheduler:01 scheduler:01 buffer:01 buffer:01 reschedule:98 reschedule:98 unix:01 unix:01 rec:01 rec:01 
+
+Daniel B=C3=BCnzli a =C3=A9crit :
+>>> let rec regular_schedule start_time period =3D
+>>>  React.E.switch React.E.never begin React.E.map
+>>>    begin fun () -> regular_schedule (Calendar.add (Calendar.now ())
+>>> period) period end
+>>>    begin schedule start_time end
+>>>  end
+>=20
+> Anyway don't do any recursive tricks unless you really know what you
+> are doing (which you don't seem). You are asking for trouble (infinite
+> loops and puzzling behaviour more precisely). The ONLY right way to
+> define recursive events and signals is to use the fixed point
+> operators. So in your case something like this should work :
+>=20
+> let regular_schedule start_time period =3D
+>   let define tick =3D (* tick is the value of tick' dt times ago *)
+>     let tick' =3D
+>       let reschedule () =3D Calendar.add (Calendar.now ()) period in
+>       React.E.switch (schedule start_time) (E.map reschedule tick)
+>     in
+>     tick', tick'
+>   in
+>   E.fix define
+
+Thanks. This works perfectly! (I mean, with the tweak you mentioned in=20
+your second email).
+
+I still do not understand why there's the couple (tick', tick') and not=20
+simply tick', nevertheless...
+
+> Note that in general I would avoid what you are doing altoghether by
+> providing regular_schedule as a primitive as you do for schedule. If
+> you are using too much ugly side effects and tricks in your event
+> definitions then you loose all the benefits of frp.
+
+Well, I do not fully agree. While I agree that keeping code clear and=20
+non-confusing is the best option, I do not really know if I can avoiding=20
+doing such magic.
+
+My use case is the following: I'm writing a scheduler that I hope to=20
+extend smartly over time. It's a scheduler that is based on Calendar,=20
+and that runs in a Lwt.thread. Source code is given below, at the end of=20
+this email. There's a schedule function that somehow registers a task in=20
+the scheduler, and returns a React.E.event on which code using the=20
+library can hook to.
+
+Making a regular_schedule in the way you suggested proved to be quite=20
+difficult without changing the code of the scheduler itself, which I'd=20
+like to keep clean and small.
+
+Moreover, I also aim to make a auto_schedule function that does some=20
+rescheduling at with a delay that is know at the time of rescheduling.
+
+Generally speaking, I want to keep the scheduler small and clean, and=20
+give flexibility to the user of the scheduling library. So providing=20
+regular_schedule as a primitive does not seem to me to fit this perspecti=
+ve.
+
+> Best,
+>=20
+> Daniel
+>=20
+> P.S. You may want to have a look at rtime : http://erratique.ch/softwar=
+e/rtime
+
+Cool. One criticism and one question.
+
+Criticism: it doesn't use Calendar, which really a cool library.
+
+Question: How well does Rtime interact with Lwt?
+
+I'll have a look at what I can do with it.
+
+Here's the code of the scheduler:
+
+> open Lwt
+> open CalendarLib
+>=20
+> type task =3D {
+>   schedule : Calendar.t;
+>   trigger  : unit -> unit; }
+>=20
+> let compare t1 t2 =3D
+>   let n =3D Calendar.Date.compare
+>     (Calendar.to_date t1.schedule)
+>     (Calendar.to_date t2.schedule) in
+>   if n =3D 0 then CalendarLib.Calendar.Time.compare
+>     (Calendar.to_time t1.schedule)
+>     (Calendar.to_time t2.schedule)
+>   else n
+>=20
+> let tasks : task list ref =3D ref []
+>
+> let register_new_task t =3D
+>   let rec aux =3D function | [] -> t::[] | hd::tl ->
+>     begin match compare hd t with
+>     | 1 -> t::hd::tl | _ -> hd::(aux tl) end
+>   in tasks :=3D aux !tasks
+>=20
+> let (read_control_fd, write_control_fd) =3D Lwt_unix.pipe ()
+>=20
+> let task_channel =3D ref None
+> let task_mutex =3D Lwt_mutex.create ()
+>=20
+> let _ =3D
+>   let rec receive_order =3D let buffer_command =3D " " in begin fun () =
+->
+>     match Unix.read (Lwt_unix.unix_file_descr read_control_fd) buffer_c=
+ommand 0 1 with
+>     | 1 -> begin match !task_channel with
+>            | Some new_task -> begin
+>                task_channel :=3D None;
+>                Lwt_mutex.unlock task_mutex;
+>                register_new_task new_task;
+>                loop () end
+>            | None -> assert false
+>            end
+>     | _ -> assert false end
+>   and loop () : unit Lwt.t =3D match !tasks with
+>     | [] -> Lwt_unix.wait_read read_control_fd >>=3D fun () -> receive_=
+order ()
+>     | hd::tl -> let float_delay =3D
+>         Calendar.Time.Second.to_float (
+>         Calendar.Time.Period.to_seconds (
+>         Calendar.Period.to_time (
+>         Calendar.sub hd.schedule (
+>         Calendar.now ())))) in
+>         begin match float_delay > 0. with
+>         | false -> tasks :=3D tl; hd.trigger (); loop ()
+>         | true -> Lwt.catch begin fun () ->
+>                     Lwt_unix.with_timeout float_delay begin function ()=
+ ->
+>                       Lwt_unix.wait_read read_control_fd >>=3D fun () -=
+>
+>                       receive_order () end
+>                   end begin function
+>                   | Lwt_unix.Timeout -> tasks :=3D tl; hd.trigger (); l=
+oop ()
+>                   | _ -> assert false
+>                   end end in
+>   loop ()
+>=20
+> let schedule date =3D
+>   let aux () =3D
+>     let (e, set_e) =3D React.E.create () in
+>     Lwt_mutex.lock task_mutex >>=3D fun () ->
+>     task_channel :=3D Some {schedule =3D date; trigger =3D set_e;};
+>     Lwt_unix.write write_control_fd "X" 0 1 >>=3D function
+>     | 1 -> Lwt.return e | _ -> assert false in
+>   Lwt_main.run (aux ())
+>=20
+> let regular_schedule start period =3D
+>   (* The let define tick in E.fix define is the proper way to
+>      implement recursive events. define has type React.event ->
+>      (React.event * React.event) and its argument is a placeholder
+>      for the event at time t-dt. *)
+>   let define tick =3D
+>     let tick' =3D React.E.switch (schedule start) (React.E.map begin fu=
+nction () ->
+>       schedule (Calendar.add (Calendar.now ()) period) end tick) in
+>     tick', tick'
+>   in
+>   React.E.fix define
+
+--=20
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

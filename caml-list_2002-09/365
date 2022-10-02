@@ -1,0 +1,141 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA08608; Thu, 26 Sep 2002 15:33:08 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA08497 for caml-list@pauillac.inria.fr; Thu, 26 Sep 2002 15:33:07 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA00018 for <caml-list@pauillac.inria.fr>; Thu, 26 Sep 2002 11:01:03 +0200 (MET DST)
+Received: from swordfish.cs.caltech.edu (swordfish.cs.caltech.edu [131.215.44.124])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g8Q911D12330
+	for <caml-list@inria.fr>; Thu, 26 Sep 2002 11:01:02 +0200 (MET DST)
+Received: from orchestra.cs.caltech.edu (orchestra.cs.caltech.edu [131.215.44.20])
+	by swordfish.cs.caltech.edu (Postfix) with ESMTP id 9932BDF23D
+	for <caml-list@inria.fr>; Thu, 26 Sep 2002 02:01:00 -0700 (PDT)
+Received: (from mvanier@localhost)
+	by orchestra.cs.caltech.edu (8.11.6/8.9.3) id g8Q910t03459;
+	Thu, 26 Sep 2002 02:01:00 -0700
+Date: Thu, 26 Sep 2002 02:01:00 -0700
+Message-Id: <200209260901.g8Q910t03459@orchestra.cs.caltech.edu>
+X-Authentication-Warning: orchestra.cs.caltech.edu: mvanier set sender to mvanier@cs.caltech.edu using -f
+From: Michael Vanier <mvanier@cs.caltech.edu>
+To: caml-list@inria.fr
+Subject: [Caml-list] a design problem requiring downcasting? (long)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I've run into a design problem that I think requires downcasting, and I
+wanted to see if anyone on the list has any ideas about an alternative
+approach, since AFAIK downcasting is impossible in the current ocaml object
+system (at least without nasty Obj.magic hacks).  I'll try to simplify the
+problem as much as possible, but this is still pretty long.
+
+Here's the problem.  I'm working on the redesign of a large simulation system
+originally written in C.  It has all the problems that one always finds in
+software written in C: lots of bugs, memory leaks, crashes, etc. etc.  I
+would like to re-write this in a safe language, preferably ocaml (since it's
+my favorite language).  An alternative might be java, although I think ocaml
+would be significantly faster (not to mention more reliable and much more fun
+to program in).  C++ would also be a valid choice except that I find that I
+can't bear to work in languages without garbage collection anymore, and
+anyway, the type discipline of ocaml is a big attraction for me.
+
+It turns out that the design of the core simulator doesn't pose any real
+problems.  However, part of the simulation infrastructure is very difficult
+to achieve without having a way of downcasting (casting from a supertype to a
+subtype).  It can be done, but the design becomes extremely non-modular.  The
+issue is that these simulations can contain tens of thousands of simulation
+objects which can invoke method calls on each other.  These are actually
+binary method calls e.g.
+
+  obj1#my_method obj2
+
+where "obj2" has to be of a specific class type (in actuality, it will be
+an interface type).  These method calls are highly dependent on the
+specific types of the objects.  If you create the objects like this:
+
+  let obj1 = new class1 in
+  let obj2 = new class2 in
+  obj1#my_method obj2
+
+then everything works.  However, it is not feasible, when writing a
+simulation with this many objects, to keep unique identifiers to each object
+that you create.  Therefore, you need some kind of data structure to store
+objects after you create them.  For our purposes we can assume that there is
+a big master array of these objects.  I see two alternatives for the types of
+the array elements.
+
+1) All elements will be instances of subclasses of a base type "base".  The
+   array will have the type "base array".
+
+2) The array will be of type "anObject array", where anObject is a variant type
+   that can hold the type of any simulation object.
+
+With alternative (1), to do the method call above you would need downcasting
+e.g. in pseudo-ocaml:
+
+  let obj1 = array.(0) as class1 in
+  let obj2 = array.(1) as class2 in
+  obj1#my_method obj2
+
+with the cast raising an exception if it fails.  No problem.  With the
+variant type you would have:
+
+  let obj1 = array.(0) in
+  let obj2 = array.(1) in
+  match (obj1, obj2) with
+    (Class1 o1, Class2 o2) -> o1#my_method o2
+  | _ -> raise (Failure "bad")
+
+The problem is, every time that a new class is added you have to modify the
+variant type.  As if this wasn't bad enough, I envision that "my_method"'s
+argument is any class type which implements a particular interface.  So
+you'd really have to do this:
+
+  let obj1 = array.(0) in
+  let obj2 = array.(1) in
+  match obj1 with
+    Class1 o1 ->
+      match obj2 with
+        (* any class that implements the given interface *)
+        Class2 o 
+      | Class3 o
+      | ...
+      | ClassN o -> obj1#my_method o
+      | _ -> raise (Failure "bad")
+  | _ -> raise (Failure "bad")
+    
+This is getting pretty ugly.  Every time you define a new class which
+implements the interface you'd have to modify the above code.  A better
+alternative is to call a virtual method on obj1 e.g.
+
+  class class1 =  (* obj1's class *)
+    object
+      method my_method obj2 =  (* obj2 has the variant type *)
+        match obj2 with
+          Class2 o 
+        | Class3 o
+        | ...
+        | ClassN o -> obj1#my_method o
+        | _ -> raise (Failure "bad")
+    end
+
+This is still pretty horrible; for one thing, obj1 is a class type while obj2
+is a variant type.  If the array elements are of the variant type, how do you
+turn them into the class types?  You could have the array elements be a tuple
+of (variant type, superclass type) so you could use whichever form is more
+convenient, but that's pretty nasty too.
+
+Compared to this, downcasting looks very sweet.  Actually, I think what I
+really want is multimethods ;-)  Is there any way around this that I'm
+missing?
+
+Thanks,
+
+Mike
+
+
+
+
+  
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

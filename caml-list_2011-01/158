@@ -1,0 +1,95 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p0HFbco4026552
+	for <caml-list@sympa-roc.inria.fr>; Mon, 17 Jan 2011 16:37:38 +0100
+X-IronPort-AV: E=Sophos;i="4.60,333,1291590000"; 
+   d="scan'208";a="95636021"
+Received: from mp-57040.rocqadm.inria.fr ([128.93.57.40])
+  by mail1-relais-roc.national.inria.fr with ESMTP/TLS/AES128-SHA; 17 Jan 2011 16:37:33 +0100
+Mime-Version: 1.0 (Apple Message framework v1082)
+Content-Type: text/plain; charset=windows-1252
+From: xclerc <xavier.clerc@inria.fr>
+In-Reply-To: <AANLkTikznXV-ORo1P=ar49kAYnq7_nKygJvS--z4r7kY@mail.gmail.com>
+Date: Mon, 17 Jan 2011 16:37:33 +0100
+Cc: xclerc <xavier.clerc@inria.fr>, Caml List <caml-list@inria.fr>
+Message-Id: <0AA39519-6C34-4620-9CFA-A99A3EC217CA@inria.fr>
+References: <AANLkTikznXV-ORo1P=ar49kAYnq7_nKygJvS--z4r7kY@mail.gmail.com>
+To: Ashish Agarwal <agarwal1975@gmail.com>
+X-Mailer: Apple Mail (2.1082)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p0HFbco4026552
+Subject: Re: [Caml-list] printing an exception changes printed backtrace
+
+
+Le 14 janv. 2011 à 22:15, Ashish Agarwal a écrit :
+
+> I observe the following unexpected behavior:
+> 
+> --- a.ml ---
+> try
+>   … some code ...
+> with e ->
+> (*  Printf.eprintf "%s\n" (Printexc.to_string e); *)
+>   Printexc.print_backtrace Legacy.stderr
+> ------
+> 
+> Compiling as ocamlopt -g a.ml gives:
+> $ ./a.out
+> Raised at file "fool.ml", line 162, characters 13-22
+> Called from file "bar.ml", line 13, characters 5-56
+> Called from file "bar.ml", line 43, characters 4-63
+> 
+> Now this doesn't say which exception was raised, so I uncomment the commented line. I'm expecting the identical output, but with the exception printed first. However, I get:
+> 
+> $ ./a.out
+> Not_found
+> Raised at file "hashtbl.ml", line 93, characters 19-28
+> 
+> So it appears that printing an exception changes the backtrace. Is that possible?
+> 
+> Unfortunately, I cannot reproduce this behavior in a minimal example. The following script behaves as expected:
+
+It seems possible to reproduce the problem with the following source code:
+
+
+let custom_printer = true
+
+let () =
+  if custom_printer then
+    Printexc.register_printer
+      (function
+        | Not_found -> failwith "silently"
+        | _ -> None)
+
+let rec f () =
+  ignore (raise Not_found);
+  f ()
+
+let () =
+  try
+    f ()
+  with e ->
+    Printf.eprintf "%s\n%!" (Printexc.to_string e);
+    Printexc.print_backtrace stderr
+
+
+
+You will get different backtraces according to the value of "custom_printer".
+The underlying problem is that "Printexc.print_backtrace" prints the backtrace
+for the last exception raised... which can be one raised by "Printf.eprintf" or
+"Printexc.to_string", but locally caught and not exposed to the outside world.
+
+In the code sample above, an exception is raised by the register custom
+printer. By design of "Printexc.to_string", such exceptions are silently
+ignored... but change the value of the last raised exception (and thus its
+associated backtrace).
+
+Your experience of the backtrace actually vanishing may be an instance of
+the same problem, where it just happens that the code for the custom printer
+has not been compiled with the "-g" option.
+
+
+Hope this helps,
+
+Xavier Clerc
+
+

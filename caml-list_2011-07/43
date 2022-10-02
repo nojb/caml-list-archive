@@ -1,0 +1,221 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p663R2PG013179
+	for <caml-list@sympa-roc.inria.fr>; Wed, 6 Jul 2011 05:27:03 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AisDAPfUE06ACH+RgWdsb2JhbABThyyYRQGIMAEBFiYliHq6VYh6hjYEly6LWg
+X-IronPort-AV: E=Sophos;i="4.65,484,1304287200"; 
+   d="scan'208,217";a="112615147"
+Received: from router-304.cs.umd.edu (HELO egg.cs.umd.edu) ([128.8.127.145])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 06 Jul 2011 05:26:56 +0200
+Received: from [192.168.32.2] (pool-71-163-241-45.washdc.fios.verizon.net [71.163.241.45])
+	(Authenticated sender: khooyp)
+	by egg.cs.umd.edu (Postfix) with ESMTPSA id C7F5B681FED;
+	Tue,  5 Jul 2011 23:26:53 -0400 (EDT)
+From: Khoo Yit Phang <khooyp@cs.umd.edu>
+Content-Type: multipart/alternative; boundary=Apple-Mail-11-903130512
+Date: Tue, 5 Jul 2011 23:26:52 -0400
+Message-Id: <102E6342-F199-4A3C-B651-06795D14EB89@cs.umd.edu>
+Cc: Khoo Yit Phang <khooyp@cs.umd.edu>
+To: caml-list@yquem.inria.fr
+Mime-Version: 1.0 (Apple Message framework v1084)
+X-Mailer: Apple Mail (2.1084)
+X-Greylist: Sender succeeded SMTP AUTH, not delayed by milter-greylist-4.3.7 (egg.cs.umd.edu [0.0.0.0]); Tue, 05 Jul 2011 23:26:53 -0400 (EDT)
+X-CSD-MailScanner-ID: C7F5B681FED.AE6CD
+X-CSD-MailScanner: Found to be clean
+X-CSD-MailScanner-SpamCheck: not spam, SpamAssassin (not cached,
+	score=-49.99, required 5, autolearn=not spam, ALL_TRUSTED -50.00,
+	HTML_MESSAGE 0.01)
+X-CSD-MailScanner-From: khooyp@cs.umd.edu
+X-CSD-MailScanner-Watermark: 1310527614.00868@PH0LQKys+Md/7XE1zFSY/A
+Subject: [Caml-list] Race conditions with asynchronous exceptions in standard library
+
+
+--Apple-Mail-11-903130512
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain;
+	charset=us-ascii
+
+Hi all,
+
+I recently discovered a race condition when asynchronous exceptions, i.e., =
+exceptions raised by signal handlers, are used with the DelimCC library. Af=
+ter consulting with Oleg Kiselyov, he realized that the problem with asynch=
+ronous exceptions is far more pervasive than I had originally thought. For =
+example, the following program, using only the standard OCaml library, lead=
+s to a segfault:
+
+> let q =3D Queue.create ();;
+>=20
+> let () =3D
+>     let en =3D ref false in
+>     Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -> if !en then r=
+aise Exit));
+>     ignore (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval=3D1e-6; Un=
+ix.it_value=3D1e-3 });
+>     while true do
+>         try
+>             en :=3D true;
+>             Queue.add "a" q;
+>             en :=3D false;
+>             ignore (Queue.pop q)
+>         with Exit ->
+>             en :=3D false;
+>             if Queue.length q > 0 then prerr_endline "Non-empty";
+>             assert (let len =3D Queue.length q in len =3D 0 || len =3D 1);
+>             Queue.iter print_string q;
+>             Queue.clear q;
+>     done
+
+The problem occurs in Queue.ml:
+
+> let create () =3D {
+>   length =3D 0;
+>   tail =3D Obj.magic None
+> }
+>=20
+> let add x q =3D
+>   q.length <- q.length + 1;
+>   (* asynchronous exception occurs here *)
+>   ...
+
+When Queue.add is interrupted by an exception immediately after the length =
+is updated, the length becomes inconsistent with the tail, and subsequent o=
+perations such as Queue.iter will attempt to operate on Obj.magic None, lea=
+ding to the segfault.
+
+Probably much of the standard library is similarly susceptible to such race=
+s, particularly the parts that operate on mutable data. These mostly lead t=
+o less dramatic consequences than segfaults, but are still seemingly random=
+ errors such as corrupted data or violated invariants.
+
+For DelimCC, my solution was to provide a pair of C functions, mask_signals=
+ and unmask_signals, to bracket operations that are unsafe under asynchrono=
+us exceptions, using sigprocmask to suppress signal handling between them. =
+However, since this requires access to OCaml's signal handling internals (c=
+aml_process_pending_signals and caml_signals_are_pending) to flush pending =
+signals, it would be great to have mask_signals and unmask_signals or somet=
+hing similar in the standard library, so as to make it easier to develop li=
+braries that are safe under asynchronous exceptions. (For reference, Haskel=
+l has seen this and other issues with asynchronous exception and implemente=
+d a similar solution, see http://hackage.haskell.org/trac/ghc/ticket/1036.)
+
+Another option would be to simply warn against or disallow signal handlers =
+that raise exceptions, but that seems less useful, e.g., it would make it h=
+ard to interrupt a long-running library function with a timeout.
+
+We look forward to hearing what the official fix or guideline for handling =
+asynchronous exception will be, for the standard library, third-party libra=
+ries, as well as applications.
+
+
+Thank you,
+
+Yit
+July 5, 2011=
+
+--Apple-Mail-11-903130512
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html;
+	charset=us-ascii
+
+<html><head></head><body style=3D"word-wrap: break-word; -webkit-nbsp-mode:=
+ space; -webkit-line-break: after-white-space; ">Hi all,<div><br></div><div=
+>I recently discovered a race condition when asynchronous exceptions, i.e.,=
+ exceptions raised by signal handlers, are used with the DelimCC library. A=
+fter consulting with Oleg Kiselyov, he realized that the problem with async=
+hronous exceptions is far more pervasive than I had originally thought. For=
+ example, the following program, using only the standard OCaml library, lea=
+ds to a segfault:</div><div><br></div><blockquote class=3D"webkit-indent-bl=
+ockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></block=
+quote><blockquote type=3D"cite">let q =3D Queue.create ();;<br><blockquote =
+class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; border: non=
+e; padding: 0px;"></blockquote><br><blockquote class=3D"webkit-indent-block=
+quote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></blockquo=
+te>let () =3D<br><blockquote class=3D"webkit-indent-blockquote" style=3D"ma=
+rgin: 0 0 0 40px; border: none; padding: 0px;"></blockquote>&nbsp;&nbsp; &n=
+bsp;let en =3D ref false in<br><blockquote class=3D"webkit-indent-blockquot=
+e" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></blockquote>&=
+nbsp;&nbsp; &nbsp;Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -&gt=
+; if !en then raise Exit));<br><blockquote class=3D"webkit-indent-blockquot=
+e" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></blockquote>&=
+nbsp;&nbsp; &nbsp;ignore (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interva=
+l=3D1e-6; Unix.it_value=3D1e-3 });<br><blockquote class=3D"webkit-indent-bl=
+ockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></block=
+quote>&nbsp;&nbsp; &nbsp;while true do<br><blockquote class=3D"webkit-inden=
+t-blockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></b=
+lockquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp;try<br><blockquote class=3D"webk=
+it-indent-blockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0=
+px;"></blockquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;en :=3D tr=
+ue;<br><blockquote class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 =
+0 40px; border: none; padding: 0px;"></blockquote>&nbsp;&nbsp; &nbsp; &nbsp=
+; &nbsp; &nbsp; &nbsp;Queue.add "a" q;<br><blockquote class=3D"webkit-inden=
+t-blockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></b=
+lockquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;en :=3D false;<br>=
+<blockquote class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px;=
+ border: none; padding: 0px;"></blockquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp=
+; &nbsp; &nbsp;ignore (Queue.pop q)<br><blockquote class=3D"webkit-indent-b=
+lockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></bloc=
+kquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp;with Exit -&gt;<br><blockquote clas=
+s=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; border: none; p=
+adding: 0px;"></blockquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e=
+n :=3D false;<br><blockquote class=3D"webkit-indent-blockquote" style=3D"ma=
+rgin: 0 0 0 40px; border: none; padding: 0px;"></blockquote>&nbsp;&nbsp; &n=
+bsp; &nbsp; &nbsp; &nbsp; &nbsp;if Queue.length q &gt; 0 then prerr_endline=
+ "Non-empty";<br><blockquote class=3D"webkit-indent-blockquote" style=3D"ma=
+rgin: 0 0 0 40px; border: none; padding: 0px;"></blockquote>&nbsp;&nbsp; &n=
+bsp; &nbsp; &nbsp; &nbsp; &nbsp;assert (let len =3D Queue.length q in len =
+=3D 0 || len =3D 1);<br><blockquote class=3D"webkit-indent-blockquote" styl=
+e=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></blockquote>&nbsp;&n=
+bsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;Queue.iter print_string q;<br><block=
+quote class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; borde=
+r: none; padding: 0px;"></blockquote>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbs=
+p; &nbsp;Queue.clear q;<br><blockquote class=3D"webkit-indent-blockquote" s=
+tyle=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></blockquote><div>=
+&nbsp;&nbsp; &nbsp;done</div></blockquote><div><br></div><div>The problem o=
+ccurs in Queue.ml:</div><div><br></div><blockquote class=3D"webkit-indent-b=
+lockquote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></bloc=
+kquote><blockquote type=3D"cite">let create () =3D {<br><blockquote class=
+=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; border: none; pa=
+dding: 0px;"></blockquote>&nbsp;&nbsp;length =3D 0;<br><blockquote class=3D=
+"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; border: none; paddi=
+ng: 0px;"></blockquote>&nbsp;&nbsp;tail =3D Obj.magic None<br><blockquote c=
+lass=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; border: none=
+; padding: 0px;"></blockquote>}<br><blockquote class=3D"webkit-indent-block=
+quote" style=3D"margin: 0 0 0 40px; border: none; padding: 0px;"></blockquo=
+te><br><blockquote class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 =
+0 40px; border: none; padding: 0px;"></blockquote>let add x q =3D<br><block=
+quote class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0 40px; borde=
+r: none; padding: 0px;"></blockquote>&nbsp;&nbsp;q.length &lt;- q.length + =
+1;<br><blockquote class=3D"webkit-indent-blockquote" style=3D"margin: 0 0 0=
+ 40px; border: none; padding: 0px;"></blockquote>&nbsp;&nbsp;(* asynchronou=
+s exception occurs here *)<br><div><div>&nbsp;&nbsp;...</div></div></blockq=
+uote><div></div><div><div><br></div></div><div>When Queue.add is interrupte=
+d by an exception immediately after the length is updated, the length becom=
+es inconsistent with the tail, and subsequent operations such as Queue.iter=
+ will attempt to operate on&nbsp;Obj.magic None, leading to the segfault.</=
+div><div><br></div><div>Probably much of the standard library is similarly =
+susceptible to such races,&nbsp;particularly the parts that operate on muta=
+ble data. These&nbsp;mostly lead to less dramatic consequences than segfaul=
+ts, but are still seemingly random errors such as corrupted data or violate=
+d invariants.</div><div><br></div><div>For DelimCC, my solution was to prov=
+ide a pair of C functions, mask_signals and unmask_signals, to bracket oper=
+ations that are unsafe under asynchronous exceptions, using sigprocmask to =
+suppress signal handling between them. However, since this requires access =
+to OCaml's signal handling internals (caml_process_pending_signals and&nbsp=
+;caml_signals_are_pending) to flush pending signals, it would be great to h=
+ave mask_signals and unmask_signals or something similar in the standard li=
+brary, so as to make it easier to&nbsp;develop libraries that are safe unde=
+r&nbsp;asynchronous exceptions. (For reference, Haskell has seen this and o=
+ther issues with asynchronous exception and implemented a similar solution,=
+ see <a href=3D"http://hackage.haskell.org/trac/ghc/ticket">http://hackage.=
+haskell.org/trac/ghc/ticket</a>/1036.)</div><div><br></div><div>Another opt=
+ion would be to simply warn against or disallow signal handlers that raise =
+exceptions, but that seems less useful, e.g., it would make it hard to inte=
+rrupt a long-running library function with a timeout.</div><div><br></div><=
+div>We look forward to hearing what the official fix or guideline for handl=
+ing asynchronous exception will be, for the standard library, third-party l=
+ibraries, as well as applications.</div><div><br></div><div><br></div><div>=
+Thank you,</div><div><br></div><div>Yit</div><div>July 5, 2011</div></body>=
+</html>=
+
+--Apple-Mail-11-903130512--

@@ -1,0 +1,150 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q0BD0XoP007906
+	for <caml-list@sympa-roc.inria.fr>; Wed, 11 Jan 2012 14:00:33 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjgCACyHDU/UTWUHjWdsb2JhbABChQ+nWSIBAQEBCQkLCRIGIYFyAQEFIwQLAQUIAQE4DwsYAgIFIQICDwJGBg0IAQGHeKR7aoM3AY4fB4EviViBFppOjH8
+X-IronPort-AV: E=Sophos;i="4.71,493,1320620400"; 
+   d="scan'208";a="126420339"
+Received: from mx3.wp.pl ([212.77.101.7])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 11 Jan 2012 14:00:28 +0100
+Received: (wp-smtpd smtp.wp.pl 1052 invoked from network); 11 Jan 2012 14:00:25 +0100
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed; d=wp.pl; s=1024a;
+          t=1326286825; bh=RTX1hDCWjt492L8fij+klp0BtFbezT3Ge+W/SCp95p0=;
+          h=From:To:Subject;
+          b=d1KBRWzp3hf9TsRFZXddLSo5+d53YxEXXVP2d09Hj8cBZlZl9kaQhmaU8frBlh0GK
+           3II8DBRXde+jTVxS+vSN8rdkknmoRrXmqvt9vw+8/oiRK7vCrcz6E2KRH8d/Pydnzy
+           ca5+0ysy7YnvBE0xxcCEO8iJs74Ln2SxRMNQu4Ug=
+Received: from 18-161.2-0.pl (HELO [192.168.1.100]) (d0@[91.189.18.161])
+          (envelope-sender <d0@wp.pl>)
+          by smtp.wp.pl (WP-SMTPD) with AES256-SHA encrypted SMTP
+          for <caml-list@yquem.inria.fr>; 11 Jan 2012 14:00:25 +0100
+Message-ID: <4F0D87E8.90602@wp.pl>
+Date: Wed, 11 Jan 2012 14:00:24 +0100
+From: Dawid Toton <d0@wp.pl>
+User-Agent: Mozilla/5.0 (X11; Linux i686; rv:9.0) Gecko/20111220 Thunderbird/9.0
+MIME-Version: 1.0
+To: caml-list <caml-list@yquem.inria.fr>
+References: <1326209342.96423.YahooMailNeo@web111502.mail.gq1.yahoo.com> <1326214824.62249.YahooMailNeo@web111507.mail.gq1.yahoo.com> <E51C5B015DBD1348A1D85763337FB6D9C26218B6@Remus.metastack.local> <4F0D6913.4090207@wp.pl> <CAPFanBGAyytgavTmooUChTkEQwLY-Fv9igduas55RN12EPcvPw@mail.gmail.com>
+In-Reply-To: <CAPFanBGAyytgavTmooUChTkEQwLY-Fv9igduas55RN12EPcvPw@mail.gmail.com>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 8bit
+X-WP-AV: skaner antywirusowy poczty Wirtualnej Polski S. A.
+X-WP-SPAM: NO 0000000 [wbMk]                               
+Subject: [Caml-list] Re: References and polymorphism
+
+On 2012-01-11 12:07, Gabriel Scherer wrote:
+> How would you make the distinction between
+>
+>    let f : 'a . unit ->  'a list ref =
+>      fun () ->  ref ([] : 'a list)
+>
+> and
+>
+>    let f : 'a . unit ->  'a list ref =
+>      let r = ref ([] : 'a list) in
+>      fun () ->  r
+>
+> ?
+>
+I think that it's not the value restriction which prevents the second 
+example from have generalized type.
+Here's how I uderstand it.
+
+First, we write the code, but don't put a quantifier in the annotation 
+for f:
+
+let f : unit ->  'a list ref =
+   let r = ref ([] : 'a list) in
+   fun () ->  r
+
+
+Then, compiler tries to determine what does it mean. I think it should 
+see it in the following way:
+
+∃'b.
+let f : X 'a. (unit -> 'a list ref) =
+   let r = ref ([] : 'b list) in
+   fun () -> r
+
+where X stays for an unknown quantifier: generalize or not? We can try 
+with forall:
+
+∃'b.
+let f : ∀ 'a. (unit -> 'a list ref) =
+   let r = ref ([] : 'b list) in
+   fun () -> r
+
+But this doesn't typecheck: you cannot pass a value of type 'b list ref 
+with some particular 'b and pretend that it works for some unrelated 'a.
+
+A second possibility:
+∃'b.
+let f : ∃'a. (unit -> 'a list ref) =
+   let r = ref ([] : 'b list) in
+   fun () -> r
+
+Here, nothing special happens. The compiler discovers that 'a='b. The 
+toplevel translates this quantification to an underscore and we get unit 
+-> '_a list ref.
+
+I have considered several variations around this theme and no one needs 
+the extra value restriction rule:
+
+∀'a.(
+let f : unit -> 'a list ref =
+   let r = ref ([] : 'a list) in
+   fun () -> r
+)
+
+(* above: Anonymous mapping from types to functions. Useless. *)
+
+let f0 : ∀'a. (unit -> ∀'b. 'b list ref) =
+   let r = ref ([] : ∀'c. 'c list) in
+   fun (type 'aa) ->
+     fun () ->
+       r
+
+(* f0: Sound, but returns useless ref [] constant. Its type ∀'b. 'b list 
+ref could be forbidden. *)
+
+let f1 : ∀'a . (unit -> 'a list ref) =
+   let r = ref ([] : 'a list) in
+   fun (type 'aa) ->
+     fun () ->
+       r
+
+(* f1: Problem with type variable scope. The quantifier encompasses what 
+is in brackets in the annotation for f1. Function body cannot refer to 
+'a bound by this quantifier. It wouldn't make sense. *)
+
+let f2 : ∀'a . (unit -> 'a list ref) =
+   let r = ref ([] : ∀'c. 'c list) in
+   fun (type 'aa) ->
+     fun () ->
+       r
+
+(* f2: Type of function body (for each type return a constant/degenerate 
+cell) is incompatible with the type given in the annotation (for each 
+type return an useful ref cell). But it would be simpler just to avoid 
+the useless type of r entirely. *)
+
+let f3 : ∀'a . unit -> 'a list ref =
+   fun (type 'aa) ->
+     let r = ref ([] : 'aa list) in
+     fun () ->
+       r
+
+(* f3: Fine, but it would require some work at compile time or smart 
+transformations to keep types erased at run-time. Also, keeping the 
+first actual argument (staying for 'aa) implicit would need extra rules 
+to resolve ambiguities (decide when this argument is applied). *)
+
+let f4 : ∀'a . unit -> 'a list ref =
+   fun (type 'aa) ->
+     fun () ->
+       let r = ref ([] : 'aa list) in
+       r
+
+(* f4: All clear. *)
+
+Dawid

@@ -1,0 +1,96 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id DE668BB81
+	for <caml-list@yquem.inria.fr>; Tue, 28 Dec 2004 20:32:16 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id iBSJWG5I018827
+	for <caml-list@yquem.inria.fr>; Tue, 28 Dec 2004 20:32:16 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA15861 for <caml-list@pauillac.inria.fr>; Tue, 28 Dec 2004 20:32:16 +0100 (MET)
+Received: from smtp-vbr15.xs4all.nl (smtp-vbr15.xs4all.nl [194.109.24.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id iBSJWFUE018822
+	for <caml-list@inria.fr>; Tue, 28 Dec 2004 20:32:16 +0100
+Received: from reddwarf.xs4all.nl (voge.xs4all.nl [213.84.6.60])
+	by smtp-vbr15.xs4all.nl (8.12.11/8.12.11) with SMTP id iBSJWFHs058400
+	for <caml-list@inria.fr>; Tue, 28 Dec 2004 20:32:15 +0100 (CET)
+	(envelope-from lodewijk@reddwarf.xs4all.nl)
+Received: (qmail 13783 invoked from network); 28 Dec 2004 19:36:00 -0000
+Received: from unknown (HELO ?192.168.3.65?) (192.168.3.65)
+  by reddwarf.voge.xs4all.nl with SMTP; 28 Dec 2004 19:36:00 -0000
+Mime-Version: 1.0 (Apple Message framework v619)
+Content-Transfer-Encoding: 7bit
+Message-Id: <2D67CB0C-5907-11D9-B386-000A95A068A6@reddwarf.xs4all.nl>
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+To: caml-list@inria.fr
+From: Lodewijk Voge <lodewijk@reddwarf.xs4all.nl>
+Subject: memory leak in C snippet?
+Date: Tue, 28 Dec 2004 20:32:14 +0100
+X-Mailer: Apple Mail (2.619)
+X-Virus-Scanned: by XS4ALL Virus Scanner
+X-Miltered: at nez-perce with ID 41D1B4C0.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 41D1B4BF.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 camlprim:01 camlparam:01 alloc:01 val:01 alloc:01 val:01 camlreturn:01 usr:01 rss:01 rss:01 strangely:01 strangely:01 macos:01 unix:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.0
+X-Spam-Level: 
+
+hello,
+
+I'm writing a daemon in ocaml with some glue code in C. it all works 
+fine, except memory seems to leak to a point the daemon can last
+only about a week on the smallest systems. after a lot of removing code 
+I come to this snippet that seems to leak:
+
+external bar: unit -> Unix.inet_addr * unit = "bar"
+
+let _ =
+         let s = String.create 392 in
+         while true do
+                 ignore(bar ());
+         done
+
+with
+
+CAMLprim value bar(value unit) {
+         CAMLparam1(unit);
+         CAMLlocal2(res, addr);
+         int i;
+
+         addr = alloc_string(4);
+         *(int *)(String_val(addr)) = htonl(0xac100000);
+         res = alloc_tuple(2);
+         Store_field(res, 0, addr);
+         Store_field(res, 1, Val_unit);
+         CAMLreturn(res);
+}
+
+which gives when run:
+
+~/test$ while /usr/bin/true; do ps -o rss -p 15696 | tail -1; sleep 2; 
+done
+    784
+    784
+    788
+    792
+    796
+    800
+    804
+    808
+    812
+^C
+
+an ever growing RSS. strangely, having bar() return just the alloced 
+string instead of a tuple, this doesn't occur. even more strangely, if 
+I delete the let s = String.make 392 line, it doesn't occur either. 
+systems tested are MacOS X, FreeBSD (the target system) and Linux. as 
+the RSS approaches the segment size that'll expand too, and this 
+gobbles up all available virtual memory in a week on the smallest 
+target systems.
+
+so, my question is: can anyone see an obvious error in the C snippet? 
+some violation of the rules in the manual I missed?
+
+thanks,
+Lodewijk
+

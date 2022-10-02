@@ -1,0 +1,151 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A78E7BB84
+	for <caml-list@yquem.inria.fr>; Sun, 23 Jul 2006 23:12:28 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k6NLCR7q026090
+	for <caml-list@yquem.inria.fr>; Sun, 23 Jul 2006 23:12:28 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA20315 for <caml-list@pauillac.inria.fr>; Sun, 23 Jul 2006 23:12:27 +0200 (MET DST)
+Received: from fmmailgate02.web.de (fmmailgate02.web.de [217.72.192.227])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k6NLCQe8017230
+	for <caml-list@inria.fr>; Sun, 23 Jul 2006 23:12:27 +0200
+Received: from smtp07.web.de (fmsmtp07.dlan.cinetic.de [172.20.5.215])
+	by fmmailgate02.web.de (Postfix) with ESMTP id CA8C2AE49F2;
+	Sun, 23 Jul 2006 23:12:26 +0200 (CEST)
+Received: from [84.165.142.236] (helo=wiko)
+	by smtp07.web.de with smtp (WEB.DE 4.107 #114)
+	id 1G4lFS-0001mg-00; Sun, 23 Jul 2006 23:12:26 +0200
+Message-ID: <00ea01c6ae9d$3c459750$15b2a8c0@wiko>
+From: "Andreas Rossberg" <AndreasRossberg@web.de>
+To: "Jacques Carette" <carette@mcmaster.ca>, <caml-list@inria.fr>
+References: <44C3D4C8.8010502@mcmaster.ca>
+Subject: Re: [Caml-list] Variance problem in higher-order Functors?
+Date: Sun, 23 Jul 2006 23:16:16 +0200
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 6.00.2800.1807
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2800.1807
+Sender: AndreasRossberg@web.de
+X-Sender: AndreasRossberg@web.de
+X-Miltered: at concorde with ID 44C3E63B.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 44C3E63A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; rossberg:01 variance:01 higher-order:01 functors:01 higher-order:01 functors:01 sig:01 foo:01 val:01 foo:01 struct:01 struct:01 sig:01 val:01 semantically:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+"Jacques Carette" <carette@mcmaster.ca> wrote:
+> I seem to have encountered a problem in type-checking of higher-order
+> functors with type constraints -- it seems to me that the containment
+> check is backwards.
+
+Well, yes. That's contravariance.
+
+> (* this works *)
+> module type DOMAIN = sig
+>     type kind
+>     type foo
+>     val  upd : foo -> foo
+> end
+>
+> type domain_is_field
+>
+> module Rational = struct
+>     type kind = domain_is_field
+>     type foo  = int * int
+>     let  upd (x,y) = (x-1, y+1)
+> end
+>
+> module Integer = struct
+>     type kind
+>     type foo  = int
+>     let  upd x = x-1
+> end
+>
+> module type UPDATE = sig
+>     type obj
+>     val update : obj -> obj
+> end
+>
+> module DivisionUpdate(D:DOMAIN with type kind = domain_is_field) = struct
+>     type obj = D.foo
+>     let update a = D.upd a
+> end
+>
+> (* this one is semantically incorrect! *)
+> module BadUpdate(D:DOMAIN) = struct
+>     type obj = D.foo
+>     let update a = D.upd a
+> end
+>
+> (* works, as expected *)
+> module A = DivisionUpdate(Rational)
+> (* _correctly_ generates an error
+> module A = DivisionUpdate(Integer)
+> *)
+>
+> (* However, if we go higher order: *)
+> module type UPDATE2 =
+>     functor(D:DOMAIN) -> sig
+>     type obj = D.foo
+>     val update : obj -> obj
+> end
+>
+> (* this is the same as the "updates" above, just wrapped in a module *)
+> module Bar(D:DOMAIN)(U:UPDATE2) = struct
+>     module U = U(D)
+>     let update x = U.update x
+> end
+>
+> (* works as there are no restrictions *)
+> module T3 = Bar(Integer)(BadUpdate) ;;
+>
+> (* and now this does not work?!?! even though it should!*)
+> module T2 = Bar(Rational)(DivisionUpdate) ;;
+
+No, it should not work. Bar(Rational) has the signature
+
+  functor(U: functor(D:DOMAIN)->S1) -> S2
+
+i.e. argument signature
+
+  functor(D:DOMAIN)->S1
+
+but you are trying to apply it to module DivisionUpdate, which has signature
+
+  functor(D:DOMAIN')->S1
+
+where DOMAIN'=(DOMAIN with type kind = domain_is_field). This is a
+*sub*signature of DOMAIN! Since functors are necessarily contravariant in
+their argument, however, it had to be a *super*signature of DOMAIN instead
+to allow passing the functor to Bar.
+
+That is, the problem with your example boils down to this:
+
+  module type DOMAIN = sig type kind end
+  module type DOMAIN' = sig type kind = unit end
+
+  module Bar (U : functor(D : DOMAIN) -> sig end) = struct end
+  module Up (D : DOMAIN') = struct end
+
+  module T = Bar(Up)
+
+-->
+
+  Signature mismatch:
+  Modules do not match:
+    functor (D : DOMAIN') -> sig  end
+  is not included in
+    functor (D : DOMAIN) -> sig  end
+  Modules do not match: DOMAIN is not included in DOMAIN'
+  Type declarations do not match: type t is not included in type kind = unit
+
+- Andreas
+

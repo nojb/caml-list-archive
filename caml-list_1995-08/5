@@ -1,0 +1,366 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id UAA11868 for caml-redistribution; Tue, 29 Aug 1995 20:13:13 +0200
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id UAA11790 for weis@pauillac.inria.fr; Tue, 29 Aug 1995 20:08:11 +0200
+From: Pierre Weis <weis@pauillac.inria.fr>
+Message-Id: <199508291808.UAA11790@pauillac.inria.fr>
+Subject: Re: Constructive criticism
+To: weis@pauillac.inria.fr (Pierre Weis)
+Date: Tue, 29 Aug 1995 20:08:11 +0200 (MET DST)
+In-Reply-To: <199508291755.TAA11490@pauillac.inria.fr> from "Pierre Weis" at Aug 29, 95 07:55:24 pm
+X-Mailer: ELM [version 2.4 PL21]
+Content-Type: text
+Content-Length: 13522     
+Sender: weis
+Status: O
+
+Thank you very much for the bugs report, we'll correct them as soon as
+possible.
+
+It's a pleasure to answer to your numerous and so constructive suggestions:
+
+Patterns in fun matches:
+------------------------
+>        - The following error seems difficult to understand:
+>
+>                #let testit = fun | 4 -> 2 | 1 | 2 -> 3;;
+>                Toplevel input:
+>                >let testit = fun | 4 -> 2 | 1 | 2 -> 3;;
+>                >                              ^
+>                Syntax error.
+>                #
+          
+>          Why is this OK with "function" but not with "fun"? It is
+>          not possible to match something to the symbol "|" is it?      
+
+The rule of thumb is that complex patterns have to be bracketed when
+used inside ``fun'' pattern matchings. And since ``or'' patterns, that
+is patterns separated by the or symbol ``|'', are not considered basic.
+
+Technically, this strange treatment of patterns is mainly due to Yacc
+restrictions, and partly due to real syntactic ambiguities, since fun
+patterns may bind several parameters (when function patterns only bind
+one). Consider the pattern ``C D'', where C and D are constructors.
+This patterns is syntactically ambiguous: is it the application of
+constructor C to constructor D, or two successive parameters,
+parameter C followed by parameter D ? In a function pattern the first
+interpretation is used, in a fun pattern the second one is assumed
+(hence, when you need the first meaning in a fun pattern you must
+bracket the application of constructor C to D, writing (C D)).
+
+Library considerations:
+-----------------------
+>        - The standard library seems to miss some routines that
+>          I would expect / like to see through symmetry
+
+Yes, the Caml Light library has been designed to be as light as possible!
+Some one-liner functions have been omitted (such as your copy_string,
+which is just (function s -> s ^ "")). Some other useful functions
+may not be provided in the standard library (for instance sprintf is
+only available via the contrib/libstr library, as the function str__format).
+
+In contrast, the Caml V3.1 library has more functions. Almost all the
+functions you suggest to add to the standard libray have a counterpart
+in this library, some time a  bit more general than yours. I give the
+Caml V3.1 version when it is better than yours:
+
+> let list_of_n n x = list_of_vect (make_vect n x);;
+
+Your list_of_n function is not optimal, since you allocate a vector
+that you immediately throw away to get the list of its elements. It it
+more efficent to create the list directly.
+
+Anyway, list_of_n is usually named replicate in Caml:
+
+let rec replicate n x =
+ if n <= 0 then [] else x :: replicate (n - 1) x;;
+
+>              let map_list_count f l =
+>                let rec work n = function
+>                   | [] -> []
+>                   | h::t -> (f n h)::(work (n+1) t)
+>                in work 0 l;;
+
+Your map_list_count function is a special case of the more general
+map_i functional defined as:
+
+let map_i f =
+ let rec map_i_rec i = function
+     [] -> [] | x::l -> f i x::map_i_rec (i+1) l in
+ map_i_rec;;
+map_i : (int -> 'a -> 'b) -> int -> 'a list -> 'b list = <fun>
+
+The corresponding primitive for vectors is map_i_vect_list to return a list:
+
+let map_i_vect_list f i0 v =
+ let rec map_i_rec n =
+  if n >= vect_length v then [] else f n v.(n)::map_i_rec (succ n) in
+ map_i_rec i0;;
+map_i_vect_list : (int -> 'a -> 'b) -> int -> 'a vect -> 'b list = <fun>
+
+or map_i_vect to return a new vector:
+
+let map_i_vect f i0 v =
+  let len = vect_length v - i0 in
+  if len <= 0 then [| |] else
+  let result = make_vect len (f i0 v.(i0)) in
+  for i = i0 + 1 to i0 + len - 1 do result.(i - i0) <- f i v.(i) done;
+  result;;
+map_i_vect : (int -> 'a -> 'b) -> int -> 'a vect -> 'b vect = <fun>
+
+>              let rec list_do f = function
+Your list_do that applies a function to the ellements of a list in
+reverse order is usually called rev_do_list:
+              let rec rev_do_list f = function
+                | [] -> ()
+                | h::t -> rev_do_list f t; f h; ();;
+
+extract_list is known as filter in Caml V3.1.
+
+create_numlist corresponds to interval:
+(* Lists of consecutive integers *)
+let interval n m =
+ let rec interval_n (l,m) =
+  if n > m then l else interval_n (m::l,pred m) in
+ interval_n ([],m);;
+
+let range = interval 1;;
+
+Packed arrays:
+--------------
+
+>Probably futile wish list for implementors with infinite amounts of time.
+
+>        - Packed arrays of enumerated (sum) types with only a small number of 
+>          possibilities and with no arguements -- like boolean.
+
+Why do you want them packed ? You can use vectors. I agree that in
+some cases vectors waste memory locations, in particular for caracters
+(but Caml provides strings).
+In some cases, you can consider to use bit_vectors (I can send you such a
+library if you want), otherwise you can use integers and logical
+shift operations as in C, but this is very low-level. The best
+solution is probably to consider these packed arrays as a compiler
+optimisation, but is it worth the work it needs ?
+
+Unary minus:
+------------
+>        - I would like to be able to not have to bracket the unary minus
+>          before a constant in a function application.
+
+>                eg. let m1 = num_of_int -1;;
+
+Well, I presume that you want to use the same symbol for unary and
+binary minus (that is the mathematical ``-''). In this case you may be
+able to distinguish between those two. If you denote function
+application by mere juxtaposition, then f - 1 can either be the
+application of function f to the number -1 or the subtraction of 1 to
+the integer variable f. You may want to distinguish with spaces: then
+-1 is a single token and f -1 is an application, while f - 1 is a
+binary operation. The problem is that now f-1 is an application, and
+thus x*y-1 is understood as x * (y (-1)). This is strange. An
+admissible solution could be to give the same treatment to other
+binary operators...
+
+Extended pattern matching:
+--------------------------
+
+>        - I would like to be able to use a symbol twice in 
+>          pattern matching. For instance, 
+
+>                let compare = fun
+>                        | x x -> 0
+>                        | x y -> if x>y then 1 else -1
+>                ;;
+
+You can encode this using a guard (a ``when'' side-condition) in your
+pattern matching clause:
+let compare = function
+  | (x, y) when x = y -> 0
+  | (x, y) -> if x > y then 1 else -1;;
+compare : 'a * 'a -> int = <fun>
+
+>         I realise that this involves (in some cases) a generalised
+>          comparison which is not always possible for functions, but a 
+>          generalised "=" is used elsewhere, and the exception for functional
+>          values seems like a reasonable solution.
+
+You're right. It is conceivable to add this kind of ``non-linear''
+patterns to Caml: the compiler just has to generate the right ``when''
+conditions. This may be done some day. This was not done to maintain a
+good property of Caml pattern matching: pattern matching selection
+is fast, and in particular it cannot loop for ever. In the presence of
+cyclic data, the equality test generated by non linear patterns may
+need an unpredictable amount of computation to complete, or may even
+loop for ever.
+
+In fact we prefered to implement guards rather non linear patterns,
+since guards are more general, allowing to test not only variable
+equalities but arbitrary boolean conditions (in particular they allow
+user defined equality rather than the built-in ad hoc equality).
+
+Continue in patterns:
+---------------------
+
+>        - I would like someway of handling the following nicely:
+
+>                | a b when let (success,res) = big_fn a b in success
+>                        ->  let (success,res) = big_fn a b in res
+
+>          Perhaps something like
+
+>                | a b -> let (success,res) = big_fn a b in
+>                        if success then res else fail
+
+>          where "fail" would pass one on to the next condition to be tested.
+
+This is known as the ``continue in pattern matching'' feature in the
+Caml community. It has been implemented in Caml V3.1 some time ago.
+You simply use ``continue'' instead of your ``fail'', and the semantic
+is exactly what you wanted.
+
+In fact, a generalised version is implemented: continue statements may
+refer to a specific pattern matching, which is useful in case of
+nested pattern matching.
+
+Thus your example is written as:
+
+let big_fn a b = if a then (a, b + 1) else (false, b);;
+Value big_fn is <fun> : 'a * int -> 'a * int
+
+let g = function continuing g
+ | (a,b) -> let (success,res) = big_fn (a, b) in
+    if success then res else continue g
+ | _ -> 2;;
+Value g is <fun> : bool * int -> int
+
+#g (true, 4);;
+5 : int
+
+#g (false, 4);;
+2 : int
+
+In some cases, you can simulate the continue statement with some
+rewritting of your function and a ``try raise'' construct. Something like:
+
+let g x = try continuing_g x with continue -> rest_of_patterns x
+
+let continuing_g = function
+ | (a,b) -> let (success,res) = big_fn (a, b) in
+    if success then res else raise continue
+ | z -> rest_of_patterns z
+
+and rest_of_patterns _ = 2
+
+This trick is not a solution: it is untractable for complex pattern matching.
+
+Generalized orpats:
+-------------------
+>        - I would like to be able to write functions that are in some
+>          way symmetric between parameters. For instance, instead of writing
+
+>                fun
+>                        | Null x -> x
+>                        | x Null -> x
+>                        | x y -> messy_implementation_of_add x y
+
+>          I would like to be able to merge the two first lines into one line.
+>          I can't suggest a nice syntax for this that makes sense for more
+>          than two parameters and which is still intuitive. This problem
+>          is made less of a problem if the next point is done: 
+
+Your problem is just to generalize ``or'' patterns, to allow them to
+bind variables. Once more this is possible in Caml V3.1.
+
+Given:
+
+type nat = Null | Succ of nat;;
+
+let messy_implementation_of_add x y = Null;;
+
+You may use ``or'' patterns that bind variables to write:
+
+let f = function
+  | Null, x | x, Null -> x
+  | x, y -> messy_implementation_of_add x y;;
+Value f is <fun> : nat * nat -> nat
+
+#f (Null, Succ Null);;
+(Succ Null) : nat
+
+#f (Succ Null, Null);;
+(Succ Null) : nat
+
+#f (Succ Null, Succ Null);;
+Null : nat
+
+Definitions of record values:
+-----------------------------
+
+>        - I would like to be able to define a new structure instance with
+>          a declaration like { x ; Field3=5 ; Field7 = 9 } which would make a
+>          copy of the structure x, whilst changing the two given fields to the
+>          appropriate values. Why? So I can write a program that has lots of
+>          things that it will eventually do with slight changes to a structure,
+>          and I don't have to go through and change routines that are 
+>          irrelevant to the change.
+
+This a well known problem: allocation of record values is much more
+messy than allocation of sum type values. As you mentioned, this is
+particularly evident when you have to modify a few part of a given
+record.
+
+However, in Caml you get the capability to treat the fields that have to be
+modified in an imperative way: you just declare those fields ``mutable''
+when defining the record type. This way you share the record and its
+modified version, and just have to change what have to be modified.
+Your example would be something like:
+r -> r.Field3 <- 5; r.Field7 <- 9; r
+
+Unfortunately, when you need a new (fresh) data structure, this
+solution does not work.
+Some partial solutions have been proposed: for instance Caml V3.1 provides a
+short-hand to define the content of a record field: when no expression
+is associated to a field name then a variable expression equal to the
+field name is assumed.
+This way { x; y} is read as {x = x; y = y}. Your example is then a bit
+simplified 
+{ Field1; Field2; Field3; Field4; Field5; Field6; Field7 } ->
+{ Field1; Field2; Field3 = 5 ; Field4; Field5; Field6; Field7 = 9 }
+
+Unfortunately, this does not solve your maintenance problem.
+By contrast, your generalised ellipse is an exiting alternative, since
+it allows an easy modification of allocating routines.
+
+Overloading:
+------------
+>Really grasping at straws:
+
+>        - I would like to be able to perform "function overloading" as
+>          in C++. Furthurmore, greedy person that I am, I would like this
+>          overloaded-ability to automagically be passed through into 
+>          functions that use the overloaded function ...
+
+This is really difficult to provide, and is a long-time research problem.
+However, there exists a restricted form of overloading in Caml V3.1
+that we called ``static overloading''.
+
+We recently made progress on that point and proposed new type systems
+and new compilation schemes to provide a general overloading facility
+(see the article ``Extensional Polymorphism'' in POPL 95).
+This work still has to be fully incorporated into a working Caml system.
+
+>Maybe I should go to caml rather than
+>          caml-light.
+Use both!
+
+Pierre Weis
+----------------------------------------------------------------------------
+WWW Home Page: http://pauillac.inria.fr/~weis
+Projet Cristal
+INRIA, BP 105, F-78153 Le Chesnay Cedex (France)
+E-mail: Pierre.Weis@inria.fr
+Telephone: +33 1 39 63 55 98
+Fax: +33 1 39 63 53 30
+----------------------------------------------------------------------------
+
+
+

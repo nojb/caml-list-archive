@@ -1,0 +1,123 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 2929EBB9A
+	for <caml-list@yquem.inria.fr>; Tue, 27 Sep 2005 07:32:57 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j8R5WuIX008827
+	for <caml-list@yquem.inria.fr>; Tue, 27 Sep 2005 07:32:56 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA21984 for <caml-list@pauillac.inria.fr>; Tue, 27 Sep 2005 07:32:55 +0200 (MET DST)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j8R5WrSw008822
+	for <caml-list@inria.fr>; Tue, 27 Sep 2005 07:32:54 +0200
+Received: from rosella (ppp16-174.lns2.syd7.internode.on.net [59.167.16.174])
+	by smtp1.adl2.internode.on.net (8.12.9/8.12.6) with ESMTP id j8R5WnKe028065;
+	Tue, 27 Sep 2005 15:02:51 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] Re: Ant:  Efficiency of let/and
+From: skaller <skaller@users.sourceforge.net>
+To: Stefan Monnier <monnier@iro.umontreal.ca>
+Cc: caml-list@inria.fr
+In-Reply-To: <87hdc724wo.fsf-monnier+gmane.comp.lang.caml.inria@gnu.org>
+References: <20050926043240.24009.qmail@web26809.mail.ukl.yahoo.com>
+	 <Pine.LNX.4.63.0509260819410.9226@localhost.localdomain>
+	 <87hdc724wo.fsf-monnier+gmane.comp.lang.caml.inria@gnu.org>
+Content-Type: text/plain
+Date: Tue, 27 Sep 2005 15:32:49 +1000
+Message-Id: <1127799169.31518.154.camel@rosella>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.2.1.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 4338D988.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 4338D985.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 semantically:01 ocamlopt:01 compiler:01 compiler:01 parallelism:01 parallelism:01 pipelines:01 ocaml:01 arises:01 reusing:01 invocation:01 invocation:01 doubles:01 ocaml:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Mon, 2005-09-26 at 12:05 -0400, Stefan Monnier wrote:
+> > Syntactically and semantically there is no difference.  I was wondering if
+> > the ocamlopt compiler took advatange of the implicit paralellism at all.
+> 
+> If someone tries to use such things as `and' or
+> unspecified-argument-evaluation-order in the hopes that the compiler will
+> extract some imagined parallelism is simply deluding himself.
+> In some cases, the freedom to execute in any order does lead to better
+> code, but that code rarely if ever uses any kind of parallelism.
+
+This is not so at all. Limited Parallelism is indeed found in all 
+modern processors, which can, for example, distribute multiple
+instructions on several pipelines, decode in parallel with
+computing values, or perform several integer and/or floating
+operations simultaneously.
+
+In fact, as far back as 197x, the Cyber 70 could do this,
+in fact it relied on it. In particular, register calculations
+and memory fetches and stores we always done in parallel,
+automatically, until a join point. When you did a load,
+for example, the next instruction would be executed
+immediately, without waiting for the load to complete,
+provided it didn't use the register being loaded
+(and I think .. it would then proceed to the next instruction,
+and execute THAT whilst suspending the previous one, provided
+it used distinct registers .. but I'm not sure).
+
+It may well be that this has no impact on Ocaml code.
+However it certainly DOES have an impact on low level C code.
+
+In addition, parallel assignment is a major benefit,
+not because the assignments are done concurrently,
+but because it can save memory. For example:
+
+	x,y = 1,2
+
+cf
+
+	x,y = y,x
+
+The first pair of assignments is faster and uses no temporaries,
+the second requires a temporary. So an arbitrary parallel
+assignment can, in fact, be optimised to reduce the number
+of temporaries used, and thus the number of operations.
+
+Parallel assignments as written aren't that useful, however
+there is a particular optimisation of great benefit
+which is requires parallel assignment: self-tail-recursion.
+
+In this case, the assignment arises through reusing the
+same closure, and the optimisation is of the form:
+
+	x,y,x = f(x,y,z), g(x,y,z), h(x,y,x)
+	goto start
+
+In particular, the argument of the new invocation can
+depend on the argument of the old invocation, and,
+in tuple form the assignment would, without analysis,
+require a temporary the size of the argument:
+
+	tmp = f(x,y,z), g(x,y,z), h(x,y,z)
+	x,y,z = tmp
+
+Which, in the worst case, *doubles* the number
+of assignments, and thus the cost of looping --
+in a tight inner loop this can be critical.
+
+In a language like Ocaml, a parallel operation can have
+a major performance advantage, because it explicitly
+indicates to the compiler that the order of evaluation
+is irrelevant: due to side-effects and separate compilation,
+the order of evaluation of sequential assignments is likely
+to be fixed, and therefore cannot be optimised.
+
+I do not know whether Ocaml does parallel assignment
+optimisations on self-tail recursions .. but I can
+tell you that Felix DOES. Perhaps this is why it
+calculates Ackermann's function faster than Ocaml and C?
+[I have no idea of the real reason .. but it does]
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

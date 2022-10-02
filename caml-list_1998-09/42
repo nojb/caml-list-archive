@@ -1,0 +1,302 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA26946 for caml-redistribution; Tue, 22 Sep 1998 18:42:44 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA10317 for <caml-list@pauillac.inria.fr>; Tue, 22 Sep 1998 18:38:05 +0200 (MET DST)
+Received: from kronstadt.rahul.net (dyn164.rahul.net [206.61.225.164])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id SAA24696
+	for <caml-list@pauillac.inria.fr>; Tue, 22 Sep 1998 18:37:58 +0200 (MET DST)
+Received: (from itz@localhost)
+	by kronstadt.rahul.net (8.8.5/8.8.5) id JAA21058;
+	Tue, 22 Sep 1998 09:36:59 -0700
+Date: Tue, 22 Sep 1998 09:36:59 -0700
+Message-Id: <199809221636.JAA21058@kronstadt.rahul.net>
+From: Ian T Zimmerman <itz@rahul.net>
+To: caml-list@pauillac.inria.fr
+Subject: Patches for ocaml 2.00 library
+Sender: weis
+
+
+[Check back for a French version in a few weeks :-)]
+
+Dear Ocaml lovers,
+
+in the course of work on a cool hack you'll soon know about, I have
+run into a few deficiencies in the `other' libraries.  Here they are;
+I enclose a patch that corrects most of them.
+
+o In the Unix library, functions tcgetattr and tcsetattr deal with
+records of type termios.  This record has so many fields that it is
+very inconvenient to create one by hand; instead, it is natural to
+obtain a template by calling tcsetattr on the controlling terminal and
+modify it as needed.  Unfortunately, there's a catch: ocaml only knows
+about the POSIX standard speeds (up to B38400) and it will throw if
+you try to tcsetattr the very settings that you have obtained from
+tcgetattr, in case the speed was a nonstandard one.  Many systems
+define extra speeds nowadays, and on some a nonstandard speed is the
+default one.  So I added a conditional entry for B57600 to the table.
+
+o Also in the Unix library, functions set_nonblock and clear_nonblock
+manipulate the nonblock flag on file table entries.  However, there's
+no way from ML to _get_ the current state of the nonblock flag, even
+though POSIX specifies the fcntl interface to do that, right next to
+the set interface.  (I didn't patch this one yet, but it would be easy
+enough.)
+
+o In the str library, the pattern matching functions translate a
+return code of -2 from GNU regex into an Invalid_argument exception.
+This is misleading; regex returns this in case of internal failure,
+which almost always means running out of its failure state stack.  In
+fact regex documentation states that in case of truly invalid
+arguments (the string offset out of range) -1 is returned, just as if
+the match simply failed.  I correct this by checking the offset in the
+stub and throwing Invalid_argument if out of range; I handle the -2
+case by throwing Failure.
+
+BTW, I found that the default value (2000) for failure stack size
+compiled into regex causes failure even for some relatively simple
+patterns.  I suspect this value was chosen with ports to low memory
+PCs in mind; maybe on modern machines something like 10000 is safe
+and will always work.
+
+o Lastly, I needed a way to check for a _partial match_ with a
+regexp.  Example: the string "aaaa" partially (though not fully)
+matches the pattern "a*b", but the string "aaaac" macthes neither
+fully nor partially.  To implement this I had to hack GNU regex just a
+little bit (included in the patch) that re_match_2 return -3
+(and not -1) in the case of partial match.  Then I added a new
+function string_partial_match to the Str interface.  (An alternative
+would be to make the ML function string_match return another value,
+but it currently returns a boolean and I didn't want to define another
+enumerated type just for this.)
+
+Best,
+
+-- 
+Ian T Zimmerman                        <itz@rahul.net>
+I came to the conclusion that what was wrong about the guillotine
+was that the condemned man had no chance at all, absolutely none.
+Albert Camus, _The Outsider_
+
+
+
+===================================================================
+RCS file: ./otherlibs/str/str.ml,v
+retrieving revision 1.1
+diff -u -r1.1 ./otherlibs/str/str.ml
+--- ./otherlibs/str/str.ml	1998/09/22 03:13:00	1.1
++++ ./otherlibs/str/str.ml	1998/09/22 03:14:58
+@@ -9,7 +9,7 @@
+ (*                                                                     *)
+ (***********************************************************************)
+ 
+-(* $Id: str.ml,v 1.1 1998/09/22 03:13:00 itz Exp $ *)
++(* $Id: str.ml,v 1.2 1998/09/22 03:14:58 itz Exp $ *)
+ 
+ type regexp
+ 
+@@ -20,6 +20,8 @@
+ external beginning_group: int -> int = "str_beginning_group"
+ external end_group: int -> int = "str_end_group"
+ external replacement_text: string -> string -> string = "str_replacement_text"
++external string_partial_match: regexp -> string -> int -> bool =
++  "str_string_partial_match"
+ 
+ let quote s =
+   let len = String.length s in
+===================================================================
+RCS file: ./otherlibs/str/strstubs.c,v
+retrieving revision 1.1
+diff -u -r1.1 ./otherlibs/str/strstubs.c
+--- ./otherlibs/str/strstubs.c	1998/09/20 23:38:52	1.1
++++ ./otherlibs/str/strstubs.c	1998/09/22 03:10:42
+@@ -72,10 +72,32 @@
+ 
+ value str_string_match(regexp expr, value text, value pos) /* ML */
+ {
+-  switch (re_match(&(expr->re), String_val(text), string_length(text),
+-                   Int_val(pos), &match_regs)) {
+-  case -2:
++  int len = string_length(text);
++  int start = Int_val(pos);
++  if (start < 0 || start >= len)
+     invalid_argument("Str.string_match");
++  switch (re_match(&(expr->re), String_val(text), len,
++                   start, &match_regs)) {
++  case -2:
++    failwith("Str.string_match");
++  case -1:
++  case -3:
++    return Val_false;
++  default:
++    return Val_true;
++  }
++}
++
++value str_string_partial_match(regexp expr, value text, value pos) /* ML */
++{
++  int len = string_length(text);
++  int start = Int_val(pos);
++  if (start < 0 || start >= len)
++    invalid_argument("Str.string_partial_match");
++  switch (re_match(&(expr->re), String_val(text), len,
++                   start, &match_regs)) {
++  case -2:
++    failwith("Str.string_partial_match");
+   case -1:
+     return Val_false;
+   default:
+@@ -85,13 +107,16 @@
+ 
+ value str_search_forward(regexp expr, value text, value pos) /* ML */
+ {
++  int res;
+   int len = string_length(text);
+   int start = Int_val(pos);
+-  int res = re_search(&(expr->re), String_val(text), len, start, len-start,
+-                      &match_regs);
++  if (start < 0 || start >= len)
++    invalid_argument("Str.search_forward");
++  res = re_search(&(expr->re), String_val(text), len, start, len-start,
++                  &match_regs);
+   switch(res) {
+   case -2:
+-    invalid_argument("Str.search_forward");
++    failwith("Str.search_forward");
+   case -1:
+     raise_not_found();
+   default:
+@@ -101,13 +126,16 @@
+ 
+ value str_search_backward(regexp expr, value text, value pos) /* ML */
+ {
++  int res;
+   int len = string_length(text);
+   int start = Int_val(pos);
+-  int res = re_search(&(expr->re), String_val(text), len, start, -start-1,
+-                      &match_regs);
++  if (start < 0 || start >= len)
++    invalid_argument("Str.search_backward");
++  res = re_search(&(expr->re), String_val(text), len, start, -start-1,
++                  &match_regs);
+   switch(res) {
+   case -2:
+-    invalid_argument("Str.search_backward");
++    failwith("Str.search_backward");
+   case -1:
+     raise_not_found();
+   default:
+===================================================================
+RCS file: ./otherlibs/str/str.mli,v
+retrieving revision 1.1
+diff -u -r1.1 ./otherlibs/str/str.mli
+--- ./otherlibs/str/str.mli	1998/09/22 03:16:08	1.1
++++ ./otherlibs/str/str.mli	1998/09/22 03:21:37
+@@ -9,7 +9,7 @@
+ (*                                                                     *)
+ (***********************************************************************)
+ 
+-(* $Id: str.mli,v 1.1 1998/09/22 03:16:08 itz Exp $ *)
++(* $Id: str.mli,v 1.2 1998/09/22 03:21:37 itz Exp $ *)
+ 
+ (* Module [Str]: regular expressions and high-level string processing *)
+ 
+@@ -68,6 +68,11 @@
+ external search_backward: regexp -> string -> int -> int = "str_search_backward"
+         (* Same as [search_forward], but the search proceeds towards the
+            beginning of the string. *)
++external string_partial_match: regexp -> string -> int -> bool =
++  "str_string_partial_match"
++        (* Similar to string_match, but succeeds whenever the argument
++           string is a prefix of a string that matches.  This includes
++           the case of a true complete match. *)
+ 
+ val matched_string: string -> string
+         (* [matched_string s] returns the substring of [s] that was matched
+===================================================================
+RCS file: ./otherlibs/unix/termios.c,v
+retrieving revision 1.1
+diff -u -r1.1 ./otherlibs/unix/termios.c
+--- ./otherlibs/unix/termios.c	1998/09/20 18:04:04	1.1
++++ ./otherlibs/unix/termios.c	1998/09/20 18:06:13
+@@ -9,7 +9,7 @@
+ /*                                                                     */
+ /***********************************************************************/
+ 
+-/* $Id: termios.c,v 1.1 1998/09/20 18:04:04 itz Exp $ */
++/* $Id: termios.c,v 1.2 1998/09/20 18:06:13 itz Exp $ */
+ 
+ #include <mlvalues.h>
+ #include <alloc.h>
+@@ -95,7 +95,6 @@
+   speed_t speed;
+   int baud;
+ } speedtable[] = {
+-  {B0,       0},
+   {B50,      50},
+   {B75,      75},
+   {B110,     110},
+@@ -109,7 +108,11 @@
+   {B4800,    4800},
+   {B9600,    9600},
+   {B19200,   19200},
+-  {B38400,   38400}
++  {B38400,   38400},
++#ifdef B57600
++  {B57600,   57600},
++#endif
++  {B0,       0}
+ };
+ 
+ #define NSPEEDS (sizeof(speedtable) / sizeof(speedtable[0]))
+===================================================================
+RCS file: ./otherlibs/str/regex-0.12/regex.c,v
+retrieving revision 1.1
+diff -u -r1.1 ./otherlibs/str/regex-0.12/regex.c
+--- ./otherlibs/str/regex-0.12/regex.c	1998/09/22 02:24:12	1.1
++++ ./otherlibs/str/regex-0.12/regex.c	1998/09/22 02:59:46
+@@ -24,6 +24,8 @@
+   #pragma alloca
+ #endif
+ 
++static char rcsid[] = "$Id: regex.c,v 1.2 1998/09/22 02:59:46 itz Exp $";
++
+ #define _GNU_SOURCE
+ 
+ /* We need this for `regex.h', and perhaps for the Emacs include files.  */
+@@ -3061,12 +3063,14 @@
+ 
+ /* Call before fetching a character with *d.  This switches over to
+    string2 if necessary.  */
++/* itz Mon Sep 21 19:31:55 PDT 1998 set a flag in case we're at the
++   end, to indicate a partial match was possible. */
+ #define PREFETCH()							\
+   while (d == dend)						    	\
+     {									\
+       /* End of string2 => fail.  */					\
+       if (dend == end_match_2) 						\
+-        goto fail;							\
++        { partial = 1; goto fail; }					\
+       /* End of string1 => advance to string2.  */ 			\
+       d = string2;						        \
+       dend = end_match_2;						\
+@@ -3256,6 +3260,9 @@
+   const char **reg_dummy;
+   register_info_type *reg_info_dummy;
+ 
++  /* itz Mon Sep 21 19:34:09 PDT 1998 record a partial match here */
++  int partial = 0;
++
+ #ifdef DEBUG
+   /* Counts the total number of registers pushed.  */
+   unsigned num_regs_pushed = 0; 	
+@@ -4337,7 +4344,7 @@
+ 
+   FREE_VARIABLES ();
+ 
+-  return -1;         			/* Failure to match.  */
++  return (partial ? -3 : -1);   /* Failure to match.  */
+ } /* re_match_2 */
+ 
+ /* Subroutine definitions for re_match_2.  */
+
+
+
+

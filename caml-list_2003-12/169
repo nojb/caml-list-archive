@@ -1,0 +1,165 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA26013; Mon, 15 Dec 2003 12:34:52 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA26273 for <caml-list@pauillac.inria.fr>; Mon, 15 Dec 2003 12:34:51 +0100 (MET)
+Received: from smtp1.pp.htv.fi (smtp1.pp.htv.fi [212.90.64.119])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBFBYnX04147;
+	Mon, 15 Dec 2003 12:34:50 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp1.pp.htv.fi (Postfix) with ESMTP
+	id BE2E48049E; Mon, 15 Dec 2003 13:34:49 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBFBYlT22583;
+	Mon, 15 Dec 2003 13:34:47 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AVqzu-00018W-00; Mon, 15 Dec 2003 13:34:46 +0200
+To: Basile Starynkevitch <basile.starynkevitch@inria.fr>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Freeing dynamically loaded code
+References: <87d6at97t3.fsf@naked.iki.fi>
+	<20031215092813.GA14492@bourg.inria.fr>
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Mon, 15 Dec 2003 13:34:44 +0200
+Message-ID: <87r7z6tiuj.fsf@iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 dynamically:01 basile:01 dynlink:01 bytecomp:01 byterun:01 dynlink:01 loadfile:01 buffer:01 alloc:01 allocates:01 pointers:01 pointers:01 runtime:01 closures:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Basile Starynkevitch wrote:
+> On Fri, Dec 12, 2003 at 09:04:24PM +0200, Nuutti Kotivuori wrote:
+>> So, I went down the dirty depths of Dynlink and friends, and
+>> bytecomp and byterun, and all that - and I think I have a rather
+>> good image of the problem.
+>>
+>> I would wish for Dynlinkable code to be garbage collected.
+>> ==========================================================
+>>
+>> When a file is loaded with Dynlink.loadfile, most of what's read
+>> and executed and handled is stored in the normal OCaml heap - and
+>> hence garbage collected properly when there are no references
+>> anymore.
+>>
+>> But, the actual executable code isn't. Basically what is done to
+>> that is that the buffer is allocated by Meta.static_alloc, the code
+>> is read there, and then Meta.reify_bytecode is invoked on it -
+>> which merely wraps the pointer in a Closure_tag block it allocates.
+
+Thanks for your input on this matter.
+
+> Please note that for code to be GC-ed, the garbage collector has to
+> handle specially every closure, looking into the code pointed by the
+> GC, etc. This might slow down the GC significantly (given that the
+> pointer to code is usually in the body of the code chunk, not to its
+> beginning).
+
+Not necessarily at all - if code pointers are handled as pointers to
+the start of a block and an offset, the GC can work exactly as it
+did. This ofcourse introduces runtime overhead in calling closures. If
+the GC is augmented to handle blocks of type Closure_tag specially,
+but still so that they contain a pointer to the start of the
+memoryblock as well, then there will be no runtime overhead in calling
+closures, minimal overhead in garbage collection (update of two
+pointers instead of one when moving a block), and only an increased
+storage of one word for each closure.
+
+> Also both the bytecode and the native compiler should share a common
+> behavior on this.
+
+Um, I believe this concerns only interpreting bytecode. We are talking
+about dynamic linking - loading code at runtime. If the code is
+statically loaded - there hardly is any need to garbage collect it. It
+could result in small gains in code size for code parts that are
+executed only once and then never again, but that's minimal. Same
+thing for the native compiler - there's no need to free actual code
+pages from the executable if we are running native code. And
+dynamically linking nativecode - that is, taking in a .o file to a
+running executable, resolving it's unresolved symbol references at
+runtime, and being able to access it - doesn't seem feasible at
+all. And dynamically linking native code to a bytecode executable
+seems even less feasible. Dynamically loading bytecode from an
+executable compiled natively with ocamlopt doesn't seem to work
+directly, but Asmdynlink (part of CDK) seems to do it with some
+hacking, so it shouldn't be impossible - but this should not break it
+either.
+
+So, for this thing we are *only* talking about dynamically linking
+bytecode - and being able to free the code when it is no longer
+required.
+
+> Besides, most of the runtime (including the bytecode interpreter)
+> rely upon the fact that code is not moved (ie remains at a fixed
+> address). If it was moved, the GC would have to update the code
+> pointer referenced in closures which would be difficult. (Also, for
+> moving machine code in ocamlopt, you'll have to flush -in a system
+> dependent way- the instruction cache, which is expensive). Not
+> moving code means that you cannot copy or compact it, as the GC does
+> for most values.
+
+GC would only have to update the Code pointer in closures if that's a
+plain pointer to the actual code address to jump to. If for example
+_every_ closure would have a pointer to the start of an allocated
+block, and an offset from it - the GC would not have to be modified at
+all. The runtime cost in this case example would be two loads and an
+add compared to one load.
+
+And as already mentioned, moving machine code is not meaningful as the
+code pages are not linked or allocated by us, but by the OS (or
+libc/ELF runtime).
+
+> I understand your wish (and in an ideal world I do share it) but I
+> also think that making code garbage collected would impact a big
+> part of the ocaml runtime system (and would, for example, probably
+> make ocaml's GC slower, even for most of the applications which
+> don't load any code).
+
+Doing it only for dynamically linked bytecode, and accepting a runtime
+performance cost for them compared to others, I believe it is doable
+without impacting other performance at all. And the changes could be
+rather well localized.
+
+> FWIW, some old versions of SML/NJ (maybe 0.93...) did actually
+> garbage-collect and move machine code, so this is in principle
+> doable, but it is difficult and involve a serie of tradeoffs
+> (different from those of Ocaml3). Also, most of Common Lisp
+> implementations probably collect code (even in machine code form).
+
+I believe Common Lisp is a bit different in this respect, because it
+actually generates code at runtime - something that I don't think
+OCaml does at all.
+
+> So I would believe that to make code GC-able would require a big lot
+> of work, and I understand that it is not currently a top priority of
+> the Cristal team.
+
+I understand. However, even if the Cristal team is not interested in
+spending effort towards making this happen, for the moment, I am.
+
+Alain Frisch and me have been discussing a possibility of implementing
+this with a rather minimal change to the runtime system, without
+touching garbage collection at all - or more like Alain has been
+describing his idea, and I have been trying to understand.
+
+If we can figure out the final implementation plan on this - I will
+probably start implementing this rather soon.
+
+> Making code garbageable is a big design decision which should be
+> done when starting to implement a language. It cannot be made
+> afterwards without lot of pains.
+
+Yes, achieving true garbage collection on all parts of the code
+without incurring a runtime cost nor making the garbage collector
+exceedingly inefficient is indeed a hard thing to get proper. However,
+adding limited garbage collection for some parts of the code might
+still be doable.
+
+Best wishes,
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,328 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA15801 for caml-redistribution; Mon, 7 Jul 1997 09:11:23 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA05837 for <caml-list@pauillac.inria.fr>; Fri, 4 Jul 1997 14:33:51 +0200 (MET DST)
+Received: from arthur.u-strasbg.fr (boos@arthur.u-strasbg.fr [130.79.6.103]) by nez-perce.inria.fr (8.8.5/8.7.3) with ESMTP id OAA03957 for <caml-list@inria.fr>; Fri, 4 Jul 1997 14:33:50 +0200 (MET DST)
+Received: (from boos@localhost) by arthur.u-strasbg.fr (8.7.5/8.7.3) id QAA05302; Fri, 4 Jul 1997 16:36:09 +0200
+Date: Fri, 4 Jul 1997 16:36:09 +0200
+Message-Id: <199707041436.QAA05302@arthur.u-strasbg.fr>
+From: Christian Boos <boos@arthur.u-strasbg.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+To: caml-list@inria.fr
+CC: Robbert VanRenesse <rvr@cs.cornell.edu>
+Subject: sscanf hack
+X-Mailer: VM 6.22 under 19.15p4 XEmacs Lucid
+Sender: weis
+
+
+Hello, 
+
+
+[French] 
+
+Voila un [sscanf] derive de celui  poste par Robbert, mais qui utilise
+en plus  le  type predefini  format qui permet  de construire  un type
+currifie  correspondant aux specifications  donnees dans  la chaine de
+formatage.  Il y  a moyen d'utiliser  ce type pour  realiser un sscanf
+type,  un  peu a  la  maniere du  printf   actuel.  Ce n'est  pas 100%
+parfait,  mais je pense   que c'est tout ce   qu'on peut faire avec le
+support  actuel du compilateur qui a  ete pense  pour le formattage de
+sortie.
+
+
+[English]
+
+In this mail,  you will found a  modified version of Robbert's  sscanf
+that use the famous ('just, 'a, 'hack) format :)
+
+The use of sscanf is more intuitive here than in the original version,
+which used a "value" variant list for retrieving the scanned values.
+
+Now, you can write simple things, like:
+
+#  sscanf (fun three str -> three,str) "3 hello more" "%d%s";;
+- : int * string = 3, "hello more"
+
+However, the tags "%a" and  "%t" are  not  supported: using them  will
+produces a run-time  exception (if you  manage to write something that
+can be correctly typed).
+
+
+What is really needed is a construct like :
+
+  let (three, str) = sscanf "3 hello more" "%d%s" in ...
+
+but this will require an explicit support of  the compiler, with a new
+built-in type [input_format]   (the  old [format] should then   become
+[output_format]). Perhaps the tags "%a"  and "%t" might be implemented
+then (permitting to write something like: 
+ let (a, b) = sscanf "(1,2) (3,4)" "%a%a" scan_cplx scan_cplx
+).
+
+
+Overall, Xavier is right saying that the scanf in C is not flexible at
+all, but if you   look closer at   Robbert's code, you'll see  that he
+included a   small support  for  ranges   ("%[abc]"  or "%[^abc]"  for
+example (*)). This makes his sscanf a little more flexible.
+
+One could think of adding  more enhancements. A big  one would be  the
+'fscanf' function   (for scanning input_channels).    This way, we can
+have "light weight" string parsing  utilities in the standard  library
+which may  be preferred to using the  external Str package.  For those
+having  the  need  of more   complex regexps,  the  Str  machinery  is
+certainly a better way to go.
+
+
+-- Christian
+
+(*) I had to change this to "%s[abc]" and "%s[^abc]", because the "%["
+is rejected  by  the compiler when  inside a  format string.    I also
+changed the meaning of "%s" to  match a full  line (stop at '\n').  To
+get the original behavior, use "%sw", which is equivalent to
+  "%s[^ \t\n]".
+
+
+(********************************************************)
+(* scanf.ml                                            *)
+(*                                                      *)
+(* Robbert VanRenesse,      <rvr@cs.cornell.edu>        *)
+(* Christian Boos           <boos@dpt-info.strasbg.fr>  *)
+(* Fri Jul  4 13:35:40 MET DST 1997                     *)
+(********************************************************)
+(*                                                      *)
+(* This one is closer to the Printf.sprintf function    *)
+(* (all %X implemented but %t and %a)                   *)
+(*                                                      *)
+(* anyone wants to add a fscanf feature ? :)            *)
+(********************************************************)
+
+
+
+(* Module [Scanf]: formatting input functions *)
+
+exception Scan_error
+
+(*
+  val iscanf: 'a -> string -> int -> ('a, unit, 'b) format -> 'b * int
+  (* [iscanf f str offset format] scans [str] according to the format
+     string [format], then calls [f] with arguments built from the 
+     converted parts of [str] as specified in the format, and returns
+     the result of [f v1 ... vn] along with the position in [str]
+     where the scan ended.
+
+     The format is a character string which contains two types of
+     objects:  plain  characters, which are simply expected to be
+     found  in the same order in the string [str], and conversion
+     specifications, each of which causes conversion of a fragment
+     of [str]. The resulting value will be passed to the [f] callback.
+
+     Conversion specifications consist in the [%] character, 
+     followed by optional flags (no field widths for now), followed by
+     one conversion character.
+     The conversion characters and their meanings are:
+
+     -          [d], [i], [u], [x], [X]: convert a string of digits 
+                  (in any form) to integer
+
+     -          [s]: get a string ...
+                  Some flags may follow the [s] character:
+                    - [s]: get a line (get the string until a '\n' or the 
+                        end of the string is reached),
+                    - [sw]: get a word (stop at a blank character),
+                    - [s[abc]]: get a string containing 'a', 'b' or 'c' 
+                        characters only,
+                    - [s[^abc]]: get a string containing any character except
+                        'a', 'b' or 'c'
+
+     -          [c]: get a character 
+     -          [f], [e], [E], [g] or [G]: convert a string of digits 
+                  (including decimal point and exponent notation) to
+                  a floating point value.
+
+     -          [b]: convert the strings "t", "true" (or capitalized), or "1"
+                  to the value true, and the strings "f", "false" (or
+                  capitalized), or "0" to the value false.
+
+     -          [a], [t]: user-defined scanners are not supported.
+
+     If the string cannot be parsed according to the format, the 
+     [Scan_error] exception is raised.
+
+
+  *)
+
+  val sscanf: 'a -> string -> ('a, unit, 'b) format -> 'b 
+  (* [sscanf f str format] is like iscanf but slightly less general: 
+     it starts at the offset 0 and don't return back the position where
+     the scan ended.
+   *)
+
+*)
+
+
+let iscanf (f : 'a) str offset (fmt : ('a, unit, 'b) format) : ('b * int) =
+  (*
+   * -- String utilities
+   *)
+  (* See if c is included in one of the characters in the string chars.
+   *)
+  let included c chars =
+    let len = String.length chars in
+    let rec find i =
+      if i = len then false
+      else if c = (String.unsafe_get chars i) then true
+      else find (succ i)
+    in find 0
+  in
+  let len_str = String.length str in
+  (* Return a substring of s, starting at offset i, consisting of
+   * characters in the given string chars.  Also return the new offset.
+   *)
+  let scan_chunk s i chars =
+    let len_s = String.length s in
+    let j = ref i in
+      while (!j < len_s) && (included (String.unsafe_get s !j) chars) do
+      	incr j
+      done;
+      ((if i = !j then "" else String.sub s i (!j - i)), !j)
+  (* Return a substring of s, starting at offset i, consisting of
+   * characters *not* in the given string chars.  Also return the
+   * new offset.
+   *)
+  and scan_but_chunk s i chars =
+    let len_s = String.length s in
+    let j = ref i in
+      while (!j < len_s) && not (included (String.unsafe_get s !j) chars) do
+      	incr j
+      done;
+      ((if i = !j then "" else String.sub s i (!j - i)), !j)
+  in
+  (* Skip all blanks starting at offset i.  Return the new offset.
+   *)
+  let skip_blanks i =
+    let j = ref i in
+      while (!j < len_str) && (included (String.unsafe_get str !j) " \t\n") do
+      	incr j
+      done;
+      !j
+  in
+  (* Scan chars, ints, floats, words, strings and bools
+   *)
+  let scan_char i =
+    (String.unsafe_get str i, succ i)
+  and scan_int i =
+    let (s, i) = scan_chunk str i "0123456789" in
+      (int_of_string s, i)
+  and scan_float i =
+    let (s, i) = scan_chunk str i "0123456789.eE" in
+      (float_of_string s, i)
+  and scan_word i =
+    scan_but_chunk str i " \t\n"
+  and scan_string i =
+    scan_but_chunk str i "\n" in
+  let scan_bool i = 
+    match String.unsafe_get str i with
+	'1' -> (true, succ i)
+      | '0' -> (false, succ i)
+      | _ ->
+	  let (s, i) = scan_word i in
+	  match s with 
+	      "t" | "T" | "true" | "TRUE" -> (true, i)
+	    | "f" | "F" | "false" | "FALSE" -> (false, i)
+	    | _ -> failwith "bool_of_string"
+  in
+  (*
+   * -- Scanner
+   *)
+  let fmt = (Obj.magic fmt : string) in
+  let len_fmt = String.length fmt
+  in
+  (* In the following, i is an offset in str, and j an offset in fmt.  *) 
+  (* The format specifies two sort of matches:                             
+   * - trivial match (characters need to be the same in [str] and in [fmt]
+   * - item match    (as specified by a % tag)                           
+   *)
+  (* Scan the next item  as specified in fmt.
+   *)
+  let rec doscan i j =
+    let do_match c j = (* perform a trivial match and proceed *)
+      if (String.unsafe_get str i) = c then
+        doscan (succ i) j
+      else
+        raise Scan_error
+    in
+      if j = len_fmt then (* end of format reached ; return i *)
+      	([], i)
+      else
+      	let c = String.unsafe_get fmt j in
+      	  if c = '%' && j < pred len_fmt then (* format tag : match an item *)
+            match String.unsafe_get fmt (succ j) with
+	      | 's' ->
+		  let add_string () =
+	      	    let i = skip_blanks i in
+	      	    let (v, i) = scan_string i in
+		      add_match (Obj.repr v) i (j + 2)
+		  in
+		  if j < (len_fmt - 2) then
+		    match String.unsafe_get fmt (j + 2) with
+		      | '[' -> (* get ... *)
+	  		  if (String.get fmt (j + 3)) = '^' then (* all but *)
+			    let (chars, j) = scan_but_chunk fmt (j + 4) "]" in
+			    let (v, i) = scan_but_chunk str i chars in
+	              	      add_match (Obj.repr v) i (succ j)
+	      		  else (* only *)
+			    let (chars, j) = scan_but_chunk fmt (j + 3) "]" in
+			    let (v, i) = scan_chunk str i chars in
+			      add_match (Obj.repr v) i (succ j)
+		      | 'w' ->
+	      		  let i = skip_blanks i in
+	      		  let (v, i) = scan_word i in
+			    add_match (Obj.repr v) i (j + 3)
+		      | _ -> add_string ()
+		  else
+		    add_string ()
+              | 'c' ->
+		  let (v, i) = scan_char i in
+		    add_match (Obj.repr v) i (j + 2)
+	      | 'd' | 'o' | 'x' | 'X' | 'u' ->
+		  let i = skip_blanks i in
+		  let (v, i) = scan_int i in
+		    add_match (Obj.repr v) i (j + 2)
+	      | 'f' | 'e' | 'E' | 'g' | 'G' ->
+		  let i = skip_blanks i in
+		  let (v, i) = scan_float i in
+		    add_match (Obj.repr v) i (j + 2)
+	      | 'b' ->
+		  let i = skip_blanks i in
+		  let (v, i) = scan_bool i in
+		    add_match (Obj.repr v) i (j + 2)
+	      | 'a' | 't' -> failwith "%a and %t tags unsupported"
+	      | _ as c ->
+		  do_match c (j + 2)
+	  else (* trivial match *)
+            do_match c (succ j)
+  (* Prepend the current item
+   *)
+  and add_match v_repr i j =
+    let (matches, last_i) = doscan i j in
+      (v_repr :: matches, last_i)
+  in 
+  (* Some magic needed ... (type annotation added for clarity) 
+   *)
+  let (matches, last_i) = doscan offset 0 in
+    ((Obj.magic
+       	(List.fold_left (fun g elt -> (Obj.magic (g elt) : Obj.t -> Obj.t))
+	   (Obj.magic f : Obj.t -> Obj.t)
+	   matches)
+      : 'b), last_i)
+
+
+let sscanf f str fmt = 
+  fst (iscanf f str 0 fmt)
+
+
+(* end *)
+
+
+
+

@@ -1,0 +1,267 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA29803; Sat, 14 Aug 2004 18:28:10 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA29479 for <caml-list@pauillac.inria.fr>; Sat, 14 Aug 2004 18:28:09 +0200 (MET DST)
+Received: from mproxy.gmail.com (rproxy.gmail.com [64.233.170.200])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i7EGS7mL020944
+	for <caml-list@inria.fr>; Sat, 14 Aug 2004 18:28:08 +0200
+Received: by mproxy.gmail.com with SMTP id 75so34966rnl
+        for <caml-list@inria.fr>; Sat, 14 Aug 2004 09:28:05 -0700 (PDT)
+Received: by 10.38.162.38 with SMTP id k38mr208430rne;
+        Sat, 14 Aug 2004 09:28:05 -0700 (PDT)
+Message-ID: <d849ad2a04081409283cf52583@mail.gmail.com>
+Date: Sat, 14 Aug 2004 12:28:05 -0400
+From: John Prevost <j.prevost@gmail.com>
+Reply-To: John Prevost <j.prevost@gmail.com>
+To: Caml Mailing List <caml-list@inria.fr>
+Subject: Re: Re: [Caml-list] Restricting Method Overriding/Redefinition in Subclass
+In-Reply-To: <1092469137.29139.564.camel@pelican.wigram>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <411D56EC.2070301@ntlworld.com> <1092469137.29139.564.camel@pelican.wigram>
+X-Miltered: at nez-perce with ID 411E3D97.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 overriding:01 subclassing:01 o'caml's:01 class-based:01 subtyping:01 subtyping:01 subclassing:01 getx:01 getx:01 coerced:01 subtypes:01 val:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+John Skaller's solution is probably a good choice here.
+
+To understand why restricting subclassing doesn't do much good in
+O'Caml, you have to understand how O'Caml's object system is different
+from that of most class-based languages you've worked with before.
+
+The key insight is in the area of subtyping.  In C++, Java, and the
+like, subtyping and subclassing are combined with each other.  You
+cannot have a value which is of type A unless that value's class is
+either A or a subclass of A.  Here's an example from Java:
+
+class A {
+    public int getX() { return 1; }
+}
+
+class B {
+    public int getX() { return 2; }
+    public int getY() { return 3; }
+}
+
+B is not a subclass of A (it is not declared as "extends A"),
+therefore an instance of class B cannot be used where an instance of
+class A is expected.  In O'Caml, this is distinctly not the case:
+
+class a =
+  object
+    method get_x () = 1
+  end
+
+class b =
+  object
+    method get_x () = 2
+    method get_y () = 3
+  end
+
+let use_get_x o = o#get_x
+
+Here, the function "use_get_x" can be used on instances of any class
+that contains a method get_x : unit -> int.  This is called
+"structural subtyping".  The subtype relationship is based purely on
+what methods exist, not on what classes have been declared to be
+subclasses of others.
+
+So for your example, where you want to restrict the implementation of
+the subclasses, you can't really do it--any object that has all of the
+methods of class base_class can be coerced to type base_class and
+added with add_child.  So even if you were to restrict how your
+subclasses have to work, you can't be sure that the values you're
+given are actually produced from those subclasses.  (Well, not totally
+true: you can do it if you make your class type opaque--but this will
+prevent subclassing entirely, which you don't want.)
+
+At this point, you may be wondering "Why is O'Caml like this?  Is it a
+good thing to separate subtyping and subclassing this way?"  So I'll
+give a couple of examples of how this type discipline is less of a
+pain than the one used by Java.
+
+1) Implementing multiple interfaces.
+
+In Java, things sometimes get awkward if you want to work with values
+that implement multiple interfaces at once:
+
+interface Colored {
+   Color getColor();
+}
+
+interface HasPoint {
+    Point getPoint();
+}
+
+class MyThingy implements Colored, HasPoint {
+    ...
+}
+
+Okay, so the difficulty in this set of classes and interfaces (which
+*has* actually bitten me in the wild fairly frequently) is that there
+is no way to declare a variable as "any object that is of both type
+Colored and type HasPoint."  If we do this:
+
+interface ColoredHasPoint extends Colored, HasPoint { ... }
+
+then MyThingy is not an instance of ColoredHasPoint.  It has all of
+the appropriate methods, but it was not *declared* to have this type. 
+Therefore, it does not have the correct type.  So you end up having to
+write:
+
+    void useColoredHasPoint(Object o) {
+        Colored c = (Colored) o;
+        HasPoint h = (HasPoint) o;
+        ... = c.getColor();
+        ... = h.getPoint();
+    }
+
+and obviously the system has now broken down.  AS long as you work
+with only one interface at a time, you're in fine shape.  As soon as
+you need more than one and have no other requirements, you're in
+trouble.  In O'Caml, of course, the above is trivial:
+
+    let use_colored_has_point o =
+       let color = o#get_color () in
+       let point = o#get_point () in
+       ...
+
+2) Subclasses that are not subtypes
+
+This is a really interesting case, actually.  The short explanation is
+that if you let subclassing not require subtyping, then you can change
+the types of the arguments of the subclass's methods.  That raises the
+question "Why would you want to do that?"
+
+Say you have a class that implements linked lists:
+
+# class ['a] linked_list (x : 'a) =
+    object (_ : 's)                 (* self type for the "next" pointer *)
+      val mutable next = (None : 's option)
+      method set_next n = next <- Some n
+      method clear_next () = next <- None
+      method next = next
+      method value = x
+    end;;
+class ['a] linked_list :
+  'a ->
+  object ('b)
+    val mutable next : 'b option
+    method clear_next : unit -> unit
+    method next : 'b option
+    method set_next : 'b -> unit
+    method value : 'a
+  end
+
+Now, looking at this type, we see that there's a method "set_next"
+that takes the self type as an argument.  As a result, *any* subclass
+of linked_list that adds methods will not in fact be a subtype.  So
+why would you ever want to subclass this, anyway?  Well, perhaps you
+want to *re-use code* when writing a doubly linked list.
+
+# class ['a] doubly_linked_list (x : 'a) =
+    object (self : 's)
+      inherit ['a] linked_list x as ll
+      val mutable prev = (None : 's option)
+      method set_next n = match next with
+        | None -> ll#set_next n
+        | Some n' when n = n' -> ()
+        | Some n' -> (ll#set_next n; n'#clear_next (); n#set_next self)
+      method set_prev p = match prev with
+        | None -> prev <- Some p
+        | Some p' when p = p' -> ()
+        | Some p' -> (prev <- Some p; p'#clear_next (); p#set_next self)
+      method clear_prev () = match prev with
+        | None -> ()
+        | Some p -> (prev <- None; p#clear_next ())
+      method prev = prev
+    end;;
+class ['a] doubly_linked_list :
+  'a ->
+  object ('b)
+    val mutable next : 'b option
+    val mutable prev : 'b option
+    method clear_next : unit -> unit
+    method clear_prev : unit -> unit
+    method next : 'b option
+    method prev : 'b option
+    method set_next : 'b -> unit
+    method set_prev : 'b -> unit
+    method value : 'a
+  end
+
+And we see upon using them:
+
+# let w = new linked_list 10
+  let x = new linked_list 20
+  let y = new doubly_linked_list 30
+  let z = new doubly_linked_list 40;;
+val w : int linked_list = <obj>
+val x : int linked_list = <obj>
+val y : int doubly_linked_list = <obj>
+val z : int doubly_linked_list = <obj>
+# w#set_next x;;
+- : unit = ()
+# y#set_next z;;
+- : unit = ()
+# x#set_next y;;
+This expression has type int doubly_linked_list but is here used with type
+  int linked_list
+Only the first object type has a method clear_prev
+# z#set_next w;;
+This expression has type int linked_list but is here used with type
+  int doubly_linked_list
+Only the second object type has a method clear_prev
+
+We see upon using them that these types aren't compatible in
+O'Caml--not in either direction.  A linked_list cannot be used as a
+doubly_linked_list, a doubly_linked_list cannot be used as a linked
+list.  And it turns out that this stays true even if you try to coerve
+the types.  Why?  Because the doubly_linked_list only works if its
+"prev" and "next" pointers are also doubly linked lists--it needs to
+update its neighbours to make sure that x -next-> y implies that y
+-prev-> x.
+
+On the other hand:
+
+# let rec iter_list f l =
+    match l#next with
+      | None -> f l
+      | Some n -> f l; iter_list f n;;
+val iter_list : ((< next : 'a option; .. > as 'a) -> 'b) -> 'a -> 'b = <fun>
+# iter_list (fun v -> Printf.printf "%d\n" v#value) w;;
+10
+20
+- : unit = ()
+# iter_list (fun v -> Printf.printf "%d\n" v#value) y;;
+30
+40
+- : unit = ()
+
+This works because both the linked_list and doubly_linked_list types
+are subtypes of a third object type: the one that only cares about the
+"next" and "value" methods, and doesn't touch the set_next method or
+anything else.
+
+
+So anyway, the whole point here is that "class x is a subclass of
+class y" does not entail "type x is a subtype of type y".  And this is
+a good thing, because it enriches our world.  Now subtyping means that
+two values can be used in the same contexts (iter_list works on both
+linked_list and doubly_linked_list, even though they've not been
+declared as subclasses of < next : 'a option >).  And subclassing
+means that we're sharing code (linked_list and doubly_linked_list
+share code, even though their types are incompatible.)
+
+
+I hope my long-winded explanation was useful.
+
+John.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

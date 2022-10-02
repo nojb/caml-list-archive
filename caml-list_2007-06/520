@@ -1,0 +1,197 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id B78D5BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 20:23:42 +0200 (CEST)
+Received: from ptb-relay01.plus.net (ptb-relay01.plus.net [212.159.14.212])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5RINg8H023165
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 20:23:42 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay01.plus.net with esmtp (Exim) id 1I3cB3-0002a5-Hd
+	for caml-list@yquem.inria.fr; Wed, 27 Jun 2007 19:23:41 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] The Implicit Accumulator: a design pattern using optional arguments
+Date: Wed, 27 Jun 2007 19:17:55 +0100
+User-Agent: KMail/1.9.7
+References: <200706271314.35134.jon@ffconsultancy.com> <200706271618.54156.jon@ffconsultancy.com> <468293D4.3000100@functionality.de>
+In-Reply-To: <468293D4.3000100@functionality.de>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200706271917.55344.jon@ffconsultancy.com>
+X-Miltered: at discorde with ID 4682AB2E.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; stack:01 val:01 val:01 factorial:01 computations:01 factorial:01 amortize:01 ocaml:01 constructors:01 constructors:01 ocaml:01 deallocation:01 def:01 params:01 params:01 
+
+On Wednesday 27 June 2007 17:44:04 you wrote:
+> Jon Harrop wrote:
+> > This seems to be something that Lisp uses to allocate data structures on
+> > the stack rather than the heap. Why would you want that?
+>
+> In order to avoid dynamic memory management and get dynamically scoped
+> pre-allocated "implicit context" buffers to which I can refer as if they
+> were ordinary variables.
+
+Do you mean something like this:
+
+let dt() =
+  let start = ref (time()) in
+  fun () ->
+    let time' = time() in
+    let dt = time' -. !start in
+    start := time';
+    dt
+
+Call dt() to get a new delta timer, call the delta timer to get the time since 
+it was last called:
+
+# let dt1 = dt();;
+val dt1 : unit -> float = <fun>
+# let dt2 = dt();;
+val dt2 : unit -> float = <fun>
+# dt1();;
+- : float = 4.66352200508117676
+# dt2();;
+- : float = 4.48727107048034668
+# dt1();;
+- : float = 3.36179709434509277
+# dt2();;
+- : float = 2.09420299530029297
+
+You could call this a factory pattern.
+
+> > let float_factorial =
+> >   let m = ref [||] in
+> >   fun n ->
+> >     try (!m).(n) with _ ->
+> >     let m' = Array.make (n + 1) 1. in
+> >     for i=1 to n do
+> >       m'.(i) <- float i *. m'.(i - 1)
+> >     done;
+> >     m := m';
+> >     m'.(n);;
+>
+> Well, it avoids some of the computations in your example, which re-does
+> all the array whenever it has to be extended.
+
+On "float_factorial 1000000", my original implementation was >2x faster. If 
+you call for slowly increasing arguments then you can do much better still by 
+doubling the length of the array to amortize allocation:
+
+let float_factorial3 =
+  let n = ref 0 in
+  let m = ref [||] in
+  fun j ->
+    if j <= !n then (!m).(j) else
+      if j < Array.length !m then begin
+	let m' = !m in
+	for i = !n to j do
+	  m'.(i) <- float i *. m'.(i - 1)
+	done;
+	m := m';
+	m'.(j)
+      end else begin
+	n := j;
+	let m' = Array.make (2 * j + 1) 1. in
+	for i=1 to j do
+	  m'.(i) <- float i *. m'.(i - 1)
+	done;
+	m := m';
+	m'.(j)
+      end
+
+This is ~7x faster for 1 .. 20000.
+
+> >>Other advanced optimization techniques that can be used for benefit
+> >>in very specialized situations include (explicit) continuation coding:
+> >>rather than returning a value (e.g. a tuple), you take as an argument
+> >>a function to which you then pass on your return value(s). This is quite
+> >>useful whenever "execution flow branches out into multiple paths that
+> >>have to be taken",
+> >
+> > Are you referring to CPS?
+>
+> Yes, but not the call/cc implicit CPS, but explicitly passing around
+> continuations.
+
+Yes, that's very useful in OCaml.
+
+> >>and may sometimes (though rarely) also be used for
+> >>good as a poor man's VALUES/MULTIPLE-VALUE-BIND substitute.
+> >
+> > Weren't values and multiple-value-bind completely superceded by pattern
+> > matching?
+>
+> No. :-) Pattern matching requires constructors, which cons.
+
+Here is a pattern match without constructors:
+
+  let x = 3
+
+Here is a pattern match that doesn't cons:
+
+  let f(x, y) = x + y in
+  f 3 4
+
+Here is a pattern match with constructors that doesn't cons:
+
+  type t = A | B
+
+  let f = function
+    | A -> 0
+    | B -> 1
+
+What exactly are you having trouble implementing in OCaml? It sounds as if 
+you're still trying to work around the inefficiencies of Lisp and the beauty 
+of OCaml is that you don't have to. :-)
+
+Incidentally, the ray tracer is a good demonstration of this. The performance 
+of the Lisp implementations is crippled by very slow allocation and 
+deallocation. Juho Snellman tried to circumvent this problem using 
+multiple-value-bind in a macro:
+
+(defmacro def ((name params &body body)
+               (mname &rest mparams)
+               (wname &rest wparams))
+  `(progn
+    (declaim (inline ,name ,wname))
+    (defun ,name ,params
+      (declare (type double-float ,@params))
+      ,@body)
+    (defmacro ,mname ,(mapcar #'car mparams)
+      ,(loop with inner = (list name)
+             with body = ``,',inner
+             with all-names = nil
+             for (form count) in (reverse mparams)
+             for names = (loop repeat count collect (gensym))
+             do
+             (setf all-names (append all-names names))
+             (setf body ``(multiple-value-bind ,',(reverse names)
+                           ,,form ,,body))
+             finally
+             (setf (cdr inner) (reverse all-names))
+             (return body)))
+    (defun ,wname ,(mapcar #'car wparams)
+      (,mname ,@(mapcar #'cadr wparams)))))
+
+While this greatly improves the performance of the Lisp, it remains far slower 
+than most other languages.
+
+The equivalent optimization in OCaml is to pass multiple arguments in curried 
+form, exploiting ocamlopt's big step semantics without losing the 
+expressiveness of a functional style.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+The OCaml Journal
+http://www.ffconsultancy.com/products/ocaml_journal/?e
+

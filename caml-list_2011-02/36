@@ -1,0 +1,105 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p16GaF3T002528
+	for <caml-list@sympa-roc.inria.fr>; Sun, 6 Feb 2011 17:36:15 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvcAAPtcTk2A1gkBe2dsb2JhbACXD441AQEWIgUfuXiFWgQ
+X-IronPort-AV: E=Sophos;i="4.60,434,1291590000"; 
+   d="scan'208";a="99340539"
+Received: from courier.cs.helsinki.fi (HELO mail.cs.helsinki.fi) ([128.214.9.1])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 06 Feb 2011 17:36:07 +0100
+Received: from melkinpaasi.cs.helsinki.fi (melkinpaasi.cs.helsinki.fi [128.214.9.14])
+  (AUTH: PLAIN cs-relay, TLS: TLSv1/SSLv3,256bits,AES256-SHA)
+  by mail.cs.helsinki.fi with esmtp; Sun, 06 Feb 2011 18:36:07 +0200
+  id 00093F45.4D4ECDF7.00001FAF
+Received: by melkinpaasi.cs.helsinki.fi (Postfix, from userid 37211)
+	id DB89881446; Sun,  6 Feb 2011 18:36:06 +0200 (EET)
+Date: Sun, 6 Feb 2011 18:36:06 +0200
+From: Lauri Alanko <la@iki.fi>
+To: caml-list@inria.fr
+Message-ID: <20110206163606.GA1023@melkinpaasi.cs.helsinki.fi>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: [Caml-list] Closure marshalling inconsistency
+
+Marshalling closures with references to globals is precarious
+business.
+
+(** a.ml **)
+let r = ref 0
+let f () = incr r
+let print s = Printf.printf "After %s, !A.r = %d\n" s !r
+
+(** b.ml **)
+let f1 = A.f
+let f2 () = A.f ()
+let f3 () = incr A.r
+let pickle f = Marshal.to_string f [Marshal.Closures]
+let unpickle s : unit -> unit = Marshal.from_string s 0 
+let s1 = pickle f1
+let s2 = pickle f2
+let s3 = pickle f3
+let u1 = unpickle s1
+let u2 = unpickle s2
+let u3 = unpickle s3
+let _ =
+  A.print "start";
+  u1 ();
+  A.print "u1";
+  u2 ();
+  A.print "u2";
+  u3 ();
+  A.print "u3"
+
+
+$ ocamlc -o a a.ml b.ml
+$ ./a
+After start, !A.r = 0
+After u1, !A.r = 0
+After u2, !A.r = 1
+After u3, !A.r = 2
+
+Why did u1 () not increase A.r? Because A.f is a _closure_ whose
+environment consists of the variables of its local module that it
+refers to, namely, the ref cell r. When A.f is marshalled, the current
+value of r is marshalled as well, and then unmarshalled into a new
+closure containing a reference to a new ref cell. When u1 () is
+applied, only the newly created ref cell is incremented, not A.r.
+
+On the other hand, the _code_ of f2 contains a reference to the global
+variable A.f, and there is no environment to marshall. When we
+unmarshall back, we get back a reference to the same code, so calling
+u2() just calls A.f() (not a copy of it), which then increments A.r as
+normal.
+
+Finally, f3() does the same thing as f2(), except that instead of
+calling A.f, it just increments A.r (through a global reference)
+directly.
+
+So simple eta expansion and inlining of plain functions can have an
+observable effect on sharing in marshalled closures.
+
+What's worse, this only applies to the bytecode compiler. In native
+code things are different:
+
+$ ocamlopt -o a.opt a.ml b.ml
+$ ./a.opt
+After start, !A.r = 0
+After u1, !A.r = 1
+After u2, !A.r = 2
+After u3, !A.r = 3
+
+In native code, the reference to the local variable r in A.f does not
+happen through an environment, but is hard-coded into the code. Since
+the environment is marshalled by value and code is marshalled by
+reference, this again makes an observable difference. I'd consider
+this a bug.
+
+So, if you want to marshall a function that references a global, make
+sure that the global is in _another_ top-level module than the one
+that defines the function.
+
+
+Lauri

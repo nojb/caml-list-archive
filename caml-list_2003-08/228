@@ -1,0 +1,163 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA14672; Wed, 20 Aug 2003 17:46:28 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA13850 for <caml-list@pauillac.inria.fr>; Wed, 20 Aug 2003 17:46:26 +0200 (MET DST)
+Received: from rabelais.socialtools.net (rabelais.socialtools.net [81.2.94.243])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h7KFkPf23037
+	for <caml-list@inria.fr>; Wed, 20 Aug 2003 17:46:25 +0200 (MET DST)
+Received: by rabelais.socialtools.net (Postfix, from userid 108)
+	id 6048D23311; Wed, 20 Aug 2003 16:46:25 +0100 (BST)
+Received: from socialtools.net (chaucer.socialtools.net [81.2.94.242])
+	by rabelais.socialtools.net (Postfix) with ESMTP id 65B1C2330E
+	for <caml-list@inria.fr>; Wed, 20 Aug 2003 16:46:24 +0100 (BST)
+Message-ID: <3F4396F6.1010404@socialtools.net>
+Date: Wed, 20 Aug 2003 16:42:46 +0100
+From: Benjamin Geer <ben@socialtools.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.4) Gecko/20030624
+X-Accept-Language: en-gb, en, fr, it
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: [Caml-list] does class polymorphism need to be so complicated?
+X-Enigmail-Version: 0.76.5.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Status: No, hits=-0.1 required=5.0
+	tests=USER_AGENT_MOZILLA_UA,X_ACCEPT_LANG
+	version=2.54
+X-Spam-Checker-Version: SpamAssassin 2.54 (1.174.2.17-2003-05-11-exp)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; val:01 refactor:01 coercions:01 caml:01 inherit:01 mutable:01 int:01 supported:01 coercion:01 syntax:02 objects:02 cumbersome:02 unit:03 string:03 explicit:03 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I'm looking for a convenient way to use a derived class anywhere its 
+base class can be used.  There seem to be two ways to do this, but 
+neither of them is convenient.
+
+For example, suppose I have the following examples (borrowed from the 
+O'Reilly Caml book):
+
+class virtual printable () =
+    object (self)
+      method virtual to_string : unit -> string
+      method print () = print_string (self#to_string())
+    end ;;
+
+class point (x_init, y_init) =
+   object
+     inherit printable ()
+     val mutable x = x_init
+     val mutable y = y_init
+     method get_x = x
+     method get_y = y
+     method to_string () =
+       "( " ^ (string_of_int x) ^ ", " ^ (string_of_int y) ^")"
+   end ;;
+
+I want to make a class 'printer', which prints the string representation 
+of any 'printable'.  It seems that I have two options:
+
+1. Write 'printer' like this:
+
+class printer =
+   object
+     method print (obj : printable) = obj#print()
+   end ;;
+
+And use it like this:
+
+let p = new point (1, 2) ;;
+let pr = new printer ;;
+pr#print (p :> printable) ;;
+
+It is cumbersome to have to write the coercion, and it seems strange to 
+have to do so in an object-oriented language; why can't Caml recognise 
+that a 'point' is a 'printable', and do the coercion automatically?
+
+Moreover, it introduces a potential maintenance problem.  Suppose that, 
+after writing the application, I decide to to move the printing logic 
+out of 'printable', and into the 'printer' class.  I refactor the 
+classes like this:
+
+class virtual stringable () =
+    object
+      method virtual to_string : unit -> string
+    end ;;
+
+class virtual printable () =
+    object (self)
+      inherit stringable ()
+      method print () = print_string (self#to_string())
+    end ;;
+
+class printer =
+   object
+     method print (obj : stringable) = print_string (obj#to_string())
+   end ;;
+
+But now I have to change all the coercions from (p :> printable) to (p 
+:> stringable).  If it had been legal to write:
+
+let p = new point (1, 2) ;;
+let pr = new printer ;;
+pr#print p ;;
+
+there would be nothing more to change; all the calls to 'pr#print' would 
+still work.
+
+2. The second option is to write 'printer' like this:
+
+class printer =
+   object
+     method print : 'a. (#printable as 'a) -> unit =
+       fun obj -> obj#print()
+   end ;;
+
+This syntax is horribly awkward.  It would be very unpleasant to have to 
+write (or read) a lot of methods in this style.  Moreover, it seems 
+strange to have to do this, because I can write a function like this:
+
+let print (obj : #printable) = obj#print() ;;
+
+Or even:
+
+let print obj = obj#print() ;;
+
+So why can't I write:
+
+class printer =
+   object
+     method (obj : #printable) = obj#print()
+   end ;;
+
+Or even:
+
+class printer =
+   object
+     method obj = obj#print()
+   end ;;
+
+Why isn't a method just like a function in this respect?
+
+Of course, I could write 'printer' as a function instead of a class. 
+But this would lead to an approach in which objects are manipulated only 
+by functions, and never by other objects.  If that were really the only 
+convenient way to use classes in Caml, it would be difficult to say that 
+Caml supported object-oriented programming.
+
+So my questions are:
+
+Does it really need to be this complicated?  Could the language be 
+improved so that either (1) explicit coercions to a base class were not 
+needed or (b) methods could use types the way functions do?
+
+Is there a more convenient approach that I've missed?  What do people 
+generally do in order to get round this problem, when using classes in Caml?
+
+Ben
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

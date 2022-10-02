@@ -1,0 +1,95 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.7 required=5.0 tests=AWL,SPF_SOFTFAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 4837ABC69
+	for <caml-list@yquem.inria.fr>; Sun,  8 Jul 2007 02:20:13 +0200 (CEST)
+Received: from ptb-relay03.plus.net (ptb-relay03.plus.net [212.159.14.214])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l680KCQ6009100
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sun, 8 Jul 2007 02:20:13 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay03.plus.net with esmtp (Exim) id 1I7KVY-0004if-6U
+	for caml-list@yquem.inria.fr; Sun, 08 Jul 2007 01:20:12 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: try .. finally using new camlp4
+Date: Sun, 8 Jul 2007 01:14:41 +0100
+User-Agent: KMail/1.9.7
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200707080114.42213.jon@ffconsultancy.com>
+X-Miltered: at discorde with ID 46902DBC.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; camlp:01 camlp:01 syntax:01 afaict:01 expr:01 expr:01 syntax:01 sig:01 struct:01 ocaml:01 val:01 exn:01 val:01 exn:01 ocamlc:01 
+
+
+I'm just getting my toe wet with the new camlp4 and I can't get this simple 
+syntax extension to work. AFAICT, the following code:
+
+
+open Camlp4.PreCast;;
+
+let expr : Camlp4.PreCast.Ast.expr Camlp4.PreCast.Gram.Entry.t =
+  Gram.Entry.mk "expression"
+
+module Example (Syntax : Camlp4.Sig.Camlp4Syntax) = struct
+  open Camlp4.PreCast
+  include Syntax
+
+  let printer =
+    let module P = Camlp4.Printers.OCaml.Make(Syntax) in
+    new P.printer ()
+
+  EXTEND Gram
+    expr: LEVEL "top"
+    [[ "try"; f=expr; "finally"; g=expr ->
+	 <:expr<
+	   ((function
+	     | `Val v, g -> g(); v
+	     | `Exn e, g -> g(); raise e)
+	      ((try `Val($f$) with e -> `Exn e), (fun () -> $g$)))
+	 >>]];
+  END
+end
+
+module M = Camlp4.Register.OCamlSyntaxExtension(Id)(Example)
+
+
+should provide the syntax extension. Compile with:
+
+$ ocamlc -dtypes -pp camlp4of -I /usr/lib/ocaml/3.10.0/camlp4 -linkall 
+camlp4lib.cma unix.cma Camlp4Parsers/Camlp4OCamlRevisedParser.cmo 
+Camlp4Parsers/Camlp4OCamlParser.cmo Camlp4Printers/Camlp4AutoPrinter.cmo 
+Camlp4Bin.cmo pa_tryfinally.ml -o pa_tryfinally
+
+Drop into a top-level with the extended syntax and the extension works but it 
+seems to have replaced the original try .. with syntax rather than added a 
+new one:
+
+$ ocaml camlp4of.cma pa_tryfinally.cmo
+        Objective Caml version 3.10.0
+
+        Camlp4 Parsing version 3.10.0
+
+# try raise Exit finally print_endline "Foo!";;
+Foo!
+Exception: Pervasives.Exit.
+# try raise Exit with _ -> print_endline "Foo!";;
+Parse error: "finally" expected after [expr] (in [expr])
+
+I've tried various things to correct this but I can't get it to work. What am 
+I doing wrong?
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+The OCaml Journal
+http://www.ffconsultancy.com/products/ocaml_journal/?e
+

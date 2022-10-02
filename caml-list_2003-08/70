@@ -1,0 +1,174 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA04029; Thu, 7 Aug 2003 22:16:53 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA06041 for <caml-list@pauillac.inria.fr>; Thu, 7 Aug 2003 22:16:51 +0200 (MET DST)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h77KGpf25515
+	for <caml-list@pauillac.inria.fr>; Thu, 7 Aug 2003 22:16:51 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Thu, 7 Aug 2003 15:16:58 -0500
+Received: from eagle.ancor.com ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 7 Aug 2003 15:16:59 -0500
+Received: from localhost (bhurt@localhost)
+	by eagle.ancor.com (8.11.6/8.11.6) with ESMTP id h77KGnE31968;
+	Thu, 7 Aug 2003 15:16:50 -0500
+X-Authentication-Warning: eagle.ancor.com: bhurt owned process doing -bs
+Date: Thu, 7 Aug 2003 15:16:49 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender:  <bhurt@eagle.ancor.com>
+To: Matt Gushee <matt@gushee.net>
+cc: <caml-list@pauillac.inria.fr>
+Subject: Re: [Caml-list] Multi-keyed lookup table?
+In-Reply-To: <20030807194135.GB21983@swordfish>
+Message-ID: <Pine.LNX.4.33.0308071457590.2616-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 07 Aug 2003 20:16:59.0044 (UTC) FILETIME=[DAF6A640:01C35D20]
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.05; caml-list:01 gushee:01 all--:01 font:99 hashtbl:01 ,15:99 10646:01 serif:99 sansserif:99 helvetica:99 roman:98 int:01 width:98 match:02 tree:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 7 Aug 2003, Matt Gushee wrote:
+
+> Hello, all--
+> 
+> I am trying to decide on a data structure that allows efficient lookup
+> of fonts according to various font properties. I am thinking that the
+> data structures describing fonts will be something like this:
+
+In the general case, this is hard.  In this specific case, you might 
+consider just hard coding your levels.  So you'd end up with a data 
+structure like:
+
+             All font
+             /   |   \
+            /    |    \
+         medium bold light   <-- pick the weight
+                / | \
+               /  |  \
+              /   |   \
+             /    |    \
+          Roman Italic Oblique  <-- pick the style
+                / | \
+               /  |  \
+              /   |   \
+             /    |    \
+            /     |     \
+        Normal Expanded Condensed <-- pick the width
+                  |
+
+           [ ...; 15; ... ] <-- pick the size
+                  |
+                  |
+                  *    <-- pick the family
+
+So you'd end up with something like:
+
+type font_tree = { medium: style_tree; bold: style_tree; light: style_tree 
+};
+
+type style_tree = { roman: width_tree; italic: width_tree; oblique: 
+width_tree };
+
+type witdth_tree = ...
+
+type family_tree = (string, size_tree) Hashtbl.t
+
+type size_tree = (int, string) Hashtbl.t
+
+let font_list tree weight style width family size =
+    let list_of_hashtbl tbl =
+        let f _ s t = s :: t in
+        List.rev (Hashtbl.fold f tbl [])
+
+    let get_size sztree =
+        match size with
+            | "*" -> list_of_hashtbl sztree
+            | _ ->
+                try
+                    [ Hashtbl.find sztree (int_of_string size) ]
+                with
+                   Not_found -> []
+    in
+
+    ...
+
+    in
+    match weight with
+        | "*" -> (get_style tbl.medium) @ (get_style tbl.bold) @
+                 (get_style tbl.light)
+        | "medium" -> get_style tbl.medium
+        | "bold" -> get_style tbl.bold
+        ...
+
+For bonus points remove the @'s by accumulating.
+
+Brian
+
+
+> 
+> 
+>   type font_weight =
+>     | Medium
+>     | Bold
+>     | Light
+>   type font_style =
+>     | Roman
+>     | Italic
+>     | Oblique
+>   type font_width =
+>     | Normal
+>     | Expanded
+>     | Condensed
+>   type encoding = string * int     (* e.g. : ("iso8859",15))
+>   type font_ref = string       (* reference to the font file *)
+>   
+>   type font_family =
+>     ((font_weight * font_style * font_width * encoding) * font_ref) 
+>     list
+> 
+>   (* Example font family *)
+>   let arial = [
+>     ((Medium, Roman, Normal, ("iso10646",1)), "arial.ttf");
+>     ((Bold, Roman, Normal, ("iso10646",1)), "arialb.ttf");
+>     ...
+>     ];;
+> 
+>   (* based on the 5 types used in CSS and other Web standards *)
+>   type font_class =
+>     | Serif           
+>     | SansSerif
+>     | Monospaced
+>     | Cursive
+>     | Fantasy
+> 
+> 
+> What I would like to have is a data structure that contains descriptions
+> of all fonts available on a particular system, such that an application
+> can do something like:
+> 
+>   get_font_by_class ~weight:Bold ~style:Italic ~encoding:("iso8859",1) SansSerif
+> 
+> or
+> 
+>   get_font_by_family  ~weight:Bold "Helvetica"
+> 
+> And obtain the font file name that matches the specified
+> characteristics. As I mentioned above, efficient lookup is important;
+> efficient creation of the data structure is probably not important; and
+> since there are no large objects involved, and the data refers to font
+> collections that may have hundreds of members, but probably not
+> thousands, I don't think memory usage is really an issue.
+> 
+> So, does anyone have an idea what sort of data structure would work
+> best?
+> 
+> TIA for your suggestions.
+>     
+> 
+> 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

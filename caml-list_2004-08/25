@@ -1,0 +1,89 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA07553; Mon, 2 Aug 2004 17:15:07 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA08142 for <caml-list@pauillac.inria.fr>; Mon, 2 Aug 2004 17:15:06 +0200 (MET DST)
+Received: from fichte.ai.univie.ac.at (fichte.ai.univie.ac.at [131.130.174.156])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i72FF5SH008365
+	for <caml-list@inria.fr>; Mon, 2 Aug 2004 17:15:06 +0200
+Received: from fichte.ai.univie.ac.at (markus@localhost [127.0.0.1])
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) with ESMTP id i72FF2Du011369
+	for <caml-list@inria.fr>; Mon, 2 Aug 2004 17:15:02 +0200
+Received: (from markus@localhost)
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) id i72FF2Dg011368
+	for caml-list@inria.fr; Mon, 2 Aug 2004 17:15:02 +0200
+Date: Mon, 2 Aug 2004 17:15:02 +0200
+From: Markus Mottl <markus@oefai.at>
+To: OCaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] "noalloc" + enter/leave blocking section - safe?
+Message-ID: <20040802151502.GA10950@fichte.ai.univie.ac.at>
+Mail-Followup-To: OCaml <caml-list@inria.fr>
+References: <20040802104349.GA6997@fichte.ai.univie.ac.at>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20040802104349.GA6997@fichte.ai.univie.ac.at>
+User-Agent: Mutt/1.5.6i
+X-Miltered: at concorde with ID 410E5A79.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 noalloc:01 noalloc:01 foo:01 foo:01 stub:01 tids:01 tids:01 mlvalues:01 camlprim:01 stub:01 val:01 segfault:01 c-interface:01 bug:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, 02 Aug 2004, Markus Mottl wrote:
+> one important question: is it safe to use "noalloc" with
+> C-functions that contain calls to "caml_enter_blocking_section" and
+> "caml_leave_blocking_section" to allow other POSIX-treads?
+
+Ok, after having done some experiments on my own now, it seems that this
+is _not_ safe.  Here is a small example that demonstrates this:
+
+file: foo.ml
+---------------------------------------------------------------------------
+external foo : 'a -> unit = "foo_stub" "noalloc"
+
+let thread () =
+  let ar = Array.init 1 (fun _ -> "") in
+  foo ();
+  let ar = Array.init 1 (fun _ -> "") in
+  ()
+
+let () =
+  let n = 10 in
+  let ar = Array.create n () in
+  let tids = Array.map (Thread.create thread) ar in
+  Array.iter Thread.join tids
+---------------------------------------------------------------------------
+
+
+file: foo_stubs.c
+---------------------------------------------------------------------------
+#include <caml/mlvalues.h>
+#include <caml/signals.h>
+
+CAMLprim value foo_stub(value v) {
+  caml_enter_blocking_section();
+    int i;
+    for (i = 0; i < 100000000; i++);
+  caml_leave_blocking_section();
+  return Val_unit;
+}
+---------------------------------------------------------------------------
+
+Compiling and linking the above example to native code (i.e. with
+POSIX-threads) and running it will almost immediately produce a segfault
+on my machine.  Removing "noalloc" solves this problem.
+
+Could the documentation on the C-interface please be updated with a
+small section on the correct use of "noalloc"?  It's not documented at
+all right now!  (This also closes bug report #3019, I guess).
+
+Regards,
+Markus
+
+-- 
+Markus Mottl          http://www.oefai.at/~markus          markus@oefai.at
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

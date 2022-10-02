@@ -1,0 +1,94 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q08IjEHG032073
+	for <caml-list@sympa-roc.inria.fr>; Sun, 8 Jan 2012 19:45:14 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Av0EACzjCU9QRFuw/2dsb2JhbAA9BqxFgQWBcgEBBTo2CRALGBwSFCg0GoditQeFFYNMgk1jBJUIkjo
+X-IronPort-AV: E=Sophos;i="4.71,476,1320620400"; 
+   d="scan'208";a="138327369"
+Received: from furbychan.cocan.org ([80.68.91.176])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/AES256-SHA; 08 Jan 2012 19:45:09 +0100
+Received: from rich by furbychan.cocan.org with local (Exim 4.72)
+	(envelope-from <rich@annexia.org>)
+	id 1Rjxjt-00080Q-3h; Sun, 08 Jan 2012 18:45:05 +0000
+Date: Sun, 8 Jan 2012 18:45:05 +0000
+From: "Richard W.M. Jones" <rich@annexia.org>
+To: orbitz@ezabel.com
+Cc: david.baelde@ens-lyon.org, Caml List <caml-list@inria.fr>
+Message-ID: <20120108184505.GA30498@annexia.org>
+References: <96F225D0-B458-4E25-BE34-3976989984B2@ezabel.com>
+ <CAFqqUFEO5Vxf0jWxSEbDjXY-qE_G2XsOA0uZj47jTt4NMkeBPA@mail.gmail.com>
+ <EED65A08-B24F-42CD-B4D6-4E30667EC6CA@ezabel.com>
+ <20120101124454.GA12851@annexia.org>
+ <012932EC-860F-4A40-98D1-E4B6EC123927@ezabel.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <012932EC-860F-4A40-98D1-E4B6EC123927@ezabel.com>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: Re: [Caml-list] Understanding usage by the runtime
+
+On Sat, Jan 07, 2012 at 12:43:22AM -0500, orbitz@ezabel.com wrote:
+> One question does remain though: In my tests I would do some work
+> that would cause ~1GB of RAM to be under control of the Gc.  Then I
+> would do something that, at the time I didn't understand, would case
+> the Gc to compact all of its memory and go back down to less than 1
+> meg, but the RES value in top would only drop to about 400 megs.  Is
+> this expected behavior?  I know the malloc implementation might hold
+> on to some data for itself but 400x the amount of memory the Ocaml RTS
+> actually needs seems a bit excessive.
+
+I would say it's unusual, but not necessarily unexpected.
+
+You have to understand (a) how C malloc works, (b) under what
+conditions memory may be given back to the OS, and (c) whether it's
+even necessary to give back memory to the OS.
+
+Now (a) depends on what malloc implementation you're using.  We can
+assume it's Linux glibc, although even that has changed several times,
+so it really depends on which precise version of glibc you've got, but
+for this discussion I'll assume it's the latest version.  All of these
+details could be completely different for other operating systems ...
+
+glibc currently has three strategies to allocate memory.
+
+. For small amounts (under 512 bytes in the current impl) it has a
+  linked list of cached blocks of fixed sizes that are used to satisfy
+  requests quickly.
+
+. For medium amounts (512 - 128K, adjustable) it has a complex
+  algorithm described as a combination of best fit and LRU.
+
+. For large allocations (128K and over, but tunable), it uses mmap.
+
+Furthermore, for allocations < 128K, when more core is required from
+the OS, it will either use sbrk(2) to increase the heap linearly, or
+it will use mmap(2) to allocate >= 1MB chunks scattered around the
+address space.
+
+Basically what this means for (b) is that it's phenomenally hard to
+predict if it will be possible to give back memory to the OS.  It
+depends on how the OCaml runtime requested it (what size, what order
+of requests).  It will depend on how random C allocations (libraries
+and the OCaml runtime) happen to be spread around, since those cannot
+be moved and will prevent memory from being given back.  And it will
+depend on the malloc control structures themselves which also cannot
+be moved and their location will be highly dependent on the order in
+which requests were made (maybe even not predictable if you have a
+multithreaded program).  It may be that just one struct is preventing
+a whole mmapped area from being given back.
+
+So you might think that your program "just allocated 1GB of RAM and
+freed it" at the OCaml level, but what's happening at the allocator
+level is likely to be far more complex.
+
+And that brings us to (c): does it even make sense to give back memory
+to the OS?  Here's the news: the OS doesn't need you to give back
+memory.  Because of virtual memory and swap, the OS will quite happily
+take back your memory whenever it wants without asking you.  It could
+even be more efficient this way.
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat

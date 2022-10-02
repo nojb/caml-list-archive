@@ -1,0 +1,111 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA27176; Tue, 5 Feb 2002 09:11:09 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA27166 for <caml-list@pauillac.inria.fr>; Tue, 5 Feb 2002 09:11:09 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g158B8H01317
+	for <caml-list@inria.fr>; Tue, 5 Feb 2002 09:11:08 +0100 (MET)
+Received: (from fpottier@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA27520 for caml-list@inria.fr; Tue, 5 Feb 2002 09:11:08 +0100 (MET)
+Date: Tue, 5 Feb 2002 09:11:08 +0100
+From: Francois Pottier <francois.pottier@inria.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] optimizing functors
+Message-ID: <20020205091108.A26664@pauillac.inria.fr>
+Reply-To: Francois.Pottier@inria.fr
+References: <20020202185918.B3976@pauillac.inria.fr> <Pine.GSO.4.03.10202041337360.28015-100000@basilic.ens.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+In-Reply-To: <Pine.GSO.4.03.10202041337360.28015-100000@basilic.ens.fr>; from David.Monniaux@ens.fr on Mon, Feb 04, 2002 at 01:50:06PM +0100
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+On Mon, Feb 04, 2002 at 01:50:06PM +0100, David Monniaux wrote:
+> 
+> In code containing many modules consisting of a few small functions called
+> by functions in functors, this lack of optimization may be costly.
+> 
+> I was thinking of implementing such functors similarly as C++ templates
+> (expanding the functor parameters). Has some work been done on this?
+
+I am also of the opinion that the current compilation scheme creates
+a tension between modularity and efficiency, and that people (including
+myself) are too often tempted to choose efficiency.
+
+I have given some thought to writing a source-to-source defunctorizer, i.e. a
+tool that expands functors and modules away, and produces a flat O'Caml
+program, which can then be fed to the normal ocamlopt compiler. There are two
+conceptually independent tasks to be performed: reducing functor applications
+and flattening modules (i.e. removing nested modules). Perhaps the latter can
+be neglected, as (I believe) ocamlopt produces good code for nested modules.
+
+I quickly ran into problems when trying to define a source-level reduction
+semantics for O'Caml functors. O'Caml's source syntax was clearly not meant to
+express its own reduction semantics, and this shows through the lack of
+alpha-conversion (renaming) facilities. Indeed, it is easy to rename a program
+variable by introducing a `let' binding, but there is no or little provision
+to rename types, data constructors, record labels, etc. Consider the following
+example:
+
+  (* functor definition site *)
+  type t = A
+  module F (X : sig ... end) = struct
+    let x = A
+  end
+
+  ...
+
+  (* functor application site *)
+  type u = A | B
+  module M = F (struct ... end)
+
+Expanding the call to F causes the data constructor name A (in the definition
+of x) to be captured, and there seems to be no simple way of avoiding it.
+
+Another problem is caused by the current type system for `applicative'
+functors. The type system is able to keep track of the fact that two modules
+have the same type because they arise out of the same functor application. (In
+other words, functor applications may appear in types.)  Expanding away
+functor applications causes this information to be lost, which potentially
+makes the program ill-typed. There may be a work-around, but it isn't
+pretty. (All I could think of was to keep the functor around, and to use
+explicit type equations to propagate the type information that was available
+in the original program, e.g.
+
+  module F = functor (...) struct type t = ... end
+  module N = F(M) (* N.t == F(M).t *)
+
+would become
+
+  module F = functor (...) struct type t = ... end
+  module N = struct type t = F(M).t = ... end
+
+A bit ugly, but could be made to work, I believe.)
+
+Given these difficulties, I haven't looked any further into source-to-source
+defunctorization. Some defunctorizers have been written for Standard ML. One
+is part of the BANE program analysis toolkit:
+
+  http://www.cs.berkeley.edu/Research/Aiken/bane.html
+
+Another defunctorizer was written by Martin Elsman:
+
+  http://www.dina.kvl.dk/~mael/papers.html
+
+See the paper `Static Interpretation of modules'. This one doesn't work at
+the source level, however, I believe.
+
+In light of the current syntax war on the caml-list, I would suggest, if a new
+syntax is to be adopted, that it be able to express a reduction semantics for
+the language. This would make source-to-source transformations a whole lot
+easier.
+
+-- 
+François Pottier
+Francois.Pottier@inria.fr
+http://pauillac.inria.fr/~fpottier/
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

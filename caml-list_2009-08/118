@@ -1,0 +1,84 @@
+Return-Path: <rixed@happyleptic.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.6 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 6E655BC37
+	for <caml-list@yquem.inria.fr>; Fri, 21 Aug 2009 22:21:01 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkIBAAOfjkrUGyoFkWdsb2JhbACbCwEBAQEJCwoHEwO7JIQaBQ
+X-IronPort-AV: E=Sophos;i="4.44,252,1249250400"; 
+   d="scan'208";a="34689808"
+Received: from smtp5-g21.free.fr ([212.27.42.5])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 21 Aug 2009 22:20:44 +0200
+Received: from smtp5-g21.free.fr (localhost [127.0.0.1])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 28A59D4813F
+	for <caml-list@inria.fr>; Fri, 21 Aug 2009 22:20:39 +0200 (CEST)
+Received: from apc.happyleptic.org (happyleptic.org [82.67.194.89])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 447C7D480F7
+	for <caml-list@inria.fr>; Fri, 21 Aug 2009 22:20:37 +0200 (CEST)
+Received: from yeeloong (unknown [82.229.213.209])
+	by apc.happyleptic.org (Postfix) with ESMTP id BA408334FD
+	for <caml-list@inria.fr>; Fri, 21 Aug 2009 22:20:36 +0200 (CEST)
+Received: from rixed by yeeloong with local (Exim 4.69)
+	(envelope-from <rixed@happyleptic.org>)
+	id 1MeabC-0001Oe-Gw
+	for caml-list@inria.fr; Fri, 21 Aug 2009 22:20:34 +0200
+Date: Fri, 21 Aug 2009 22:20:34 +0200
+From: rixed@happyleptic.org
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Native compilation for today's MIPS
+Message-ID: <20090821202034.GA5354@happyleptic.org>
+References: <20090810173413.GA7442@fp-desktop.fr.evistel.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20090810173413.GA7442@fp-desktop.fr.evistel.com>
+User-Agent: Mutt/1.5.18 (2008-05-17)
+X-Spam: no; 0.00; compilation:01 mips:01 coq:01 bug:01 bug:01 mips:01 coqtop:01 itailcall:01 addu:01 vaguely:01 pointer:01 coq:01 stack:01 emit:01 emit:01 
+
+Done !
+
+At least, now coq compiles and seams to run OK.
+
+I encountered a strange bug, anyway, and would like some advice about
+my fix. Also, this bug do not seams related to my particular
+architecture and, as far as I can tell, would hit any MIPS.
+
+At various occasions the coqtop program jumped in the wrong places.
+This was due to the code emited for some tail calls :
+
+    | Lop(Itailcall_imm s) ->
+        if s = !function_name then begin
+          `	b	{emit_label !tailrec_entry_point}\n`
+        end else begin
+          let n = frame_size() in
+          if !contains_calls then
+            `	lw	$31, {emit_int(n - 4)}($sp)\n`;
+          if !uses_gp then
+            `	lw	$gp, {emit_int(n - 8)}($sp)\n`;
+          if n > 0 then
+            `	addu	$sp, $sp, {emit_int n}\n`;
+          `	la	$25, {emit_symbol s}\n`;
+          liveregs i live_25;
+          `	j	$25\n`
+        end
+
+Now when !uses_gp is true, then the gp register is restored.
+Only then the address of symbol s is fetched into register $25, and
+jumped to. The problem is : the pseudo instruction 'la' may result 
+in some code that uses gp to reach the global offset table and read the
+address from there. The assembler will then assume that the gp is the
+one that was setup at the begening of the function, and not the one
+that's just restored from the stack. Maybe for small programs the value
+of gp is always the same (I only vaguely understand this global pointer
+thing) but it is not the case for coq.
+
+So I merely moved upward the 'la' instruction, before the 'lw gp,stack'.
+And it works, apparently.
+
+What do you think ?
+

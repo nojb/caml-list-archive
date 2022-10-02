@@ -1,0 +1,155 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id FAA26290; Wed, 11 Dec 2002 05:04:00 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA25799 for <caml-list@pauillac.inria.fr>; Wed, 11 Dec 2002 05:03:59 +0100 (MET)
+Received: from TheWorld.com (pcls1.std.com [199.172.62.103])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id gBB43vX24609
+	for <caml-list@inria.fr>; Wed, 11 Dec 2002 05:03:57 +0100 (MET)
+Received: from watergate.world.std.com (pool-141-149-176-134.bos.east.verizon.net [141.149.176.134])
+	by TheWorld.com (8.9.3/8.9.3) with ESMTP id XAA26595
+	for <caml-list@inria.fr>; Tue, 10 Dec 2002 23:03:56 -0500
+Message-Id: <5.2.0.9.0.20021210221857.02f85258@pop.theWorld.com>
+X-Sender: chase@pop.theWorld.com
+X-Mailer: QUALCOMM Windows Eudora Version 5.2.0.9
+Date: Tue, 10 Dec 2002 23:03:55 -0500
+To: caml-list@inria.fr
+From: David Chase <chase@world.std.com>
+Subject: Re: [Caml-list] float pretty-printing precision, once more.
+In-Reply-To: <20021210164721.C7440@pauillac.inria.fr>
+References: <97FCFA94-0C40-11D7-B751-0003930FCE12@inria.fr>
+ <1039475060.3df52174c32a4@imp.pro.proxad.net>
+ <97FCFA94-0C40-11D7-B751-0003930FCE12@inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+At 04:47 PM 12/10/2002 +0100, Xavier Leroy wrote:
+>If that was really the best approximation, there would be nothing to
+>argue.  But both 0.10000000000000001 and 0.1 read back as identical
+>floats, so the latter should be printed instead, but sprintf (on
+>Linux at least) is too stupid to realize this.
+
+Gdtoa will supply you with the non-stupid answer, if you care
+to ask it.  Again -- this I know well, I have used gdtoa to get
+specification-conforming double->String conversion in a Java
+VM/library.  Here is a test program that demonstrates how to
+use gdtoa in "minimum unambiguous result length" mode.  This
+assumes int is 32 bits long:
+
+#include "gdtoa.h"
+/* Always define to zero or one.  It is zero on Pentium. */
+#define LITTLE_ENDIAN 1
+FPI d_convert = { 53, 1-1023-53+1, 2046-1023-53+1, FPI_Round_near, 0};
+union pun {
+  double d;
+  int i[2];
+};
+char * test_gdtoa(double d, int mode, int ndigits, int * plength, int * pdecpt) {
+  union pun convert;
+  convert.d = d;
+  {
+  int i0 = convert.i[0^LITTLE_ENDIAN];
+  int i1 = convert.i[1^LITTLE_ENDIAN];
+  
+  int isNeg = i0 < 0;
+  int m0 = i0 & 0xfffff;
+  int e0 = ((unsigned)i0 >> 20) & 0x7ff; 
+  int int_args[8];
+  char * ptr_args[1];
+  char * result;
+  int length;
+  
+  /* NaN or Inf */
+  if (e0 == 0x7ff) {
+    if ((m0 | i1) != 0) {
+      *plength = -1;
+      return "NaN";
+    } else {
+      *plength = -1;
+      return isNeg ? "-Infinity" : "Infinity";
+    }
+  }
+  
+  /* +/- 0 */
+  if ((m0 | i1 | e0) == 0) {
+    *plength = -1;
+    return isNeg ? "-0.0" : "0.0";
+  }
+  
+  /* If the exponent is larger than zero,
+     then the leading "1" in the mantisssa
+     is implicit.  Otherwise, the number is
+     denormalized, and the exponent is
+     really 1. */
+  
+  if (e0 != 0) m0 |= 0x100000;
+  else e0 = 1;
+  
+  /* Adjust exponent to remove bias and to
+     make the mantissa all "integer", e.g.
+     12345e-4 instead of 1.2345e+0 */
+  e0 -= 0x3ff + 52;
+  int_args[0] = i1;
+  int_args[1] = m0;
+  int_args[2] = STRTOG_Normal;
+  result = gdtoa(&d_convert, /* fpi */
+                 e0,         /* be   */
+                 int_args + 0, /* bits */
+                 int_args + 2, /* kindP */
+                 mode,         /* mode */
+                 ndigits,      /* ndigits */
+                 int_args + 3, /* decpt */
+                 ptr_args + 0); /* rve */
+  *pdecpt = int_args[3];
+  length = ptr_args[0] - result;
+  if (length == 0) {
+      *plength = -1;
+    return isNeg ? "-0.0" : "0.0";
+  }
+  *plength = length;
+  return result;
+  }
+}
+
+static test_one(double d) {
+  int decpt;
+  int length;
+  char * result = test_gdtoa(d, 0, 0, &length, &decpt);
+
+  if (length == -1) {
+    printf("test of %f returns special value %s\n", d, result);
+  } else {
+    printf("test of %f returns regular value %s, decpt %d, length %d\n", d, result, decpt, length);
+  }
+}
+
+int main(int argc, char ** argv) {
+  test_one(1.0);
+  test_one(1.0/0.0);
+  test_one(-1.0/0.0);
+  test_one(-1.0/0.0 + 1.0/0.0);
+  test_one(0.0);
+  test_one(-0.0);
+  test_one(-1.0);
+  test_one(0.25);
+  test_one(4.0);
+  test_one(8192.125);
+  test_one(0.1);
+  test_one(0.01);
+  test_one(0.9);
+  test_one(0.09);
+  test_one(0.2);
+  test_one(0.02);
+  test_one(0.3);
+  test_one(0.03);
+}
+
+
+David Chase
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,139 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q46FYkNZ002127
+	for <caml-list@sympa-roc.inria.fr>; Sun, 6 May 2012 17:34:47 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuIBAMmZpk/ZSMDjgGdsb2JhbABEDrJdIgEBCwsLBRYDJIIMAQEEAScTPwULCyElDwEEKCETh38BCQmvUh+KC5EfBJthjQ87
+X-IronPort-AV: E=Sophos;i="4.75,539,1330902000"; 
+   d="scan'208";a="142743440"
+Received: from fmmailgate02.web.de ([217.72.192.227])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 06 May 2012 17:34:41 +0200
+Received: from moweb001.kundenserver.de (moweb001.kundenserver.de [172.19.20.114])
+	by fmmailgate02.web.de (Postfix) with ESMTP id 72C9D1C452CCD
+	for <caml-list@inria.fr>; Sun,  6 May 2012 17:34:22 +0200 (CEST)
+Received: from frosties.localnet ([95.208.118.96]) by smtp.web.de (mrweb001)
+ with ESMTPA (Nemesis) id 0LtX9Q-1RzWf31rL2-010xds; Sun, 06 May 2012 17:34:21
+ +0200
+Received: from mrvn by frosties.localnet with local (Exim 4.77)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1SR3TY-0000WM-Gf; Sun, 06 May 2012 17:34:20 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+Cc: Goswin von Brederlow <goswin-v-b@web.de>, caml-list@inria.fr
+References: <87r4uykb09.fsf@frosties.localnet>
+	<415387F7-557D-40C7-8F9E-E8CDC5603E3C@math.nagoya-u.ac.jp>
+Date: Sun, 06 May 2012 17:34:20 +0200
+In-Reply-To: <415387F7-557D-40C7-8F9E-E8CDC5603E3C@math.nagoya-u.ac.jp>
+	(Jacques Garrigue's message of "Sun, 6 May 2012 22:01:03 +0900")
+Message-ID: <87aa1lcohv.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Provags-ID:  V02:K0:5ayk1o+jC14NiDDFq6fk2m4TTnNN8EmzVKBTqSZWsFO
+ b7/3UDZb+oio1Kj1eSfn+UfNe5LJidM8OhdUO1oDLLc2jb80pR
+ V2go5bxnW5+tIQbjbNxYqS158lxSM/YC7Iir9LDmvs2B78XrT9
+ +GbgvFx+FV+BJPgW+NdRvSIzDu2O+wnHFgTKbzg1dEoktZ/Z47
+ Suz0gy4nLth8A/UROWr4Q==
+Subject: Re: [Caml-list] A shallow option type
+
+Jacques Garrigue <garrigue@math.nagoya-u.ac.jp> writes:
+
+> Hi Goswin,
+>
+> Actually I remember discussing this issue with Xavier Leroy a long time ago,
+> and we ended up concluding that this could be done in a clean way by using
+> a bit pattern not yet used for ocaml values.
+>
+> Our idea was that rather than put some restriction on the shallowness of
+> types (which is very hard to implement), one should just allow arbitrary nesting
+> of option types, and represent the sequence "Some (Some (... ( Some None) ...))"
+> as an integer.
+> I think I even tried an implementation, but we then concluded that there
+> was not enough demand to put it in the compiler.
+
+The advantage of providing it by the compiler would be to allow pattern
+matching.
+
+> However there is nothing wrong with providing it as a library.
+> The basic idea is that you have only two kinds of values in ocaml:
+> integers, which have their lower bit to 1, and pointers, which must
+> all be multiples of 4 (on 32-bit architectures).
+> So  the pattern (v % 4) == 2 is not used.
+
+Actualy isn't (v % 4) == 2 an exception?
+
+caml/callback.h:
+#define Make_exception_result(v) ((v) | 2)
+#define Is_exception_result(v) (((v) & 3) == 2)
+#define Extract_exception(v) ((v) & ~3)
+
+So returning an Sopt.none in a callback would be taken as exception. :)
+
+> Here is the code:
+>
+> module Sopt : sig
+>   type +'a t
+>   val none : 'a t
+>   val some : 'a -> 'a t
+>   val is_none : 'a t -> bool
+>   val arg : 'a t -> 'a
+>   val is_sopt : 'a t -> bool
+>   val depth : 'a t -> int
+> end = struct
+>   type 'a t = int
+>   let null = (Obj.magic (Some 0) land 2) land 1
+>   let none = null + 1
+>   let is_none x = x > 0 && x < 1
+>   let is_sopt x = is_none (x land 1)
+>   let some (x : 'a) : 'a t =
+>     let y : 'a t = Obj.magic x in
+>     if is_sopt y then y+2 else y
+>   let arg (x : 'a t) : 'a =
+>     if is_sopt x then Obj.magic (x-2) else Obj.magic x
+>   let depth x =
+>     if is_sopt x then x lsr 1 else 0
+> end
+
+WOW. That is some code. Thanks for sharing that.
+
+> The code for null tricks the compiler into creating a null pointer.
+> I avoiding using the simpler (Obj.magic (Some 0) land 0) in case land is optimized.
+> By adding 1 to this value, one creates a 2 at the C level.
+> For ocaml this value is "strictly between" 0 (i.e. 1) and 1 (i.e. 3).
+> Sopt.some checks whether a value is such an sopt, in which case it adds 2 to it to
+> add a Some constructor, otherwise it returns the value itself.
+> Sopt.arg does just the opposite.
+> Sopt.is_sopt and Sopt.depth are only exported for demonstrative purposes.
+>
+> # Sopt.depth (Sopt.some (Sopt.some (Sopt.some Sopt.none)));;
+> - : int = 3
+> # Sopt.depth (Sopt.some (Sopt.some (Sopt.some 0)));;
+> - : int = 0
+>
+> Of course this precludes using the above bit pattern for anything else,
+> but otherwise this should be completely type-safe.
+> (At the theoretical level at least, I'm not 100% sure of the trickery used here
+> to have the compiler work on C level integers)
+>
+> Cheers,
+>
+> Jacques Garrigue
+
+The implementation relies on specific aspect of the compiler to
+construct those values. I would give it a 99% chance to fail with an
+llvm backend for ocaml for example. Using C stubs that directly
+manipulate the bits seems a better approach.
+
+For example nothing says x + 2 can't be implemented as
+
+value add(value x, value y) {
+    return (x & ~1) + y;
+}
+
+as opposed to
+
+value add(value x, value y) {
+    return x + y - 1;
+}
+
+MfG
+        Goswin

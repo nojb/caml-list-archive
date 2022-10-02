@@ -1,0 +1,123 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p23MGEUP002181
+	for <caml-list@sympa-roc.inria.fr>; Thu, 3 Mar 2011 23:16:14 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtkBAO+hb03RVdg2kGdsb2JhbACEKpQFMY1/CBUBAQEBCQkMBxEEIaQdiWk8gh2FJS+IWwEBAwWBIoNEdgSFGocShlqBfTo
+X-IronPort-AV: E=Sophos;i="4.62,260,1297033200"; 
+   d="scan'208";a="77046638"
+Received: from mail-qw0-f54.google.com ([209.85.216.54])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 03 Mar 2011 23:16:08 +0100
+Received: by qwj8 with SMTP id 8so1758627qwj.27
+        for <caml-list@inria.fr>; Thu, 03 Mar 2011 14:16:07 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:in-reply-to:references:date
+         :message-id:subject:from:to:content-type:content-transfer-encoding;
+        bh=V6VGr/3/ejjaL8mqfWpS/PLIWmR8uUCg9OeNRgJDjfk=;
+        b=LDO0EePB2YaGPTXTHGXdWraOfkrjWK044y89YxQp9t6BCl73BjPSjW+zGISpVm3FTj
+         Yr85EtXLHYm+uaeZEkb5b3Cfs8viBON53XEeOgrIPvUI1F4hG2zlCCz9ecyhSz/JcRn6
+         0ZzAjnXv0pY3O9JWDo5kdCA09JnKHWCKwvuX8=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :content-type:content-transfer-encoding;
+        b=TLV6NTGnHGjfu1ZJBJvXxlEG+AbNFwjnnYbNs9hAQIc59W9SmuzQUtxwGCg03m2GYt
+         UtVjNdNkiheVH/2LnpKrCFkXzuPKxosOtSRp48us3oPCShiAE6yX75gFU+9oh7UdJ07r
+         0H2yDbFv8T/RT8ocWTDm04M9WWceLEMJugsOg=
+MIME-Version: 1.0
+Received: by 10.229.75.228 with SMTP id z36mr524061qcj.32.1299190566914; Thu,
+ 03 Mar 2011 14:16:06 -0800 (PST)
+Received: by 10.229.102.7 with HTTP; Thu, 3 Mar 2011 14:16:06 -0800 (PST)
+In-Reply-To: <AANLkTi=XJ=ekYQ6qJ5eE+ce_Wdk9MYph5pVWAvFEHy86@mail.gmail.com>
+References: <AANLkTim-aovgVd4uKvjDbq8J-8VeTh=S5CLYz3QcEMxL@mail.gmail.com>
+	<AANLkTi=XJ=ekYQ6qJ5eE+ce_Wdk9MYph5pVWAvFEHy86@mail.gmail.com>
+Date: Thu, 3 Mar 2011 17:16:06 -0500
+Message-ID: <AANLkTikTV8kKKxnhrFp+SMhKi13U8avgK-dV+d9SewzW@mail.gmail.com>
+From: Niki Yoshiuchi <aplusbi@gmail.com>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p23MGEUP002181
+Subject: Re: [Caml-list] Using C threads
+
+I figured it out so I'm posting it here for reference.
+caml_c_thread_register() attempts to get the master lock, which
+involves dereferencing a pointer.  That pointer is initialized by the
+Thread module.  However if the OCaml code doesn't use the Thread
+module that pointer is never initialized resulting in a segfault.  You
+can force the initialization with something as simple as:
+
+    ignore (Thread.self ());
+
+Additionally, if your OCaml code doesn't use any threads (or call any
+c code with a call to caml_enter_blocking_section()) then it appears
+that the master lock is never released by the main thread, so the C
+thread hangs in the caml_c_thread_register() call.
+
+-Niki Yoshiuchi
+
+On Tue, Mar 1, 2011 at 7:14 AM, Dmitry Bely <dmitry.bely@gmail.com> wrote:
+> On Tue, Mar 1, 2011 at 12:56 AM, Niki Yoshiuchi <aplusbi@gmail.com> wrote:
+>> I'm trying to call some OCaml code from a thread created in C.  I know
+>> I'm supposed to call caml_c_thread_{un}register, however this pretty
+>> much guarantees a segfault.  If I leave them out, my code works fine
+>> so long as I don't try and do much of anything.  Here's my code
+>> stripped down to the bare minimum:
+>>
+>> C code:
+>>
+>> void *my_thread(void *ptr)
+>> {
+>>    caml_c_thread_register();
+>>    for(;;)
+>>    {
+>>        caml_acquire_runtime_system();
+>>        caml_callback(*caml_named_value("my_callback"), Val_unit);
+>>        caml_release_runtime_system();
+>>    }
+>>    caml_c_thread_unregister(); // I realize this will never be
+>> called.  I've tried without the for loop as well, same result
+>> }
+>>
+>> CAMLprim value caml_create_callback(value unit)
+>> {
+>>    pthread_t thread1;
+>>    pthread_create(&thread1, NULL, my_thread, NULL);
+>>    return Val_unit;
+>> }
+>>
+>> OCaml code:
+>>
+>> external create_callback : unit -> unit = "caml_create_callback"
+>>
+>> let my_thread () =
+>>    ()
+>>
+>> let _ =
+>>    Callback.register "my_callback" random_thread;
+>>    create_callback ();
+>>    while true do
+>>        ()
+>>    done
+>>
+>> This code will segfault immediately.  If I remove the thread_register
+>> functions it will run as expected.  If I try and do anything more than
+>> just return unit, it will segfault unless I add in some sleep
+>> statements.  I'm assuming that the sleep function acts as a sort of
+>> poor-man's thread synchronizer.  I've tried endless permutations
+>
+> Maybe you are trying to call caml_c_thread_register() inside a thread
+> created by Caml runtime? Otherwise I cannot imagine how
+> caml_callback() could ever succeed without registering C-thread first.
+>
+> - Dmitry Bely
+>
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+

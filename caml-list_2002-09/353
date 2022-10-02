@@ -1,0 +1,127 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA17167; Wed, 25 Sep 2002 20:39:25 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA17163 for <caml-list@pauillac.inria.fr>; Wed, 25 Sep 2002 20:39:23 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g8PIdM506060
+	for <caml-list@inria.fr>; Wed, 25 Sep 2002 20:39:22 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Wed, 25 Sep 2002 13:39:20 -0500
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Wed, 25 Sep 2002 13:39:20 -0500
+Date: Wed, 25 Sep 2002 13:44:10 -0500 (CDT)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Markus Mottl <markus@oefai.at>
+cc: Brian Hurt <brian.hurt@qlogic.com>,
+        Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Probably FAQ: Why is list-append (list :: elem) so
+ expensive?
+In-Reply-To: <20020925161703.GC31883@fichte.ai.univie.ac.at>
+Message-ID: <Pine.LNX.4.33.0209251315440.1974-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 25 Sep 2002 18:39:20.0157 (UTC) FILETIME=[DC4270D0:01C264C2]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Thanks to everyone for answering my question.  I think the light is 
+starting to glimmer, however dim :-).
+
+I think I'm asking the wrong question.  Is there any circumstances where 
+Ocaml will reuse the cells from one list to make another list?
+
+Consider the following Ocaml code:
+
+    let dup_list lst =
+        let rec reverse_list l accum =
+            match l with
+                [] -> accum
+                | head :: tail -> reverse_list tail (head :: accum)
+        in
+            reverse_list (reverse_list lst)
+    ;;
+
+Ok, the first time through reverse_list the compiler has to allocate a 
+whole new list, including a whole new set of list cells, for the 
+accumlation list.  This is because the code doesn't dare modify lst.  But 
+the second time reverse_list is called, it's obvious that l is the list 
+allocated the first time through, and it's garbage as soon as the call 
+completes.  In fact, each cell of the list is garbage after it's been 
+prepended to accum.  So why not reuse the cells from l to form the accum?  
+Yes, I know this violates the immutability of l.  But it seems to me that, 
+with the exception of garbage creation rates, the two are identical.
+
+Phrased this way, I start wondering how much of an optimization this
+actually would be.  Ocaml has a copying garbage collector, which means
+allocating new objects is cheap.  Especially if what you're doing is
+duplicating a recently allocated, soon to be garbage list- like my example
+above.  
+
+Of course, appending elements to a list would only work if it was
+optimized as such a "modifiable list" in the optimizer.  Which strikes me
+as a dangerous proposition.  The ability to write algorithms which are
+O(N) if you compile with the right optimizations, and O(N^2) if you don't
+(or if you make some subtle change to the code and all of a sudden the
+optimizer can modify the list anymore) strikes me as being sub-optimal.
+
+Heh.  One of the dangers of Ocaml is that it makes the algorithm clear 
+enough that it encourages you to over-optimize your algorithms in the same 
+way that C encourages you to cycle count and over-optimize your 
+implementations.
+
+Brian
+
+On Wed, 25 Sep 2002, Markus Mottl wrote:
+
+> On Wed, 25 Sep 2002, Brian Hurt wrote:
+> > I get that the cost of list concatenation is proportional to the length of 
+> > the first list.  So (elem :: list) is O(1) no matter what the length of 
+> > list is.  But (list :: elem) is O(n), with n being the length of the list.
+> 
+> You probably mean (list @ [elem]).
+> 
+> > Why doesn't Ocaml keep a pointer to the last element of the list,
+> > as well as the first element?
+> 
+> Because standard lists are purely functional, i.e. you can't just
+> overwrite some pointer to append an element. If there are several lists
+> that share a common sublist, such an operation would change both lists.
+> 
+> E.g.:
+> 
+>   let l = [1; 2; 3] in
+>   let l1 = 0 :: l in
+>   let l2 = 42 :: l in
+>   l @ [4]
+> 
+> If the last operation overwrote anything in "l", this would also change
+> l1 and l2, thus destroying referential transparency: list variables
+> couldn't be used for straightforward equational reasoning anymore,
+> which is important if you want to e.g. proof list algorithms correct.
+> 
+> As you noted, keeping pointers to the previous element also makes
+> list nodes larger and thus more expensive both in terms of time and
+> space. Why have this by default if lists are most often not used in ways
+> that require efficiency with such operations?
+> 
+> If you want to have mutable lists, it's not difficult to implement them.
+> But be warned: you might be surprised to discover that standard lists
+> most often perform better in not too extreme cases.
+> 
+> In case you want to learn more about purely functional datastructures,
+> you will definitely want to read Chris Okasaki's book "Purely Functional
+> Data Structures", which is published by Cambridge University Press (1998).
+> 
+> Regards,
+> Markus Mottl
+> 
+> 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

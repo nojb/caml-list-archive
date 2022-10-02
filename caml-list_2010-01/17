@@ -1,0 +1,140 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 77C8BBBAF
+	for <caml-list@yquem.inria.fr>; Sun,  3 Jan 2010 12:36:57 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgwCAGYQQEtV2gB5i2dsb2JhbACDX5dmAQEBCgsKGog0oD6MGIEtgi5WBIkm
+X-IronPort-AV: E=Sophos;i="4.47,492,1257116400"; 
+   d="scan'208";a="53146510"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 03 Jan 2010 12:36:57 +0100
+Received: from [192.168.0.12] (unknown [85.218.92.99])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id A7F1B83440B;
+	Sun,  3 Jan 2010 12:36:51 +0100 (CET)
+Message-ID: <4B40815E.3050707@citycable.ch>
+Date: Sun, 03 Jan 2010 12:37:02 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20090707)
+MIME-Version: 1.0
+To: OCaml List <caml-list@inria.fr>
+Cc: ygrek <ygrekheretix@gmail.com>
+Subject: Dynamically loaded BSS not initialised to 0.
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; guillaume:01 guillaume:01 bss:01 cmxa:01 bss:01 recompiled:01 segfault:01 cvs:01 bytecode:01 segfaults:01 typedef:01 struct:01 val:01 bytecode:01 byte:01 
+
+Hello.
+
+I encountered a rather weird issue. A binding of mine works fine when 
+bundled as a .cmxa, but fails when bundled as a .cma. I'm running a 
+Linux Debian amd64.
+
+I've tracked down the issue to the following point: it seems that when 
+the BSS (uninitialised data section) of libmonetdb5.so is dynamically 
+loaded, it doesn't get initialised to 0. And the code in libmonetdb5.so 
+relies on the fact that BSS gets initialised to 0 when dynamically loaded.
+
+To reproduce my problem, do the following:
+
+You need to have the following Debian packages installed for MonetDB.
+
+	libmonetdb-client-dev
+	libmonetdb-client1
+	libmonetdb-dev-dbg
+	libmonetdb1-dbg
+	libmonetdb5-server-dev-dbg
+	libmonetdb5-server5-dbg
+	libmonetdb5-sql-dev
+	libmonetdb5-sql2
+	monetdb-client
+	monetdb5-server-dbg
+
+The *-dbg packages are packages I've changed and recompiled with the -g 
+option. They are available from my website:
+
+	http://yziquel.homelinux.org/debian/pool/main/m/
+
+The key signing the repo is located at
+
+http://yziquel.homelinux.org/debian/yziquel-debian-packages.asc
+
+and you just have to do
+
+	cat yziquel-debian-packages.asc | sudo apt-key add -
+
+and include the following lines:
+
+> deb     http://yziquel.homelinux.org/debian stable   main
+> deb-src http://yziquel.homelinux.org/debian stable   main
+> deb     http://yziquel.homelinux.org/debian testing  main
+> deb-src http://yziquel.homelinux.org/debian testing  main
+> deb     http://yziquel.homelinux.org/debian unstable main
+> deb-src http://yziquel.homelinux.org/debian unstable main
+
+The rest of the MonetDB packages can be found here:
+
+	http://monetdb.cwi.nl/downloads/Debian/
+
+and the monetdb5 binding is here:
+
+	http://yziquel.homelinux.org/gitweb/?p=ocaml-monetdb5.git;a=tree
+
+(click on snapshot to download one).
+
+Now here is why I believe that the BSS is not properly initialised. The 
+code in which I have my segfault is the following one, function findBox. 
+Line 330 of:
+
+http://monetdb.cvs.sourceforge.net/viewvc/monetdb/MonetDB5/src/mal/mal_box.mx?revision=1.100&view=markup
+
+There is this line:
+
+> if (box[i] != NULL && idcmp(name, box[i]->name) == 0) {
+
+I've followed machine code instructions step by step there, with ddd.
+
+In native code, box[i] == NULL. Evaluation stops there (i.e. box[i] != 
+NULL is false). Everything is perfect.
+
+In bytecode, box[i] != NULL because BSS is not initialised to 0... And 
+it then tries to access box[i]->name, and segfaults.
+
+For the record, you have:
+
+>   211 typedef struct BOX {
+>   212 	MT_Lock lock;		/* provide exclusive access */
+>   213 	str name;
+>   214 	MalBlkPtr sym;
+>   215 	MalStkPtr val;
+>   216 	int dirty;		/* don't save if it hasn't been changed */
+>   217 } *Box, BoxRecord;
+
+and
+
+>   263 #define MAXSPACES 64		/* >MAXCLIENTS+ max modules !! */
+>   264 Box box[MAXSPACES];
+
+For the disassembled code, you can have a look at:
+
+http://sourceforge.net/mailarchive/message.php?msg_name=4B3ED073.3050203%40citycable.ch
+
+I've also tried running ltrace to see how dynamic loading happens for 
+the bytecode monetdb5.cma:
+
+	http://yziquel.homelinux.org/monetdb_sql.byte.ltrace
+
+But it gives ma 95% of ocaml related lines, and the end is concerned 
+only with ml_monetdb_sql. I'd like to see how the 'box' symbol gets 
+loaded in BSS, but do not know how to do that.
+
+So: is ocaml failing to initialise memory to 0 when limonetdb5.so is 
+dynamically loaded?
+
+-- 
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

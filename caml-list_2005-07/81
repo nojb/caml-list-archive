@@ -1,0 +1,109 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 2D821BCAE
+	for <caml-list@yquem.inria.fr>; Wed, 13 Jul 2005 00:43:24 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j6CMhNLf001927
+	for <caml-list@yquem.inria.fr>; Wed, 13 Jul 2005 00:43:23 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA08651 for <caml-list@pauillac.inria.fr>; Wed, 13 Jul 2005 00:43:23 +0200 (MET DST)
+Received: from swip.net (mailfe05.swip.net [212.247.154.129])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j6CMhMWh001922
+	for <caml-list@inria.fr>; Wed, 13 Jul 2005 00:43:23 +0200
+X-T2-Posting-ID: 2IIuXFmkcTpj3lKEFKW25A==
+Received: from [83.176.166.53] (HELO poincare)
+  by mailfe05.swip.net (CommuniGate Pro SMTP 4.3.4)
+  with ESMTPS id 225262390; Wed, 13 Jul 2005 00:43:20 +0200
+Received: from [127.0.0.1] (helo=localhost ident=trch)
+	by poincare with esmtp (Exim 4.50)
+	id 1DsTQk-00031C-M9; Wed, 13 Jul 2005 00:40:46 +0200
+Date: Wed, 13 Jul 2005 00:40:43 +0200 (CEST)
+Message-Id: <20050713.004043.123299672.Christophe.Troestler@umh.ac.be>
+To: "O'Caml Mailing List" <caml-list@inria.fr>
+Subject: Concurrency for services
+From: Christophe TROESTLER <Christophe.Troestler@umh.ac.be>
+Organization: Universite de Mons-Hainaut (http://math.umh.ac.be/an/)
+X-Spook: Maple airframe Bletchley Park domestic disruption RSA FSF Forte
+ government 9705 Samford Road dictionary 
+X-Blessing: Om Ah Hum Vajra Guru Pema Siddhi Hum
+X-Operating-System: GNU/Linux (http://www.linux.org/)
+X-Mailer-URL: http://www.mew.org/
+X-Mailer: Mew version 4.2.51 on Emacs 21.4 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 42D4478B.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 42D4478A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; christophe:01 troestler:01 christophe:01 troestler:01 umh:01 callbacks:01 model:01 threads:01 threads:01 callbacks:01 abstracted:01 val:01 val:01 handler:01 handler:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+Status: O
+Content-Length: 2606
+Lines: 63
+
+Hi,
+
+I have been confronted a couple of times to the following situation
+and I am looking for advice for a good (the best, if possible :)
+reusable solution.
+
+Imagine you want to build a server library (e.g. a Lpd daemon, a file
+server, a web service,...).  In broad terms, you can describe it as a
+protocol for which you will handle the various "events" by callbacks.
+You do not want to wire any concurrency model in your library but
+instead provide the user with the appropriate functions so it can use
+his favorite concurrency schema.  My question is: what is the best way
+to do that?
+
+Perhaps naively, I am thinking along these lines.  There are three
+points where a possibility of concurrency naturally offers itself:
+
+1. several threads/processes can listen (run "accept") on the same
+   socket;
+
+2. each time a connection is accepted, one may decide to process it in
+   a new thread/process (or send it to a pool of threads/processes,...);
+
+3. each time one calls a callback (that only makes sense if several
+   callbacks can be called independently for a single connection).
+
+It seems to me that 3. belongs to the design of the library and cannot
+easily be abstracted.  1. and 2. however are basically the same from
+one library to the next.  For 2., one has to distinguish whether one
+uses threads of processes to know when the accept socket has to be
+closed.  So one ends up with 3 functions:
+
+val socket : unit -> Unix.file_descr
+val accept_fork :
+  fork:((Unix.file_descr -> unit) -> int * Unix.file_descr) ->
+  'a connection_handler -> Unix.inet_addr -> unit
+val accept_threads :
+  ?thread:((unit -> unit) -> unit) ->
+  'a connection_handler -> Unix.inet_addr -> unit
+
+The [connection_handler] is an abstract type that is created by a
+[handle_connection] which states which callback(s) to use.  The file
+descriptor in [fork] is a communication channel for the son to send
+messages to the father (the father may need to react to some commands
+in the protocol e.g. "shutdown").  A simple usage is
+
+let () = accept_threads (handle_connection f) (socket())
+
+Of course, there usually will be many optional arguments to tailor the
+behavior of these functions.  I wonder:
+
+i. are the above functions able to take care of about any concurrency
+   model one can imagine (new thread/process, pool of threads,
+   dispatching to a set of machines,...);
+
+ii. are they designed well enough so that they can form a signature on
+    which one can build usual concurrency models through functors?
+
+I do not have a large experience with concurrency models, so your
+input is very much appreciated.
+
+Regards,
+ChriS
+

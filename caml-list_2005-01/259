@@ -1,0 +1,150 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id BF3C3BB91
+	for <caml-list@yquem.inria.fr>; Thu, 27 Jan 2005 05:19:44 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j0R4Jilb000782
+	for <caml-list@yquem.inria.fr>; Thu, 27 Jan 2005 05:19:44 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA05260 for <caml-list@pauillac.inria.fr>; Thu, 27 Jan 2005 05:19:44 +0100 (MET)
+Received: from mz1.forethought.net (mzpi3.forethought.net [216.241.36.12])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j0R4JgA2017482
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Thu, 27 Jan 2005 05:19:43 +0100
+Received: from [216.241.35.41] (helo=[10.0.0.2])
+	by mz1.forethought.net with esmtp (Exim 4.30)
+	id 1Cu188-0007t3-Ng
+	for caml-list@inria.fr; Wed, 26 Jan 2005 21:19:41 -0700
+Message-ID: <41F86C2D.8030209@havenrock.com>
+Date: Wed, 26 Jan 2005 21:21:01 -0700
+From: Matt Gushee <mgushee@havenrock.com>
+User-Agent: Mozilla Thunderbird 1.0 (X11/20050108)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] index of substring
+References: <1106786478.41f838aecb7dd@www.doc.ic.ac.uk>
+In-Reply-To: <1106786478.41f838aecb7dd@www.doc.ic.ac.uk>
+X-Enigmail-Version: 0.86.1.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 41F86BE0.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 41F86BDE.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 wrote:01 ocaml:01 ocaml:01 idioms:01 regexp:01 pcre:01 parsing:01 ocamllex:01 ocamlyacc:01 val:01 char:01 char:01 rec:01 val:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+yjc01@doc.ic.ac.uk wrote:
+> I tried to write a function to return the index of a substring in a string from
+> an index. So I can use it to extract some comments (text between (* and *) in a
+> file. But came across some problem when returning the value.
+
+Well, I'm not the world's greatest OCaml expert, but I enjoy this sort 
+of problem, so I took a stab at it.
+
+First, a couple of quick comments on your code:
+
+> (* create variable to store file *)
+> let comments = String.make fileSize 'c';;
+
+I don't really understand the need for this. If, as it appears, this 
+string will hold the contents of the input file, why not just create a 
+file-reading function that returns a string?
+
+> (* return index of a substring in a string from an index, if substring not
+> matched retun -1 *)
+
+You must be a C programmer ;-) Not that it's necessarily wrong to return 
+  -1. But there are OCaml idioms that to me seem more natural for this 
+case. You could use an int option type ( None | Some x ), or you could 
+keep the return type as an int, raising Not_found when appropriate.
+
+> Or is there an easier way to do this?
+
+There are a number of possible solutions. The easiest would be to use 
+regexp matching (standard Str module, or 3rd-party Pcre). I'm sure you 
+can figure that one out on your own, so I won't pursue it further. If 
+you want a more robust solution, you should probably use one of the fine 
+parsing tools available: ocamllex/ocamlyacc or camlp4. But those are 
+large topics in their own right.
+
+I worked up another solution that uses only the standard library. It's 
+probably not easier, but it is mostly functional where your code was 
+imperative, and is arguably more elegant. Maybe it will give you an idea 
+or two.
+
+
+(* val sync_start : char -> char Stream.t -> char Stream.t -> unit *)
+let sync_start chr s1 s2 =
+     (* "Sets" both streams to the position of the starting character.
+      * A Stream.Failure exception may be raised; it is deliberately
+      * not handled here. *)
+     let rec sync () =
+         match Stream.next s1 with
+         (* Since the start character is removed from s1, s2 must
+          * be advanced by one to match. *)
+         | c when c = chr -> Stream.junk s2
+         | _ -> sync () in
+     sync ()
+
+(* val index_left : ?start:int -> string -> string -> int *)
+let index_left ?(start=0) src target =
+     let first = target.[0]
+     and sstream = Stream.of_string src in
+     (* Set the source stream to the desired start position. *)
+     for i = 1 to start do
+         try ignore (Stream.next sstream)
+         with Stream.Failure -> raise Not_found
+     done;
+     (* We need a fresh target stream each time the search is
+      * repeated, so the following is a function. Hmm, there's
+      * probably a better solution, but it hasn't occurred to
+      * me yet. *)
+     let mkts () = Stream.of_string target
+     and advance s =
+         (* The return type is char option because it will be used
+          * in pattern matching. *)
+         try Some (Stream.next s)
+         with Stream.Failure -> None in
+     let rec search tstream =
+         ( try sync_start first sstream tstream
+           (* If we reach the end of the source stream, then of course
+            * that means the substring was not found, so there's no
+            * point in continuing. *)
+           with Stream.Failure -> raise Not_found );
+         let startpos = Stream.count sstream - 1 in
+         (* Continue searching once the start character is found. *)
+         let rec continue () =
+             match advance sstream, advance tstream with
+               (* Everything matches up to this point. Continue
+                * searching. *)
+             | Some c1, Some c2 when c1 = c2 -> continue ()
+               (* Substring is not matched here. Start over. *)
+             | Some c1, Some c2 -> search (mkts ())
+               (* The target stream is exhausted, no non-matching
+                * characters found, so we have a complete match. Return
+                * the starting index. *)
+             | _, None -> startpos
+               (* The source stream is exhausted, but one or more
+                * characters remain in the target. No match. *)
+             | None, Some _ -> raise Not_found in
+         continue () in
+     search (mkts ())
+
+
+It occurs to me now that if you wanted to use this approach to search 
+sequentially for different substrings, it would probably be best to 
+create the source stream outside the search function. Then you would 
+reuse that stream over several invocations of the function; each time 
+you searched, the stream would be positioned at the end of the previous 
+search.
+
+Hope this helps a bit.
+
+--
+Matt Gushee
+Englewood, CO USA
+

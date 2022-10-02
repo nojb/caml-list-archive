@@ -1,0 +1,161 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA03456 for caml-redistribution; Sun, 7 Dec 1997 16:47:10 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA03250 for <caml-list@pauillac.inria.fr>; Sun, 7 Dec 1997 16:30:52 +0100 (MET)
+Received: from jaune.inria.fr (ddr@jaune.inria.fr [128.93.11.80])
+	by nez-perce.inria.fr (8.8.7/8.8.5) with ESMTP id QAA04240
+	for <caml-list@inria.fr>; Sun, 7 Dec 1997 16:30:51 +0100 (MET)
+Received: (from ddr@localhost)
+	by jaune.inria.fr (8.8.5/8.8.5) id QAA25753
+	for caml-list@inria.fr; Sun, 7 Dec 1997 16:30:54 +0100
+Message-Id: <199712071530.QAA25753@jaune.inria.fr>
+Subject: Grammars and pretty print
+In-Reply-To: <348402F1.D25@lri.fr> from Emmanuel Engel at "Dec 2, 97 01:45:37 pm"
+To: caml-list@inria.fr
+Date: Sun, 7 Dec 1997 16:30:54 +0100 (MET)
+From: Daniel de Rauglaudre <daniel.de_rauglaudre@inria.fr>
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+About grammars and pretty print...
+
+I have implemented something for Camlp4. It is a syntax extension,
+interpreting the statement extend as doing the entries extensions
+and defining pretty printing functions. It is a prototype but you
+can download it at address:
+   ftp://ftp.inria.fr/INRIA/Projects/cristal/Daniel.de_Rauglaudre/
+files:
+   pa_extprint.cmo
+   pa_extprint.ml (the source)
+
+You must define a function named "print_token" taking a value of type
+Token.t (camlp4 library) and printing it.
+
+Example of use. File "foo.ml":
+==================================================================
+type ast =
+    Plus of ast * ast
+  | Minus of ast * ast
+  | Mult of ast * ast
+  | Div of ast * ast
+  | Exp of ast * ast
+  | Int of string
+;;
+
+let gram = Grammar.create (Plexer.make ());;
+let test = Grammar.Entry.create gram "test";;
+let expr = Grammar.Entry.create gram "expr";;
+
+let print_token =
+  function
+    Token.Tterm x -> print_string x
+  | Token.Tint x -> print_string x
+  | _ -> ()
+;;
+
+EXTEND
+  test: [[ x = expr; EOI -> x ]];
+  expr:
+    [ "plus" LEFTA
+      [ x = expr; "+"; y = expr -> Plus (x, y)
+      | x = expr; "-"; y = expr -> Minus (x, y) ]
+    | "mult" LEFTA
+      [ x = expr; "*"; y = expr -> Mult (x, y)
+      | x = expr; "/"; y = expr -> Div (x, y) ]
+    | "exp" RIGHTA
+      [ x = expr; "^"; y = expr -> Exp (x, y) ]
+    | "simple"
+      [ i = INT -> Int i
+      | "("; x = expr; ")" -> x ] ]
+   ;
+END;;
+==================================================================
+
+Result of
+    camlp4o ./pa_extprint.cmo pr_o.cmo pr_extend.cmo gram.ml
+
+==================================================================
+type ast =
+    Plus of ast * ast
+  | Minus of ast * ast
+  | Mult of ast * ast
+  | Div of ast * ast
+  | Exp of ast * ast
+  | Int of string
+;;
+
+let gram = Grammar.create (Plexer.make ());;
+let test = Grammar.Entry.create gram "test";;
+let expr = Grammar.Entry.create gram "expr";;
+
+let print_token =
+  function
+    Token.Tterm x -> print_string x
+  | Token.Tint x -> print_string x
+  | _ -> ()
+;;
+
+let rec pr_test x = pr_expr x; print_token Token.Teoi; ()
+and pr_expr x =
+  let rec p0 =
+    function
+      Plus (x, y) -> pr_expr x; print_token (Token.Tterm "+"); pr_expr y; ()
+    | Minus (x, y) -> pr_expr x; print_token (Token.Tterm "-"); pr_expr y; ()
+    | x -> p1 x
+  and p1 =
+    function
+      Mult (x, y) -> pr_expr x; print_token (Token.Tterm "*"); pr_expr y; ()
+    | Div (x, y) -> pr_expr x; print_token (Token.Tterm "/"); pr_expr y; ()
+    | x -> p2 x
+  and p2 =
+    function
+      Exp (x, y) -> pr_expr x; print_token (Token.Tterm "^"); pr_expr y; ()
+    | x -> p3 x
+  and p3 =
+    function
+      Int i -> print_token (Token.Tint i); ()
+    | x ->
+        print_token (Token.Tterm "(");
+        pr_expr x;
+        print_token (Token.Tterm ")");
+        ()
+  in
+  p0 x
+;;
+EXTEND
+  test:
+    [ [ x = expr; EOI -> x ] ]
+  ;
+  expr:
+    [ "plus" LEFTA
+      [ x = SELF; "+"; y = SELF -> Plus (x, y)
+      | x = SELF; "-"; y = SELF -> Minus (x, y) ]
+    | "mult" LEFTA
+      [ x = SELF; "*"; y = SELF -> Mult (x, y)
+      | x = SELF; "/"; y = SELF -> Div (x, y) ]
+    | "exp" RIGHTA
+      [ x = SELF; "^"; y = SELF -> Exp (x, y) ]
+    | "simple"
+      [ i = INT -> Int i | "("; x = SELF; ")" -> x ] ]
+  ;
+END;;
+==================================================================
+
+Remark: if you have a version of camlp4 (camlp4 -v) anterior to
+1.06+2, the previous command will display it with an incorrect
+"declare" statement. It is just a pretty print bug that is fixed.
+Take the patch in the ftp directory.
+
+--------------------------------------------------------------------------
+ Daniel de RAUGLAUDRE
+
+ Projet Cristal - INRIA Rocquencourt
+ Tel: +33 (01) 39 63 53 51
+ Email: daniel.de_rauglaudre@inria.fr
+ Web: http://pauillac.inria.fr/~ddr/
+--------------------------------------------------------------------------
+
+
+
+

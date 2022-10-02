@@ -1,0 +1,131 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id F2597BCAE
+	for <caml-list@yquem.inria.fr>; Fri,  1 Jul 2005 20:12:44 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j61ICi3u027858
+	for <caml-list@yquem.inria.fr>; Fri, 1 Jul 2005 20:12:44 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA18100 for <caml-list@pauillac.inria.fr>; Fri, 1 Jul 2005 20:12:44 +0200 (MET DST)
+Received: from furbychan.cocan.org (furbychan.cocan.org [80.68.91.176])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j61IChUn000303
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Fri, 1 Jul 2005 20:12:43 +0200
+Received: from rich by furbychan.cocan.org with local (Exim 3.35 #1 (Debian))
+	id 1DoQ7D-00018a-00; Fri, 01 Jul 2005 19:19:51 +0100
+Date: Fri, 1 Jul 2005 19:19:50 +0100
+To: Bernd Kuhls <bernd.kuhls@informatik.uni-oldenburg.de>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] How to find out free diskspace?
+Message-ID: <20050701181950.GA2557@furbychan.cocan.org>
+References: <da3qe7$23i$1@sea.gmane.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <da3qe7$23i$1@sea.gmane.org>
+User-Agent: Mutt/1.3.28i
+From: Richard Jones <rich@annexia.org>
+X-Miltered: at concorde with ID 42C5879C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 42C5879B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 bernd:01 ocaml:01 bindings:01 multiplying:01 bsize:01 bsize:01 errno:01 alloc:01 mlvalues:01 struct:01 buf:01 camlparam:01 alloc:01 val:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+Status: O
+Content-Length: 2642
+Lines: 92
+
+On Fri, Jul 01, 2005 at 06:28:21PM +0200, Bernd Kuhls wrote:
+> Hi,
+> 
+> I am looking for some Ocaml code (or C bindings which work on 
+> Linux/Solaris/Cygwin) to get the amount of free diskspace on a volume. 
+> The function should receive a string and return an int64 value or 
+> something similar.
+
+The attached files have only been very lightly tested, but they appear
+to work.  You can work out the amount of free disk space by
+multiplying the f_bfree and f_bsize fields.
+
+Note the functions as they stand assume that Unix.file_descr = int and
+don't throw a useful Unix error if the underlying call fails.
+
+Rich.
+
+---------------------------------------------------------------- statfs.ml
+type statfs = {
+  f_type : int64;
+  f_bsize : int64;
+  f_blocks : int64;
+  f_bfree : int64;
+  f_bavail : int64;
+  f_files : int64;
+  f_ffree : int64;
+  f_fsid : unit;  (* See note in statfs(2) *)
+  f_fnamelen : int64;
+}
+
+external statfs : string -> statfs = "statfs_statfs"
+external fstatfs : Unix.file_descr -> statfs = "statfs_fstatfs"
+
+---------------------------------------------------------------- statfs_c.c
+#include <errno.h>
+#include <string.h>
+#include <sys/vfs.h>
+
+#include <caml/alloc.h>
+#include <caml/fail.h>
+#include <caml/memory.h>
+#include <caml/mlvalues.h>
+
+static value
+copy_statfs (struct statfs *buf)
+{
+  CAMLparam0 ();
+  CAMLlocal1 (bufv);
+  bufv = caml_alloc (9, 0);
+  caml_modify (&Field (bufv, 0), copy_int64 (buf->f_type));
+  caml_modify (&Field (bufv, 1), copy_int64 (buf->f_bsize));
+  caml_modify (&Field (bufv, 2), copy_int64 (buf->f_blocks));
+  caml_modify (&Field (bufv, 3), copy_int64 (buf->f_bfree));
+  caml_modify (&Field (bufv, 4), copy_int64 (buf->f_bavail));
+  caml_modify (&Field (bufv, 5), copy_int64 (buf->f_files));
+  caml_modify (&Field (bufv, 6), copy_int64 (buf->f_ffree));
+  caml_modify (&Field (bufv, 7), Val_unit);
+  caml_modify (&Field (bufv, 8), copy_int64 (buf->f_namelen));
+  CAMLreturn (bufv);
+}
+
+CAMLprim value
+statfs_statfs (value pathv)
+{
+  CAMLparam1 (pathv);
+  CAMLlocal1 (bufv);
+  const char *path = String_val (pathv);
+  struct statfs buf;
+  if (statfs (path, &buf) == -1)
+    caml_failwith (strerror (errno));
+  bufv = copy_statfs (&buf);
+  CAMLreturn (bufv);
+}
+
+CAMLprim value
+statfs_fstatfs (value fdv)
+{
+  CAMLparam1 (fdv);
+  CAMLlocal1 (bufv);
+  int fd = Int_val (fdv);
+  struct statfs buf;
+  if (fstatfs (fd, &buf) == -1)
+    caml_failwith (strerror (errno));
+  bufv = copy_statfs (&buf);
+  CAMLreturn (bufv);
+}
+
+
+-- 
+Richard Jones, CTO Merjis Ltd.
+Merjis - web marketing and technology - http://merjis.com
+Team Notepad - intranets and extranets for business - http://team-notepad.com
+

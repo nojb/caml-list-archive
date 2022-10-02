@@ -1,0 +1,73 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p3PJUjjU023240
+	for <caml-list@sympa-roc.inria.fr>; Mon, 25 Apr 2011 21:30:45 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgUCAFXLtU3UnwdkkWdsb2JhbACECEegaxQBAQEBCQsLBxQEIbMWkRKBKYNQfQSSPQ
+X-IronPort-AV: E=Sophos;i="4.64,266,1301868000"; 
+   d="scan'208";a="93794926"
+Received: from relay.pcl-ipout02.plus.net ([212.159.7.100])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 25 Apr 2011 21:30:40 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ai8FAFXLtU3Unw4S/2dsb2JhbACECEega3ezFpESgSmDUH0Ekj0
+Received: from outmx06.plus.net ([212.159.14.18])
+  by relay.pcl-ipout02.plus.net with ESMTP; 25 Apr 2011 20:30:39 +0100
+Received: from [80.229.123.248] (helo=WinEight)
+	 by outmx06.plus.net with esmtp (Exim) id 1QERUV-0003R5-Ci; Mon, 25 Apr 2011 20:30:39 +0100
+From: "Jon Harrop" <jon@ffconsultancy.com>
+To: <frederic.gava@univ-paris-est.fr>, <caml-list@inria.fr>
+References: <013e01cc02d7$e23b8f00$a6b2ad00$@ffconsultancy.com> <1303727768.3782.66.camel@thinkpad> <4DB5A327.90409@univ-paris-est.fr>
+In-Reply-To: <4DB5A327.90409@univ-paris-est.fr>
+Date: Mon, 25 Apr 2011 20:30:34 +0100
+Message-ID: <017001cc037f$3fdb5350$bf91f9f0$@ffconsultancy.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="utf-8"
+X-Mailer: Microsoft Outlook 14.0
+Thread-Index: AQImpvJ3eLoZLtuamy6z08OU/Cn6fQEtmkV2ASb6kxOTpwBvgA==
+Content-Language: en-gb
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p3PJUjjU023240
+Subject: RE: [Caml-list] Parallel n-queens solver
+
+Frédéric wrote:
+> It is the well known "skeleton paradigm" and BSP model (twice, since 1990)
+> 
+> Skeletons:
+> http://en.wikipedia.org/wiki/Algorithmic_skeleton
+> http://homepages.inf.ed.ac.uk/mic/Skeletons/index.html
+> 
+> BSP:
+> http://en.wikipedia.org/wiki/Bulk_Synchronous_Parallel
+> http://www.bsp-worldwide.org/
+
+Very true. Subsequent fiddling turned up the following F# solution that uses a sequential pair of calls to Parallel.init (i.e. direct bulk synchronous parallelism) instead of the data flow parallelism:
+
+  let run n =
+    let timer = System.Diagnostics.Stopwatch.StartNew()
+    let solve k =
+      let sols = Array.init (n*n) (fun _ -> ResizeArray())
+      solve k n (fun b ->
+        let b = transformations b
+        sols.[b.[1]*n + b.[0]].Add b)
+      sols |> Array.map (fun sols -> sols.ToArray())
+    let sols =
+      let sols = Array.Parallel.init n solve
+      Array.Parallel.init (n*n) (fun i ->
+        let s = System.Collections.Generic.HashSet(HashIdentity.Structural)
+        for sols in sols do
+          let sols = sols.[i]
+          for i=0 to sols.Length-1 do
+            s.Add sols.[i] |> ignore
+        s.Count)
+      |> Array.sum
+    printfn "%d solutions %d-queens problem in %gs" sols n timer.Elapsed.TotalSeconds
+
+That old "invoke" combinator that evaluates a function application on a forked process and marshals the result back could be used to implement a naïve Parallel.init and, therefore, this solution could be translated to OCaml quite easily. However, it would still lack load balancing. That turns out to be ok in this particular case because the generated data is quite evenly distributed (and we assume that nothing else is running on the machine) but real applications might not be so lucky...
+
+Turns out you can also use data flow parallelism entirely by replacing Array.Parallel.init with PSeq.init. In theory, this allows the second phase to occur concurrently with the first phase, being updated as new results are generated. In practice, I don't see a speedup.
+
+Cheers,
+Jon.
+
+
+

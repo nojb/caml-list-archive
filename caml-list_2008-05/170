@@ -1,0 +1,207 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id B5D46BBCA
+	for <caml-list@yquem.inria.fr>; Sat, 10 May 2008 22:04:57 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlwDAFOcJUjUnw7XcGdsb2JhbACCMY9ZAQwFAgQHE5d6
+X-IronPort-AV: E=Sophos;i="4.27,466,1204498800"; 
+   d="scan'208";a="26034806"
+Received: from fhw-relay07.plus.net ([212.159.14.215])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 10 May 2008 22:04:57 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by fhw-relay07.plus.net with esmtp (Exim) id 1JuvJN-0005B1-SS; Sat, 10 May 2008 21:04:54 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: David Teller <David.Teller@univ-orleans.fr>
+Subject: Re: [Caml-list] Re: Why OCaml rocks
+Date: Sat, 10 May 2008 20:59:54 +0100
+User-Agent: KMail/1.9.9
+References: <200805090139.54870.jon@ffconsultancy.com> <200805091910.41381.jon@ffconsultancy.com> <1210371949.6399.62.camel@Blefuscu>
+In-Reply-To: <1210371949.6399.62.camel@Blefuscu>
+Cc: caml-list@yquem.inria.fr
+MIME-Version: 1.0
+Content-Disposition: inline
+Content-Type: text/plain;
+  charset="iso-8859-15"
+Content-Transfer-Encoding: 7bit
+Message-Id: <200805102059.54856.jon@ffconsultancy.com>
+X-Plusnet-Relay: 77fc228846ac1d05f50fd793c29bc6cd
+X-Spam: no; 0.00; ocaml:01 0100,:01 parallelism:01 ocaml:01 amortize:01 uniformly:01 mutable:01 fine-grained:01 parallelism:01 fine-grained:01 ocaml's:01 mutable:01 matrices:01 mutation:01 matrices:01 
+
+On Friday 09 May 2008 23:25:49 David Teller wrote:
+> On Fri, 2008-05-09 at 19:10 +0100, Jon Harrop wrote:
+> > Parallelism is easy in F#.
+>
+> Now, that's a cliffhanger. Could you elaborate?
+
+Sure. Review the concerns cited regarding parallel programming in OCaml:
+
+1. When do we fork? Earlier to amortize the overhead or later to enable 
+sharing of data structures?
+
+2. How do we avoid excessive copying? What if each parallel thread only 
+requires part of a data structure, should we dissect the data structure to 
+alleviate message passing?
+
+3. How do we pass values like heap allocated custom blocks?
+
+4. Do we use the Ancient module and manage our memory manually so that we can 
+mutate shared data?
+
+These all make parallel programming much harder in OCaml than it needs to be. 
+All of these concerns simply disappear when you have a concurrent GC. F# 
+already does. Hopefully OCaml will soon.
+
+Addressing each point in turn:
+
+1. Use the high-performance thread pool provided by the Task Parallel Library.
+
+2. There is no copying.
+
+3. You can pass any value to another thread because everything is uniformly 
+represented.
+
+4. Memory management is fully automated and shared mutable data is easy.
+
+Consider the embarassingly-parallel task of matrix-matrix multiplication. Note 
+that this is absolutely best-case for OCaml because the overheads are as 
+small as possible thanks to the complete absence of fine-grained parallelism. 
+Most real applications require much more fine-grained parallelism and OCaml's 
+performance is much worse as a consequence.
+
+In F#, this is really easy to write:
+
+    let c = Array2.zero_create am bn
+    Parallel.For(0, n, fun i ->
+      for j = 0 to n - 1 do
+        let mutable r = 0.0
+        for k = 0 to n - 1 do
+          r <- r + a.[i,k] * b.[k,j]
+        c.[i,j] <- r)
+
+There are several things to notice about this:
+
+. The input matrices are immediately accessible from parallel threads without 
+us having to do anything. There is no copying, so memory consumption is lower 
+and there is no overhead to worry about.
+
+. The output matrix is filled directly using mutation. Again, there is no 
+copying, no subsequent single-threaded collation of results and no overhead.
+
+. No manual memory management is required.
+
+There is no easy solution in OCaml but you might:
+
+. Fork a process for each CPU at the start of the multiply in order to avoid 
+copying the input matrices, use message passing to return the result and 
+collate it serially.
+
+. Prefork a process for each CPU and use message passing to queue work items, 
+pass the input matrices using message passing, compute results, pass results 
+back using message passing and collate them serially.
+
+So we might have an O(1) hit from forking, an O(n^2) hit from message passing 
+and collation and an O(n^3) actual algorithm. Like Ulf said, message passing 
+scales well. However, its raw performance is awful compared to leveraging 
+shared memory.
+
+Here is an OCaml implementation of the above F#:
+
+  let invoke (f : 'a -> 'b) x : unit -> 'b =
+    let input, output = Unix.pipe() in
+    match Unix.fork() with
+    | -1 -> (let v = f x in fun () -> v)
+    | 0 ->
+	Unix.close input;
+	let output = Unix.out_channel_of_descr output in
+	Marshal.to_channel output (try `Res(f x) with e -> `Exn e) [];
+	close_out output;
+	exit 0
+    | pid ->
+	Unix.close output;
+	let input = Unix.in_channel_of_descr input in
+	fun () ->
+	  let v = Marshal.from_channel input in
+	  ignore (Unix.waitpid [] pid);
+	  close_in input;
+	  match v with
+	  | `Res x -> x
+	  | `Exn e -> raise e
+  
+  let parmul_aux i0 i1 n a b =
+    let c = Array.make_matrix (i1 - i0) n 0. in
+    for i = i0 to i1 - 1 do
+      let ai = a.(i) in
+      for j = 0 to n - 1 do
+	let r = ref 0.0 in
+	for k = 0 to n - 1 do
+	  r := !r +. Array.unsafe_get ai k *. Array.unsafe_get (Array.unsafe_get b k) 
+j
+	done;
+	c.(i - i0).(j) <- !r
+      done;
+    done;
+    c
+  
+  let parmul n a b =
+    let c1 = invoke (fun () -> parmul_aux 0 (n/2) n a b) () in
+    let c2 = parmul_aux (n/2) n n a b in
+    Array.concat [c1(); c2]
+
+Note that we must manually insert unsafe array accesses and hoist loop 
+invariants in order to obtain comparable performance. This code is clearly 
+much more complicated than the F# and that complexity is completely 
+unnecessary.
+
+> > > I think that the cost of copying data is totally overrated. We are
+> > > doing this often, and even over the network, and hey, we are breaking
+> > > every speed limit.
+> >
+> > You cannot afford to pay that price for parallel implementations of most
+> > numerical algorithms.
+>
+> Er... Not being a specialist, I may be wrong, but I seem to remember
+> that you can afford that, as long as you're also doing something else
+> during that copy.
+
+Here are some actual performance results for this task on my machine:
+
+ n        OCaml              F#
+      Serial Parallel   Serial Parallel
+ 16  0.00005 0.00022   0.00002 0.000045
+ 32  0.00040 0.00067   0.00015 0.00015
+ 64  0.0033  0.0021    0.00090 0.00068
+512  4.0     2.4       2.5     1.4
+
+As you can see, F# is much faster in every case. Larger "n" approaches the 
+limit where F# is only 1.6x faster than OCaml. For smaller "n" the gap 
+quickly widens with F# being 5x faster for n=16.
+
+> > On the contrary, that is not a theoretical statement at all: it
+> > already happened. F# already makes it much easier to write high
+> > performance parallel algorithms and its concurrent GC is the crux of that
+> > capability. 
+>
+> Examples ? Pretty please ?
+
+The above examples are a good start. The latest F#.NET Journal article covers 
+parallelism using Microsoft's TPL. A future OCaml Journal article will cover 
+the use of fork-based parallelism. I think you can see what I mean from the 
+results I've presented in this post though.
+
+To put this another way, multicore computing provides hardware accelerated 
+shared memory and a concurrent GC makes it easy to exploit that. Message 
+passing is fine for concurrent applications that are not CPU bound or for 
+distributed computing but it is not competitive on today's multicore machines 
+and will not become competitive in the next decade.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/products/?e
+

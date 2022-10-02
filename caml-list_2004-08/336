@@ -1,0 +1,121 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA20331; Mon, 23 Aug 2004 07:13:59 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA21852 for <caml-list@pauillac.inria.fr>; Mon, 23 Aug 2004 07:13:59 +0200 (MET DST)
+Received: from us18.unix.fas.harvard.edu (us18.unix.fas.harvard.edu [140.247.35.198])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i7N5DvRM032410
+	for <caml-list@pauillac.inria.fr>; Mon, 23 Aug 2004 07:13:58 +0200
+Received: from ls02.fas.harvard.edu (ls02.fas.harvard.edu [140.247.34.102])
+	by us18.unix.fas.harvard.edu (8.12.11/8.12.11) with ESMTP id i7N5DvMM028433
+	for <caml-list@pauillac.inria.fr>; Mon, 23 Aug 2004 01:13:57 -0400
+Received: by ls02.fas.harvard.edu (Postfix, from userid 19885)
+	id BA6641C003; Mon, 23 Aug 2004 01:13:52 -0400 (EDT)
+Received: from localhost (localhost [127.0.0.1])
+	by ls02.fas.harvard.edu (Postfix) with ESMTP id B762B24024
+	for <caml-list@pauillac.inria.fr>; Mon, 23 Aug 2004 01:13:52 -0400 (EDT)
+Date: Mon, 23 Aug 2004 01:13:52 -0400 (EDT)
+From: Michael Alexander Hamburg <hamburg@fas.harvard.edu>
+To: caml-list@pauillac.inria.fr
+Subject: [Caml-list] camlp4 and class values
+Message-ID: <Pine.LNX.4.58.0408230033090.15745@ls02.fas.harvard.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at concorde with ID 41297D15.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; camlp:01 mutated:01 val:01 foo:01 extensible:01 camlp:01 foo:01 mlast:01 pcaml:01 mlast:01 params:01 expr:01 params:01 lident:01 ctyp:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I'm trying to write a simple game in ocaml, largely to give me an excuse
+to learn more of the language.  To deal with rule-changing effects, a
+large fraction of the methods in the game will have to be more or less
+mutable, although they will be mutated in a specific, nontrival way.
+
+I've created a module, temporarily called Stack, which implements the kind
+of mutation I want, so now there's the issue of define the methods.  For
+now, the implementation goes thusly:
+
+class test = object (self)
+  val onFoo : (test -> int -> int) Stack.t =
+    Stack.create (fun _ _ -> 0)
+
+  method foo x = Stack.apply onFoo self x
+
+  method addFoo f = Stack.append onFoo f
+end
+
+And this sort of thing works, but it would be nice if I didn't have to
+write these three things for all the extensible methods, which is quite a
+lot of methods.  So I've been trying to write a camlp4 preprocessor, which
+would take
+
+class test = object (self)
+  extmethod foo (x:int) = 0
+end
+
+or the like, and turn it into the above code.  I haven't been able to get
+anything to work, though.  I don't really know camlp4, although not for
+lack of trying (I've spent several hours working through its
+documentation).  The best I've been able to do is something like:
+
+#load "pa_extend.cmo";;
+#load "q_MLast.cmo";;
+
+open Pcaml
+open MLast
+
+let addName n = "add_" ^ n
+let onName n = "on_" ^ n
+
+let o2b = function
+  Some _ -> true
+| None -> false
+
+let genfunc loc params e =
+  <:expr< Stack.apply (fun self $params$ -> $e$)  >>
+
+let genval loc l params e =
+ <:class_str_item< value $lid:onName l$ = $genfunc loc params e$ >>
+
+let genmeth loc pf l topt params =
+ <:class_str_item< method $opt:o2b pf$ $l$ $opt:topt$ $patt:params$ =
+   Stack.apply $lid:onName l$ self $params$>>
+
+let genadd loc pf l =
+ <:class_str_item< method $opt:o2b pf$ $addName l$ f = Stack.append
+$lid:onName l$ f >>
+
+
+EXTEND
+  class_str_item : LAST
+  [[ "extmethod"; pf = OPT "private"; l = LIDENT; topt = OPT ctyp; params
+= LIST0 patt; "="; e = expr ->
+       let meth = genmeth loc pf l topt params
+       and add = genadd loc pf l
+       and v = genval loc l params e in
+	 <:class_str_item< declare $v$; $meth$; $add$; end >>
+  ]];
+END;;
+
+which raises:
+
+File "extmethod.ml", line 22, characters 52-65:
+While expanding quotation "class_str_item":
+Parse error: [fun_binding] expected (in [class structure item])
+Uncaught exception: Pcaml.Qerror("class_str_item", 1, _)
+Preprocessor error
+
+The closest thing I've been able to find to documentation on fun_bindings
+is the camlp4 source, which does a much more direct translation.
+
+How do I write such an extenision? OR is there some reason that it's not
+possible?
+
+Thanks for your time,
+
+Mike Hamburg
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

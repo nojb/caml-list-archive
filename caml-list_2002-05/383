@@ -1,0 +1,240 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA25033; Thu, 30 May 2002 08:53:16 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA25154 for <caml-list@pauillac.inria.fr>; Thu, 30 May 2002 08:53:16 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g4U6rFH05318
+	for <caml-list@inria.fr>; Thu, 30 May 2002 08:53:15 +0200 (MET DST)
+Received: (from fpottier@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA25104 for caml-list@inria.fr; Thu, 30 May 2002 08:53:15 +0200 (MET DST)
+Date: Thu, 30 May 2002 08:53:15 +0200
+From: Francois Pottier <francois.pottier@inria.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Hashtbl iter semantics
+Message-ID: <20020530085315.A24997@pauillac.inria.fr>
+Reply-To: Francois.Pottier@inria.fr
+References: <200205271904.VAA0000015105@beaune.inria.fr> <3CF5258C.3080409@ozemail.com.au>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="ew6BAiZeqk4r7MaW"
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+In-Reply-To: <3CF5258C.3080409@ozemail.com.au>; from skaller@ozemail.com.au on Thu, May 30, 2002 at 05:01:32AM +1000
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--ew6BAiZeqk4r7MaW
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+
+
+On Thu, May 30, 2002 at 05:01:32AM +1000, John Max Skaller wrote:
+> 
+> [The replace semantics you describe are unfortunate for me: my unification
+> algorithm keeps a hashtable of variable -> term bindings into which
+> I have to incrementally subtitute while iterating through the table.
+
+Do you need to maintain *several* such substitutions (i.e. tables) with
+the same domain (i.e. the same set of variables)? If not (that is, if
+you only have one hash table), then it is customary to use a mutable
+field, within each variable record, to store the associated term. It's
+simpler and the overhead for access is very small.
+
+One nice way of doing so is to use a generic union/find algorithm, such
+as the one I am attaching to this message. Simply define
+
+  type term =
+    descriptor UnionFind.point
+
+  and descriptor =
+  | TInteger
+  | TArrow of term * term
+  | ...
+
+and you're all set.
+
+-- 
+François Pottier
+Francois.Pottier@inria.fr
+http://pauillac.inria.fr/~fpottier/
+
+--ew6BAiZeqk4r7MaW
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="unionFind.mli"
+
+(* $Header: /home/pauillac/formel1/fpottier/cvs/modulo/unionFind.mli,v 1.1 2002/04/08 09:55:51 fpottier Exp $ *)
+
+(* This module provides support for a basic union/find algorithm. *)
+
+(* The abstraction defined by this module is a set of points,
+   partitioned into equivalence classes. With each equivalence class,
+   a piece of information, of abstract type ['a], is associated; we
+   call it a descriptor. *)
+
+type 'a point
+
+(* [equivalent point1 point2] tells whether [point1] and [point2] belong to
+   the same equivalence class. *)
+
+val equivalent: 'a point -> 'a point -> bool
+
+(* [describe point] returns the descriptor associated with [point]'s
+   equivalence class. *)
+
+val describe: 'a point -> 'a
+
+(* [fresh desc] creates a fresh point and returns it. It forms an
+   equivalence class of its own, whose descriptor is [desc]. *)
+
+val fresh: 'a -> 'a point
+
+(* [self desc] creates a fresh point [point] and returns it. It forms an
+   equivalence class of its own, whose descriptor is [desc point]. In
+   other words, the descriptor is allowed to recursively refer to
+   the point that is being created. Use with caution -- the function
+   [desc] is allowed to store a pointer to [point], but must not use it
+   in any other way. *)
+
+val self: ('a point -> 'a) -> 'a point
+
+(* [alias point1 point2] merges the equivalence classes associated
+   with [point1] and [point2], which must be distinct, into a single
+   class, whose descriptor is that originally associated with
+   [point2]'s equivalence class. *)
+
+val alias: 'a point -> 'a point -> unit
+
+(* [redundant] maps all members of an equivalence class, but one,
+   to [true]. *)
+
+val redundant: 'a point -> bool
+
+
+--ew6BAiZeqk4r7MaW
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="unionFind.ml"
+
+(* $Header: /home/pauillac/formel1/fpottier/cvs/modulo/unionFind.ml,v 1.1 2002/04/08 09:55:50 fpottier Exp $ *)
+
+(* This module provides support for a basic union/find algorithm. *)
+
+(* The abstraction defined by this module is a set of points,
+   partitioned into equivalence classes. With each equivalence class,
+   a piece of information, of abstract type ['a], is associated; we
+   call it a descriptor. *)
+
+(* A point is implemented as a cell, whose (mutable) contents consist
+   of a single link to either a descriptor, or another point. Thus,
+   points form a graph, which must be acyclic, and whose connected
+   components are the equivalence classes. In every equivalence class,
+   exactly one point has no outgoing edge, and carries the class's
+   descriptor instead. It is the class's representative element. *)
+
+type 'a point = {
+    mutable link: 'a link
+  } 
+
+and 'a link =
+  | Immediate of 'a
+  | Link of 'a point
+
+(* [repr point] returns the representative element of [point]'s
+   equivalence class. It is found by starting at [point] and following
+   the links. For efficiency, the function performs path compression
+   at the same time. *)
+
+let rec repr point =
+  match point.link with
+  | Link point' ->
+      let point'' = repr point' in
+      if point'' != point' then
+
+	(* [point''] is [point']'s representative element. Because we
+	   just invoked [repr point'], [point'.link] must be [Link
+	   point'']. We write this value into [point.link], thus
+	   performing path compression. Note that this function never
+	   performs memory allocation. *)
+
+	point.link <- point'.link;
+      point''
+  | Immediate _ ->
+      point
+
+(* [equivalent point1 point2] tells whether [point1] and [point2] belong to
+   the same equivalence class. *)
+
+let equivalent point1 point2 =
+  repr point1 == repr point2
+
+(* [describe point] returns the descriptor associated with [point]'s
+   equivalence class. *)
+
+let rec describe point =
+
+  (* By not calling [repr] immediately, we optimize the common cases
+     where the path starting at [point] has length 0 or 1, at the
+     expense of the general case. *)
+
+  match point.link with
+  | Immediate desc ->
+      desc
+  | Link { link = Immediate desc } ->
+      desc
+  | Link { link = Link _ } ->
+      describe (repr point)
+
+(* [fresh desc] creates a fresh point and returns it. It forms an
+   equivalence class of its own, whose descriptor is [desc]. *)
+
+let fresh desc = {
+  link = Immediate desc
+} 
+
+(* [self desc] creates a fresh point [point] and returns it. It forms an
+   equivalence class of its own, whose descriptor is [desc point]. In
+   other words, the descriptor is allowed to recursively refer to
+   the point that is being created. Use with caution -- the function
+   [desc] is allowed to store a pointer to [point], but must not use it
+   in any other way. *)
+
+let self desc =
+
+  (* Create a dangling point. We cannot (yet) create its descriptor. *)
+
+  let rec point = {
+    link = Link point (* this is the only placeholder available *)
+  } in
+
+  (* Create the descriptor and assign the point to it. *)
+
+  point.link <- Immediate (desc point);
+  point
+
+(* [alias point1 point2] merges the equivalence classes associated
+   with [point1] and [point2], which must be distinct, into a single
+   class, whose descriptor is that originally associated with
+   [point2]'s equivalence class.
+
+   The fact that [point1] and [point2] do not originally belong to the
+   same class guarantees that we do not create a cycle in the
+   graph. *)
+
+let alias point1 point2 =
+  let point1 = repr point1 in
+  assert (point1 != repr point2);
+  point1.link <- Link point2
+
+(* [redundant] maps all members of an equivalence class, but one,
+   to [true]. *)
+
+let redundant = function
+  | { link = Link _ } ->
+      true
+  | { link = Immediate _ } ->
+      false
+
+
+--ew6BAiZeqk4r7MaW--
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

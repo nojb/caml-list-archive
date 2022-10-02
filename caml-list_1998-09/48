@@ -1,0 +1,150 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA14657 for caml-redistribution; Mon, 28 Sep 1998 11:52:57 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA00774 for <caml-list@pauillac.inria.fr>; Mon, 28 Sep 1998 11:51:39 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id LAA00154;
+	Mon, 28 Sep 1998 11:51:09 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA27562; Mon, 28 Sep 1998 11:51:09 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199809280951.LAA27562@pauillac.inria.fr>
+Subject: Re: polymorphic recursion
+To: leroy@welcome.disi.unige.it (Xavier Leroy)
+Date: Mon, 28 Sep 1998 11:51:09 +0200 (MET DST)
+Cc: caml-list@inria.fr
+In-Reply-To: <19980922191410.C17087@welcome.disi.unige.it> from "Xavier Leroy" at Sep 22, 98 07:14:10 pm
+X-Mailer: ELM [version 2.4 PL24 ME8]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> This is one of those little dark spots in ML-style languages that I
+> hope will be cleaned some day by drastic simplifications (as the
+> problem with polymorphic refs was drastically simplified by the value
+> restriction).  (Argumented) suggestions are welcome.
+
+In my mind the dark spot comes from the confusion between types and
+type schemes due to the implicit quantification of type
+variables. Writing ML programs, we need type schemes and not
+types. Usual semantics for type annotations is ambiguous, since it
+rely on strange rules to get rid of the absence of explicit
+quantifiers in ML type schemes. Hence the strange semantics of
+original ML (and CAML) type annotations: useless to the compiler and
+useless to the reader of the program.
+
+I suggest the following simple rules:
+
+(1) type expressions appearing in type constraints are supposed to be
+type schemes, implicitely quantified as usual. Scope of type variables
+is simply delimited by the parens surrounding the type constraint.
+
+(2) a type constraint (e : sigma) is mandatory. It means that sigma IS
+a valid type scheme for e, and indeed sigma is the type scheme
+associated to e by the compiler. (This implies that sigma is an
+instance of the most general type scheme of e.)
+
+This is fairly conservative and easy to implement. For those
+interested in details, I elaborate below on the consequences of this
+two rules.
+
+
+(I) What we gain:
+=================
+
+-- type constraints have a reliable meaning as type annotations in
+programs,
+-- polymorphic recursive definitions are easy to type check, if type
+(scheme) annotated.
+
+Examples:
+
+let (f : int -> int) = function x -> x;;
+Accepted:
+--------
+ int -> int is a valid type scheme for f (although not the most general one).
+ f gets type (scheme) int -> int.
+
+let (f : 'a -> 'b) = function x -> raise Not_found;;
+Accepted:
+---------
+ 'a -> 'b is a valid type scheme for f (the most general one).
+ f gets type scheme Forall 'a 'b. 'a -> 'b
+
+let (f : 'a -> 'a) = function x -> raise Not_found;;
+Accepted:
+---------
+ 'a -> 'a is a valid type scheme for f.
+ f gets type scheme Forall 'a. 'a -> 'a
+
+let (f : int -> int) = function x -> raise Not_found;;
+Accepted:
+---------
+ int -> int is a valid type scheme for f.
+ f gets type (scheme) int -> int.
+
+let (f : 'a -> 'b) = function x -> x + 1;;
+Rejected: 'a -> 'b is not a valid type scheme for f.
+---------
+
+let (f : 'a -> 'a) = function x -> x + 1;;
+Rejected: 'a -> 'a is not a valid type scheme for f.
+---------
+
+The difference between this treatment and the actual semantics of type
+annotations in Caml is fairly conservative: all the ``Accepted''
+examples are already legal O'Caml programs and type assignments are
+exactly the same. On the other hand, the strange ``Rejected''
+annotations, that indeed use types that are more general than the
+principal type scheme of the program, are now rejected.
+
+(II) What we loose:
+===================
+
+As you may have noticed this new semantics precludes the sharing of
+type variables between distinct type annotations. It is not clear to
+me that this sharing is needed or really useful or desirable. Anyway,
+this sharing is now impossible due to the new scope rule of type
+variables, and to the type scheme interpretation of type annotations.
+For instance, if we write:
+
+let f (x : 'a) (y : 'a) = ...
+
+meaning (according to the old semantics) that x and y should have the
+same type, this is now rejected, since neither x nor y can be assigned
+the polymorphic type scheme Forall 'a. 'a.
+
+If we really need this sharing semantics we can use a
+conservative extension of the basic scheme above, as follows:
+
+(III) Extension to free type variables:
+=======================================
+
+To express type sharing between expressions, we must be able to express
+constraints involving types with free type variables (not quantified
+in any type scheme): we already have a notation to express those type
+variables, namely '_a:
+
+let f (x : '_a) (y : '_a) = x + y;;
+
+Now the constraint is not quantified: it simply means that x and y should
+have the same type (more precisely, it exists a type ty such that x :
+ty and y : ty).
+
+(The scope of these free type variables should be global to the phrase they
+appear into and they can be assigned any type).
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+PS: We may also consider explicit Forall quantification in type
+schemes. This is less conservative than this proposal but is
+definitively clearer (furthermore, we get rid of this strange '_a
+notation). Anyway, we may think we should have to introduce this
+explicit quantification to support future extensions of the type
+system to inner quantification; so it simpler to wait for these
+extensions to introduce explicit quantification.
+
+
+
+
+

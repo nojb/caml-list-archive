@@ -1,0 +1,76 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA11617; Mon, 14 Oct 2002 09:18:37 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA11084 for <caml-list@pauillac.inria.fr>; Mon, 14 Oct 2002 09:18:36 +0200 (MET DST)
+Received: from relay.pair.com (relay1.pair.com [209.68.1.20])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with SMTP id g9E7IYD20670
+	for <caml-list@inria.fr>; Mon, 14 Oct 2002 09:18:35 +0200 (MET DST)
+Received: (qmail 33078 invoked from network); 14 Oct 2002 07:18:32 -0000
+Received: from adsl-host-sf-228.apexworld.net (HELO checkerlap.d6.com) (66.114.212.228)
+  by relay1.pair.com with SMTP; 14 Oct 2002 07:18:32 -0000
+X-pair-Authenticated: 66.114.212.228
+Message-Id: <4.3.2.7.2.20021013222805.01b51428@mail.d6.com>
+X-Sender: checker@mail.d6.com
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Date: Mon, 14 Oct 2002 00:18:41 -0700
+To: Xavier Leroy <xavier.leroy@inria.fr>
+From: Chris Hecker <checker@d6.com>
+Subject: Re: [Caml-list] gc question: thread stacks, fibers, etc.
+Cc: caml-list@inria.fr
+In-Reply-To: <20021013103223.E13771@pauillac.inria.fr>
+References: <4.3.2.7.2.20021004000748.030bd2c0@mail.d6.com>
+ <4.3.2.7.2.20021004000748.030bd2c0@mail.d6.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"; format=flowed
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+>An alternative is to allocate the stack outside the heap, and scan it
+>via scanning hooks like the thread library does, but manipulate it
+>from the Caml side through a proxy, heap-allocated custom block.  The
+>custom block has a finalization function that the GC will call when no
+>reference to the proxy (i.e. to the fiber) remain.  The finalization
+>function can then decide to kill the fiber (free its stack) if it so
+>pleases.
+
+But this doesn't solve the original problem of the fiber containing a 
+reference to itself on its stack (or any fiber points to any other fiber), 
+right?  The scanning hook functions assume they're scanning roots, so they 
+can't check for circularity and release the whole mess.  The function I 
+need is something that says "the values I'm sending to the scanner are not 
+stored in roots, so check for circularities that includes them".  Or 
+something like that.  Make sense?  Perhaps there's a way to hook that in 
+the gc?  Maybe I'm missing something.
+
+Anyway, ignoring the circularity problem for the moment, deleting the stack 
+from under a fiber works because the stack itself can never have a pointer 
+from the heap into it, so it's always okay to delete (according to your 
+answer to my other question).  I guess you'd have to be careful that no C 
+functions that were still on the stack of that fiber had ever passed a 
+pointer into their stack to anyone who keeps it elsewhere (which in 
+ordinary cases is okay, since when writing the C code you assume you'll get 
+returned-to in an orderly fashion).  Maybe that's an okay constraint to 
+place on code, but a bug of that nature would certainly be hard to find, so 
+maybe it's not okay (this is why people shouldn't kill threads, nb. the 
+other thread  :).
+
+Hmm, now that I think about it, I can just use an exception for this, 
+exactly like the other caml-list discussion was wishing it could for 
+threads.  In other words, I'm only ever going to consider toasting a fiber 
+when it's yielded, so when the fiber gets resumed it'll be in the yield 
+code.  That code can check whether the gc has requested finalization of the 
+fiber, and throw an exception back up through the fiber.  That will solve 
+all the stack issues, because the exception will unwind it all, and the 
+fiber can catch it if it wants and do any cleanup.
+
+Yes, that's much cleaner than just killing it anyway.  That just leaves the 
+circularity issue above.
+
+Thanks!
+Chris
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

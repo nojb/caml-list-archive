@@ -1,0 +1,203 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 99D16BCAF
+	for <caml-list@yquem.inria.fr>; Wed, 15 Jun 2005 16:13:00 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5FED0Xi009605
+	for <caml-list@yquem.inria.fr>; Wed, 15 Jun 2005 16:13:00 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA28512 for <caml-list@pauillac.inria.fr>; Wed, 15 Jun 2005 16:12:59 +0200 (MET DST)
+Received: from mx1.polytechnique.org (mx1.polytechnique.org [129.104.30.34])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5FECxKK009599
+	for <caml-list@inria.fr>; Wed, 15 Jun 2005 16:12:59 +0200
+Received: from [192.168.0.11] (falcal.net [81.56.73.55])
+	(using TLSv1 with cipher RC4-SHA (128/128 bits))
+	(No client certificate requested)
+	by ssl.polytechnique.org (Postfix) with ESMTP id DF1053316A;
+	Wed, 15 Jun 2005 16:12:58 +0200 (CEST)
+Mime-Version: 1.0 (Apple Message framework v730)
+Content-Type: text/plain; charset=US-ASCII; delsp=yes; format=flowed
+Message-Id: <7E5A2BF0-8CE7-4680-9D4B-60732DE9C8C6@m4x.org>
+Content-Transfer-Encoding: 7bit
+From: Damien Bobillot <damien.bobillot@m4x.org>
+Subject: Inter-module dependences
+Date: Wed, 15 Jun 2005 16:12:56 +0200
+To: caml-list@inria.fr
+X-Mailer: Apple Mail (2.730)
+X-Virus-Scanned: by amavisd-new-20030616-p10 at Polytechnique.org
+X-DCC--Metrics: djali 32702; Body=1 Fuz1=1 Fuz2=1
+X-Org-Mail: damien.bobillot.2002@polytechnique.org
+X-Miltered: at nez-perce with ID 42B0376C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 42B0376B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; damien:01 damien:01 dependences:01 sig:01 val:01 val:01 sig:01 functor:01 struct:01 struct:01 compiler:01 ocamlc:01 ocamlc:01 ...:98 ...:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Hello,
+
+I'm defining a graph structure compatible with the ocamlgraph library.
+
+I want to be able to access all neighbors and edge to neighbors of a  
+vertex in 0(1), so I think I need to store the outgoing edge list of  
+each vertex in the vertex structure. I also need to be able to access  
+the source and destination of an edge in 0(1), so I store these  
+vertex in the edge structure.
+
+A standard Caml will be :
+
+type vertex = {
+     label : int;
+     out_edges : edge list;
+     ...
+} and edge = {
+     label : int;
+     src : vertex;
+     dst : vertex;
+     ...
+}
+
+However, in ocamlgraph, the vertex and edge type must be defined by  
+modules of signatures (and I cannot modify it) :
+
+module type VERTEX = sig
+     type t
+     type label
+     val create : label -> t
+     val label : t -> label
+end
+module type EDGE = sig
+     type t
+     type label
+     type vertex
+     val create : vertex -> label -> vertex -> t
+     val label : t -> label
+     val src : t -> vertex
+     val dst : t -> vertex
+end
+module type GRAPH = sig
+     module V : VERTEX
+     module E : EDGE
+     ...
+end
+
+Then the graph structure is generally created with a functor like :
+
+module Make_Graph(V : VERTEX)(E : EDGE with type vertex = V.t) = struct
+     module V = V
+     module E = E
+     ...
+end
+
+It works fine, but it doesn't respond to my problem : I want that V  
+use a type from E and at the same time E use a type of V. So I write  
+the following code :
+
+module type MYVERTEX = sig
+     include VERTEX
+     type edge
+     val out_edges : t -> edge list
+end
+
+module MyVertex = struct
+     type edge
+     type t = { label : int; out_edges : edge list }
+     let out_edges v = v.out_edges
+     ...
+end
+
+module MyEdge = struct
+     type vertex
+     type t = { label : int; src : vertex; dst : vertex }
+     ...
+end
+
+module Make_MyGraph(V : MYVERTEX with type edge = E.t)(E : EDGE with  
+type vertex = V.t) = struct
+     module V = V
+     module E = E
+     ...
+end
+
+The compiler found an error on "with type edge = E.t" : "Unbound type  
+constructor E.t". I understood it, E has not been defined yet, but I  
+want to do that any way : if I suppress "with type edge = E.t", the  
+V.edge and E.t types are not the same (and some other functions  
+inside Make_MyGraph won't work).
+
+I tried things like :
+module Make_MyGraph(VV : MYVERTEX)(EE : EDGE with type vertex = V.t)  
+= struct
+     module E = EE
+     module V = VV with type edge = E.t (*ocamlc doesn't understand  
+the with keyword here*)
+     ...
+end
+
+or
+module Make_MyEdge(E : EDGE)(V : MYVERTEX with type edge = E.t) = struct
+     include V
+end
+module Make_MyGraph(VV : MYVERTEX)(EE : EDGE with type vertex = VV.t)  
+= struct
+     module E = EE
+     module V = Make_MyEdge(E)(VV) (*ocamlc doesn't accepte VV,
+Modules do not match:
+   sig type t = VV.t type label = VV.label type edge = VV.edge end
+is not included in
+   sig type t type label type edge = E.t end
+*)
+     ...
+end
+
+-- 
+Damien Bobillot
+
+Test.ml file :
+===================
+module type VERTEX = sig
+     type t
+     type label
+end
+module type EDGE = sig
+     type t
+     type label
+     type vertex
+end
+module type MYVERTEX = sig
+     include VERTEX
+     type edge
+end
+
+module MyVertex = struct
+     type edge
+     type t = { label : int; out_edges : edge list }
+end
+module MyEdge = struct
+     type vertex
+     type t = { label : int; src : vertex; dst : vertex }
+end
+module Make_MyGraph(V : MYVERTEX with type edge = E.t)(E : EDGE with  
+type vertex = V.t) = struct
+     module V = V
+     module E = E
+end
+
+(*module Make_MyGraph(VV : MYVERTEX)(EE : EDGE with type vertex =  
+V.t) = struct
+     module E = EE
+     module V = VV with type edge = E.t
+end*)
+
+(*module Make_MyEdge(E : EDGE)(V : MYVERTEX with type edge = E.t) =  
+struct
+     include V
+end
+module Make_MyGraph(VV : MYVERTEX)(EE : EDGE with type vertex = VV.t)  
+= struct
+     module E = EE
+     module V = Make_MyEdge(E)(VV)
+end*)
+===========
+

@@ -1,0 +1,99 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA25643; Sat, 17 Mar 2001 11:58:51 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA25746 for <caml-list@pauillac.inria.fr>; Sat, 17 Mar 2001 11:58:49 +0100 (MET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f2HAwl515106
+	for <caml-list@inria.fr>; Sat, 17 Mar 2001 11:58:48 +0100 (MET)
+Received: from localhost (isdnppp2.kurims.kyoto-u.ac.jp [130.54.16.103])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id TAA12122;
+	Sat, 17 Mar 2001 19:58:20 +0900 (JST)
+To: msk@post.tepkom.ru
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Ocaml 3.01: bug or feature?
+In-Reply-To: <Pine.LNX.4.10.10103161255430.32395-100000@post.tepkom.ru>
+References: <Pine.LNX.4.10.10103161255430.32395-100000@post.tepkom.ru>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20010317195946N.garrigue@kurims.kyoto-u.ac.jp>
+Date: Sat, 17 Mar 2001 19:59:46 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 70
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> When I try to compile the following program by Ocaml 3.01:
+> 
+> let f ?(a=1) b = a + b
+> let (+>) x f = f x
+> let _ = 1 +> f
+> 
+> I get following message:
+> 
+> File "bug.ml", line 3, characters 13-14: 
+> This expression has type ?a:int -> int -> int 
+> but is here used with type 'a ->'b
+> 
+> With Ocaml 3.00 all worked fine.
+
+You stumbled on a very interesting glitch :-(
+
+If I remember correctly, this would work in 3.00 in classic mode, but
+not in commuting label mode. 3.01 is a bit more conservative, so this
+doesn't work in both.
+
+The problem is that the type of the expected function ('a -> 'b) is
+not precise enough to be sure whether this would be legal or not to
+discard ?a:int. The notion of legality is with respect to a set of
+untyped reduction rules, which you can find in my recent paper
+"Labeled and optional arguments for Objective Caml" at
+http://wwwfun.kurims.kyoto-u.ac.jp/~garrigue/papers/.
+
+You can make it work by explicitly giving a (non-polymorphic) type for
+the return value of f:
+  # let (+>) x f : int = f x;;
+  val ( +> ) : 'a -> ('a -> int) -> int = <fun>
+  # 1 +> f;;
+  - : int = 2
+
+Considering commuting label mode, here is an example which would
+create semantical problems:
+   # let f ?(a=1) b ~a:c = a + b + c;;
+   val f : ?a:int -> int -> a:int -> int
+   # let id (x : 'a -> 'b) = x;;
+   val id : ('a -> 'b) -> 'a -> 'b
+   # let g = id f;;
+   val g : int -> a:int -> int
+   # g ~a:2;;
+   - : int -> int
+According to the untyped semantics, this application on ~a is the
+first argument (indiretcly) passed to f, so it should really replace
+the first ?a, so that the type of the result should be "int -> a:int
+-> int", and indirectly the type of g was wrong.
+This is subtle, and this is a rather unusual style of coding, but this
+would make the system unsound, so this is prohibited.
+
+For classic mode, the situation is even worse, and in fact the current
+version is not 100% sound. Here is a counter-example, that is accepted
+by the compiler:
+  # let f ?(a=1) b = print_int (a+b);;
+  val f : ?a:int -> int -> unit = <fun>
+  # let g ~f = f ~a:2;;                
+  val g : f:(a:int -> 'a) -> 'a = <fun>
+  # let h ~(f : int -> unit) ~g = ignore (g ~f);;
+  val h : f:(int -> unit) -> g:(f:(int -> unit) -> 'a) -> unit = <fun>
+  # h ~f ~g;;
+  3- : unit = ()
+According to the untyped semantics, we are really applying f on ~a:2, so
+there should be no output.
+Again, this is pretty far-fetched, but we will have to solve it
+someday.
+
+Cheers,
+
+        Jacques
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

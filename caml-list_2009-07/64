@@ -1,0 +1,190 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=AWL,NO_REAL_NAME,SPF_FAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id ACBDABBAF
+	for <caml-list@yquem.inria.fr>; Sat, 11 Jul 2009 05:07:08 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjICAPCeV0rAEKcge2dsb2JhbACPCQGJIXsBARYkBbVGhAkFgTs
+X-IronPort-AV: E=Sophos;i="4.42,381,1243807200"; 
+   d="scan'208";a="32866715"
+Received: from selenite.metnet.navy.mil ([192.16.167.32])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 11 Jul 2009 05:07:07 +0200
+Received: (qmail 6942 invoked by uid 107); 11 Jul 2009 03:07:05 -0000
+Received: from unknown (HELO Adric.metnet.navy.mil) (10.100.105.184)
+  by selenite.metnet.navy.mil with SMTP; 11 Jul 2009 03:07:05 -0000
+Received: by Adric.metnet.navy.mil (Postfix, from userid 760)
+	id 49092176DE; Fri, 10 Jul 2009 20:05:10 -0700 (PDT)
+From: oleg@okmij.org
+To: caml-list@inria.fr
+Subject: GADTs in OCaml
+Message-Id: <20090711030510.49092176DE@Adric.metnet.navy.mil>
+Date: Fri, 10 Jul 2009 20:05:10 -0700 (PDT)
+X-Spam: no; 0.00; oleg:01 ocaml:01 ocaml:01 invariants:01 printf:01 scanf:01 trivial:01 recursion:01 invariants:01 statically:01 node:01 node:01 printf:01 scanf:01 higher-order:01 
+
+
+We present a simple, pure, magic-free implementation of a form of
+GADTs in OCaml that is sufficient for the common applications of GADTs
+such as data structures with embedded invariants, typed printf/scanf,
+tagless interpreters.  The implementation is a simple module,
+requiring no changes to the OCaml system. The implementation is so
+trivial that it should work on any ML system (although, like nested
+data types, GADTs aren't very useful on an SML system without support
+for polymorphic recursion).
+
+Our examples include: 
+	- enforcing invariants on data structures: statically
+ensuring that in a tree representation of an HTML document, a link
+node is never an ancestor of another link node;
+	- typed printf/scanf sharing the same format descriptor, which
+is first-class and can be built incrementally;
+	- simply typed lambda-calculus with constants and higher-order
+abstract syntax. This is essentially the example of Hongwei Xi's et al 
+POPL 2003 paper.
+
+The complete code with the implementation and examples is available at
+	http://okmij.org/ftp/ML/GADT.ml
+
+The GADT notation turns out lightweight. However, GADTs are often
+inductive, and so we need polymorphic recursion to process them. That
+adds some (relatively small) notational overhead.  Mainly, GADTs are
+often used with existentials -- so often that Haskell makes
+existential quantification implicit in GADT declarations.  OCaml, alas,
+lacks such notational conveniences, and so existentials (which must be
+encoded via double-negation) aren't pretty. Smart constructors --
+which can be build mechanically, perhaps with a suitable camlp4
+macro -- ease the pain.
+
+We learned the lesson that common GADTs are available in OCaml here
+and now. We can truly write the published examples that motivated
+GADTs, without too much violence to their notation. We can translate
+GADT code from Haskell, more or less mechanically. No changes to the
+OCaml type system or the type checker are necessary. Of course changes
+such as explicit existential quantification, better support for rank-2
+types, etc. shall be greatly appreciated -- but they are not necessary
+to start using and enjoying GADTs.
+
+Hopefully the present implementation lets one get a taste of GADTs and
+write code that seems to require them. The end of GADT.ml
+points out to a more efficient implementation, which perhaps can be
+the basis for the native OCaml implementation. 
+
+
+As shown by Patricia Johann and Neil Ghani: 
+    Foundations for Structured Programming with GADT. POPL 2008.
+the essence of GADTs is the EQ GADT, which implements the following interface:
+
+      type ('a,'b) eq
+      val refl : ('a,'a) eq
+      val apply_eq : ('a,'b) eq -> 'a -> 'b
+
+The value of the type ('a,'b) eq witnesses the equality of two types.
+The function apply_eq relies on the witness when performing type coercion.
+
+To be precise, the genuine GADTs provide a more general function
+for the Leibniz principle
+      val apply_eq : ('a,'b) eq -> 'a tau -> 'b tau
+for any type tau. Our implementation supports only those tau that are
+functors (that is, admit a map operation). That seems sufficient however
+for all the common examples.
+
+The following trivial implementation is genuinely safe, meaning it
+never leads to segmentation faults, even in principle.
+
+module EQ = struct
+  type ('a,'b) eq = Refl of 'a option ref * 'b option ref
+
+  let refl () = let r = ref None in Refl (r,r)
+
+  let symm : ('a,'b) eq -> ('b,'a) eq = function 
+      Refl (x,y) -> Refl (y,x)
+
+  let apply_eq : ('a,'b) eq -> 'a -> 'b = function
+      Refl (rx,ry) -> fun x ->
+        rx := Some x;
+        match !ry with
+	| Some y -> rx := None; y
+	|     _  -> failwith "Impossible"
+end;;
+
+
+We show briefly one of the examples from GADT.ml: typed printf/scanf
+sharing the same format descriptor (which is first-class and can be
+built incrementally):
+
+let tp2 = sprintf (f_lit "Hello " ^^ f_lit "world" ^^ f_char) '!';;
+(* val tp2 : string = "Hello world!" *)
+
+let ts2 = sscanf tp2 (f_lit "Hello " ^^ f_lit "world" ^^ f_char) (fun x -> x);;
+(* val ts2 : char * string = ('!', "") *)
+
+(* Formats are first-class and can be constructed incrementally *)
+let fmt31 () = f_lit "The value of " ^^ f_char ^^ f_lit " is ";;
+(* val fmt31 : unit -> ('a, char -> 'a) fmt *)
+
+let fmt3 () = fmt31 () ^^ f_int;;
+(* val fmt3 : unit -> ('a, char -> int -> 'a) fmt *)
+
+let tp3 = sprintf (fmt3 ()) 'x' 3;;
+(* val tp3 : string = "The value of x is 3" *)
+
+(* What we print, we can parse back *)
+let ts3 = sscanf tp3 (fmt3 ()) (fun x n -> (x,n));;
+(* val ts3 : (char * int) * string = (('x', 3), "") *)
+
+
+The example is a straightforward re-implementation of the Haskell code
+   http://okmij.org/ftp/typed-formatting/PrintScanI.txt
+   http://okmij.org/ftp/typed-formatting/PrintScan.hs
+
+In particular, the GADT defining a domain-specific language of format
+descriptors is written in OCaml as follows:
+
+type ('a,'b) fmt =
+  | FLit of < m_flit : 'w. (('a,'b) eq -> string -> 'w) -> 'w >
+  | FInt of < m_fint : 'w. ((int -> 'a,'b) eq -> 'w) -> 'w >
+  | FChr of < m_fchr : 'w. ((char -> 'a,'b) eq -> 'w) -> 'w >
+  | FCmp of < m_fcmp : 'w. ('a,'b,'w) fcmp_k -> 'w >
+      (* The standard encoding of existentials *)
+and ('a,'c,'w) fcmp_k = 
+    {fcmp_k : 'b. ('b,'c) fmt * ('a,'b) fmt -> 'w}
+;;
+
+We can (mechanically) define smart constructors:
+let f_lit x 
+    = FLit (object method m_flit : 'w. (('a,'b) eq -> string -> 'w) -> 'w
+	= fun k -> k (refl ()) x end);;
+(* val f_lit : string -> ('a, 'a) fmt *)
+
+let f_int 
+    = FInt (object method m_fint : 'w. ((int -> 'a,'b) eq -> 'w) -> 'w
+	= fun k -> k (refl ()) end);;
+(* val f_int : ('a, int -> 'a) fmt *)
+
+We show one interpreter of the DSL, to format values into a string:
+
+type print_sig = {pr: 'a 'b. ('a,'b) fmt -> (string -> 'a) -> 'b};;
+let rec printer = {pr = 
+ function 
+   | FLit x -> fun k -> x#m_flit (fun eq x -> apply_eq eq (k x))
+   | FInt x -> fun k -> x#m_fint (fun eq   -> apply_eq eq 
+	 (fun x -> k (string_of_int x)))
+   | FChr x -> fun k -> x#m_fchr (fun eq   -> apply_eq eq 
+	 (fun x -> k (String.make 1 x)))
+   | FCmp x -> fun k ->
+       x#m_fcmp {fcmp_k = 
+	  fun (a,b) -> printer.pr a (fun sa ->
+	                printer.pr b (fun sb -> k (sa ^ sb)))}
+};;
+let sprintf fmt = printer.pr fmt (fun x -> x);;
+(* val sprintf : (string, 'a) fmt -> 'a *)
+
+The code is rather straightforward.  One can build many similar
+interpreters, e.g., to direct the output into any suitable data
+sink. No changes to the format descriptor or the library is
+needed.
+

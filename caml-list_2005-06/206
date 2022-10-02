@@ -1,0 +1,97 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id D7361BCAE
+	for <caml-list@yquem.inria.fr>; Fri, 24 Jun 2005 16:20:18 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5OEKIiG008650
+	for <caml-list@yquem.inria.fr>; Fri, 24 Jun 2005 16:20:18 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA21132 for <caml-list@pauillac.inria.fr>; Fri, 24 Jun 2005 16:20:17 +0200 (MET DST)
+Received: from mallaury.noc.nerim.net (smtp-105-friday.noc.nerim.net [62.4.17.105])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5OEKHrU008643
+	for <caml-list@inria.fr>; Fri, 24 Jun 2005 16:20:17 +0200
+Received: from karryall.dnsalias.org (karryall.dnsalias.org [213.41.180.99])
+	by mallaury.noc.nerim.net (Postfix) with ESMTP id EAEF962D21
+	for <caml-list@inria.fr>; Fri, 24 Jun 2005 16:20:15 +0200 (CEST)
+Received: by karryall.dnsalias.org (Postfix, from userid 500)
+	id 438FC5971D3; Fri, 24 Jun 2005 16:20:17 +0200 (CEST)
+Resent-Message-ID: <17084.5793.225118.490315@karryall.dnsalias.org>
+Resent-Date: Fri, 24 Jun 2005 16:20:17 +0200
+Resent-To: caml-list@inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <17083.61629.766378.319685@karryall.dnsalias.org>
+In-Reply-To: <20050623214733.GA30897@furbychan.cocan.org>
+References: <20050623214733.GA30897@furbychan.cocan.org>
+From: Olivier Andrieu <andrieu@ijm.jussieu.fr>
+To: Richard Jones <rich@annexia.org>
+Subject: Re: [Caml-list] Wrapping a callback to OCaml code from C
+Date: Fri, 24 Jun 2005 13:38:37 +0200
+X-Mailer: VM 7.19 under Emacs 21.4.1
+Resent-From: oandrieu@nerim.net (Olivier Andrieu)
+X-Miltered: at nez-perce with ID 42BC16A2.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 42BC16A1.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; andrieu:01 andrieu:01 ijm:01 caml-list:01 ocaml:01 ocaml:01 bindings:01 typedef:01 camlprim:01 camlparam:01 camlreturn:01 val:01 invocation:01 camlparam:01 val:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Hi,
+
+ Richard Jones [Thursday 23 June 2005] :
+ > I'm currently making some OCaml bindings for some C code.  The C
+ > code which is causing me difficulty provides a callback interface.
+ > 
+ > The interface, in C, looks like:
+ > 
+ >   typedef void callback_t (void *data, obj *o1, obj *o2);
+ >   void run (void *data, callback_t *callback);
+ > 
+ > When 'run' function is called, it will call the callback function
+ > passed several times, passing 'data' as the first parameter.  I want
+ > to provide an equivalent function in OCaml.
+ > 
+ > My current best attempt is this, which uses the 'data' parameter to
+ > hold the address of the OCaml closure:
+ > 
+ >   CAMLprim value
+ >   run_wrapper (value fv)
+ >   {
+ >     CAMLparam1 (fv);
+ >     value *fvp = &fv;
+ >     caml_register_global_root (fvp);
+ >     run (fvp, callback_wrapper);
+ >     caml_remove_global_root (fvp);
+ >     CAMLreturn (Val_unit);
+ >   }
+
+you don't need caml_remove_global_root / caml_remove_global_root if
+the callback is only called during the run() invocation. A local root
+as registered by the CAMLparam macro is enough.
+
+ >   static void
+ >   callback_wrapper (void *fvpv, obj *o1, obj *o2)
+ >   {
+ >     value *fvp = (value *) fvpv;
+ >     value fv = *fvp;
+ >     value o1v, o2v;
+ >     o1v = Val_obj (o1);
+ >     o2v = Val_obj (o2);
+ >     caml_callback2 (fv, o1v, o2v);
+ >   }
+
+you should dereference fvp at the last possible time, after the
+Val_obj calls if theses calls are allocating in the caml heap (eg
+caml_copy_double, caml_copy_string).
+
+Also you probably should use caml_callback2_exn, otherwise if your
+caml callback raises an exception, control will jump back straight to
+the ocaml code and skip the end of the C caller code (run), which will
+usually result in resource leaks (for instance in your version it would
+leak the global root).
+
+-- 
+   Olivier
+

@@ -1,0 +1,127 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id BC382BBAF
+	for <caml-list@yquem.inria.fr>; Sun, 20 Dec 2009 16:55:51 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhwCAGfXLUvU4xEKkWdsb2JhbACBSpoIAQEBAQkLCgcTA7VqAoIsggAE
+X-IronPort-AV: E=Sophos;i="4.47,427,1257116400"; 
+   d="scan'208";a="39076880"
+Received: from moutng.kundenserver.de ([212.227.17.10])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 20 Dec 2009 16:55:51 +0100
+Received: from office1.lan.sumadev.de (dslb-084-059-079-108.pools.arcor-ip.net [84.59.79.108])
+	by mrelayeu.kundenserver.de (node=mrbap0) with ESMTP (Nemesis)
+	id 0MACoT-1NBglg32gD-00BxUb; Sun, 20 Dec 2009 16:55:50 +0100
+Received: from [192.168.0.32] (dslb-084-058-048-057.pools.arcor-ip.net [84.58.48.57])
+	by office1.lan.sumadev.de (Postfix) with ESMTPSA id 45B26C0E8E;
+	Sun, 20 Dec 2009 16:55:49 +0100 (CET)
+Subject: Re: [Caml-list] Re: OCaml is  broken
+From: Gerd Stolpmann <gerd@gerd-stolpmann.de>
+To: yminsky@gmail.com
+Cc: Erik Rigtorp <erik@rigtorp.com>,
+	caml-list <caml-list@yquem.inria.fr>
+In-Reply-To: <891bd3390912200547i67c3852dv1c91900018fdea9b@mail.gmail.com>
+References: <4B2D2BC1.6020204@msu.edu>
+	 <200912200443.57698.jon@ffconsultancy.com>
+	 <a57051ba0912200421w72837f94j2689dab1c2cf4dcb@mail.gmail.com>
+	 <891bd3390912200547i67c3852dv1c91900018fdea9b@mail.gmail.com>
+Content-Type: text/plain
+Date: Sun, 20 Dec 2009 17:01:29 +0100
+Message-Id: <1261324889.6545.30.camel@flake.lan.gerd-stolpmann.de>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.12.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V01U2FsdGVkX1+t65eJMjl+bUFWIlaCsevn641ZViT+ddFIzkx
+ WnlWJJyviHFkj3wM9jDnwM25kgFdsuYUK07cKdEtR1rbWadBsI
+ P8tUPbiUi/Wr+TLRfEmuw==
+X-Spam: no; 0.00; ocaml:01 gerd:01 stolpmann:01 gerd:01 yaron:01 minsky:01 ocaml:01 runtime:01 runtimes:01 off-list:01 ocamlnet:01 bigarray:01 mli:01 marshalling:01 runtime:01 
+
+
+Am Sonntag, den 20.12.2009, 08:47 -0500 schrieb Yaron Minsky:
+> On Sun, Dec 20, 2009 at 7:21 AM, Erik Rigtorp <erik@rigtorp.com>
+> wrote:
+>         The first step for OCaml would be to be able to run multiple
+>         communicating instances of the runtime bound to one core each
+>         in one
+>         process and have them communicate via lock free queues.
+> 
+> 
+> We've done some experiments in this direction at Jane Street.  On
+> Linux, we've been able to get fast enough IPC channels for our
+> purposes that slamming things into the same memory space has not in
+> the end been necessary.  (There is I agree some pain associated with
+> running multiple runtimes in the same process.  If you're interested,
+> contact me off-list and I can try to get you some of the details of
+> what we ran into.)
+> 
+> 
+> But have you tried using shared-memory segments for communicating
+> between different processes?  You say the latencies are too high, but
+> do you have any measurements you could share? Have you tried queues
+> using shared memory segments, in particular?  Inter-thread
+> communication has latency as well, and the performance issues depend
+> on lots of things, OS and hardware platform included.  It would help
+> in understanding the tradeoffs.
+
+I'm also experimenting now with shared memory (shm) as fast IPC
+mechanism. I've extended ocamlnet with a few functions that allow to
+copy an ocaml value into a shm segment which is accessible as bigarray:
+
+https://godirepo.camlcity.org/svn/lib-ocamlnet2/trunk/code/src/netsys/netsys_mem.mli
+
+Look especially for init_string. (I've also to mention Ancient here
+which inspired to this work.)
+
+Having ocaml values in shm saves us from some marshalling costs which is
+right now the biggest performance penalty when using multiple processes.
+However, this causes some problems, and at some point modifications of
+the ocaml runtime will be necessary:
+
+- The polymorphic equality and hash primitives do not work anymore
+  for values in such shm segments (and that really hurts,
+  especially string comparison is broken)
+- Given that the shm segment is set to read-only after being set up, it
+  is not possible to have pointers from shm to other memory regions.
+  This is good, as this would be very dangerous (GC may delete or move
+  values in the regular heap). However, the question arises when the
+  shm segment can be deleted. We would need help by the GC to identify
+  segments that are no longer referenced.
+
+Without that, shm will be restricted to a role as low-level
+inter-process buffers. 
+
+> As we go to higher-and-higher numbers of cores, I suspect that
+> message-passing solutions are likely to scale better than shared
+> memory, so I'm not so sure that OCaml is on the wrong path here.  I
+> think that most of the work that's needed is going to come in the form
+> of libraries, with only a little work in the compiler and the
+> runtime.  Given that, I think this is an issue for the community to
+> solve, not INRIA.
+
+Well, message passing and shm do not exclude each other. We should
+refine the terminology here: Actually, shm is just a basic mechanism
+where several execution threads (including processes) can share memory.
+What's often meant is, however, the role it plays for multi-threading,
+i.e. shared mutable data structures. What's typical here is that several
+threads write to the same memory regions. I don't know a good name for
+naming that programming style - maybe multi-threading style shm is the
+best.
+
+I'm working on a local message passing queue that can be used for long
+messages, based on shm, and where the messages can contain normal ocaml
+values (although it is likely that these are copied to the normal heap
+by the receiver, for the above mentioned reasons, but this is an
+expensive copy). The whole point will be that the data marshalling costs
+are minimized. So far I can already say, we will need some changes in
+the runtime to make such a mechanism fast and safe.
+
+Gerd
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Bad Nauheimer Str.3, 64289 Darmstadt,Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

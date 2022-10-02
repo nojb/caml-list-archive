@@ -1,0 +1,127 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA26103 for caml-red; Wed, 21 Jun 2000 15:31:37 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA23395 for <caml-list@pauillac.inria.fr>; Tue, 20 Jun 2000 03:14:49 +0200 (MET DST)
+Received: from isil.localdomain (ISIL.WV.CC.CMU.EDU [128.2.66.210])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e5K1Elf19348
+	for <caml-list@inria.fr>; Tue, 20 Jun 2000 03:14:48 +0200 (MET DST)
+Received: by isil.localdomain (Postfix, from userid 1000)
+	id 4300D369BC; Mon, 19 Jun 2000 00:14:06 -0400 (EDT)
+To: caml-list@inria.fr
+Subject: Labels and operators
+From: John Prevost <prevost@maya.com>
+Date: 19 Jun 2000 00:14:02 -0400
+Message-ID: <87bt0y71f9.fsf@isil.localdomain>
+Lines: 109
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: weis@pauillac.inria.fr
+
+A friend of mine recently said "if ML had regexp stuff that was as
+convenient as Perl, I'd switch to it for everything", and mentioned =~
+as something he specifically wanted.  So, as I was walking home
+tonight, I thought "hey, I bet I could make some little operators for
+the PCRE library and show him!"
+
+But, it also occurred to me that you want to use the nice labelled
+optional argument stuff, and I wasn't sure you could do that with
+operators.  Here's what I've discovered.
+
+The following definition is kind of non-sensical, since obviously you
+need at least one and probably at least two arguments for an infix
+operator:
+
+# let (+) ?(x = 1) ?(y = 1) () = x + y;;
+val ( + ) : ?x:int -> ?y:int -> unit -> int = <fun>
+
+but, well, it accepts it.  Now, let's see if we can apply this
+operator as a function.
+
+# (+) ();;
+- : int = 2
+# (+) ~x:5 ();;
+- : int = 6
+# (+) ~x:5 ~y:5 ();;
+- : int = 10
+
+Okay, that's as expected.  What about as an operator?  Well, the first
+case is obviously degenerate, since we're not giving enough arguments
+for a two argument operator.  What about the second and third:
+
+# ~x:5 + ();;
+  ---
+Syntax error
+# ~x:5 + ~y:5 ();;
+  ---
+Syntax error
+
+Well, that's a little disappointing.  I sort of half expected it,
+though, since this isn't function application we're dealing with.
+
+Here's what I was *trying* to do:
+
+# let (=~) s ?iflags ?flags ?rex ?pos pat =
+    pmatch ?iflags ?flags ?rex ~pat ?pos s;;
+val ( =~ ) :
+  string -> ?iflags:Pcre.irflag -> ?flags:Pcre.rflag list ->
+    ?rex:Pcre.regexp -> ?pos:int -> string -> bool = <fun>
+# "foo" =~ "\s+";;
+- : bool false
+# "foo" =~ "f";;
+- : bool true
+# "foo" =~ "f" ~pos:1;;
+           ---
+This expression is not a function, it cannot be applied
+# ("foo" =~ "f") ~pos:1;;
+  --------------
+This expression is not a function, it cannot be applied
+# (=~) "foo" ~pos:1 "f";;
+- : bool false
+# (=~) "foo" "f" ~pos:1;;
+- : bool false
+
+The only solution I can think of is something like:
+
+# let re ?iflags ?flags ?rex ?pos pat = (iflags, flags, rex, Some pat, pos)
+val re :
+  ?iflags:'a -> ?flags:'b -> ?rex:'c -> ?pos:'d -> 'e ->
+    'a option * 'b option * 'c option * 'e option * 'd option =
+  <fun>
+# let (=~) s (iflags,flags,rex,pat,pos) =
+                   pmatch ?iflags ?flags ?rex ?pat ?pos;;
+val ( =~ ) :
+  string ->
+  Pcre.irflag option * Pcre.rflag list option * Pcre.regexp option *
+  string option * int option -> bool = <fun>
+# "foo" =~ re "f";;
+- : bool = true
+# "foo" =~ re "f" ~pos:1;;
+- : bool = false
+
+Which, well, works, but seems kind of nasty.
+
+
+Since the syntax of labeled arguments is based around function
+application, and since function application (juxtaposition) has higher
+precedence than any other "operator", I can see why it's not
+syntactically valid to try to use labels on arguments to an operator.
+I don't see any clean way of "fixing" this, so I figured I ought to
+warn people that while you can define an operator with labeled
+arguments, you're not going to get much use of it as an infix.
+
+Well, okay, I think it might be reasonable to change the syntax to
+allow this syntax:
+
+<expr1> <op> <labelled args> <expr2>
+
+since the labelled args could not in any way shape or form be thought
+to go with either expr1 or expr2.  This would lead to things like:
+
+# "foo" =~ ~pos:1 "f";;
+- : bool = false
+
+being possible.  Don't know whether it's a great idea, though.
+
+
+
+John.
+
+

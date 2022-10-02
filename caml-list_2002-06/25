@@ -1,0 +1,82 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA18523; Tue, 4 Jun 2002 11:58:33 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA18519 for <caml-list@pauillac.inria.fr>; Tue, 4 Jun 2002 11:58:33 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g549wVH16786;
+	Tue, 4 Jun 2002 11:58:31 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA18515; Tue, 4 Jun 2002 11:58:31 +0200 (MET DST)
+Date: Tue, 4 Jun 2002 11:58:31 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: John Carr <jfc@MIT.EDU>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] OCaml SPARC asm compiler implementation question
+Message-ID: <20020604115830.A18179@pauillac.inria.fr>
+References: <200206031645.MAA08466@psi-phi.mit.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <200206031645.MAA08466@psi-phi.mit.edu>; from jfc@MIT.EDU on Mon, Jun 03, 2002 at 12:45:33PM -0400
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Why does %l7 hold the address of young_limit instead of its value?
+> The alloc instruction sequence would be reduced by one instruction and
+> 1-3 cycles (depending on chip) if the load could be omitted.  The MIPS
+> implementation does not have this indirection.
+
+The reason is related to signal handling.  Outside of blocking I/O
+primitives, OCaml processes signals by polling: the signal handler
+sets a flag, and this flag is periodically polled.  To avoid adding
+polling instructions to ocamlopt-generated code, the signal handler
+also simulates a "minor heap is full" condition by setting young_limit
+above young_ptr; the next allocation then calls the garbage collector,
+which tests the signal flag and acts accordingly.  
+
+Consequently, young_limit can be cached in a register only if the
+signal handler is able to modify this register in addition to the
+global variable young_limit; otherwise, the next allocation would not
+see the "minor heap is full" condition.
+
+Modifying a register from a signal handler is highly OS-specific: the
+kernel saves the registers on stack before calling the signal handler,
+and restores the registers from the stack area before returning to the
+interrupted code, so it's really the saved register area on the stack
+that must be modified.  Most kernels give access to this saved
+register area via additional arguments to the signal handler.
+However, for the Sparc, at least one of the supported operating systems
+(Solaris, SunOS 4, Linux, BSD) does not provide this facility (I can't
+remember which one(s)).
+
+Hence the Sparc code generator uses plan B: the address of young_limit
+(and not its value) is cached in register %l7, and the current value
+of young_limit is reloaded at each allocation.  This way, changes to
+young_limit are seen at the next allocation.
+
+(Other ports of ocamlopt use plan B for similar reasons: ARM, HPPA.)
+
+> Looking at this code made me wonder, what fraction of operations in a
+> typical ocaml program are allocations?  _Garbage Collection_ quotes
+> statistics for several functional languages, including a version of ML,
+> but I don't think it mentions ocaml.
+
+I have no hard data to provide.
+
+> Are many people using ocaml on UltraSPARC processors?  The code is
+> optimized for older SPARCs and substantial improvement is possible
+> for UltraSPARC.  (For example, the integer load-double and store-double
+> instructions are faster than a pair of load or store instructions on
+> older SPARCs, are substantially slower on UltraSPARC, and trap to
+> emulation on the Hal SPARC-64.)
+
+It is true that I do not have access to an UltraSPARC machine.
+Thanks for the info on the integer ldd and std instructions.
+Fortunately, they are not used in ocamlopt-generated code (for reasons
+related to alignment constraints), only in glue code that is not time
+critical.
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

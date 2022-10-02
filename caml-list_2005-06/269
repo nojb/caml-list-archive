@@ -1,0 +1,195 @@
+Return-Path: <skaller@users.sourceforge.net>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id DDED1BCAF
+	for <caml-list@yquem.inria.fr>; Wed, 29 Jun 2005 22:37:17 +0200 (CEST)
+Received: from ash25e.internode.on.net (ash25e.internode.on.net [203.16.214.182])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j5TKbFAn032137
+	for <caml-list@yquem.inria.fr>; Wed, 29 Jun 2005 22:37:17 +0200
+Received: from rosella (ppp5-13.lns1.syd3.internode.on.net [59.167.5.13])
+	by ash25e.internode.on.net (8.12.9/8.12.6) with ESMTP id j5TKb873063621;
+	Thu, 30 Jun 2005 06:07:09 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] Type abstraction and (polymorphic) equality
+From: John Skaller <skaller@users.sourceforge.net>
+To: Jon Harrop <jon@ffconsultancy.com>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <200506291012.30612.jon@ffconsultancy.com>
+References: <20050629.023111.15476874.debian00@tiscali.be>
+	 <200506291012.30612.jon@ffconsultancy.com>
+Content-Type: multipart/signed; micalg=pgp-sha1; protocol="application/pgp-signature"; boundary="=-wBcj/XYs5NWjgE8LTY4m"
+Date: Thu, 30 Jun 2005 06:37:11 +1000
+Message-Id: <1120077431.24682.102.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.2.1.1 
+X-Miltered: at concorde with ID 42C3067B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 abstraction:01 christophe:01 troestler:01 syntax:01 overloading:01 parametric:01 extensional:01 polymorphism:01 bool:01 val:01 val:01 bool:01 parser:01 overloading:01 
+X-Attachments: type="application/pgp-signature" name="signature.asc" 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+
+--=-wBcj/XYs5NWjgE8LTY4m
+Content-Type: text/plain
+Content-Transfer-Encoding: quoted-printable
+
+On Wed, 2005-06-29 at 10:12 +0100, Jon Harrop wrote:
+> On Wednesday 29 June 2005 01:31, Christophe TROESTLER wrote:
+
+> >   - one allows to redefine equality for new types, say with a syntax
+> >     like
+> >
+> >     type t =3D ... with compare x y =3D ...
+> >
+> >     as this is already done for blocks with custom tags.  (BTW, why
+> >     aren't Big_int such blocks with an appropriate compare?)
+
+Executive Summary: I guess no wart free solution can exist.
+
+I have been considering these issues for some time
+for Felix, I don't see any easy solution. Felix is
+an ML like language which supports overloading,
+and whole program analysis with strictly parametric=20
+but extensional polymorphism.
+
+At present primitives can be compared like this:
+
+type int =3D "int"; // maps to the C representation
+fun eq: int * int -> bool =3D "$1=3D=3D$2"; // C equality
+val a: int =3D 1;
+val b: int =3D 2;
+val e: bool =3D a =3D=3D b; // parser maps to eq(a,b)=20
+
+By overloading, we have=20
+
+	1L =3D=3D 2L // longs
+
+working too.
+
+Now consider a comparison for this type:
+
+	int * long
+
+For any product of comparable types, we can use
+the lexicographical comparison algorithm to
+generate a comparator.
+
+However, if we decide to do that automatically
+for all algebraic types, then the user cannot
+also provide a comparator. Even if it were possible
+it is undesirable because it would be extremely
+fragile and very hard to know which function was
+called by examining the code -- a general problem
+with overloading, but far worse when some overloads
+are automatically synthesised.
+
+For generative types, we can allow something like:
+
+struct X =3D { x:int; y:int; } with eq: auto;
+
+where the user may supply the comparator, and if they
+choose to may supply the generated one. If they
+do not supply the comparator, one is not generated.
+
+This can't work for non-generative products: there
+is no place to declare the comparator.
+
+There is another problem. The user may be rather
+confused in this case, as is demonstrated by the
+equivalent problem in Ocaml with floating comparisons:
+
+fun eq: int * int -> bool;
+fun eq: long * long -> bool;
+
+fun isequal[t] (a:t, b:t) =3D> a =3D=3D b; // WOOPS
+
+Here there is a compiler error: there is
+no function named 'eq' with a signature
+for which t * t is a specialisation.
+
+You would have to write:
+
+fun isequal[t] (a:t, b:t, eq: t * t -> bool) =3D> a =3D=3D b;
+
+explicitly passing the comparator. Unlike C++,
+Felix does not permit 'two phase lookup', lookup
+and overload resolution are done before instantiation
+to ensure polymorphism is fully parametric (as in Ocaml).
+
+The user is likely to annoyed they have to write:
+
+isequal (1,2,eq of (int * int))
+
+to solve this. Macros may help in cases that work:
+
+macro genisequal (a,b) {
+  isequal(a,b,eq of (typeof(a) * typeof(b)));
+}
+
+genisequal(1,2)
+
+but I am quite dubious that, in the case of a failure,
+the user would have much hope of unravelling the
+error messages (and in Felix, implicit macro invocation
+is not available anyhow).
+
+The *advantage* of requiring the equality to be
+explicitly passed is seen in cases like:
+
+typedef complex =3D double * double; // double is C floating type
+
+where a lexicographical comparison is not desired.
+Apart from the extra verbiage, the problem is as above:
+although you have to pass the desired comparison to a=20
+polymorphic routine, you will get a completely different
+comparator in simple usage like
+
+val a: complex =3D 1.0,2.0;
+if a =3D=3D a then .. //woops, lexicographical compare
+
+and you cannot fix this with an overload with 'the right'
+comparator -- it would, should, and must conflict with=20
+an  implicitly autogenerated one.=20
+
+Note in Felix you can in fact model this by cheating:
+
+fun eq[t]: t * t -> bool =3D "$1 =3D=3D $2"; // 'polymorphic' comparison
+module A {
+  fun eq:int * int -> bool;
+  ... 1 =3D=3D 2 .. //uses A::eq
+}
+1 =3D=3D 2 // uses global eq
+
+but we simply cannot have implicitly generated
+functions being so context sensitive. Note that in the
+example we are cheating: only by falling back to the=20
+broken C++ system can we actually define a polymophic
+equality operator .. of course we will get C++ compile
+time errors instead of Felix compile time errors:
+at least the error detection isn't delayed until run time.
+
+My conclusion is: in Ocaml, the runtime failure
+of polymorphic comparisons when encountering
+abstract types (or cyclic data structures) is a wart,
+but there is no wart free solution.=20
+
+--=20
+John Skaller <skaller at users dot sourceforge dot net>
+Download Felix: http://felix.sf.net
+
+--=-wBcj/XYs5NWjgE8LTY4m
+Content-Type: application/pgp-signature; name=signature.asc
+Content-Description: This is a digitally signed message part
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.2.5 (GNU/Linux)
+
+iD8DBQBCwwZ3w7vY25tjqN4RAjlZAJkBdcNJx+IlKxC34XLIRjVwQWVqsgCfcdDw
+IJrn8A/GyB6gS03mZ45Q9Wo=
+=wFiV
+-----END PGP SIGNATURE-----
+
+--=-wBcj/XYs5NWjgE8LTY4m--
+

@@ -1,0 +1,150 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id QAA23234 for caml-redistribution; Fri, 16 Feb 1996 16:28:09 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id PAA21289 for <caml-list@pauillac.inria.fr>; Fri, 16 Feb 1996 15:28:06 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.1/8.7.1) with ESMTP id PAA10581 for <caml-list@pauillac.inria.fr>; Fri, 16 Feb 1996 15:28:07 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.6.10/8.6.6) with ESMTP id PAA08864 for <caml-list@margaux.inria.fr>; Fri, 16 Feb 1996 15:28:05 +0100
+Received: from zephyr.univ-bpclermont.fr (zephyr.univ-bpclermont.fr [193.54.50.11]) by concorde.inria.fr (8.7.1/8.7.1) with ESMTP id PAA10575 for <caml-list@margaux.inria.fr>; Fri, 16 Feb 1996 15:28:05 +0100 (MET)
+Message-Id: <199602161428.PAA10575@concorde.inria.fr>
+Received: by zephyr.univ-bpclermont.fr
+	(1.37.109.16/16.2) id AA291010830; Fri, 16 Feb 1996 15:27:10 +0100
+From: Jocelyn Serot <Jocelyn.Serot@lasmea.univ-bpclermont.fr>
+Subject: string vs vect - some results
+To: caml-list@margaux.inria.fr
+Date: Fri, 16 Feb 1996 15:27:09 MET
+X-Mailer: Elm [revision: 109.14]
+Sender: weis
+Status: O
+
+
+Hello,
+
+In the process of finding an efficient implementation for an image abstract
+datatype i've been led to compare the <vect> and <string> provided by the
+Caml-Light core library.
+I feel that some may be interested by the results.
+I used the time profiler written by C. Raffalli (raffalli@cs.chalmers.se) and
+posted a few months ago in this list.
+
+I wrote several versions of fns doing read-write access to 1D and 2D arrays.
+For each program, results are given like this (this is taken from C. Raffali
+post):
+
+  f                5.32    7.10
+  g                4.00    4.00
+  main             0.12    9.44
+  total           -9.44    0.00
+
+- The first column is the name of the function.
+- The third column give the time (utime + stime) spend inside the function.
+- The second column give the time spend inside the function minus the
+  time spend in other profiled functions called by it
+
+Times are given in seconds. They should not be interpreted in an absolute
+manner (since they may vary slightly depending on the host load) but relatively
+(the ratios appear to remain constant for several runs of the same pgm).
+
+(***************************** 1st VERSION ***********************************)
+let s = make_string 65536 `a`;;
+let f n = for i = 0 to n do set_nth_char s i (nth_char s i) done;; 
+let f = profile "f" f;;
+let v = make_vect 65536 `a`;;
+let g n = for i = 0 to n do vect_assign v i (vect_item v i) done;; 
+let g = profile "g" g;;
+f 65535;;
+g 65535;;
+print_profile ();;
+(*--------------------------------------------------- RESULTS ------------------
+g                        9.83     9.83
+f                        9.68     9.68
+------------------------------------------------------------------------------*)
+
+	COMMENT: the cost of accessing a vect and a string cell is approximately
+			 the same (with a slight advantage for strings). 
+
+(***************************** 2nd VERSION ***********************************)
+let s = make_string 65536 `a`;;
+let f n = for i = 0 to n do s.[i] <- s.[i] done;; 
+let f = profile "f" f;;
+let v = make_vect 65536 `a`;;
+let g n = for i = 0 to n do v.(i) <- v.(i) done;; 
+let g = profile "g" g;;
+f 65535;;
+g 65535;;
+print_profile ();;
+(*--------------------------------------------------- RESULTS ------------------
+g                        9.87     9.87
+f                        9.52     9.52
+------------------------------------------------------------------------------*)
+
+	COMMENT: the .(), .[] and <- notations are only syntactics sugars.
+			 Good.
+
+(***************************** 3rd VERSION ***********************************)
+let s = make_string 65536 `a`;;
+let f n =
+	for i = 0 to n do for j = 0 to n do s.[i*256+j] <- s.[i*256+j] done done;; 
+let f = profile "f" f;;
+let v = make_matrix 256 256 `a`;;
+let g n =
+	for i = 0 to n do for j = 0 to n do v.(i).(j) <- v.(i).(j) done done;;
+let g = profile "g" g;;
+f 255;;
+g 255;;
+print_profile ();;
+(*--------------------------------------------------- RESULTS ------------------
+g                       16.77    16.77
+f                       11.58    11.58
+------------------------------------------------------------------------------*)
+
+	COMMENT: For 2D arrays, strings win the game. This is quite surprising
+			 since Caml Light is not supposed to be very good in doing the
+			 explicit arithmetic involved in the index computation. Vects seem
+			 to be penalized by the double indirection. 
+
+(***************************** 4th VERSION ***********************************)
+let s = make_string 65536 `a`;;
+let f n =
+	for i = 0 to n do for j = 0 to n do s.[i*256+j] <- s.[i*256+j] done done;; 
+let f = profile "f" f;;
+let v = make_vect 256 (make_string 256 `a`);;
+let g n =
+	for i = 0 to n do for j = 0 to n do v.(i).[j] <- v.(i).[j] done done;;
+let g = profile "g" g;;
+f 255;;
+g 255;;
+print_profile ();;
+(*--------------------------------------------------- RESULTS ------------------
+g                       16.52    16.52
+f                       11.62    11.62
+------------------------------------------------------------------------------*)
+
+	COMMENT: This "hybrid" version (vect of strings) does not bring any 
+			 improvment
+
+CONCLUSION:
+
+For 1D arrays, string and vect-based implementation have similar efficiency.
+For 2D arrays (like image representions for ex) strings seems more efficient
+than vects of vects.
+
+However, when defining operations on 2D-arrays more work has to be done if
+these are represented by strings (in the Caml-Light core library the <string>
+module is much smaller than the <vect> module (which in turn is smaller than
+the list module..)).
+
+I also have to say, from ny current experiences, that reading/writting
+a 2D-array from/to a file can be _much_ more efficient 
+with a string-based representation (specially if elements are stored in 
+row-major order on disk)
+
+Any comment, addition, negation ?
+
+	Jocelyn S.
+
+E-mail: Jocelyn.Serot@lasmea.univ-bpclermont.fr .............................
+S-mail: LASMEA - URA 1793 CNRS, Universite Blaise Pascal, 63177 Aubiere cedex
+Tel: (33) 73.40.73.30 - Fax: (33) 73.40.72.62 ...............................
+.... http://wwwlasmea.univ-bpclermont.fr/Personnel/Jocelyn.Serot/Welcome.html
+
+
+
+

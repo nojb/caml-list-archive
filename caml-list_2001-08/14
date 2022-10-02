@@ -1,0 +1,163 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA15662; Thu, 2 Aug 2001 14:54:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA15659 for <caml-list@pauillac.inria.fr>; Thu, 2 Aug 2001 14:54:43 +0200 (MET DST)
+Received: from mail.cs.uu.nl (sunset.cs.uu.nl [131.211.80.32])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f72CsgX22483
+	for <caml-list@inria.fr>; Thu, 2 Aug 2001 14:54:42 +0200 (MET DST)
+Received: from bentobox (bentobox.cs.uu.nl [131.211.80.235])
+	by mail.cs.uu.nl (Postfix) with SMTP
+	id 7BB934531; Thu,  2 Aug 2001 14:54:42 +0200 (MET DST)
+From: "Frank Atanassow" <franka@cs.uu.nl>
+To: "Johann Spies" <jspies@maties.sun.ac.za>,
+        "ocaml mailing list" <caml-list@inria.fr>
+Subject: RE: [Caml-list] Please help a newbie
+Date: Thu, 2 Aug 2001 14:54:57 +0200
+Message-ID: <FLELJKKJEIKNBDJGMIHKIEFICAAA.franka@cs.uu.nl>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3 (Normal)
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook IMO, Build 9.0.2416 (9.0.2911.0)
+In-Reply-To: <87lml2a896.fsf@#maties.sun.ac.za>
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2479.0006
+Importance: Normal
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> # let lys = ['a';'b';'c'];;
+> val lys : char list = ['a'; 'b'; 'c']
+> # let wys_dit woord = print_string woord;;
+> val wys_dit : string -> unit = <fun>
+> # let rec wys_die_lys l = function
+>     [] -> []
+>         | h :: t -> wys_dit h ::    wys_die_lys l t;;
+> val wys_die_lys : 'a -> string list -> unit list = <fun>
+> # wys_die_lys lys;;
+> - : string list -> unit list = <fun>
+> # wys_die_lys ['x','y','z'];;
+> - : string list -> unit list = <fun>
+> ------------------------------------------------
+>
+> Now my question:  I expected
+>
+> wys_die_lys lys to print out a b c
+> and
+> wys_die_lys ['x','y','z'] to print x y z
+>
+> Why did this not happen?
+
+(Note: I only tested a few of the definitions that appear below. If I made a
+mistake somewhere, hopefully you will not be too confused by it.)
+
+As you can see from the reported type,
+
+  wys_die_lys : 'a -> string list -> unit list
+
+wys_die_lys is a "function of two arguments"; if you only pass it the first,
+and the result is just another function, which expects a list of strings.
+Also, the first argument of wys_die_lys, l, is never used (though it is
+passed down recursively). You probably wanted to write:
+
+  let rec wys_die_lys2 = function
+      [] -> []
+    | h :: t -> wys_dit h :: wys_die_lys2 t;;
+
+You mentioned l on the lefthand side, and then used 'function' on the
+righthand side. So the definition expects two arguments. Consider these
+three definitions, which all define the same thing:
+
+  let f x y = x+y;;
+  let f x = function y -> x+y;;
+  let f = function x -> function y -> x+y;;
+
+Another problem is that the list you supply is a list of characters, but
+wys_dit is expecting a string. So you should use the appropriate function
+print_char:
+
+  let wys_dit2 l = print_char l;;
+  let rec wys_die_lys3 = function
+      [] -> []
+    | h :: t -> wys_dit2 h :: wys_die_lys3 t;;
+
+Normally, you would have gotten a type error to alert you to this problem,
+but because l is not used in wys_die_lys, it was assigned the type 'a, which
+means you could pass a value of any type in for it. That makes sense,
+because if you never use l, it does not matter what type of value it is
+bound to.
+
+But even if you use the definition above, it won't give the you result you
+expect. Instead, you will get:
+
+  # wys_die_lys3 ['x','y','z'];;
+  zyx
+
+The reason is that Ocaml evaluates function arguments from right to left.
+The consing operator (::) is a function. Consequently, it will recurse down
+the righthand side of the :: until it finds the empty list [], and then only
+on its trip back will evaluate the lefthand side, wys_dit2 h.
+
+A solution to this, then, is to use a let-expression, which evaluates the
+expressions bound to let-variables before it evaluates the body.
+
+  let rec wys_die_lys4 = function
+      [] -> []
+    | h :: t -> let x = wys_dit2 in
+                x :: wys_die_lys4 t;;
+
+This should work. It will return a list of units in every case, i.e.,
+something of this form.
+
+  [(); (); ... ()]
+
+However, you are probably not interested in these sorts of results, so the
+more conventional way to define something like this is to throw away the
+result of wys_dit, and change the returned value in the first branch (the
+base case) from [] to ().
+
+  let rec wys_die_lys5 = function
+      [] -> ()
+    | h :: t -> let x = wys_dit2 h in
+                wys_die_lys5 t;;
+
+In these cases, x is never used (it's always the unit value ()), so you
+probably want to use the sequencing operator ';' instead. So:
+
+  let rec wys_die_lys6 = function
+      [] -> ()
+    | h :: t -> wys_dit2 h; wys_die_lys6 t;;
+
+Lastly, there is no need to define wys_dit2; it does exactly the same thing
+as print_char, so you can just write:
+
+  let rec wys_die_lys7 = function
+      [] -> ()
+    | h :: t -> print_char h; wys_die_lys6 t;;
+
+Incidentally, this definition would be more useful if you parametrized it
+with a function doe_dit itself. That way you can perform some particular
+action on every element of the list.
+
+  let rec doe_met doe_dit = function
+      [] -> ()
+    | h :: t -> doe_dit h; doe_met doe_dit t;;
+
+For example,
+
+  doe_met print_char
+
+is equal to the function wys_die_lys7. In fact, doe_met is already defined
+in the List library, where it is called List.iter.
+
+Hope that helped.
+
+---
+Frank Atanassow, Information & Computing Sciences, Utrecht University
+Padualaan 14, PO Box 80.089, 3508TB Utrecht, The Netherlands
+Tel +31 (0)30 253-3261 Fax +31 (0)30 251-3791
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

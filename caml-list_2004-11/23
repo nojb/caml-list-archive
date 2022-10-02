@@ -1,0 +1,143 @@
+Return-Path: <edgin@slingshot.co.nz>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 446C8BC28
+	for <caml-list@yquem.inria.fr>; Thu,  4 Nov 2004 00:45:34 +0100 (CET)
+Received: from mxsrv1.tranzpeer.net (mxsrv1.tranzpeer.net [202.180.66.214])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id iA3NjTmQ003763
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@yquem.inria.fr>; Thu, 4 Nov 2004 00:45:33 +0100
+Received: from [202.180.104.84] (helo=p84.cpich1-n1.callplus.net.nz)
+	by mxsrv1.tranzpeer.net with ASMTP (Exim 4.34)
+	id 1CPUob-0006US-Fn
+	for caml-list@yquem.inria.fr; Thu, 04 Nov 2004 12:45:24 +1300
+From: Tony Edgin <edgin@slingshot.co.nz>
+Reply-To: edgin@slingshot.co.nz
+Organization: CARP
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Self type cannot be unified with a closed object type
+Date: Thu, 4 Nov 2004 12:43:57 +1300
+User-Agent: KMail/1.5.3
+References: <E1CP8IP-00029f-Mt@syrma.ccs.neu.edu>
+In-Reply-To: <E1CP8IP-00029f-Mt@syrma.ccs.neu.edu>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200411041243.57603.edgin@slingshot.co.nz>
+X-Miltered: at nez-perce with ID 41896D99.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 subtype:01 wrote:01 ocaml:01 val:01 mutable:01 val:01 mutable:01 runtime:01 checker:01 foo:01 conceptually:01 caml-list:01 beginner's:01 ocaml:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+You have a small narrowing problem.  Your adapt method as stated in the nl_vp 
+class type definition returns an object of the same type as the object the 
+method is activated on.  This isn't what you want.  You want the method to 
+return an object of type nl_vp but not necessarily of the same subtype as the 
+object being activated.  To fix this, see the two changes below.
+
+On Wed, 03 Nov 2004 12:42, Philippe Meunier wrote:
+> Hi,
+>
+> I'm trying to implement the state pattern in Ocaml and I'm looking for
+> help.  I have two classes itv1 and itv2 representing two kinds of
+> state.  I'm trying to coerce objects from these two classes to a
+> single class nl_v so I can use them indefferently inside objects of
+> the class anl:
+>
+>
+> (**************************************************)
+> class type nl_vp =
+>   object ('a)
+>     method get : int
+>     method set : int -> 'a
+
+    method adapt : nl_vp
+
+>   end;;
+>
+> class nl_v : nl_vp =
+>   object (self: 'a)
+>     method get = 0
+>     method set (i : int) = self
+>     method adapt = self
+
+    method adapt = (self :> nl_vp) 
+
+>   end;;
+>
+>
+> type itv2_ptr;;
+>
+> external new_itv2_stub : unit -> itv2_ptr            = "new_itv2_stub";;
+> external get_itv2_stub : itv2_ptr -> int             = "get_itv2_stub";;
+> external set_itv2_stub : itv2_ptr -> int -> itv2_ptr = "set_itv2_stub";;
+>
+> class itv1 =
+>   object (self)
+>     inherit nl_v
+>
+>     val mutable itv1_val = ~-1
+>
+>     method get = itv1_val
+>     method set i = {< itv1_val = i >}
+>     method adapt = if self#get = 2 then ((new itv2) :> nl_vp) else (self :>
+> nl_vp) end
+> and itv2 =
+>   object (self)
+>     inherit nl_v
+>
+>     val mutable itv2_val = new_itv2_stub ()
+>
+>     method get = get_itv2_stub itv2_val
+>     method set i = {< itv2_val = set_itv2_stub itv2_val i >}
+>     method adapt = if self#get = 7 then ((new itv1) :> nl_vp) else (self :>
+> nl_vp) end;;
+>
+> class anl =
+>   object
+>     val mutable nl = (new itv1 :> nl_vp)
+>
+>     method get = nl#get
+>     method set i = {< nl = (nl#set i)#adapt >}
+>     method adapt = {< nl = nl#adapt >}
+>   end;;
+> (**************************************************)
+>
+>
+> The problem is that I need to be able to switch dynamically between
+> states itv1 and itv2 depending on some runtime condition.  Hence the
+> "if "expression in the "adapt" method of both itv1 and itv2.  But when
+> I try that I get the following error message from the type checker,
+> complaining about such "if" expression:
+>
+> File "foo.ml", line 30, characters 19-82:
+> This expression has type nl_vp but is here used with type
+>   < adapt : 'a; get : int; set : int -> 'a; .. > as 'a
+> Self type cannot be unified with a closed object type
+>
+> As you can see I tried using a class type nl_vp as suggested towards
+> the end of section 3.12 of the manual but so far it hasn't done me any
+> good.  So I'm stuck.  Conceptually the thing I'm trying to do is quite
+> simple so I think I'm just missing something obvious but I can't
+> figure out what.  I'd really appreciate if someone could tell me how
+> to get this thing working...
+>
+> Thanks a lot,
+>
+> Philippe
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+
+-- 
+Tony Edgin
+CARP
+

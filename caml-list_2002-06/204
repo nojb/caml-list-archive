@@ -1,0 +1,124 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA15944; Tue, 18 Jun 2002 10:40:12 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA16007 for <caml-list@pauillac.inria.fr>; Tue, 18 Jun 2002 10:40:11 +0200 (MET DST)
+Received: from nexus.stwing.upenn.edu (NEXUS.STWING.UPENN.EDU [165.123.132.61])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g5I8eAP29514
+	for <caml-list@inria.fr>; Tue, 18 Jun 2002 10:40:10 +0200 (MET DST)
+Received: from force.stwing.upenn.edu (daemon@force.stwing.upenn.edu [165.123.132.65])
+	by nexus.stwing.upenn.edu (8.11.6/8.11.6) with ESMTP id g5I8e8B18095
+	(using TLSv1/SSLv3 with cipher EDH-RSA-DES-CBC3-SHA (168 bits) verified NO)
+	for <caml-list@inria.fr>; Tue, 18 Jun 2002 04:40:09 -0400 (EDT)
+Received: (from wlovas@localhost)
+	by force.stwing.upenn.edu (8.11.6/8.11.6) id g5I8e7409450
+	for caml-list@inria.fr; Tue, 18 Jun 2002 04:40:07 -0400 (EDT)
+Date: Tue, 18 Jun 2002 04:40:07 -0400
+From: William Lovas <wlovas@stwing.upenn.edu>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Memoizing (was: static variables...)
+Message-ID: <20020618084006.GA8596@force.stwing.upenn.edu>
+Mail-Followup-To: caml-list@inria.fr
+References: <87k7oyreva.dlv@wanadoo.fr> <200206171356.g5HDu5u19866@n05.sp.go.dlr.de>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <200206171356.g5HDu5u19866@n05.sp.go.dlr.de>
+User-Agent: Mutt/1.3.25i
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, Jun 17, 2002 at 03:56:04PM +0200, Benedikt Rosenau wrote:
+> I tried to memoize the Ackermann function
+> 
+> # let rec ack m n =
+>     if m = 0 then n + 1
+>     else if n = 0 then ack (m - 1) 1
+>     else ack (m - 1) (ack m (n - 1))
+> val ack : int -> int -> int = <fun>
+> # let my_ack = memoize ack;;
+> val my_ack : int -> int -> int = <fun>
+> 
+> 
+> The type checker deals with the 'a being an (int -> int).
+> However, I noticed no speedup. So, I transformed the
+> Ackermann to the tupled version, ie "let ackermann (m, n)...",
+> but to no avail.
+> 
+> What is the mistake?
+
+Benedikt,
+
+I think the problem is something like this: when you call memoize (and bind
+the result, for that matter), you create a new closure (above, you call it
+`my_ack').  This *closure* is memoized, but recursive calls inside it,
+which refer to the original closure (`ack') are not.  
+
+Since Ackermann's function does a lot of repeated computation (correct me
+if i'm wrong), it would benefit from a sort of "total memoization", but
+i've been having a hard time figuring out how that would work in O'Caml.
+I think this is what John Prevost was aiming to solve with his "delayed
+binding" recursion, but i haven't managed to contrive a complete solution
+using that method -- either we have only top-level calls to the function
+being memoized, or no memoization goes on at all.  E.g.,
+
+    let recfib recfib = function
+      | 0 | 1 -> 1
+      | n -> recfib (n-1) + recfib (n-2);;
+
+    (* simple binding *)
+    let rec fib n = recfib fib n;;
+
+    (* through memoize *)
+    let rec wrong_fib_1 n = memoize (recfib wrong_fib_1) n;;
+
+    (* another way, also wrong *)
+    let wrong_fib_2 = memoize fib;;
+
+    (* *boggle* -- too tired to think about it, but also doesn't work *)
+    let rec wrong_fib_3 n = recfib (memoize (recfib wrong_fib_3)) n;;
+
+Now, if we do:
+
+    wrong_fib_1 30;; (* takes a very long time *)
+    wrong_fib_1 30;; (* still takes a very long time -- not memoized 
+                        at all *)
+
+    wrong_fib_2 30;; (* takes a very long time -- shouldn't, if fully
+                        memoized *)
+    wrong_fib_2 30;; (* instantaneous -- top-level is memoized *)
+
+    wrong_fib_3 30;; (* like wrong_fib_1, very slow *)
+    wrong_fib_3 30;; (* still slow -- no memoization happening *)
+
+Note that we can observe the correct behaviour by writing the memoized
+`fib' directly, e.g.:
+
+    let rec memo_fib =
+        let hash = Hashtbl.create 20 in
+        function
+          | 0 | 1 -> 1
+          | n -> if Hashtbl.mem hash n
+                    then Hashtbl.find hash n
+                    else let v = memo_fib (n-1) + memo_fib (n-2) in
+                         (Hashtbl.replace hash n v; 
+                         v)
+    ;;
+
+    memo_fib 30;; (* instantaneous -- all recursive calls are memoized *)
+
+Unfortunately, this is not a very general solution.  I suspect a
+general solution, like for example Mark-Jason Dominus's Perl module 
+Memoize.pm, requires a stateful environment (i think the Perl version
+uses code references).  The problem with an elegant O'Caml solution, i
+think, is that the inner recursive calls are part of the definition
+environment of the recursive function (i.e. part of the closure), and 
+there's no way to change them without writing a new function (and thus
+creating a new closure).
+
+Does anyone have any thoughts on this?  Am i missing something obvious?
+
+William
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

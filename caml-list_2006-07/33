@@ -1,0 +1,131 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id BEEFCBB83
+	for <caml-list@yquem.inria.fr>; Wed,  5 Jul 2006 00:52:58 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k64Mqx2I000699
+	for <caml-list@yquem.inria.fr>; Wed, 5 Jul 2006 00:52:59 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA19423 for <caml-list@pauillac.inria.fr>; Wed, 5 Jul 2006 00:52:58 +0200 (MET DST)
+Received: from mz1.forethought.net (mzpi3.forethought.net [216.241.36.12])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k64Mqv1f000683
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Wed, 5 Jul 2006 00:52:58 +0200
+Received: from [216.241.35.41] (helo=[10.0.0.2])
+	by mz1.forethought.net with esmtp (Exim 4.51)
+	id 1FxtlD-0002aU-E7
+	for caml-list@inria.fr; Tue, 04 Jul 2006 16:52:51 -0600
+Message-ID: <44AAF164.20406@gushee.net>
+Date: Tue, 04 Jul 2006 16:53:24 -0600
+From: Matt Gushee <matt@gushee.net>
+User-Agent: Thunderbird 1.5.0.4 (X11/20060615)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] revised syntax and immediate objects
+References: <ad8cfe7e0607041443k7e337b14h31d77a18999d865a@mail.gmail.com>
+In-Reply-To: <ad8cfe7e0607041443k7e337b14h31d77a18999d865a@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 44AAF14B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 44AAF149.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; syntax:01 syntax:01 ocaml:01 camlp:01 camlp:01 decls:01 decls:01 accessors:01 accessors:01 config:01 defaults:01 expr:01 mlast:01 expr:01 config:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Jonathan Roewen wrote:
+
+ > What is the syntax for immediate objects in ocaml when using revised 
+syntax?
+
+Not sure offhand, but ...
+
+ > I'd like to try make a camlp4 syntax extension that uses immediate
+ > objects,
+
+I've done that. I'll show you the key section of the code below, and I 
+can send you the complete file if you like. It may not be 100% correct, 
+but I've been using it in an application and so far it works. I don't 
+know if I can *explain* it, though ... I wrote it several months ago, 
+and I'm coming to think that CamlP4, like Perl, is a write-only language ;-)
+
+[BTW, *_si in function names means "structure item", and *_csi means 
+"class structure item"]
+
+
+let object_body loc decls =
+   let sub_objects =
+     let sos =
+       List.fold_right
+         ( fun idat lst ->
+           match idat.sub_obj with
+           | None -> lst
+           | Some so -> so::lst )
+         decls [] in
+     <:class_str_item< declare $list:sos$ end >>
+   and accessors =
+     let accs =
+       List.fold_right
+         ( fun idat lst ->
+           match idat.setter with
+           | None -> idat.getter :: lst
+           | Some se -> idat.getter :: se :: lst )
+         decls [] in
+     <:class_str_item< declare $list:accs$ end >> in
+   (sub_objects, accessors)
+
+let subconf_csi loc key decls =
+   let sub_objects, accessors = object_body loc decls
+   and pself = <:patt< self >>
+   and inheritance =
+     <:class_str_item<
+       inherit sub_config data defaults path as super
+     >> in
+   let obj_expr =
+     MLast.ExObj
+       (loc, Some pself, [inheritance; sub_objects; accessors]) in
+   let keylist_expr = <:expr< [$str:key$] >> in
+   let path_bind_expr =
+     <:expr<
+       let path = path @ $keylist_expr$ in $obj_expr$
+     >>
+   and oname = key ^ "_" in
+   Some <:class_str_item< value $lid:oname$ = $path_bind_expr$ >>
+
+let rootconf_si loc cname decls =
+   let sub_objects, accessors = object_body loc decls
+   and pself = <:patt< self >>
+   and inheritance =
+     <:class_str_item<
+       inherit root_config srcs dest data defaults as super
+     >> in
+   let oe =
+     MLast.ExObj
+       (loc, Some pself, [inheritance; sub_objects; accessors]) in
+   <:str_item<
+       value $lid:cname$ srcs dest =
+         let data = Dict.create ()
+         and path = [] in $oe$
+   >>
+
+let main_si loc cname decls =
+   write_example decls;
+   let os = <:str_item< open Rascl >>
+   and oc = <:str_item< open ConfigObject >>
+   and od = <:str_item< open Dict >>
+   and defcreate = <:str_item< value defaults = create () >>
+   and defsetup0 = top_doin_expr loc [] decls in
+   let defsetup = <:str_item< $exp:defsetup0$ >>
+   and cl = rootconf_si loc cname decls in
+   let all = [os; oc; od; defcreate; defsetup; cl] in
+   <:str_item< declare $list:all$ end >>
+
+
+
+-- 
+Matt Gushee
+: Bantam - lightweight file manager : matt.gushee.net/software/bantam/ :
+: RASCL's A Simple Configuration Language :     matt.gushee.net/rascl/ :
+

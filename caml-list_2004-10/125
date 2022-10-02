@@ -1,0 +1,222 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA15906; Wed, 13 Oct 2004 03:44:02 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA15903 for <caml-list@pauillac.inria.fr>; Wed, 13 Oct 2004 03:44:01 +0200 (MET DST)
+Received: from mproxy.gmail.com (rproxy.gmail.com [64.233.170.199])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9D1i0vq018199
+	for <caml-list@inria.fr>; Wed, 13 Oct 2004 03:44:00 +0200
+Received: by mproxy.gmail.com with SMTP id 78so137441rnk
+        for <caml-list@inria.fr>; Tue, 12 Oct 2004 18:43:59 -0700 (PDT)
+Received: by 10.38.82.45 with SMTP id f45mr2645475rnb;
+        Tue, 12 Oct 2004 18:43:59 -0700 (PDT)
+Received: by 10.38.14.54 with HTTP; Tue, 12 Oct 2004 18:43:59 -0700 (PDT)
+Message-ID: <d849ad2a0410121843495fe4c0@mail.gmail.com>
+Date: Tue, 12 Oct 2004 21:43:59 -0400
+From: John Prevost <j.prevost@gmail.com>
+Reply-To: John Prevost <j.prevost@gmail.com>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Narrowing class's public interface
+In-Reply-To: <20041013.094903.08315159.garrigue@kurims.kyoto-u.ac.jp>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <200410131116.12485.edgin@slingshot.co.nz>
+	 <20041013.094903.08315159.garrigue@kurims.kyoto-u.ac.jp>
+X-Miltered: at nez-perce with ID 416C8860.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 narrowing:01 class's:01 jacques:01 struct:01 generic:01 generic:01 shorthand:01 subtyping:01 gaussian:01 gaussian:01 module's:01 re-use:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 8567
+Lines: 189
+
+To expand a bit on what Jacques said, there are a lot of places in
+O'Caml where there are very very elegant ways to do things that a
+background in more traditional OO languages might not make you think
+of.  Here's a version of your original code that highlights just a
+couple of those things:
+
+module RandomVariables =
+  (struct
+
+    (* First thought: What if we make a generic random_variable class
+       that could work for types other than float?  The most generic
+       version can only describe its type and the method that returns
+       an instance of the RV.  Here we see a class type with a type
+       variable, describing a method instance that returns a value of
+       that type.  There's no real reason to define this class type,
+       except to provide a shorthand--when we say "x random_variable",
+       we mean a random variable that returns values of type x. *)
+
+    class type ['a] random_variable =
+      object
+        method instance : 'a
+      end
+
+    (* Of course, the rv_type class that you originally described had
+       slightly more functionality.  Specifically, a scale_by method and
+       an add method.  The first thing to note here is the type 's, which
+       is the "self type" for the object.  An object that is a
+       float_random_variable has a method scale_by that takes a float and
+       returns a new object with the same type as the original object.
+       Likewise, add on an object of type t takes a second object of the
+       same type, and returns a new object of the type those objects
+       share.  This also shows us that if we want to add arbitrary
+       random variables together (not just random variables of the same
+       type), we're going to have to do things differently some day.
+
+       The "inherit [float] random_variable" is shorthand for including
+       that class type in this class type, specialized for the given
+       type "float".  Since O'Caml uses structural subtyping, it's not
+       necessary to inherit just to say that this is a subtype.  But it's
+       easier than duplicating the definition. *)
+
+    class type float_random_variable =
+      object ('s)
+        inherit [float] random_variable
+        method scale_by : float -> 's
+        method add : 's -> 's
+      end
+
+    (* This is the trick shown in the O'Caml manual for "friends".  We
+       define a new type gaussian_repr, which will carry the "secret value"
+       for our gaussian random variables.  We can't use the module type
+       to hide the existence of a method for getting the internal
+       representation--but we *can* prevent anyone outside this module
+       from making use of the value once they get it.  See below in the
+       module's signature. *)
+
+    type gaussian_repr =
+        { g_stdev : float;
+          g_mean : float }
+
+    (* The class is refactored slightly.  Note the use of {< ... >}
+       instead of "new gaussian ...".  This ensures that the new object
+       is of the same type as the original object.  If you ever want to
+       inherit from gaussian to re-use code, this means that the inheriting
+       class will work correctly, instead of returning gaussians it will
+       return new instances of itself.  Notice that we had to make a field
+       repr to hold the internal state, instead of using the constructor's
+       closure.  Without the "val repr", we can't use {< ... >} to copy
+       the object and change the intenral state of the new copy.
+
+       The "method value" is another part of the friends trick.  Notice
+       how we use it in add to get the repr of the other gaussian.  We
+       could instead have hidden the return types of the original "stdev"
+       and "mean" methods in your version--but I chose to change it to
+       this so that it doesn't look too odd.  Remember we can't get rid
+       of the methods, so users of the API would wonder "why can't I get
+       the stdev and mean out of the gaussian?!?" *)
+
+    class gaussian stdev mean =
+      object (_ : 's)
+        val repr = { g_stdev = stdev; g_mean = mean }
+        method value = repr
+        method instance = (*fake*) repr.g_mean
+        method scale_by a = {< repr = { g_stdev = (abs_float a) *. stdev;
+                                        g_mean = a *. mean } >}
+        method add (other : 's) =
+          let repr' = other#value in
+          let sigma = sqrt (repr.g_stdev ** 2.0 +. repr'.g_stdev ** 2.0) in
+          let mu = repr.g_mean +. repr'.g_mean in
+          {< repr = { g_stdev = sigma; g_mean = mu } >}
+      end
+
+  end : sig
+
+    (* Okay.  Signature time.  The class types are identical. *)
+
+    class type ['a] random_variable =
+      object
+        method instance : 'a
+      end
+
+    class type float_random_variable =
+      object ('s)
+        inherit [float] random_variable
+        method scale_by : float -> 's
+        method add : 's -> 's
+      end
+
+    (* And here's where we hide the type of the representation.  We don't
+       give a type equation after "type gaussian_repr", so the type
+       becomes opaque outside of this module. *)
+
+    type gaussian_repr
+
+    (* And now the definition of the gaussian class's type.  Here I just
+       inherit all of the methods defined in the float_random_variable
+       class type, and then add a new method "value", which returns type
+       "gaussian_repr".  The name might be even better
+       "gaussian_internal_state" or whatever, to show why the type
+       definition is hidden from outside. *)
+
+    class gaussian : float -> float ->
+      object
+        inherit float_random_variable
+        method value : gaussian_repr
+      end
+
+  end)
+
+And then we can proceed to use the above, which does compile cleanly.
+
+Now, something to note:
+
+Even though we inherit float_random_variable in the type for class
+gaussian, gaussian is not, and never will be, a subtype of
+float_random_variable.  The trouble is that we have a binary method
+here.  Because add has type 's -> 's, we can never discard any
+internal state access methods.  Why not?  Think about what happens if
+you put a variety of float_random_variables in a list.  Now you take
+the first two items in the list and try to use #add on them.  Say the
+first is a gaussian RV and the second is a log random variable.  The
+definition of the method add can't deal with this--it will try to hand
+the log random variable's state to the internals of the gaussian RV,
+which has no idea how to deal with it.
+
+HOWEVER, if we throw away the binary methods, we can in fact put a
+collection of "float random_variable" objects in a list.  Here's some
+output from an ocaml session:
+
+# let a = new RandomVariables.gaussian 0.0 1.0;;
+val a : RandomVariables.gaussian = <obj>
+# let b = (a :> RandomVariables.float_random_variable);;
+This expression cannot be coerced to type
+{ lots of error stuff, which boils down to "can't get rid of that method" }
+# let c = (a :> float RandomVariables.random_variable);;
+val c : float RandomVariables.random_variable = <obj>
+
+As you can see, casting to float_random_variable didn't work, but
+casting to float random_variable worked just fine.  The system is
+preventing us from doing something unsound: using a bunch of mixed
+float_random_variables together in a way that wouldn't work (because
+we can't add them together).  But when we mix them in a way that will
+work (we'll only make instances of them), all is well.
+
+
+The kinds of things that are problemmatic in this system are far
+different from the kinds of things that are tricky in traditional OO
+systems.  But with some experience, you can see how the system is
+amazingly powerful.  I suggest reading not only the section of the
+manual on friends, but all of Chapter 3 (Objects in Caml) and Chapter
+5 (Advanced examples with classes and modules).
+
+And feel free to ask about suggestions about how to structure your
+system.  From the looks of your code, I have some ideas about where
+you might be going, and about designs that might work better in a few
+places.  If you do ask, make sure to describe your problem in terms of
+what you want to do, rather than how you want to do it.  (i.e. "I want
+to be able to add arbitrary random variables together", not "I want to
+be able to get run-time type information on my random variables so
+that I can find the code to add them together in the right way.")
+
+Good luck!
+
+John.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,138 @@
+Return-Path: <darioteixeira@yahoo.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id AABF1BBAF
+	for <caml-list@yquem.inria.fr>; Thu, 26 Jun 2008 23:41:55 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArYAAA2qY0jOvjGtfGdsb2JhbACSZAEBCwUCBgcRA6FI
+X-IronPort-AV: E=Sophos;i="4.27,710,1204498800"; 
+   d="scan'208";a="14468405"
+Received: from web54603.mail.re2.yahoo.com ([206.190.49.173])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 26 Jun 2008 23:41:55 +0200
+Received: (qmail 33899 invoked by uid 60001); 26 Jun 2008 21:41:53 -0000
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+  s=s1024; d=yahoo.com;
+  h=Received:X-Mailer:Date:From:Subject:To:In-Reply-To:MIME-Version:Content-Type:Content-Transfer-Encoding:Message-ID;
+  b=1hFF5csb2VoW5XhpUsSSADxQv06/r0dptTmg5vtM6wLJf/FZ/YrCsYbhC8TJk7Pvw01a3U2nv5VGasjE3yenyK2Xv2Q41XamoDLZwhoSAlqbsl5TMzHkm3iNW2BIZlfvfxRhQTZo/LO5U9lT+eC2WcXMW6eh1rT4uOoHsbMwMIw=;
+Received: from [212.13.62.205] by web54603.mail.re2.yahoo.com via HTTP; Thu, 26 Jun 2008 14:41:53 PDT
+X-Mailer: YahooMailWebService/0.7.199
+Date: Thu, 26 Jun 2008 14:41:53 -0700 (PDT)
+From: Dario Teixeira <darioteixeira@yahoo.com>
+Subject: Re: [Caml-list] Phantom types: transparency vs rogue unification
+To: caml-list@yquem.inria.fr
+In-Reply-To: <522359.38196.qm@web54605.mail.re2.yahoo.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <720820.32869.qm@web54603.mail.re2.yahoo.com>
+X-Spam: no; 0.00; unification:01 functor:01 non-trivial:01 unification:01 sig:01 node:01 node:01 val:01 val:01 struct:01 parser:01 sig:01 subset:01 parser:01 struct:01 
+
+Hi,
+
+I may have spoken too soon about the functor solving the problem.  In fact,
+in a non-trivial example the problem is merely shifted to a different place=
+.
+
+Consider thus the basic document below; note that the phantom type is made
+opaque in the signature, thus preventing the rogue unification we wish to
+avoid at all cost:
+
+_____________________________________________________________________
+module type DOCUMENT =3D
+sig
+        type inline_t =3D node_t list
+         and node_t =3D
+                private
+                | Text of string
+                | Bold of inline_t
+                | Italic of inline_t
+
+        type 'a t
+
+        val text: string -> [> `Basic] t
+        val bold: 'a t list -> 'a t
+        val italic: [< `Basic | `Complex] t list -> [> `Complex] t
+end
+
+
+module Document: DOCUMENT =3D
+struct
+        type inline_t =3D node_t list
+         and node_t =3D
+                | Text of string
+                | Bold of inline_t
+                | Italic of inline_t
+
+        type 'a t =3D node_t
+
+        let text str =3D Text str
+        let bold inl =3D Bold inl
+        let italic inl =3D Italic inl
+end
+_____________________________________________________________________
+
+
+Let us now try to extend the basic type with a couple of parsing functions.
+Simpy using "include" will fail, because the signature DOCUMENT has made
+Document.t opaque.  I thought the solution could come from the "with type"
+directive:
+
+_____________________________________________________________________
+module type DOCUMENT_PARSER =3D
+sig
+        include DOCUMENT
+
+        exception Invalid_Subset
+
+        val parse_complex: string -> [> `Basic | `Complex] t
+        val parse_basic: string -> [> `Basic] t
+end
+
+module Document_parser: DOCUMENT_PARSER with type 'a t =3D Document.node_t =
+=3D
+struct
+        include Document
+
+        exception Invalid_Subset
+
+        let parse_complex =3D function
+                | "complex"     -> italic [text "foo"]
+                | _             -> bold [text "bar"]
+
+        let rec complex_to_basic =3D function
+                | Text str      -> text str
+                | Bold inl      -> bold (List.map complex_to_basic inl)
+                | Italic inl    -> raise Invalid_Subset
+
+        let parse_basic str =3D complex_to_basic (parse_complex str)
+end
+_____________________________________________________________________
+
+
+But unfortunately something else must me missing, because the compiler
+complains on the one-before-last line:
+
+Error: This expression has type
+         ([> `Basic | `Complex ] as 'a) t =3D 'a Document.t
+       but is here used with type node_t =3D Document.node_t
+
+
+I have also tried the functor-based approach, but the same error happens.
+Any ideas on how to solve this?  Or could this be one of those cases where
+only the object system can help?
+
+Thanks in advance for your time!
+
+Kind regards,
+Dario Teixeira
+
+=0A=0A=0A      __________________________________________________________=
+=0ANot happy with your email address?.=0AGet the one you really want - mill=
+ions of new email addresses available now at Yahoo! http://uk.docs.yahoo.co=
+m/ymail/new.html
+

@@ -1,0 +1,157 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA10064; Mon, 11 Oct 2004 15:37:31 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA09363 for <caml-list@pauillac.inria.fr>; Mon, 11 Oct 2004 15:37:30 +0200 (MET DST)
+Received: from post.bourget.univ-savoie.fr (post.bourget.univ-savoie.fr [193.48.120.73])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9BDbTFR017457
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Mon, 11 Oct 2004 15:37:30 +0200
+Received: from univ-savoie.fr (d85.lama.univ-savoie.fr [193.48.123.85])
+          by post.bourget.univ-savoie.fr (8.12.3/jtpda-5.4) with ESMTP id i9BDbNa4008097
+          ; Mon, 11 Oct 2004 15:37:23 +0200
+Message-ID: <416A8CDA.7060407@univ-savoie.fr>
+Date: Mon, 11 Oct 2004 15:38:34 +0200
+From: Christophe Raffalli <Christophe.Raffalli@univ-savoie.fr>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.6) Gecko/20040115
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Jean-Christophe Filliatre <Jean-Christophe.Filliatre@lri.fr>
+CC: sejourne_kevin <sejourne_kevin@yahoo.fr>, caml-list@inria.fr
+Subject: [Caml-list] About Obj (was Recursive lists)
+References: <41669437.3010201@yahoo.it>	<4166A395.70301@yahoo.fr>	<4166DC42.3090602@baretta.com> <16746.15832.409677.764564@gargle.gargle.HOWL>
+In-Reply-To: <16746.15832.409677.764564@gargle.gargle.HOWL>
+X-Enigmail-Version: 0.83.3.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: multipart/signed; micalg=pgp-sha1;
+ protocol="application/pgp-signature";
+ boundary="------------enig1195FC116145F3A87EDBE039"
+Content-Transfer-Encoding: 8bit
+X-Scanned-By: MIMEDefang 2.33 (www . roaringpenguin . com / mimedefang)
+X-Miltered: at nez-perce with ID 416A8C99.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; raffalli:01 raffalli:01 univ-savoie:01 openpgp:01 2440:01 3156:01 filliatre:01 immutable:01 val:01 val:01 typable:01 savoie:01 chablais:01 73376:01 univ-savoie:01 
+X-Attachments: type="application/pgp-signature" name="signature.asc" name="signature.asc" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 3812
+Lines: 118
+
+This is an OpenPGP/MIME signed message (RFC 2440 and 3156)
+--------------enig1195FC116145F3A87EDBE039
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+
+Jean-Christophe Filliatre wrote:
+> sejourne_kevin wrote:
+> 
+>>(** Take a list and connect the end on the beginning
+>>   Copyright : Kévin ;)
+>>*)
+>>let cycle l =
+>>  let rl= ref l in
+>>  let rec go_fin = function
+>>      [] -> invalid_arg "cycle:[] can't be !"
+>>    | [x] as f -> Obj.set_field (Obj.repr f) 1 (Obj.repr !rl);l
+>>    | x::reste-> go_fin reste
+>>  in go_fin l
+>>;;
+>>I haven't test GC issu.
+> 
+> 
+> This shouldn't be advised, and not even posted on this list.
+> 
+
+And how do you write a tail recursive map doing only one structure 
+traversal (which is important with the penalty for memory access) on 
+immutable list without the Obj module ?
+
+However, using Obj you can write once for all some functions to 
+construct a list starting with its head, for instance with the following 
+interface (you can write an implmentation with Stack but the "extract" 
+function will not be in constant time):
+
+type 'a prelist (* mutable type of a list under construction *)
+
+val start : unit -> 'a prelist
+val extract : 'a prelist -> 'a list
+val cons : 'a -> 'a prelist -> unit
+
+Then, map can be rewritten
+
+let map f l =
+   let pl = start () in
+   let rec fn = function
+     [] -> extract pl
+   | a::l -> cons (f a) pl; fn l
+   in
+   fn l
+
+This kind of code is not that intolerable and you can advise people to 
+use Obj module to write an implementation of the above signature (if 
+they are sure they really need it).
+Since use of the Obj module is restricted to a small module, it will be 
+easy to adapt to follow the evolution of the language.
+
+The presence of the Obj module in the standard distribution itself tells 
+that it is necessary and not only for C interface (this is not its main 
+usage anyway, its main usage is to compile code typable only with 
+dependent type).
+
+Here is a possible implementation of the above module (I think it could 
+be use to improve the actual implementation of map and fold_right in the 
+standard library)
+
+type 'a prelist = { mutable start : 'a list; mutable current : 'a list}
+
+let start () = { start = []; current = []}
+
+let cons a pl = match pl.current with
+   [] -> let l = [a] in pl.current <- l; pl.start <- l
+| l ->
+	let l' = [a] in Obj.set_field (Obj.repr l) 1 (Obj.repr l');
+         pl.current <- l'
+
+let extract pl =
+   let r = pl.start in
+   pl.current <- []; pl.start <- [];
+   (* to guaranty that we can not mute the list once it has been
+   extracted *)
+   r
+
+-- 
+Christophe Raffalli
+Université de Savoie
+Batiment Le Chablais, bureau 21
+73376 Le Bourget-du-Lac Cedex
+
+tél: (33) 4 79 75 81 03
+fax: (33) 4 79 75 87 42
+mail: Christophe.Raffalli@univ-savoie.fr
+www: http://www.lama.univ-savoie.fr/~RAFFALLI
+---------------------------------------------
+IMPORTANT: this mail is signed using PGP/MIME
+At least Enigmail/Mozilla, mutt or evolution
+can check this signature
+---------------------------------------------
+
+--------------enig1195FC116145F3A87EDBE039
+Content-Type: application/pgp-signature; name="signature.asc"
+Content-Description: OpenPGP digital signature
+Content-Disposition: attachment; filename="signature.asc"
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.2.4 (GNU/Linux)
+Comment: Using GnuPG with Mozilla - http://enigmail.mozdev.org
+
+iD8DBQFBaozaSQDyWB/+xBwRAmyNAJ4kWryJpZIsDATvmkguyYKyfw4x/wCgli6p
+82NnBcXVhco/asAzjamnoA8=
+=soT7
+-----END PGP SIGNATURE-----
+
+--------------enig1195FC116145F3A87EDBE039--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

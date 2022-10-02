@@ -1,0 +1,389 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q12C7f0K013982
+	for <caml-list@sympa-roc.inria.fr>; Thu, 2 Feb 2012 13:07:41 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqsBAJl7Kk9KfVI0imdsb2JhbAApEAqufggiAQEBCgkNBxIGIYFzAQEEDAYCExkBGx0BAwwGBQs7IQEBEQEFARwGEwgTB4djKZp0CotugnCFFT+IcQIFC4dmSYMPBgIBAgIJAgIBBgcEBgEBASsMAoMLCIEUC4NYBJB3hCyLB4MQPYQB
+X-IronPort-AV: E=Sophos;i="4.71,608,1320620400"; 
+   d="scan'208";a="129824565"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 02 Feb 2012 13:07:35 +0100
+Received: by wgbds10 with SMTP id ds10so2861289wgb.9
+        for <caml-list@inria.fr>; Thu, 02 Feb 2012 04:07:35 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=cH/hBq9VUbL2Q9CTG26tP3eY4IEb7rTtPtlf/eps844=;
+        b=mXKdgjVAuDyKlHx8H6WSnb7G9DDflvJMp6+CDBG5Wb0FhzmHcvzqNukNWHQzjMyal9
+         4ZLUVSMadY/PTkW1K/cEnz94C5FG8OySZ+qcl1ZukTc+eCqaOiO5EbG8b1pJQc1tmkfz
+         2A4SxGmeMIsgddYCWaGAlqbCI4U8G2NlC8ECY=
+Received: by 10.180.106.202 with SMTP id gw10mr21867628wib.3.1328184455252;
+ Thu, 02 Feb 2012 04:07:35 -0800 (PST)
+MIME-Version: 1.0
+Received: by 10.227.42.208 with HTTP; Thu, 2 Feb 2012 04:06:55 -0800 (PST)
+In-Reply-To: <CANnJ5Gc=Ej_P4qpWXAuT88D+ec8Qod=p+gRBjZ5J=H74J1qjhA@mail.gmail.com>
+References: <CANnJ5Gc=Ej_P4qpWXAuT88D+ec8Qod=p+gRBjZ5J=H74J1qjhA@mail.gmail.com>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Thu, 2 Feb 2012 13:06:55 +0100
+Message-ID: <CAPFanBHDziRyeeU6mxV89XZ5MxroKEzubZ8tJssqOuiiT97CZQ@mail.gmail.com>
+To: Pierre-Alexandre Voye <ontologiae@gmail.com>
+Cc: caml-list <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q12C7f0K013982
+Subject: Re: [Caml-list] What type strategy ?
+
+I did not understand "the whole picture" of your question, but I think
+I get the idea. You are looking for a way to manipulate an
+heterogeneous set of values that have a common interface (possibly
+a common subset of their interface), but may have different internal
+representations. Your current solution is to parametrize the value
+types by their internal details, which is not flexible because then
+all values are required to have the same internals.
+
+If I understood the issue correctly, the general answer is
+"existential types". You don't want to abstract over the internal
+types, but to encapsulate those type locally (so that they don't flow
+out of your values). There are several ways to do this in OCaml, none
+of them being "simple" -- because you're doing something subtle.
+
+One way is to use the encoding of existential types as universal
+types. Instead of saying "I have a value using internal types to
+*produce* a result" you say "for any *consumer* of the result,
+polymorphic over some types, I can run the consumer by feeding him
+values":
+
+  type 'internal_type internal_agent =
+    ... (* the agent type, parametrized over its internal types *)
+
+  type 'result consumer =
+    { consume : 'internal_type . 'internal_type internal_agent -> 'result }
+  type agent =
+    { feed : 'result. 'result consumer -> 'result }
+
+  let consume : 'a consumer -> agent -> 'a =
+    fun consumer agent -> agent.feed consumer.consume
+
+Notice how the type `agent` is not parametrized over `'internal_type` anymore.
+
+As a simple example (none of the ": type" annotations are needed for
+type-checking, they're only here for beginner's readability)
+
+  (* an agent simply knows how to print itself *)
+  type 'a internal_agent = 'a * ('a -> string)
+  type 'result consumer =
+    { consume : 'internal_type . 'internal_type internal_agent -> 'result }
+  type agent = { feed : 'result. 'result consumer -> 'result }
+
+  let consume : 'a consumer -> agent -> 'a =
+    fun consumer agent -> agent.feed consumer
+
+  let internal_int_agent n : int internal_agent = (n, string_of_int)
+  let internal_bool_agent b : bool internal_agent = (b, string_of_bool)
+
+  let int_agent n : agent =
+    { feed = fun consumer -> consumer.consume (internal_int_agent n) }
+  let bool_agent b : agent = (* remark: a different syntax for record
+matching *)
+    { feed = fun {consume} -> consume (internal_bool_agent b) }
+
+  let agent1 = int_agent 2
+  let agent2 = bool_agent false
+
+  let print_consumer : unit consumer =
+    { consume = fun (state, print) ->
+        print_endline (print state) }
+  let print agent = consume print_consumer agent
+
+  let () = print agent1 (* prints "2" *)
+  let () = print agent2 (* prints "false" *)
+  let () = List.iter print [agent1; agent2]
+    (* seemingly heterogeneous collection;
+       List.iter ... [int_agent; bool_agent] wouldn't type-check *)
+
+Notice that in this case, there is a *much* simpler way to do it:
+simply define the type of agents as:
+
+  type agent = unit -> string
+  let int_agent n = (fun () -> string_of_int n)
+  let bool_agent b = (fun () -> string_of_bool b)
+
+This is because the interface exposed by your agents doesn't actually
+need to use the internal type -- note: internal state of internal type
+is captured in the closure, which implicitly has an existential
+type. This can be generalized to cases where you want to expose a set
+of operations:
+
+  type agent = {
+    op1 : foo1 -> bar1;
+    op2 : foo2 -> bar2;
+    ...
+  }
+
+Aside:
+
+  This is starting to look a lot like object-oriented programming;
+  that's basically the idea, but done in a simpler way, without
+  implementation inheritance (open recursion). That's a remark I wanted
+  to do about your setting: please don't use the object-oriented
+  features of OCaml if you *don't know what you're looking for*
+  exactly. You're only shooting yourself in the foot with more ways to
+  do complex things that don't help your problem.
+
+  You should begin by understanding what you're trying to do well,
+  without objects. Then if you notice that your particular problem uses
+  a lot of the features that object-orientation brings you (hidden state
+  and open recursion), then you can decide to use the OOP features to
+  simplify your setting. But you should know what you're doing first.
+
+You need to use an explicit existential type if your internal types
+are published through your interface, for example:
+
+  type 't internal_agent =
+    { state : 't;
+      duplicate : unit -> 't * 't;
+      id : int;
+      equal : 't -> bool; }
+
+It is also possible to use first-class modules to get existential types:
+
+   module type AGENT = sig
+     type t
+     val state : t
+     (* val duplicate : unit -> t * t *)
+     (* val id : int *)
+     (* val equal : t -> bool *)
+   end
+
+   type agent = (module AGENT)
+
+   let int_agent n : agent =
+     let module Agent =
+       struct
+         type t = int
+         let state = n
+       end
+     in
+     (module Agent : AGENT)
+
+
+PS:
+
+Your "transition" type is too heavy, it makes no sense to duplicate
+the logical connectors.
+
+type ('agent, 'event) transition =
+  | Condition of ('agent -> bool)
+  | Event of ('event -> bool)
+  | Op1 of op1 * ('agent, 'event) transition
+  | OpN of opN * ('agent, 'event) transition list
+and op1 = Not
+and opN = Or | And | Xor
+
+(This is more expressive as in your type `Not` could only be used on
+atomic conditions/events, rather than composed expressions. If you
+insist on keeping a partially normalized form, you can add a bolean
+argument to the Condition and Event constructors instead.)
+
+2011/12/31 Pierre-Alexandre Voye <ontologiae@gmail.com>:
+> [There's a french version below]
+>
+> Hello,
+> I am currently developing a multi agent system engine in Ocaml, and although
+> a first version of this engine works really well, I have some difficulties
+> to generalize the engine to any kind of agent. The difficulty comes from the
+> organization, in particular strategy of typing that I chose.
+>
+> My engine can animate agents - which are represented by objects - with a
+> hierarchical finite state machine. In such an automaton, each state can
+> contains a finite state automata that will be activated in this state.Thus,
+> one can define different behaviors and sub behavior in the agent.
+>
+> I'm not very good at schematic, but here is one, to illustrate:
+> http://imagepaste.nullnetwork.net/viewimage.php?id=3044
+>
+>
+> Transitions are suitable for SMA: they pass from internal conditions, but
+> external events. It is evaluated on the agent, or the event using a Boolean
+> function:
+>
+> type ('agent' event) transition =
+>    Condition of (agent -> bool)
+>   | Event of ('event -> bool)
+>   | EventOr of ('event -> bool) * (' agent 'event) transition
+>   | EventAnd of ('event -> bool) * (' agent 'event) transition
+>   | EventXor of ('event -> bool) * (' agent 'event) transition
+>   | EventNot of ('event -> bool)
+>   | ConditionOr of (agent -> bool) * ('agent' event) transition
+>   | ConditionAnd of (agent -> bool) * ('agent' event) transition
+>   | ConditionXor of (agent -> bool) * ('agent' event) transition
+>   | ConditionNot of (agent -> bool);
+>
+> We can define any Boolean equation to define a simple transition.
+>
+> Now my code is organized as follows:
+>
+> - Class  "state" manages the state and seeks what transition applies. Of
+> course, what is in this class performed the functions (agent -> bool) or
+> ('event -> bool) which involves the acquisition of the static type. Each
+> state possesses all the possible transitions to other instance of "state".
+> - A class "directory" that allows you to associate each agent to a
+> identifier string, because the events are designed to be sent from the
+> outside (HTTP or other). Typically, an event can be a command that the user
+> sends to the controller.
+> - A class "masEvent" which can receive events from the outside, to identify
+> agents which are involved by the event.
+> - A class "agent" that embeds all the state transition diagram of the agent.
+> It was he who receives "emails" including a masEvent. His method "cycle" is
+> used to start the process of moving (if applicable) to another state.
+>
+>
+> The objective:
+> my goal is to manage any kind of agent, which would ideally objects
+> inheriting from "agent". These objects do not redefine methods, they just
+> add new data and methods.
+>  If I am willing to rewrite everything as a module, I would like at least
+> that the agents to remain objects in order to manage their mutable datas.
+>
+> The problem:
+> It is very difficult to ensure that the "state" object knows all objects
+> inheriting from "agent", but it is essential to ensure the compiler accepts
+> it.
+>
+> My current solution is to give two agents as generic type to state:
+> class ['typeAgent' objetDuJeu] state (myAgent 'typeAgent) = object (self)
+>
+>  during its instantiation, but it is very inconvenient because it implies
+> that we must do the same for objects and annaire masEvent:
+>
+> class ['typeAgent, item] masEvent (directory) = object (self) ...
+> ['TypeAgent, item] directory (myAgent, myObj) = object (self) ...
+>
+> Indeed, "directory" must know all types inheriting from agents.
+> This solution isn't flexible and implies a lot of problems.
+>
+> Solutions i though :
+> - Define all objects which inherits from "agent" as virtual and redefine
+> true class which inherits really from these virtual class, it's very
+> tricky...
+> - Rewrite state, masEvent, directory as module ?
+>
+> My question is this: what I could choose smart strategy to ensure that
+> "state" can easily manage any kind can be agents, with only constraints they
+> inherit "agent"?
+>
+> Thank you
+>
+>
+>
+>
+>
+> Français :
+> Bonjour,
+> je suis en train de développer un moteur Système Multi Agent en Ocaml, et
+> bien qu'une première version de ce moteur fonctionne très bien, j'ai
+> quelques difficultés à le généraliser à toute sorte d'agent. Cette
+> difficulté tient à l'organisation, à la stratégie de typage que j'ai choisi
+> (et au fait que j'ai réellement découvert ocaml pendant son écriture :-) ).
+>
+> Mon moteur permet d'animer des agents, qui sont matérialisés par des objets,
+> avec un automate à état fini hiérarchique. Dans un tel automate, chaque état
+> peut abriter un automate qui va s'activer lorsqu'on passe dans cet état.
+> Ainsi imbriqués, on peut définir divers comportements et sous comportements
+> de l'agent.
+>
+> Je ne suis pas très bon pour les schémas, mais en voici un :
+> http://imagepaste.nullnetwork.net/viewimage.php?id=3044
+>
+>
+> Les transitions sont adapté à un SMA : elles se font à partir des conditions
+> internes, mais aussi des évènements extérieur. On évalue sur l'agent, ou sur
+> l'évènement une fonction rendant un booléen :
+>
+> type ('agent, 'event) transition =
+>    Condition     of ('agent -> bool)
+>   | Event        of ('event  -> bool)
+>   | EventOr      of ('event -> bool) * ('agent,'event) transition
+>   | EventAnd     of ('event -> bool) * ('agent,'event) transition
+>   | EventXor     of ('event -> bool) * ('agent,'event) transition
+>   | EventNot     of ('event -> bool)
+>   | ConditionOr  of ('agent -> bool) * ('agent,'event) transition
+>   | ConditionAnd of ('agent -> bool) * ('agent,'event) transition
+>   | ConditionXor of ('agent -> bool) * ('agent,'event) transition
+>   | ConditionNot of ('agent -> bool);;
+>
+> On peut ainsi définir n'importe quelle équation booléenne simple pour
+> définir une transition.
+>
+> Aujourd'hui mon code est organisé comme suit :
+>
+> - Une classe "state" gère les état, et cherche quel  transition s'applique.
+> Bien entendu, c'est dans cette classe qu'est exécuté les fonctions ('agent
+> -> bool) ou ('event -> bool) qui implique d'avoir connaissance du type
+> statique de chaque agents. Chaque state, possède l'ensemble des transitions
+> possible vers d'autres instance de "state".
+> - Une classe annuaire qui permet d'associer chaque agent a un identifiant de
+> type string, en effet les évènements sont conçus pour être envoyé depuis
+> l'extérieur (requete http ou autre). Typiquement, un évènement peut être une
+> commande que l'utilisateur envoie à l'automate.
+> - une classe "masEvent" qui permet de recevoir les évènements de l'extérieur
+> et d'identifier les agents que l'évènement implique (l'évènement doit
+> fournir les identifiants)
+> - Une classe "agent" qui embarque tout le schéma d'état transition de
+> l'agent. C'est lui qui reçoit des "emails" comprenant un masEvent. Sa
+> méthode "cycle" permet de lancer le processus de passage ( s'il y a lieu ) à
+> un autre état.
+>
+>
+> L'objectif :
+>     mon objectif est de pouvoir gérer toute sorte d'agent, qui seraient dans
+> l'idéal, des objets héritant de "agent". Ces objets ne redéfinissent pas de
+> méthodes, ils ajoutent des données et des nouvelles méthodes.
+>  Si je suis prêt à tout réécrire sous forme de module, j'aimerai au moins
+> que les agents restes des objets, afin de pouvoir gérer leur données
+> mutables.
+>
+> Le problème :
+>     Il est très difficile de faire en sorte que l'objet state connaisse TOUS
+> les objets héritant de "agent", mais c'est indispensable pour que le
+> compilateur l'accepte.
+>
+> Ma solution actuelle consiste à donner 2 agents comme type générique à state
+> :
+> class ['typeAgent, 'objetDuJeu] state (myagent :'typeAgent) = object (self)
+>
+>  lors de son instanciation, mais c'est très peu pratique parces que cela
+> implique que l'on doivent faire de même pour les objets annaire et masEvent
+> :
+>
+> class ['typeAgent,'objet] masEvent (annuaire ) = object (self) ...
+> ['typeAgent,'objet]        _ANNUAIRE  (myAgent ,myObj ) = object (self) ...
+>
+> En effet, annaire doit connaitre tous les types héritant de agents.
+>
+> Cette solution est absolument pas flexible et pose beaucoup de problèmes.
+>
+> Solutions auxquelles j'ai pensé :
+> - Définir une version "virtuelle" de chaque agents spécialisé censé hériter
+> de "agent", afin que state les "connaissent" ?
+> - Transformer "state", "masEvent" et "annuaire" en module, mais pour quel
+> apport ?
+>
+>
+> Ma question est donc la suivante : quelle stratégie intelligente je pourrais
+> choisir pour faire en sorte que "state" puisse gérer aisément toute sorte
+> possible d'agents, avec seules contraintes qu'ils héritent de "agent" ?
+>
+> Merci
+>
+>
+>
+> Regards,
+> Pierre-Alexandre
+>
+> --
+> ---------------------
+> https://twitter.com/#!/ontologiae/
+> http://linuxfr.org/users/montaigne
+>
+

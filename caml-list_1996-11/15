@@ -1,0 +1,132 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA28807 for caml-redistribution; Thu, 14 Nov 1996 14:27:16 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA25820 for <caml-list@pauillac.inria.fr>; Thu, 14 Nov 1996 11:34:07 +0100 (MET)
+Received: from arthur.u-strasbg.fr (boos@arthur.u-strasbg.fr [130.79.6.103]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id LAA25579 for <caml-list@pauillac.inria.fr>; Thu, 14 Nov 1996 11:34:06 +0100 (MET)
+Received: (from boos@localhost) by arthur.u-strasbg.fr (8.7.5/8.7.3) id LAA04448; Thu, 14 Nov 1996 11:34:44 +0100
+Date: Thu, 14 Nov 1996 11:34:44 +0100
+Message-Id: <199611141034.LAA04448@arthur.u-strasbg.fr>
+From: Christian Boos <boos@arthur.u-strasbg.fr>
+To: Pierre BOULET <Pierre.Boulet@prism.uvsq.fr>
+CC: caml-list@pauillac.inria.fr
+Subject: Re: functors and type constraints
+In-Reply-To: <s5r9186t30i.fsf@morisot.prism.uvsq.fr>
+References: <s5r9186t30i.fsf@morisot.prism.uvsq.fr>
+Sender: weis
+
+Pierre BOULET writes:
+ > [An english version follows]
+ > bonjour,
+ > 
+ > j'ai un problème avec certaines contraintes de type un peu compliquées
+ > avec Objective Caml version 1.02. Le plus simple est de prendre un
+ > exemple :
+ 
+<< meme exemple repris dans la suite >>
+
+Votre probleme est le suivant : vous definissez des contraintes de partage
+de type au niveau de la definition des types des foncteurs. Ces contraintes 
+ne sont pas apparentes dans les types des modules utilises par ces foncteurs.
+Or, lorsque vous instanciez vos modules, vous le faites avec une coercition 
+vers la signature correspondante, ce qui n'est pas obligatoire et qui a 
+comme effet "pervers" de rendre les types qui y sont definis abstraits.
+C'est pourquoi lors de la creation de modules en utilisant les foncteurs,
+le compilateur ne peut plus verifier cette egalite des types. La solution est
+donc de definir les modules sans les typer explicitement.
+
+Voila l'exemple complet (pret a passer a ocaml !) :
+
+
+  module type TAG =
+    sig
+      type t
+      val const : t
+    end;;
+  
+  module type ARBRE =
+    sig
+      type tag
+      type quast
+      val create : tag -> quast
+      val get_tag : quast -> tag
+    end;;
+  
+  module type MAKE_ARBRE = 
+    functor (T : TAG) -> (ARBRE with type tag = T.t);;
+
+
+  module Make_arbre : MAKE_ARBRE =
+    functor (T : TAG) -> 
+      struct
+	type tag = T.t
+	type quast = {tag : tag}
+	let create t = { tag = t }
+	let get_tag q = q.tag
+      end;;
+  
+  
+  module type TRAD = 
+    sig
+      type from
+      type into
+      val f : from -> into
+    end;;
+  
+  
+  module type TRAD_ARBRE =
+    functor (A1 : ARBRE) -> functor (A2 : ARBRE)
+      -> functor (T : TRAD with type from = A1.tag and type into = A2.tag) 
+      -> (TRAD with type from = A1.quast and type into = A2.quast);;
+  
+  module Make_trad : TRAD_ARBRE =
+    functor (A1 : ARBRE) -> functor (A2 : ARBRE)
+      -> functor (T : TRAD with type from = A1.tag and type into = A2.tag) -> 
+      struct
+	type from = A1.quast
+	type into = A2.quast
+	let f q1 = A2.create (T.f (A1.get_tag q1))
+      end;;
+  
+
+(* Dans l'instanciation de module, il est inutile (et indesirable !) 
+   de typer les modules :
+
+    module T1 : TAG = struct ... end;;
+    module T2 : TAG = struct ... end;;
+    module A1 : ARBRE = Make_arbre (T1);;
+    module A2 : ARBRE = Make_arbre (T2);;
+    module Trad_Tag : TRAD = 
+      struct 
+	type from = T1.t
+	type into = T2.t
+	val f ... 
+      end;;
+
+  Au lieu de cela, il faut ecrire :
+*)
+   
+
+  module T1 = struct type t = int let const = 1 end;;
+  module T2 = struct type t = float let const = 1. end;;
+  module A1 = Make_arbre (T1);;
+  module A2 = Make_arbre (T2);;
+  
+  module Trad_Tag = 
+    struct 
+      type from = T1.t
+      type into = T2.t
+      let f t1 = float t1
+    end;;
+  
+  
+  module Trad_Arbre : TRAD = Make_trad (A1) (A2) (Trad_Tag);;
+
+
+--- 
+
+Sorry, no english version today (there's an english version in the initial
+posting, and the code above solves the problem).
+
+
+-- Christian Boos
+
+
+

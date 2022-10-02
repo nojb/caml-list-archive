@@ -1,0 +1,150 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q01Cj3ZB003958
+	for <caml-list@sympa-roc.inria.fr>; Sun, 1 Jan 2012 13:45:03 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArILABVUAE9QRFuw/2dsb2JhbABDggWqUIEFgXIBAQUnUhALGBwSFCg0h3y0CYN9gRiGF2MEjiaBF4VEkjU
+X-IronPort-AV: E=Sophos;i="4.71,441,1320620400"; 
+   d="pl'?scan'208";a="125198209"
+Received: from furbychan.cocan.org ([80.68.91.176])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/AES256-SHA; 01 Jan 2012 13:44:58 +0100
+Received: from rich by furbychan.cocan.org with local (Exim 4.72)
+	(envelope-from <rich@annexia.org>)
+	id 1RhKmU-0003NB-13; Sun, 01 Jan 2012 12:44:54 +0000
+Date: Sun, 1 Jan 2012 12:44:54 +0000
+From: "Richard W.M. Jones" <rich@annexia.org>
+To: orbitz@ezabel.com
+Cc: david.baelde@ens-lyon.org, Caml List <caml-list@inria.fr>
+Message-ID: <20120101124454.GA12851@annexia.org>
+References: <96F225D0-B458-4E25-BE34-3976989984B2@ezabel.com>
+ <CAFqqUFEO5Vxf0jWxSEbDjXY-qE_G2XsOA0uZj47jTt4NMkeBPA@mail.gmail.com>
+ <EED65A08-B24F-42CD-B4D6-4E30667EC6CA@ezabel.com>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="J/dobhs11T7y2rNN"
+Content-Disposition: inline
+In-Reply-To: <EED65A08-B24F-42CD-B4D6-4E30667EC6CA@ezabel.com>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: Re: [Caml-list] Understanding usage by the runtime
+
+
+--J/dobhs11T7y2rNN
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+On Sat, Dec 31, 2011 at 10:33:19AM -0500, orbitz@ezabel.com wrote:
+> Being on the C side is not even something I had considered.  In this
+> case, I think the only piece of code not part of the Ocaml RTS that is
+> talking to C is Lwt.  It is possible that there is a memory leak in
+> there somewhere.  The upside, though, is there seems to be some
+> residue of it in the Ocaml side.  My heap numbers given earlier are
+> ~65megs which is significantly larger than it should be, so I might be
+> able to track it down from the Ocaml side.
+
+A couple of other ideas:
+
+Is compaction disabled?  lablgtk disables it unconditionally by
+setting the global Gc max_overhead (see also the Gc documentation):
+
+  src/gtkMain.ml:
+    let () = Gc.set {(Gc.get()) with Gc.max_overhead = 1000000}
+
+If something in your program or Lwt does the same, you may get
+fragmentation of the C malloc heap or perhaps the OCaml heap.  I've
+experienced fragmentation in very long-running C programs and it's
+insidious because it's very hard to understand what's really going on,
+and impossible IME to remedy it.
+
+Second suggestion is to look at /proc/<pid>/maps and/or smaps.
+That'll tell you without doubt where the 2GB of memory is being used.
+Most likely in the heap from the way you describe it, but it is worth
+checking that top isn't reporting something innocuous such as a big
+file-backed mmap in one of your C libraries.
+
+Attached is a script that you can adapt to help you interpret
+/proc/<pid>/maps.
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat
+
+--J/dobhs11T7y2rNN
+Content-Type: text/x-perl; charset=us-ascii
+Content-Disposition: attachment; filename="maps.pl"
+
+#!/usr/bin/perl -wT
+# Parse /proc/*/maps file into a readable summary.
+# $Id: maps.pl,v 1.1 2006/11/01 10:35:56 rich Exp $
+
+no warnings qw(portable);
+
+foreach my $filename (@ARGV) {
+  my %devices;
+
+  open MAPS, "<$filename" or die "$filename: $!";
+
+  while (<MAPS>) {
+    if (m/^([[:xdigit:]]+)-([[:xdigit:]]+) ([-rwxps]+) ([[:xdigit:]]+) ([[:xdigit:]]{2}:[[:xdigit:]]{2}) (\d+)\s*(.*)?/) {
+      my $start = hex $1;
+      my $end = hex $2;
+      my $perms = $3;
+      my $offset = hex $4;
+      my $device = $5;
+      my $inode = $6;
+      my $filename = $7;
+
+      my $size = $end - $start;
+
+      # Create a record.
+      my %rec =
+	(
+	 start => $start,
+	 end => $end,
+	 perms => $perms,
+	 offset => $offset,
+	 device => $device,
+	 inode => $inode,
+	 filename => $filename,
+	 size => $size
+	);
+
+      # Key for storing this.
+      my $key;
+      if ($device ne "00:00" && $inode != 0) {
+	$key = "$filename ($device $inode)"
+      } elsif ($filename ne "") {
+	$key = $filename
+      } else {
+	$key = "anonymous mapping"
+      }
+
+      # Store it.
+      $devices{$key} = [] if !exists $devices{$key};
+      push @{$devices{$key}}, \%rec
+    } else {
+      warn "ignored: $_\n"
+    }
+  }
+
+  close MAPS;
+
+  # Get the list of devices.
+  my @devices = keys %devices;
+
+  # For each device, print a summary.
+  foreach (@devices) {
+    print "$_:\n";
+    my @recs = @{$devices{$_}};
+    my $sum = 0;
+    $sum += $_->{size} foreach @recs;
+    printf ("  %d bytes %.1f MB\n", $sum, $sum/1024/1024);
+    print "  segments:\n";
+    foreach (@recs) {
+      printf ("    %x-%x (%d bytes %.1f MB) %s %d\n",
+	      $_->{start}, $_->{end}, $_->{size}, $_->{size}/1024/1024,
+	      $_->{perms}, $_->{offset});
+    }
+  }
+}
+
+--J/dobhs11T7y2rNN--

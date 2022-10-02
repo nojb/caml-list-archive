@@ -1,0 +1,85 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA26523; Thu, 18 Apr 2002 17:30:08 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA26519 for <caml-list@pauillac.inria.fr>; Thu, 18 Apr 2002 17:30:07 +0200 (MET DST)
+Received: from t2.fast.net.uk (ns1.fast.net.uk [212.42.162.2])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3IFU6L08567
+	for <caml-list@inria.fr>; Thu, 18 Apr 2002 17:30:06 +0200 (MET DST)
+Received: from htec.demon.co.uk (adsl-212-42-169-63.fast.net.uk [212.42.169.63])
+	by t2.fast.net.uk (8.11.6/8.11.4) with ESMTP id g3IFU0h69612;
+	Thu, 18 Apr 2002 16:30:01 +0100 (BST)
+Message-ID: <3CBEE681.9090404@htec.demon.co.uk>
+Date: Thu, 18 Apr 2002 16:30:09 +0100
+From: Christopher Quinn <cq@htec.demon.co.uk>
+User-Agent: Mozilla/5.0 (compatible; MSIE5.5; Windows 98;
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Jakob Lichtenberg <jl@itu.dk>
+CC: caml-list@inria.fr
+Subject: Re: [Caml-list] camlidl - finalizing cows without COM!
+References: <000901c1e5c1$f47cc130$5ba4389d@redmond.corp.microsoft.com>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Jakob Lichtenberg wrote:
+ > typedef int cow;
+ > cow createAndReferenceCow(void);
+ > void freeCow(cow);
+ >
+ > Now, when the OCaml structures for some reason decide to 
+garbage collect my
+ > cow the finalized object should call freeCow......  I 
+have done this a bunch
+ > of times without the idl interface, but have no clue how 
+to specify this in
+ > an idl file.  Help!!!
+ >
+ > And I would really *love* not to bring COM interfaces 
+into this...
+
+Hi,
+
+You can use the finalisation feature of Caml's C interface,
+but you will need to play games with your IDL declarations:
+
+value mkcow(COW c)
+{
+  value v = alloc_custom(cow_ops,.....);
+  *Data_custom_ptr(v) = c;
+  return v;
+}
+#define COW_val(v) (COW)*Data_custom_ptr(v)
+#define Val_COW(c) mkcow(c)
+
+#define COW_c2ml(c,ctx)   Val_COW(c)
+#define COW_ml2c(v,cp,ctx) COW_val(v)
+
+and finally in idl ...
+
+typedef [ml2c(COW_ml2c), c2ml(COW_c2ml)]
+   int cow;
+
+That is it in general, but undoubtedly wrong in detail.
+One has to worry about the uniqueness of a cow handle 
+because in the normal course of using cow related idl 
+functions, the handle may repeatedly be allocated a new 
+container value, each of which will have the finalisation 
+function you defined for cow_ops invoked on it.
+
+I tied myself in knots trying different schemes and in the 
+end I discovered Gc.finalise, which means you can declare 
+free_cow() in IDL and use it naturally from within caml!
+*BUT* Gc.finalise cannot handle cascades of resource 
+handles, ie. if one handle is used to request another, 
+dependent resource then even if you arrange for there to be 
+gc dependencies between the two, their finalisation may 
+still occur out of order.
+
+- Chris Quinn
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

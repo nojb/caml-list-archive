@@ -1,0 +1,505 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA30883; Thu, 6 Dec 2001 18:45:49 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA30952 for <caml-list@pauillac.inria.fr>; Thu, 6 Dec 2001 18:45:48 +0100 (MET)
+Received: from abel (nat.umh.ac.be [193.190.193.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id fB6Hjl926513
+	for <caml-list@inria.fr>; Thu, 6 Dec 2001 18:45:48 +0100 (MET)
+Received: from abel
+	([127.0.0.1] helo=localhost ident=trch)
+	by abel with esmtp (Exim 3.32 #1 (Debian))
+	id 16C2fV-0005hQ-00; Thu, 06 Dec 2001 18:50:45 +0100
+Date: Thu, 06 Dec 2001 18:50:45 +0100 (CET)
+Message-Id: <20011206.185045.86277593.debian00@tiscalinet.be>
+To: "O'Caml Mailing List" <caml-list@inria.fr>
+Subject: [Caml-list] Solution: Interfacing with C++: Gc pbm
+From: Christophe TROESTLER <debian00@tiscalinet.be>
+In-Reply-To: <20011205.142819.95575897.debian00@tiscalinet.be>
+References: <20011205.142819.95575897.debian00@tiscalinet.be>
+Organization: Universite de Mons-Hainaut
+X-Spook: gamma Rule Psix munitions Ceridian Project Monarch Maple basement
+ $400 million in gold bullion USCOI enforcers 
+X-Mailer-URL: http://www.mew.org/
+X-Operating-System: GNU/Linux (http://www.linux.org/)
+X-Blessing: Om Ah Hum Vajra Guru Pema Siddhi Hum
+X-Mailer: Mew version 2.1 on Emacs 21.1 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Multipart/Mixed;
+ boundary="--Next_Part(Thu_Dec__6_18:50:45_2001_096)--"
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+Thanks to all who replied to me and especially to Olivier Andrieu for
+great ideas and discussion.  Let me try to sum up what I understood as
+it may help others.
+
+The first and main misunderstanding I had was with Data_custom_val(v)
+which is a pointer TO the data space IN THE ALLOCATED CUSTOM BLOCK and
+not, for example, from the custom bloc to some data storage outside of
+it.  So Data_custom_val(v) cannot be allocated, only
+*Data_custom_val(v) can.  To be more precise, if one want to store
+some data <data> of type 'mytype' into the custom block, one just has
+to do
+
+     r = alloc_custom(&mytype_ops, sizeof(mytype), <used>, <max>);
+     *(mytype *) Data_custom_val(r) = <data>;
+
+In that case, mytype_ops.finalize does NOT have to free memory --
+reclaiming the custom block does that.
+
+Now storing the data into the custom block is fine as long as one has
+good understanding of how the data is freed.  For example, the
+bigarray module does that (at least is stores the C struct, not the
+actual data, in the custom block) but may not be suitable for more
+complicated structures or objects.  For example, if the structure
+points to some other data, one must make sure that this data is not
+freed before the block is deleted.  Indeed, if so, the block would
+still exist but trying to access the data would result in a segfault.
+For example, doing
+
+(1)
+    objecttype *o = new objectype(<data>);
+    r = alloc_custom(&objectype_ops, sizeof(objectype), <used>, <max>);
+    *(objectype *) Data_custom_val(r) = *o;
+
+may be problematic since, when o will be freed, that may also free a
+lot of the data referenced by o and so *(objectype*)Data_custom_val(r)
+will only contain a copy to the "top" object.  For the example given
+in http://caml.inria.fr/Hump/msg778-782 that is not a problem since
+the object is "self-contained".  The drawback however is that this
+makes it impossible to have a global value.  The implementation
+corresponding to that idea is in the file cell_stub1.cpp (and tested
+via 'make test1').
+
+Given the above, it is better to only store a pointer to the onject in
+the custom bloc and thus to replace (1) with
+
+(2)
+    r = alloc_custom(&objectype_ops, sizeof(objectype *), <used>, <max>);
+    *(objectype **) Data_custom_val(r) = new objectype(<data>);
+
+This time however, freeing the custom block will not delete the object
+(only the pointer in the custom block) and so objectype_ops.finalize(value v) 
+must contain
+
+    delete (*(objectype **) Data_custom_val(v));
+
+This idea is implemented in cell_stub.cpp (to test it, just type
+'make').
+
+All comments are welcome.
+
+Cheers,
+ChriS
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename=Makefile
+
+LIBCAMLRUN=	-cclib /usr/lib/ocaml/libcamlrun.a
+CAMLMKTOP=	ocamlmktop
+CC=		g++
+
+test: test.ml cell.cma
+	ocamlc -cc $(CC) -o test.out  cell.cma test.ml
+	./test.out
+
+cell.cma: cell.ml cell_stub.cpp  libcell.o
+	$(CC) -c cell_stub.cpp
+	ocamlc -cc $(CC) -c cell.ml
+	ocamlc -cc $(CC) -a -o cell.cma  -custom cell_stub.o cell.cmo   \
+		libcell.o $(LIBCAMLRUN)
+
+
+test1: test.ml cell1.cma
+	ocamlc -cc $(CC) -o test1.out  cell1.cma test.ml
+	./test1.out
+
+cell1.cma: cell.ml cell_stub1.cpp  libcell.o
+	$(CC) -c cell_stub1.cpp
+	ocamlc -cc $(CC) -c cell.ml
+	ocamlc -cc $(CC) -a -o cell1.cma  -custom cell_stub1.o cell.cmo   \
+		libcell.o $(LIBCAMLRUN)
+
+
+libcell.o: libcell.cpp libcell.h
+	$(CC) -c libcell.cpp
+
+cell_ocaml: 
+	$(CAMLMKTOP) -cc $(CC) -custom cell.cma  -o $@
+
+
+clean:
+	rm -f *~ *.out *.o *.cm[aoi]
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename="libcell.h"
+
+// libcell interface                      -*-c++-*-
+
+class Exc {
+public:
+    Exc(const char *m);
+    const char *msg;
+};
+
+class Cell {
+public:
+    Cell(int);
+    ~Cell();
+    void set(int);
+    int get();
+private:
+    int val;
+};
+
+
+extern Cell global_cell;
+
+  
+	
+    
+    
+
+
+  
+    
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename="libcell.cpp"
+
+// libcell implementation
+
+extern "C" {
+#include <stdio.h>
+}
+#include "libcell.h"
+
+using namespace std;
+
+
+Exc::Exc(const char *m) : msg(m) {}
+
+Cell::Cell(int init) : val(init) 
+{
+    printf("(libcell) init %p -> %i\n", this, init);
+    fflush(stdout);
+}
+
+Cell::~Cell()
+{
+    printf("(libcell) free %p (was -> %i)\n", this, val);
+    fflush(stdout);
+}
+
+
+void Cell::set(int x)
+{
+    if (x < 0) throw Exc("< 0");
+    val = x;
+}
+
+int Cell::get()
+{
+    return val;
+}
+
+Cell global_cell(3141592);
+
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename="cell_stub1.cpp"
+
+// Stub code to access libcell from OCaml
+
+extern "C" {
+#include <stdio.h>
+
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/custom.h>
+#include <caml/memory.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+}
+
+#include "libcell.h"
+
+
+#define CELL_PTR(v) ((Cell *) Data_custom_val(v))
+#define CELL_VAL(v) (* CELL_PTR(v))
+
+static void free_cell(value v)
+{
+    printf("(cell.cpp) free_cell called\n");
+}
+
+static int compare_cell(value v1, value v2)
+{
+    return CELL_VAL(v1).get() - CELL_VAL(v2).get();
+}
+
+static struct custom_operations cell_ops = {
+    /* identifier */ "Cell/v0.1",
+    /* finalize */ &free_cell,
+    /* compare */ &compare_cell,
+    /* hash */ custom_hash_default,
+    /* serialize */ custom_serialize_default,
+    /* deserialize */ custom_deserialize_default
+};
+
+
+extern "C"
+value cell_create(value v)
+{
+    CAMLparam1(v);
+    CAMLlocal1(res);
+    extern struct custom_operations cell_ops;
+    Cell c(Int_val(v));
+    
+    res = alloc_custom(&cell_ops, sizeof(Cell), sizeof(Cell), 1000);
+    CELL_VAL(res) = c; /* store the object in the alloc. block.  This
+			* may cause problems for some "structured"
+			* objects -- if the object contains pointers,
+			* when c get deleted it can also erase most of
+			* the structure and so CELL_VAL(res) will only
+			* contain a copy of the "top node" (access to
+			* "subnodes" will cause a Segmentation
+			* Fault. */
+    CAMLreturn(res);
+}
+
+
+extern "C"
+value cell_set(value v1, value v2)
+{
+    try {
+	CELL_VAL(v1).set( Int_val(v2) );
+    } catch (Exc e) {
+	failwith((char *) e.msg);
+    }
+    return(Val_unit);
+}
+
+extern "C"
+value cell_get(value v)
+{
+    return( Val_int(CELL_VAL(v).get()) );
+}
+
+extern "C"
+value cell_global(value v)
+{
+    CAMLparam1(v);
+    CAMLlocal1(res);
+    extern struct custom_operations cell_ops;
+    extern Cell global_cell;
+    
+    res = alloc_custom(&cell_ops, sizeof(Cell), sizeof(Cell), 1000);
+    CELL_VAL(res) = global_cell; /* This is not really global since
+				    only the value gets copied... */
+    CAMLreturn(res); 
+}
+
+
+
+
+extern "C"
+value cell_throw(value)
+{
+    throw Exc("cell_throw");
+}
+
+extern "C"
+value cell_call(value v)
+{
+    value f = *caml_named_value(String_val(v));
+    try {
+	return callback(f, Val_unit);
+    } catch (Exc e) {
+	return copy_string((char *) e.msg);
+    }
+}
+
+
+    
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Description: Recommended stub code
+Content-Disposition: inline; filename="cell_stub.cpp"
+
+// Stub code to access libcell from OCaml
+
+extern "C" {
+#include <stdio.h> /* for debugging purposes (=> printf) only */
+
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/custom.h>
+#include <caml/memory.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+}
+
+#include "libcell.h"
+
+
+#define CELL_PTR(v) (*((Cell **) Data_custom_val(v)))
+#define CELL_VAL(v) (* CELL_PTR(v))
+
+static void free_cell(value v)
+{
+    printf("(cell_stub1.cpp) free_cell called on %p -> %i\n",
+	   CELL_PTR(v), CELL_VAL(v).get() );
+    delete CELL_PTR(v);
+}
+
+static int compare_cell(value v1, value v2)
+{
+    return CELL_VAL(v1).get() - CELL_VAL(v2).get();
+}
+
+static struct custom_operations cell_ops = {
+    /* identifier */ "Cell/v0.1",
+    /* finalize */ &free_cell,
+    /* compare */ &compare_cell,
+    /* hash */ custom_hash_default,
+    /* serialize */ custom_serialize_default,
+    /* deserialize */ custom_deserialize_default
+};
+
+
+extern "C"
+value cell_create(value v)
+{
+    CAMLparam1(v);
+    CAMLlocal1(res);
+    extern struct custom_operations cell_ops;
+    
+    res = alloc_custom(&cell_ops, sizeof(Cell *), 1, 1000);
+    CELL_PTR(res) = /* store a pointer to the object in the custom block */
+	new Cell(Int_val(v));
+    CAMLreturn(res);
+}
+
+
+extern "C"
+value cell_set(value v1, value v2)
+{
+    CAMLparam2(v1, v2);
+    try {
+	CELL_VAL(v1).set( Int_val(v2) );
+    } catch (Exc e) {
+	failwith((char *) e.msg);
+    }
+    CAMLreturn(Val_unit);
+}
+
+extern "C"
+value cell_get(value v)
+{
+    CAMLparam1(v);
+    CAMLreturn( Val_int(CELL_VAL(v).get()) );
+}
+
+
+
+
+static struct custom_operations cell_global_ops = {
+    /* identifier */ "Cell/v0.1",
+    /* finalize */ NULL,
+    /* compare */ &compare_cell,
+    /* hash */ custom_hash_default,
+    /* serialize */ custom_serialize_default,
+    /* deserialize */ custom_deserialize_default
+};
+
+extern "C"
+value cell_global(value v)
+{
+    CAMLparam1(v);
+    CAMLlocal1(res);
+    extern struct custom_operations cell_ops;
+    extern Cell global_cell;
+    
+    res = alloc_custom(&cell_global_ops, sizeof(Cell *), 1, 1000);
+    CELL_PTR(res) = &global_cell;
+    CAMLreturn(res);
+}
+
+
+
+    
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename="cell.ml"
+
+(* Implementation of the module [Cell].  Since no interface is
+   defined, all functions will be exported. *)
+
+type t
+
+external global : unit -> t = "cell_global"
+external create : int -> t = "cell_create"
+external set : t -> int -> unit = "cell_set"
+external get : t -> int = "cell_get"
+
+
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename="test.ml"
+
+open Printf
+
+let test_cell c =
+  printf "c = %d\n" (Cell.get c); flush stdout;
+  printf "set c to 42... "; flush stdout;
+  Cell.set c 42;
+  printf "c = %d\n" (Cell.get c); flush stdout;
+  try
+    printf "set c to -1... "; flush stdout;
+    Cell.set c (-1);
+  with 
+      e -> begin print_endline (Printexc.to_string e); flush stdout end
+	
+
+let () =
+  print_endline "Start..."; flush stdout;
+  test_cell (Cell.create 271828);
+  Gc.full_major();
+  print_newline(); flush stdout;
+  test_cell (Cell.global());
+  print_newline(); flush stdout;
+  Gc.full_major()
+
+let () =
+  let c1 = Cell.create 233
+  and c2 = Cell.create 234 in
+    if c1 = c2 then printf "c1 = c2\n"
+    else if c1 < c2 then printf "c1 < c2\n"
+    else if c1 > c2 then printf "c1 > c2\n"
+    else printf "What?!\n"
+
+
+
+----Next_Part(Thu_Dec__6_18:50:45_2001_096)----
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

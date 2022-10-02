@@ -1,0 +1,103 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q42BIm1V030733
+	for <caml-list@sympa-roc.inria.fr>; Wed, 2 May 2012 13:18:48 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvECAL8XoU/RVaC2imdsb2JhbABEoHYBjwKCeggiAQEBCgkNBxIGI4IiAjVWXRIBBQE1IodrC5kQgl4JA547jWODJQSVfoERjVE9hA0
+X-IronPort-AV: E=Sophos;i="4.75,515,1330902000"; 
+   d="scan'208";a="156378761"
+Received: from mail-gy0-f182.google.com ([209.85.160.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 02 May 2012 13:18:29 +0200
+Received: by ghrr20 with SMTP id r20so858777ghr.27
+        for <caml-list@inria.fr>; Wed, 02 May 2012 04:18:28 -0700 (PDT)
+X-Google-DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=google.com; s=20120113;
+        h=mime-version:date:message-id:subject:from:to:content-type
+         :content-transfer-encoding:x-gm-message-state;
+        bh=LH352JnNvk8fe9vW4DtsLJxvRVOHScWk308LogkcZJg=;
+        b=nB31MlO6vwhFMGIX5Ggq9Q0AKTLfPvcv9ttbviJX4l8uvOUu/S79hjFpdl2Gdgt9KO
+         fDAjbfncq47/6DqK/XTLArC7M4LVwY2GLk1J5fMpbYa7waKcXhylDXdhSrhUa4xFLTSV
+         8rukPAnX+ZEFi28foR9yZ1hYd6j1ZNViWbLgIHQ5dHCaGmbZvWh78T+d19LHi3EBdScr
+         oyLBuxamqB/IEk2IiVgYzQOCL6fQSQVmA7UBELPq08R8pxC2PrQOrCACulQp/qSLldFQ
+         401eLkV0WxuS2CTpyus14CxSYV1cOuH19fRFYbMgXJtUs1V460sbxF+upohiNC+4QX4u
+         eA7A==
+MIME-Version: 1.0
+Received: by 10.50.203.74 with SMTP id ko10mr4456884igc.7.1335957508172; Wed,
+ 02 May 2012 04:18:28 -0700 (PDT)
+Received: by 10.50.163.102 with HTTP; Wed, 2 May 2012 04:18:28 -0700 (PDT)
+Date: Wed, 2 May 2012 13:18:28 +0200
+Message-ID: <CAHg28AXdDJdpMmziZx7UHt1AdC3xnkB63B1uX-5NNX9nqdeSsg@mail.gmail.com>
+From: Alexey Rodriguez <alexey@vectorfabrics.com>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=windows-1252
+X-Gm-Message-State: ALoCoQkIgsLBSoRXAQTJTSxRS64/tGyhvYpGayP2n6kZ5FiHkqKLDTE/xLnQZuSYroiNFDhdRqAL
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q42BIm1V030733
+Subject: [Caml-list] Exception values may crash GC when interfacing C and Caml
+
+Dear all,
+
+We are experiencing crashes in Caml-calling C code. This happens if
+garbage collection runs after Caml code has raised an exception. We
+now understand why this happens but we are puzzled as to why the
+"Interfacing C with Ocaml" chapter of the Ocaml manual doesn't warn
+about this situation.
+
+Suppose you have C code that calls Caml code as follows:
+
+…
+CAMLparam2(v1,v2);
+CAMLlocal2(…,res);
+res = callback2_exn(…,v1,v2);
+foobar();
+…
+
+We have found that this code will crash with "Fatal error: out of
+memory." if the following two things happen:
+* the function called by [callback2_exn] raises an exception, and
+* [foobar] triggers a garbage collection through the allocation of
+values in the Caml heap. (just calling [caml_gc_full_major] is enough
+to cause the crash).
+
+The reason for this crash is that [res] will contain an invalid
+pointer if an exception is thrown. The GC follows this bogus pointer
+([res] is registered as a root by [CAMLlocal2]) which ultimately
+causes a crash in the GC code. Why does [res] contain a bogus pointer?
+It's not really a bogus pointer, but the lower bits are tagged in
+order to denote a thrown exception. These bits are usually
+tested/cleared by [Is_exception_result] and [Extract_exception].
+
+We observed all this in an x86_64 platform but I can imagine this also
+happens in other platforms. We are using Ocaml 3.12 and Ubuntu 11.10.
+The example program is based on the one given at
+http://caml.inria.fr/pub/docs/oreilly-book/html/book-ora117.html
+
+We could do something like this to avoid the problem:
+
+…
+CAMLparam2(v1,v2);
+CAMLlocal2(…,res);
+bool was_exn=false;
+res = callback2_exn(…,v1,v2);
+if(Is_exception_result(res)) {
+  was_exn=true;
+  res = Extract_exception(res);
+}
+foobar(); // Now it's safe to Caml-allocate in foobar
+…
+
+It's a bit ugly but it could be encapsulated in a macro. The question
+I have now is why isn't the GC+exn crash mentioned in the
+documentation? Is there some best practice that we are missing from
+the documentation?
+
+Cheers,
+
+Alexey
+
+--
+Alexey Rodriguez Yakushev
+
+O +31 (0)40 8200960   |  D + 31 (0)40 8200974  |  F +31 (0)40 8200979
+Vonderweg 22, 5616 RM  |  Eindhoven |  The Netherlands
+www.vectorfabrics.com  |  alexey@vectorfabrics.com
+

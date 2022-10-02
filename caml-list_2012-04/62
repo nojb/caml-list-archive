@@ -1,0 +1,160 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q39JSwVx001899
+	for <caml-list@sympa-roc.inria.fr>; Mon, 9 Apr 2012 21:28:58 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnIFAGc3g09ZELGa/2dsb2JhbABDtkuEIIIJAQEFJ0YMEAsYLlcGiCW3AZAIYwSVbJA2gmg
+X-IronPort-AV: E=Sophos;i="4.75,393,1330902000"; 
+   d="scan'208";a="139576803"
+Received: from recoil.dh.bytemark.co.uk (HELO dark.recoil.org) ([89.16.177.154])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 09 Apr 2012 21:28:54 +0200
+Received: (qmail 13881 invoked by uid 634); 9 Apr 2012 19:28:53 -0000
+X-Spam-Level: *
+X-Spam-Check-By: dark.recoil.org
+Received: from cpc7-cmbg14-2-0-cust238.5-4.cable.virginmedia.com (HELO [192.168.1.89]) (86.30.244.239)
+  (smtp-auth username remote@recoil.org, mechanism cram-md5)
+  by dark.recoil.org (qpsmtpd/0.84) with ESMTPA; Mon, 09 Apr 2012 20:28:52 +0100
+Mime-Version: 1.0 (Apple Message framework v1257)
+Content-Type: text/plain; charset=iso-8859-1
+From: Anil Madhavapeddy <anil@recoil.org>
+In-Reply-To: <83F8677AD5E142A3BB0EC27C78C0658B@erratique.ch>
+Date: Mon, 9 Apr 2012 20:28:51 +0100
+Cc: caml-list <caml-list@inria.fr>
+Message-Id: <1341A6A9-0273-434A-BCA9-819DACA53FFF@recoil.org>
+References: <83F8677AD5E142A3BB0EC27C78C0658B@erratique.ch>
+To: =?iso-8859-1?Q?Daniel_B=FCnzli?= <daniel.buenzli@erratique.ch>
+X-Mailer: Apple Mail (2.1257)
+X-Virus-Checked: Checked by ClamAV on dark.recoil.org
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q39JSwVx001899
+Subject: Re: [Caml-list] Non-blocking IO interface design
+
+On 8 Apr 2012, at 21:37, Daniel Bünzli wrote:
+> 
+> I think that the first five points are mostly met and the
+> cps transformation of blocking into non-blocking is relatively
+> straightforward and remains readable in my opinion. Regarding the 6th
+> point, using the included `setrip.native` program on 32 Mo of randomly
+> generated s-expressions seem to indicate that:
+> 
+>  The non-blocking decoder can be at least 1.35 slower than blocking
+>  The non-blocking encoder can be at least 1.1 slower than blocking
+> 
+> Now I don't think these "bad" numbers should be taken to dismiss the
+> approach since in the context of a larger reactive program a blocking
+> codec may actually incur performance and scability issues that cannot
+> be shown by this example program.
+
+To track this down (as I'm learning about ocaml profiling at the moment),
+I firstly ran the blocking and non-blocking decoder through ocamlcp to check 
+call counts, and:
+
+(non-blocking)
+let decode_nb_unix usize fd =                                                                         
+  (* 2 *) let rec loop d fd buf = (* 18039140 *) match Se.Nb.decode d with                            
+  | `Lexeme l -> (* 18035048 *) loop d fd buf
+  | `End -> (* 2 *) `Ok  
+  | `Error -> (* 0 *) `Error                                                                          
+  | `Await -> 
+      (* 4090 *) let rc = unix_read fd buf 0 (String.length buf) in                                   
+      Se.Nb.decode_src d buf 0 rc; loop d fd buf                                                      
+  in
+  loop (Se.Nb.decoder `Manual) fd (String.create usize)                                               
+
+(blocking)
+let decode_b src =
+  (* 1 *) let rec loop d = (* 9017525 *) match Se.B.decode d with
+  | `Lexeme l -> (* 9017524 *) loop d
+  | `End -> (* 1 *) `Ok
+  | `Error -> (* 0 *) `Error
+  in
+  loop (Se.B.decoder src)
+
+The I/O loop is being called twice for the non-blocking version, as it receives 
+the `Await signal, does the Unix syscall, and then jumps into decode_src. Presumably
+a full non-blocking version would have to register with a select handler if it
+gets an EAGAIN at this point,
+
+In terms of the number of system calls, the non-blocking one is more efficient,
+as it uses a 16KB buffer versus the 4K reads done by the blocking version. 
+
+$ strace ./setrip.native -dec -unix  < foo.sexp  2>&1 | wc -l
+2107
+$ strace ./setrip.native -dec -unix -b  < foo.sexp  2>&1 | wc -l
+8238
+
+Running 'perf stat' on the decoder on Linux shows that the non-blocking version
+is spending more CPU time doing something:
+
+$ perf stat --log-fd 1 ./setrip.native -dec -unix -b  < foo.sexp  
+ Performance counter stats for './setrip.native -dec -unix -b':
+
+       1095.337180 task-clock                #    1.000 CPUs utilized          
+                 1 context-switches          #    0.000 M/sec                  
+                 0 CPU-migrations            #    0.000 M/sec                  
+               800 page-faults               #    0.001 M/sec                  
+
+$ perf stat --log-fd 1 ./setrip.native -dec -unix < foo.sexp  
+ Performance counter stats for './setrip.native -dec -unix':
+
+       1339.360940 task-clock                #    1.000 CPUs utilized          
+                 2 context-switches          #    0.000 M/sec                  
+                 0 CPU-migrations            #    0.000 M/sec                  
+               823 page-faults               #    0.001 M/sec                  
+
+
+Setting the GC to verbose shows that the non-blocking one is doing way more
+heap allocations than the blocking version (14 heap checks, versus 3). So this
+quick'n'dirty function is stuck in the source to bracket hot-looking calls and
+see how many minor heap allocations are taking place.
+
+let gcbracket fn a =                                                                                                                       
+  let open Gc in
+  compact ();
+  let s1 = stat () in
+  let r = fn a in
+  let s2 = stat () in
+  let r = fn a in
+  Printf.eprintf "gc: %.0f [%.0f %.0f %.0f / %.0f %0.f %0.f]\n%!"
+    (s2.minor_words -. s1.minor_words) s1.minor_words s1.promoted_words
+    s1.major_words s2.minor_words s2.promoted_words s2.major_words;
+  r
+
+Looking at the two decoders in src/se.ml, it looks like the non-blocking one
+allocates closures on every loop, which the blocking one doesn't. This is so it
+can store the continuation in d.k for the next loop. So putting gcbracket around
+the two decode calls confirms this. Switching to bytecode so we have accurate minor
+heap states, we have:
+
+For the blocking one:
+gc: 31 [1450548 0 44224 / 1450579 0 44224]
+gc: 31 [1451229 0 44255 / 1451260 0 44255]
+gc: 31 [1452506 0 44278 / 1452537 0 44278]
+gc: 31 [1453187 0 44309 / 1453218 0 44309]
+
+The important number is the first one (difference in minor heap size before and
+after the function, which is solidly 31.
+
+With the non-blocking one, more words are allocated in the minor heap:
+gc: 67 [5368 0 4684 / 5435 0 4684]
+gc: 42 [6096 0 4723 / 6138 0 4723]
+gc: 42 [7395 0 4762 / 7437 0 4762]
+gc: 56 [8119 0 4809 / 8175 0 4809]
+
+So to summarise, instead of storing a continuation closure, it would probably be better 
+to explicitly store the state in d.k to minimise allocation?
+
+The library looks very useful by the way: I have exactly the same issue with several
+Lwt-only protocol libraries we're developing at the moment. Would love to use yours before
+the first release of them to make them more independent of the underlying I/O mechanism...
+
+Anyone else got any useful profiling tips? I used ocaml-4-trunk for this, and one useful
+feature I just discovered (probably thanks to PR#5487 being closed) is that you can do:
+
+$ <add 'debug' to _tags>
+$ perf record ./foo.native
+$ perf annotate
+
+...and it will annotate hotspots in the binary, show you the x86 assembly, and also the
+OCaml source code amidst the assembly (due to GDB debug symbols being present).
+
+-anil

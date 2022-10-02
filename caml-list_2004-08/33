@@ -1,0 +1,177 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA10405; Tue, 3 Aug 2004 10:25:32 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA11472 for <caml-list@pauillac.inria.fr>; Tue, 3 Aug 2004 10:25:31 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i738PUEV026182
+	for <caml-list@inria.fr>; Tue, 3 Aug 2004 10:25:31 +0200
+Received: from loupiac.inria.fr (loupiac.inria.fr [128.93.11.82]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA23465 for <caml-list@inria.fr>; Tue, 3 Aug 2004 10:25:30 +0200 (MET DST)
+From: Yann Regis-Gianas <Yann.Regis-Gianas@inria.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] automata -> regular expression
+Date: Tue, 3 Aug 2004 10:25:30 +0200
+User-Agent: KMail/1.6.2
+References: <200408021258.i72CwH1U028321@reserv6.univ-lille1.fr>
+In-Reply-To: <200408021258.i72CwH1U028321@reserv6.univ-lille1.fr>
+MIME-Version: 1.0
+Content-Disposition: inline
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+Message-Id: <200408031025.30412.Yann.Regis-Gianas@inria.fr>
+X-Miltered: at nez-perce with ID 410F4BFA.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; yann:01 regis-gianas:01 yann:01 regis-gianas:01 caml-list:01 2004:99 lifl:01 transitions:01 sub-language:01 expressive:01 bugged:01 mult:01 char:01 char:01 mult:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Le lundi 2 Ao=FBt 2004 14:58, debarbie@lazarus.lifl.fr a =E9crit=A0:
+> Hello,
+> [...]
+> Can you help me?
+
+	Well, there are two popular methods to convert an automaton into a rationa=
+l=20
+expression : the Yamada/McNaughton method and the state elimination method.=
+=20
+The former can be found in every good book about FSMs. The latter is a bit=
+=20
+more simple : it works on a generalized finite state machine (a fsm whose=20
+labels are rational expressions), removes the automaton states one by one a=
+nd=20
+for each state removal, builds the transitions that denote the sub-language=
+ =20
+of the removed state. A piece of code might be more expressive :-) :
+
+(* this code may be bugged since it was not tested deeply, anyway, I hope i=
+t=20
+will give you the idea. *)
+
+type expression =3D
+    Plus of expression * expression
+  | Mult of expression * expression
+  | Star of expression
+  | Char of char
+  | One=20
+  | Zero
+
+let ( + ) e1 e2 =3D=20
+  match (e1, e2) with
+      ((Zero, e) | (e, Zero)) -> e
+    | _ -> Plus (e1, e2)
+
+let ( * ) e1 e2 =3D=20
+  match (e1, e2) with
+      ((Zero, e) | (e, Zero)) -> Zero
+    | ((One, e) | (e, One)) -> e
+    | _ -> Plus (e1, e2)
+
+let ( * ) e1 e2 =3D Mult (e1, e2)
+
+let star e =3D Star e
+
+let rec to_string =3D function
+    Plus (e1, e2) -> "("^ to_string e1 ^")+("^ to_string e2 ^ ")"
+  | Mult (e, One) -> to_string e
+  | Mult (One, e) -> to_string e
+  | Mult (e1, e2) -> to_string e1 ^" "^ to_string e2=20
+  | Star e1       -> "("^to_string e1 ^")*"
+  | Char c        -> String.make 1 c
+  | One           -> "1"
+  | Zero	  -> "0"
+  =20
+type state =3D int
+
+(* 0 =3D initial state et 1 =3D final state. *)
+let final =3D 1
+let initial =3D 0
+
+(* The labels are expression. *)
+type automaton =3D
+    ((state * expression * state) list) array *
+    ((state * expression * state) list) array
+
+let create_automaton size =3D
+  (Array.init size (fun _ -> []),=20
+   Array.init size (fun _ -> []))
+
+let add_edge (a : automaton) ((from, label, aim) as e) =3D
+  (fst a).(from) <- e :: (fst a).(from);
+  if from <> aim then=20
+    (snd a).(aim)  <- e :: (snd a).(aim)
+
+let mute a f =3D
+  for i =3D 0 to Array.length a - 1 do a.(i) <- f a.(i) done
+
+let remove_state (a : automaton) s =3D=20
+  mute (fst a) (fun t -> List.filter (fun (_, _, aim) -> aim <> s) t);
+  mute (snd a) (fun t -> List.filter (fun (from, _, _) -> from <> s) t);
+  (fst a).(s) <- [];
+  (snd a).(s) <- []
+
+let delta (a : automaton) s =3D (fst a).(s)
+
+let rdelta (a : automaton) s =3D (snd a).(s)
+
+let state_elimination (a : automaton) s =3D
+  let outer_transitions =3D delta a s=20
+  and inner_transitions =3D rdelta a s in
+  let noloops, loops =3D=20
+    List.fold_left (fun (nl, e) ((_,l,a) as x) ->=20
+		      if a =3D s then (nl, e + l) else (x :: nl, e))
+      ([], Zero)
+      outer_transitions  in
+  let merge (s,l,_) (_,l',s') =3D (s, l * star loops * l', s') in
+  let merge' t =3D List.map (merge t) noloops in
+    List.map merge' inner_transitions
+=20
+let automaton_to_expression (a : automaton) =3D
+  (* Here, another elimination order gives another=20
+     but equivalent expression. *)
+  for i =3D 2 to Array.length (fst a) - 1 do
+    List.iter (List.iter (add_edge a)) (state_elimination a i);
+    remove_state a i
+  done;
+  List.fold_left (fun e (_,l,_) -> e + l) Zero ((fst a).(initial))
+
+let examples =3D
+  begin
+    let a1 =3D create_automaton 3 in
+    let a2 =3D create_automaton 4 in
+    let a3 =3D create_automaton 4 in
+      add_edge a1 (initial, Char 'a', 2);
+      add_edge a1 (2, Char 'b', final);
+      add_edge a1 (2, Char 'c', 2);
+      Printf.printf "a1 =3D %s\n" (to_string (automaton_to_expression a1));
+     =20
+      add_edge a2 (initial, Char 'a', 2);
+      add_edge a2 (initial, Char 'b', 3);
+      add_edge a2 (2, Char 'b', final);
+      add_edge a2 (2, Char 'c', 2);
+      add_edge a2 (3, Char 'c', 3);
+      add_edge a2 (3, Char 'b', final);
+      add_edge a2 (final, Char 'd', initial);
+      Printf.printf "a2 =3D %s\n" (to_string (automaton_to_expression a2));
+
+      add_edge a3 (initial, Char 'a', 2);
+      add_edge a3 (initial, One, 3);
+      add_edge a3 (2, Char 'b', final);
+      add_edge a3 (2, Char 'c', 2);
+      add_edge a3 (3, Char 'c', 3);
+      add_edge a3 (3, Char 'b', final);
+      add_edge a3 (final, Char 'd', initial);
+      Printf.printf "a3 =3D %s\n" (to_string (automaton_to_expression a3))
+  end
+
+ =20
+
+     =20
+
+
+   =20
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,224 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 7001EBC57
+	for <caml-list@yquem.inria.fr>; Fri, 19 Nov 2010 19:41:18 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuQDAE5T5kzZSMDjgmdsb2JhbACiYRUBAQsLCAcTAx+9coVLBI1p
+X-IronPort-AV: E=Sophos;i="4.59,224,1288566000"; 
+   d="scan'208";a="88767594"
+Received: from fmmailgate02.web.de ([217.72.192.227])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 19 Nov 2010 19:41:18 +0100
+Received:  from smtp01.web.de  ( [172.20.0.243])
+	by fmmailgate02.web.de (Postfix) with ESMTP id 6C11C18509B18;
+	Fri, 19 Nov 2010 19:40:01 +0100 (CET)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp01.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #24)
+	id 1PJVsP-0001Tk-00; Fri, 19 Nov 2010 19:40:01 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.72)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1PJVsO-0001rQ-Fv; Fri, 19 Nov 2010 19:40:00 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Sylvain Le Gall <sylvain@le-gall.net>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Looking for stubs for sendmsg/recvmsg
+References: <87d3q21qe4.fsf@frosties.localnet>
+	<slrnieceu0.r67.sylvain@gallu.homelinux.org>
+	<87ipztl2ld.fsf@frosties.localnet>
+	<slrnied9hn.r67.sylvain@gallu.homelinux.org>
+Date: Fri, 19 Nov 2010 19:39:58 +0100
+In-Reply-To: <slrnied9hn.r67.sylvain@gallu.homelinux.org> (Sylvain Le Gall's
+	message of "Fri, 19 Nov 2010 16:30:47 +0000 (UTC)")
+Message-ID: <8739qx88e9.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX18ZD2cfaSx2ZvfnNeIW6Z+PAM5cP4sJ96HjDiey
+	7DT/dnBfAgG0QmeK5jsUxdsMlPlX4c85AMeZlfVSoRDobifG6Q
+	z+eRZjKnY=
+X-Spam: no; 0.00; stubs:01 le-gall:01 le-gall:01 stubs:01 const:01 struct:01 flags:01 struct:01 flags:01 finalizer:01 finalizer:01 val:01 stderr:01 hashtbl:01 hashtbl:01 
+
+Sylvain Le Gall <sylvain@le-gall.net> writes:
+
+> Hello,
+>
+> On 19-11-2010, Goswin von Brederlow <goswin-v-b@web.de> wrote:
+>> Sylvain Le Gall <sylvain@le-gall.net> writes:
+>>
+>>> On 18-11-2010, Goswin von Brederlow <goswin-v-b@web.de> wrote:
+>>>> Hi,
+>>>>
+>>>> I'm looking for stubs for
+>>>>
+>>>>        ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags);
+>>>>        ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags);
+>>>>
+>>>> Specifically I need those to send (among normal messages) an
+>>>> Unix.file_descr over a Unix Domain Socket.
+>>>>
+>>>> Does anyone know of a module that has them?
+>>>>
+>>>
+>>> If you don't find one and plan to write it yourself, this would be a
+>>> good addition to extunix:
+>>> http://extunix.forge.ocamlcore.org
+>>>
+>>> Regards,
+>>> Sylvain Le Gall
+>>
+>> I'm thinking of changing Unix.file_descr from int to a custom block
+>> (containing the FD) with finalizer. Unix.close would set the FD to -1
+>> and the finalizer gives an error if FD != -1 and closes it.
+>>
+>> Actually I want that tunable with 3 possible behaviours:
+>>
+>> type fd_leak_mode = Silent | Complain | Fail
+>> val set_leak_mode : fd_leak_mode -> unit = <fun>
+>>
+>> Silent just closes the FD if it is still open, Complain (default)
+>> outputs to stderr and closes it and Fail aborts.
+>>
+>> That would change most of the Unix module and mean a complete fork of it.
+>
+> Not that much, if you proceed in another way. I think what you are
+> looking for is a fd leak detector?
+>
+> Here is a small modules that I have written for this purpose:
+>
+> File UnixExt.ml:
+> (** Count open/close call *)
+> IFNDEF NDBUG THEN
+> let fd_opened =
+>   Hashtbl.create 13
+> ;;
+>
+> let fd_once_opened =
+>   Hashtbl.create 13
+> ;;
+>
+> let fd_open fd fn out =
+>   dbug_print
+>     (fun () -> 
+>        Printf.sprintf "%s '%s'" 
+>          (if out then "open-out" else "open-in")
+>          fn);
+>   Hashtbl.add fd_opened fd (fn, out)
+> ;;
+>
+> let fd_close fd =
+>   try 
+>     let (fn, out) as data = 
+>       Hashtbl.find fd_opened fd 
+>     in
+>       dbug_print
+>         (fun () ->
+>            Printf.sprintf "%s '%s'" 
+>              (if out then "close-out" else "close-in")
+>              fn);
+>       Hashtbl.add fd_once_opened fd data;
+>       Hashtbl.remove fd_opened fd;
+>   with Not_found ->
+>     begin 
+>       dbug_print
+>         (fun () -> 
+>            let fn =
+>              try 
+>                fst (Hashtbl.find fd_once_opened fd)
+>              with Not_found ->
+>                "unknown"
+>            in
+>              Printf.sprintf "Trying to close %s again" fn)
+>     end
+> ;;
+>
+> let () = 
+>   at_exit
+>     (fun () ->
+>        let exit_error =
+>          ref false
+>        in
+>          Hashtbl.iter 
+>            (fun fd (fn, out) ->
+>               if fd <> Unix.stdin && fd <> Unix.stdout && fd <> Unix.stderr then
+>                 begin
+>                   Printf.eprintf "Not closed '%s' (out: %b)\n" fn out;
+>                   exit_error := true
+>                 end)
+>            fd_opened;
+>          Hashtbl.clear fd_opened;
+>          if !exit_error then 
+>            exit 3
+>     )
+> ;;
+>
+> let opened_files () = 
+>   let lst = 
+>     ref []
+>   in
+>     Hashtbl.iter 
+>       (fun _ e -> lst := e :: !lst)
+>       fd_opened;
+>     List.sort compare !lst;
+>
+> ELSE
+> let fd_open _ _ _ = 
+>   ()
+> ;;
+>
+> let fd_close _ = 
+>   ()
+> ;;
+>
+> let opened_files () = 
+>   []
+> ;;
+> ENDIF
+>
+> (** See UnixExt.mli *)
+> let to_file_descr_in fd = 
+>   fd_open fd "<converted>" false;
+>   fd
+> ;;
+>
+> (** See UnixExt.mli *)
+> let to_file_descr_out fd = 
+>   fd_open fd "<converted>" true;
+>   fd
+> ;;
+>
+> (** See UnixExt.mli *)
+> let close_in fd =
+>   Unix.close fd;
+>   fd_close fd
+> ;;
+>
+> (** See UnixExt.mli *)
+> let stdout =
+>   fd_open Unix.stdout "<stdout>" true;
+>   Unix.stdout
+> ;;
+>
+> [...override other functions that open/close fd...]
+>
+> Then in the modules using this features, you just have to open UnixExt
+> after Unix...
+>
+> You can even probably design a library that will transparently hide Unix
+> with a custom Unix module providing this feature.
+
+Much less usefull.
+
+Using a custom block with finalizer means that the FD will be closed
+relative close to where/when it was leaked. Makes it easier to find
+where it was leaked and adding GC.compact calls at strategic locations
+can narrow it down even more. Leaking FDs also becomes much less
+serious. The GC will clean them up and close them. So you can use an app
+that leaks FDs just fine.
+
+MfG
+        Goswin
+

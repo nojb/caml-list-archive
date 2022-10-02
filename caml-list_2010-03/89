@@ -1,0 +1,107 @@
+Return-Path: <dave@ramenlabs.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 0D6CABC57
+	for <caml-list@yquem.inria.fr>; Sun,  7 Mar 2010 04:27:41 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvsEAA+skkvOe3NG/2dsb2JhbACbSXO3L4R4BIMX
+X-IronPort-AV: E=Sophos;i="4.49,596,1262559600"; 
+   d="scan'208";a="54156306"
+Received: from spoomusic.com ([206.123.115.70])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 07 Mar 2010 04:27:40 +0100
+Received: (qmail 17358 invoked by uid 89); 7 Mar 2010 03:27:38 -0000
+Received: from unknown (HELO ?192.168.1.99?) (98.165.139.204)
+  by 0 with ESMTPS (DHE-RSA-AES256-SHA encrypted); 7 Mar 2010 03:27:38 -0000
+Message-ID: <4B931D24.6050700@ramenlabs.com>
+Date: Sat, 06 Mar 2010 20:27:32 -0700
+From: Dave Benjamin <dave@ramenlabs.com>
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20091109)
+MIME-Version: 1.0
+To: Luca de Alfaro <luca@dealfaro.org>
+Cc: Inria Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Ocaml can't convert a GMT time into a float!
+References: <28fa90931003060153y5c4d1590j97fcc0267ee2dc1e@mail.gmail.com>
+In-Reply-To: <28fa90931003060153y5c4d1590j97fcc0267ee2dc1e@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 ocaml:01 mktime:01 isdst:01 bug:01 mktime:01 camlprim:01 struct:01 val:01 val:01 yday:01 isdst:01 bool:01 alloc:01 alloc:01 
+
+Luca de Alfaro wrote:
+> I need to convert a time, expressed in yyyy/mm/dd hh:mm:ss form, into a 
+> floating point.
+> The conversion has to be done in GMT, but the real point is, the 
+> conversion must NOT change due to daylight savings time.
+> 
+> Ocaml seems to have only one conversion function, however: Unix.mktime, 
+> which takes a time, and makes a float in the local time zone.
+> 
+> No problem, I thought: I will simply add 3600 if the conversion result 
+> tells me that dst is active (and then convert for the difference between 
+> GMT and winter time).
+> NO! This does not work!  Look at the two conversions below.  The tmrec 
+> differs by one hour.
+> However, the two floating point numbers returned are identical, and 
+> tm_isdst is set to true in both cases!
+> 
+> This means that I have no way of using the standard libraries to convert 
+> a time expressed in yyyy/mm/ss hh:mm:ss to a float!
+
+You are absolutely right, and I unfortunately did not notice this 
+subtlety when I wrote the XmlRpcDateTime module that is part of 
+XmlRpc-Light, so this means there is a bug in 
+XmlRpcDateTime.to_unixfloat_utc on systems with time zones that observe 
+daylight savings. I did not notice the problem because I live in 
+Arizona, one of only two states in the US that do not observe daylight 
+savings!
+
+The culprit can be seen here in the C implementation of Unix.mktime:
+
+CAMLprim value unix_mktime(value t)
+{
+   struct tm tm;
+   time_t clock;
+   value res;
+   value tmval = Val_unit, clkval = Val_unit;
+
+   Begin_roots2(tmval, clkval);
+     tm.tm_sec = Int_val(Field(t, 0));
+     tm.tm_min = Int_val(Field(t, 1));
+     tm.tm_hour = Int_val(Field(t, 2));
+     tm.tm_mday = Int_val(Field(t, 3));
+     tm.tm_mon = Int_val(Field(t, 4));
+     tm.tm_year = Int_val(Field(t, 5));
+     tm.tm_wday = Int_val(Field(t, 6));
+     tm.tm_yday = Int_val(Field(t, 7));
+     tm.tm_isdst = -1; /* tm.tm_isdst = Bool_val(Field(t, 8)); */
+     clock = mktime(&tm);
+     if (clock == (time_t) -1) unix_error(ERANGE, "mktime", Nothing);
+     tmval = alloc_tm(&tm);
+     clkval = copy_double((double) clock);
+     res = alloc_small(2, 0);
+     Field(res, 0) = clkval;
+     Field(res, 1) = tmval;
+   End_roots ();
+   return res;
+}
+
+The field tm.tm_isdst is not really a boolean from C's perspective. It 
+can be one of *three* states: positive for DST, zero for non-DST, and 
+negative to query the system timezone database for the value. It looks 
+like at one point Unix.mktime was written to take the value you gave it, 
+but this was commented out and the value was fixed to -1. This is why it 
+uses the time zone's daylight savings correction regardless of what you 
+pass in.
+
+Would it be possible to have a new function in the standard library with 
+the commented-out behavior instead? As it stands now I don't see any 
+reasonable way to get a UTC float from a Unix.tm.
+
+As far as XmlRpc-Light is concerned, I will probably rewrite this 
+function in terms of Netdate, since Ocamlnet is already one of my 
+dependencies. Apologies to anyone who is affected by this bug 
+(hopefully, no one).
+
+Thanks,
+Dave
+

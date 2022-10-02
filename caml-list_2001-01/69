@@ -1,0 +1,258 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA17077 for caml-red; Mon, 8 Jan 2001 12:31:18 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA18811 for <caml-list@pauillac.inria.fr>; Mon, 8 Jan 2001 11:52:14 +0100 (MET)
+Received: from mail4.microsoft.com (mail4.microsoft.com [131.107.3.122])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with SMTP id f08AqDr23136
+	for <caml-list@inria.fr>; Mon, 8 Jan 2001 11:52:13 +0100 (MET)
+Received: from 157.54.9.103 by mail4.microsoft.com (InterScan E-Mail VirusWall NT); Mon, 08 Jan 2001 02:46:18 -0800 (Pacific Standard Time)
+Received: by inet-imc-04.redmond.corp.microsoft.com with Internet Mail Service (5.5.2651.58)
+	id <CMRY5RGF>; Mon, 8 Jan 2001 02:46:03 -0800
+Message-ID: <112C6E8A1B25D34BB27D48D2FD2E96CFC9DEC9@TVP-MSG-02.europe.corp.microsoft.com>
+From: Claudio Russo <crusso@microsoft.com>
+To: frisch@clipper.ens.fr, caml-list@inria.fr
+Cc: kfl@it.edu, sestoft@dina.kvl.dk
+Subject: RE: first class modules (was: alternative module systems) 
+Date: Mon, 8 Jan 2001 02:45:19 -0800 
+X-Mailer: Internet Mail Service (5.5.2651.58)
+content-class: urn:content-classes:message
+Sender: weis@pauillac.inria.fr
+
+Hi,
+
+Thanks for doing the implementation!
+
+For the record, your simplification based on identity of signature
+identifiers
+is probably ok in practice, but it does
+rule out some examples that involve package types with free type
+variables. 
+For instance, you might want to define a Core type constructor 'a array,
+whose definition mentions
+the type parameter 'a within a package type:
+
+type  'a = < sig
+  type array
+  val init: 'a -> array
+  val sub: array -> int -> 'a
+  val update : array -> int -> 'a -> array
+end >
+
+Forcing the expression within < > to be an identifier doesn't let you do
+this (because 'a is free).
+
+BTW, in Moscow ML, the "open" construct is integrated more naturally as
+a special form of declaration, plus
+a side condition that disallows an open declaration from appearing
+within the body of a functor (for soundness reasons). This lets you open
+first-class modules at top-level and within substructures, which can be
+more convenient.
+
+Cheers,
+Claudio
+
+PS. If you come up with some more nice examples, I'd love to see them.
+
+
+
+
+
+
+
+
+
+
+Hello,
+
+a few month ago, Markus Mottl pointed to this mailing list the work by
+Claudio Russo on first class modules. There were no answer about plans
+to
+implement such a system for OCaml.
+
+I also have the feeling that there should be no problem to implement
+first
+class "packaged" modules a la Russo for OCaml. The idea is to keep the
+core and module langages distinct but provide bridges between them.
+The type algebra is enriched with the syntax  < S >  where S is a module
+type.
+
+(pack (m:S))  is a core expression of core type < S > when m is a module
+of module type S.
+
+(open a1 as X : S in a2)  has the natural meaning; a1 must have type 
+< S >, X is bound in a2 to the module packaged by a1.
+
+
+As I see it, the main issue is the unification problem < S > = < T >. I
+implemented as a quick and dirty hack such a system, where < S > and < T
+> unify if and only if S and T represent syntactically the same path. It
+is the simpliest solution, but it is general enough (by defining named
+module types and putting some explicit coercions). It should be possible
+to check that S and T are structurally compatible.
+
+
+Here is the classical example of arrays of size 2^n:
+========================================================================
+module type ARRAY = sig
+  type 'a array
+  val init: 'a -> 'a array
+  val sub: 'a array -> int -> 'a
+  val update : 'a array -> int -> 'a -> 'a array
+end
+
+module ArrayZero = struct
+  type 'a array = 'a
+  let init x = x
+  let sub a i = a
+  let update a i x = x
+end
+
+module ArraySucc (A:ARRAY) = struct
+  type 'a array = 'a A.array * 'a A.array
+  let init x = 
+    (A.init x, A.init x)
+  let sub (l,r) i = 
+    if i mod 2 = 0 then A.sub l (i/2) else A.sub r (i/2)
+  let update (l,r) i x = 
+    if i mod 2 = 0 then (A.update l (i/2) x, r) else (l, A.update r
+(i/2)
+x)
+end
+
+let rec array = function
+  | 0 -> pack (ArrayZero:ARRAY)
+  | n -> open array (n-1) as A : ARRAY in pack (ArraySucc(A):ARRAY)
+========================================================================
+
+The last definition yields as expected:
+val array : int ->  < ARRAY > 
+
+It couldn't be expressed without the extension.
+
+Now:
+======
+let _ =
+  open (array 2) as A:ARRAY in
+  let a = A.init "hello" in
+  let a = A.update a 1 " " in
+  let a = A.update a 2 "world" in
+  let a = A.update a 3 " !\n" in
+  for i = 0 to 3 do print_string (A.sub a i) done
+======
+builds a module of "array of size 4=2^2" and use it.
+
+Naturally, a type that makes reference to a module value can't escape
+the scope where this module is visible:
+======
+# open (array 3) as A:ARRAY in A.init 5;;
+This `let module' expression has type int A.array
+In this type, the locally bound module name A escapes its scope
+======
+(in the first line of the error message, `let module' should read
+`open...')
+
+
+Everything seems to work as expected for higher order modules:
+=====================================
+module type S = sig type t  val x:t  val y:t  val print:t->unit end
+module type T = sig type u  val a:u end
+module type F = functor (X:S) -> T with type u = X.t
+
+module TAKE_x(X:S): T with type u = X.t = struct type u = X.t let a =
+X.x end
+module TAKE_y(X:S): T with type u = X.t = struct type u = X.t let a =
+X.y end
+
+module A = struct type t = int let x = 1 and y = 2 and print = print_int
+end
+module B = struct type t = string let x= "A" and y = "B" and print =
+print_string end
+
+let take_x = pack (TAKE_x : F)
+let take_y = pack (TAKE_y : F)
+
+let apply f m =
+  open f as TAKE : F in
+  open m as X : S in
+  let module Y = TAKE(X) in
+  X.print Y.a
+
+let _ =
+  apply take_x (pack (A:S));
+  apply take_y (pack (A:S)); print_newline ();
+  apply take_x (pack (B:S));
+  apply take_y (pack (B:S)); print_newline ();
+=====================================
+
+Interesting types are:
+val take_x :  < F > 
+val take_y :  < F > 
+val apply :  < F >  ->  < S >  -> unit
+
+
+and the execution gives of course:
+12
+AB
+
+(as a side effect, we get the local "open ... in ...")
+
+
+Almost everything is already there in OCaml to implement easily this
+system. Basically, with trivial extensions of ast, typed ast and type
+expressions, for the typing, this gives something like:
+(typing/typecore.ml, function type_exp):
+....
+  | Pexp_pack m ->
+      let modl = !type_module env m in
+      let ty = newty (Tpackage modl.mod_type) in
+      { exp_desc = Texp_pack(modl);
+        exp_loc = sexp.pexp_loc;
+        exp_type = ty;
+        exp_env = env }
+
+  | Pexp_unpack (e1, name, mty, sbody) ->
+      let ty = newvar() in
+      Ident.set_current_time ty.level;
+      let mty = !transl_modtype env mty in
+      let arg  = type_expect env e1 (newty (Tpackage mty)) in
+      let (id, new_env) = Env.enter_module name mty env in
+      Ctype.init_def(Ident.current_time());
+      let body = type_exp new_env sbody in
+      begin try
+        Ctype.unify new_env body.exp_type ty
+      with Unify _ ->
+        raise(Error(sexp.pexp_loc, Scoping_let_module(name,
+body.exp_type)))
+      end;
+      { exp_desc = Texp_unpack(arg, id, mty, body);
+        exp_loc = sexp.pexp_loc;
+        exp_type = ty;
+        exp_env = env }
+
+
+for the conversion to lambda-code:
+(bytecomp/translcore.ml, function transl_exp)
+...
+  | Texp_pack modl ->
+      !transl_module Tcoerce_none None modl
+  | Texp_unpack  (arg,id,mty,body) ->
+      Llet(Strict, id, transl_exp arg, transl_exp body)
+
+and something very stupid in typing/ctype.ml for the unification:
+    | (Tpackage  (Tmty_ident p1), Tpackage (Tmty_ident p2)) when
+Path.same
+p1 p2 ->
+        update_level env t1.level t2;
+        t1.desc <- Tlink t2
+
+I may have overlooked some important consequences on the type safety
+properties.
+
+Is there any theoretical work about the integration of such a system to
+the OCaml module system ?  Any plan to include it in a future release ?
+
+
+-- 
+  Alain Frisch
+
+
+
+

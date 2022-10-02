@@ -1,0 +1,1220 @@
+Received: by pauillac.inria.fr; Wed, 11 May 94 17:17:34 +0200
+Received: from margaux.inria.fr by pauillac.inria.fr; Wed, 11 May 94 16:49:36 +0200
+Received: from pauillac.inria.fr by margaux.inria.fr, Wed, 11 May 1994 16:49:33 +0200
+Received: by pauillac.inria.fr; Wed, 11 May 94 16:49:32 +0200
+From: Xavier Leroy <xleroy@pauillac.inria.fr>
+Message-Id: <9405111449.AA28294@pauillac.inria.fr>
+Subject: Patch Caml Light 0.6 -> 0.61
+To: caml-list@margaux.inria.fr
+Date: Wed, 11 May 1994 16:49:31 +0200 (MET DST)
+X-Mailer: ELM [version 2.4 PL21]
+Content-Type: text
+Content-Length: 38387     
+Sender: weis@pauillac.inria.fr
+Status: O
+
+This patch is to be applied to the Caml Light 0.6 source distribution
+and brings it to version 0.61.
+
+Changes:
+
+* Pattern-matching against (C x) where C has several arguments now works
+  correctly.
+* The fatal error "labels_of_type" has been fixed (it was raised when
+  typing e.label, where the type inferred for e is not a record type,
+  but an abbreviation for a record type).
+* Hashing has been rewritten to give consistent results across all 
+  architectures, including when -custom is used.
+* output_value and intern_value are now fully compatible across 32-bit and
+  64-bit architectures. A 32-bit architecture can read values written
+  on a 64-bit architecture.
+* Better error message when compiling a .ml whose .mli has not been compiled.
+* The preprocessed files are more compatible with cpp: (**) instead of /**/.
+* Typos in library interfaces fixed.
+
+To use this patch:
+
+        - cd to the distribution directory for Caml Light 0.6
+                (the directory with subdirs src, config, ...)
+        - save this message in a file (say, "foo")
+        - run "patch -p0 < foo"
+        - recompile Caml Light from scratch
+
+diff -c -r /tmp/cl6/src/compiler/compiler.ml ./src/compiler/compiler.ml
+*** /tmp/cl6/src/compiler/compiler.ml	Wed Sep 22 23:48:26 1993
+--- ./src/compiler/compiler.ml	Tue Nov 16 00:42:06 1993
+***************
+*** 187,192 ****
+--- 187,200 ----
+    external_types := [];
+    if file_exists (filename ^ ".mli") then begin
+      try
++       if not (file_exists (filename ^ ".zi")) then begin
++         prerr_begline " Cannot find file ";
++         prerr_string filename;
++         prerr_string ".zi. Please compile ";
++         prerr_string filename;
++         prerr_endline ".mli first.";
++         raise Toplevel
++       end;
+        let intf = read_module (filename ^ ".zi") in
+        start_compiling_implementation modname intf;
+        enter_interface_definitions intf;
+diff -c -r /tmp/cl6/src/compiler/lexer.mlp ./src/compiler/lexer.mlp
+*** /tmp/cl6/src/compiler/lexer.mlp	Tue Sep 21 20:03:36 1993
+--- ./src/compiler/lexer.mlp	Tue Nov 16 18:34:19 1993
+***************
+*** 1,8 ****
+  (* The lexer definition *)
+  
+  {
+! /**/ #open "misc";;
+! /**/ #open "parser";;
+  
+  (* For nested comments *)
+  
+--- 1,8 ----
+  (* The lexer definition *)
+  
+  {
+! (**) #open "misc";;
+! (**) #open "parser";;
+  
+  (* For nested comments *)
+  
+diff -c -r /tmp/cl6/src/compiler/parser.mly ./src/compiler/parser.mly
+*** /tmp/cl6/src/compiler/parser.mly	Fri Jul 02 21:10:59 1993
+--- ./src/compiler/parser.mly	Thu Apr 07 16:56:53 1994
+***************
+*** 6,13 ****
+  #open "globals";;
+  #open "builtins";;
+  #open "syntax";;
+- #open "types";;
+- #open "typing";;
+  #open "primdecl";;
+  %}
+  
+--- 6,11 ----
+diff -c -r /tmp/cl6/src/compiler/tr_env.ml ./src/compiler/tr_env.ml
+*** /tmp/cl6/src/compiler/tr_env.ml	Wed Jul 01 19:42:55 1992
+--- ./src/compiler/tr_env.ml	Wed Mar 23 23:57:33 1994
+***************
+*** 11,16 ****
+--- 11,17 ----
+  type access_path =
+      Path_root
+    | Path_son of int * access_path
++   | Path_tuple of access_path list
+  ;;
+  
+  type transl_env =
+***************
+*** 19,27 ****
+    | Tenv of (string * access_path) list * transl_env
+  ;; 
+  
+! let translate_path root = transl where rec transl = function
+!     Path_root          -> root
+!   | Path_son(n, p)     -> Lprim(Pfield n, [transl p])
+  ;;
+  
+  let rec translate_access s env =
+--- 20,31 ----
+    | Tenv of (string * access_path) list * transl_env
+  ;; 
+  
+! let translate_path root =
+!   let rec transl = function
+!       Path_root -> root
+!     | Path_son(n, p) -> Lprim(Pfield n, [transl p])
+!     | Path_tuple pl -> Lprim(Pmakeblock(ConstrRegular(0,1)), map transl pl)
+!   in transl
+  ;;
+  
+  let rec translate_access s env =
+***************
+*** 44,57 ****
+    | Tenv(L,env)   ->
+        try
+          match assoc s L with
+!           Path_root -> raise Not_found
+          | Path_son(start,rest) ->
+              Lprim(Psetfield start, [translate_path (Lvar i) rest; newval])
+        with Not_found ->
+          transl (i+1) env
+    in transl 0 env
+  ;;
+  
+  let rec paths_of_pat path (Pat(desc,loc)) =
+    match desc with
+      Zvarpat s ->
+--- 48,83 ----
+    | Tenv(L,env)   ->
+        try
+          match assoc s L with
+!           Path_root -> transl (i+1) env
+!             (* We have two occurrences of s in the environment:
+!                one is let-bound (path = Path_root) and is the value
+!                at the time of the matching,
+!                the other is a non-trivial access path in the data structure.
+!                The latter is the one that should be modified, so we skip the
+!                former. *)
+          | Path_son(start,rest) ->
+              Lprim(Psetfield start, [translate_path (Lvar i) rest; newval])
++         | Path_tuple pl -> fatal_error "translate_update"
+        with Not_found ->
+          transl (i+1) env
+    in transl 0 env
+  ;;
+  
++ let rec pat_is_named (Pat(desc,loc)) =
++   match desc with
++     Zvarpat s -> true
++   | Zaliaspat(pat, s) -> true
++   | Zconstraintpat(pat, _) -> pat_is_named pat
++   | _ -> false
++ ;;
++ 
++ let tuple_path nfields path =
++   let rec list_of_fields i =
++     if i >= nfields then [] else Path_son(i, path) :: list_of_fields (succ i)
++   in
++     Path_tuple(list_of_fields 0)
++ ;;
++ 
+  let rec paths_of_pat path (Pat(desc,loc)) =
+    match desc with
+      Zvarpat s ->
+***************
+*** 69,75 ****
+    | Zconstruct1pat(cstr, p) ->
+        begin match cstr.info.cs_kind with
+          Constr_superfluous n ->
+!           paths_of_pat path p
+        | _ ->
+            paths_of_pat (Path_son(0, path)) p
+        end
+--- 95,101 ----
+    | Zconstruct1pat(cstr, p) ->
+        begin match cstr.info.cs_kind with
+          Constr_superfluous n ->
+!           paths_of_pat (if pat_is_named p then tuple_path n path else path) p
+        | _ ->
+            paths_of_pat (Path_son(0, path)) p
+        end
+***************
+*** 116,122 ****
+        [] -> []
+      | var::rest ->
+          translate_access var env :: add (Treserved env) rest in
+!   Llet(add env varlist, expr)
+  ;;
+  
+  let add_pat_to_env env pat =
+--- 142,150 ----
+        [] -> []
+      | var::rest ->
+          translate_access var env :: add (Treserved env) rest in
+!   match add env varlist with
+!     [] -> expr
+!   | el -> Llet(el, expr)
+  ;;
+  
+  let add_pat_to_env env pat =
+diff -c -r /tmp/cl6/src/compiler/types.ml ./src/compiler/types.ml
+*** /tmp/cl6/src/compiler/types.ml	Tue Aug 24 19:49:37 1993
+--- ./src/compiler/types.ml	Tue Nov 16 00:40:47 1993
+***************
+*** 359,361 ****
+--- 359,377 ----
+    | (_, _) ->
+        raise Unify
+  ;;
++ 
++ (* Extract the list of labels of a record type. *)
++ 
++ let rec labels_of_type ty =
++   match (type_repr ty).typ_desc with
++     Tconstr({info = {ty_abbr = Tabbrev(params, body)}}, args) ->
++       labels_of_type (expand_abbrev params body args)
++   | Tconstr(cstr, _) ->
++       begin match (type_descr_of_type_constr cstr).info.ty_desc with
++         Record_type lbl_list -> lbl_list
++       | _ -> fatal_error "labels_of_type"
++       end
++   | _ ->
++       fatal_error "labels_of_type"
++ ;;
++ 
+diff -c -r /tmp/cl6/src/compiler/typing.ml ./src/compiler/typing.ml
+*** /tmp/cl6/src/compiler/typing.ml	Mon Sep 13 19:28:12 1993
+--- ./src/compiler/typing.ml	Tue Nov 16 00:37:25 1993
+***************
+*** 311,325 ****
+              unify_expr expr ty ty_res;
+              texp (e, ty_arg))
+            lbl_expr_list;
+!         let label_list =
+!           match (type_repr ty).typ_desc with
+!             Tconstr(cstr, _) ->
+!               begin match (type_descr_of_type_constr cstr).info.ty_desc with
+!                 Record_type lbl_list -> lbl_list
+!               | _ -> fatal_error "labels_of_type"
+!               end
+!           | _ ->
+!               fatal_error "labels_of_type" in
+          let v = make_vect (list_length label_list) false in
+            do_list (fun (lbl, e) ->
+              let p = lbl.info.lbl_pos in
+--- 311,317 ----
+              unify_expr expr ty ty_res;
+              texp (e, ty_arg))
+            lbl_expr_list;
+!         let label_list = labels_of_type ty in
+          let v = make_vect (list_length label_list) false in
+            do_list (fun (lbl, e) ->
+              let p = lbl.info.lbl_pos in
+diff -c -r /tmp/cl6/src/lib/fstring.mli ./src/lib/fstring.mli
+*** /tmp/cl6/src/lib/fstring.mli	Fri Apr 30 23:27:19 1993
+--- ./src/lib/fstring.mli	Tue Mar 08 19:43:28 1994
+***************
+*** 33,39 ****
+    and lt_string : string -> string -> bool = 2 "<string"
+    and ge_string : string -> string -> bool = 2 ">=string"
+    and gt_string : string -> string -> bool = 2 ">string"
+!   and compare_strings : string -> string -> int = 1 "compare_strings"
+  ;;
+  value string_for_read : string -> string
+  ;;
+--- 33,39 ----
+    and lt_string : string -> string -> bool = 2 "<string"
+    and ge_string : string -> string -> bool = 2 ">=string"
+    and gt_string : string -> string -> bool = 2 ">string"
+!   and compare_strings : string -> string -> int = 2 "compare_strings"
+  ;;
+  value string_for_read : string -> string
+  ;;
+diff -c -r /tmp/cl6/src/lib/genlex.mlp ./src/lib/genlex.mlp
+*** /tmp/cl6/src/lib/genlex.mlp	Tue Sep 21 20:04:31 1993
+--- ./src/lib/genlex.mlp	Fri Dec 10 19:22:20 1993
+***************
+*** 1,13 ****
+  (* A generic lexer *)
+  
+! /**/ #open "float";;
+! /**/ #open "int";;
+! /**/ #open "ref";;
+! /**/ #open "exc";;
+! /**/ #open "list";;
+! /**/ #open "fchar";;
+! /**/ #open "fstring";;
+! /**/ #open "stream";;
+  
+  (* The string buffering machinery *)
+  
+--- 1,13 ----
+  (* A generic lexer *)
+  
+! (**) #open "float";;
+! (**) #open "int";;
+! (**) #open "ref";;
+! (**) #open "exc";;
+! (**) #open "list";;
+! (**) #open "fchar";;
+! (**) #open "fstring";;
+! (**) #open "stream";;
+  
+  (* The string buffering machinery *)
+  
+***************
+*** 97,104 ****
+    and neg_number = function
+      [< '(*'*) `0`..`9` as c; s >] ->
+        reset_buffer(); store `-`; store c; number s
+!   | [< >] ->
+!       keyword_or_error `-`
+      
+    and number = function
+      [< '(*'*) `0`..`9` as c; s >] ->
+--- 97,104 ----
+    and neg_number = function
+      [< '(*'*) `0`..`9` as c; s >] ->
+        reset_buffer(); store `-`; store c; number s
+!   | [< s >] ->
+!       reset_buffer(); store `-`; ident2 s
+      
+    and number = function
+      [< '(*'*) `0`..`9` as c; s >] ->
+diff -c -r /tmp/cl6/src/lib/hashtbl.ml ./src/lib/hashtbl.ml
+*** /tmp/cl6/src/lib/hashtbl.ml	Mon Jun 07 22:42:36 1993
+--- ./src/lib/hashtbl.ml	Tue Nov 16 01:27:01 1993
+***************
+*** 23,29 ****
+  ;;
+  
+  let clear h =
+-   h.max_len <- 2;
+    for i = 0 to vect_length h.data - 1 do
+      h.data.(i) <- Empty
+    done
+--- 23,28 ----
+diff -c -r /tmp/cl6/src/lib/lexing.mli ./src/lib/lexing.mli
+*** /tmp/cl6/src/lib/lexing.mli	Tue Jul 07 17:55:27 1992
+--- ./src/lib/lexing.mli	Fri Apr 01 21:32:40 1994
+***************
+*** 59,65 ****
+             of the first character of the matched string. The first character
+             of the stream has position 0. *)
+    and get_lexeme_end : lexbuf -> int
+!         (* [get_lexeme_start lexbuf] returns the position in the input stream
+             of the character following the last character of the matched
+             string. The first character of the stream has position 0. *)
+  ;;
+--- 59,65 ----
+             of the first character of the matched string. The first character
+             of the stream has position 0. *)
+    and get_lexeme_end : lexbuf -> int
+!         (* [get_lexeme_end lexbuf] returns the position in the input stream
+             of the character following the last character of the matched
+             string. The first character of the stream has position 0. *)
+  ;;
+diff -c -r /tmp/cl6/src/runtime/hash.c ./src/runtime/hash.c
+*** /tmp/cl6/src/runtime/hash.c	Wed Apr 28 23:46:57 1993
+--- ./src/runtime/hash.c	Wed May 11 14:56:10 1994
+***************
+*** 16,22 ****
+    hash_univ_count = Long_val(count);
+    hash_accu = 0;
+    hash_aux(obj);
+!   return Val_long(hash_accu & Max_long);
+  }
+  
+  #define Alpha 65599
+--- 16,24 ----
+    hash_univ_count = Long_val(count);
+    hash_accu = 0;
+    hash_aux(obj);
+!   return Val_long(hash_accu & 0x3FFFFFFF);
+!   /* The & has two purposes: ensure that the return value is positive
+!      and give the same result on 32 bit and 64 bit architectures. */
+  }
+  
+  #define Alpha 65599
+***************
+*** 29,40 ****
+  {
+    unsigned char * p;
+    mlsize_t i;
+  
+    hash_univ_limit--;
+    if (hash_univ_count < 0 || hash_univ_limit < 0) return;
+  
+!   if (Is_block(obj) && (Is_in_heap(obj) || Is_young(obj)))
+!     switch(Tag_val(obj)) {
+      case String_tag:
+        hash_univ_count--;
+        i = string_length(obj);
+--- 31,63 ----
+  {
+    unsigned char * p;
+    mlsize_t i;
++   tag_t tag;
+  
+    hash_univ_limit--;
+    if (hash_univ_count < 0 || hash_univ_limit < 0) return;
+  
+!   if (Is_long(obj)) {
+!     hash_univ_count--;
+!     Combine(Long_val(obj));
+!     return;
+!   }
+! 
+!   /* Atoms are not in the heap, but it's better to hash their tag
+!      than to do nothing. */
+! 
+!   if (obj >= Atom(0) && obj <= Atom(255)) {
+!     tag = Tag_val(obj);
+!     hash_univ_count--;
+!     Combine_small(tag);
+!     return;
+!   }
+! 
+!   /* Pointers into the heap are well-structured blocks.
+!      We can inspect the block contents. */
+!   
+!   if (Is_in_heap(obj) || Is_young(obj)) {
+!     tag = Tag_val(obj);
+!     switch (tag) {
+      case String_tag:
+        hash_univ_count--;
+        i = string_length(obj);
+***************
+*** 42,58 ****
+          Combine_small(*p);
+        break;
+      case Double_tag:
+        hash_univ_count--;
+!       i = Wosize_val(obj);
+!       while (i != 0) {
+!         i--;
+!         Combine(Field(obj, i));
+!       }
+        break;
+      case Abstract_tag:
+      case Final_tag:
+        break;
+      default:
+        i = Wosize_val(obj);
+        while (i != 0) {
+          i--;
+--- 65,92 ----
+          Combine_small(*p);
+        break;
+      case Double_tag:
++       /* For doubles, we inspect their binary representation, LSB first.
++          The results are consistent among all platforms with IEEE floats. */
+        hash_univ_count--;
+! #ifdef BIG_ENDIAN
+!       for (p = &Byte_u(obj, sizeof(double) - 1), i = sizeof(double);
+!            i > 0;
+!            p--, i--)
+! #else
+!       for (p = &Byte_u(obj, 0), i = sizeof(double);
+!            i > 0;
+!            p++, i--)
+! #endif
+!         Combine_small(*p);
+        break;
+      case Abstract_tag:
+      case Final_tag:
++       /* We don't know anything about the contents of the block.
++          Better do nothing. */
+        break;
+      default:
++       hash_univ_count--;
++       Combine_small(tag);
+        i = Wosize_val(obj);
+        while (i != 0) {
+          i--;
+***************
+*** 60,67 ****
+        }
+        break;
+      }
+!   else {
+!     hash_univ_count--;
+!     Combine((long) obj);
+    }
+  }
+--- 94,102 ----
+        }
+        break;
+      }
+!     return;
+    }
++ 
++   /* Otherwise, obj is a pointer outside the heap, to an object with
++      a priori unknown structure. Better to do nothing in this case. */
+  }
+diff -c -r /tmp/cl6/src/runtime/intext.c ./src/runtime/intext.c
+*** /tmp/cl6/src/runtime/intext.c	Tue Apr 27 03:06:55 1993
+--- ./src/runtime/intext.c	Tue May 10 17:14:52 1994
+***************
+*** 24,41 ****
+  #define Hash(v) (((asize_t) ((v) >> 2)) % extern_table_size)
+  
+  #define Base_magic_number 0x8495A6B9
+- #ifdef SIXTYFOUR
+  #define Big_endian_32_magic_number Base_magic_number
+  #define Little_endian_32_magic_number (Base_magic_number + 1)
+! #define Big_endian_magic_number (Base_magic_number + 2)
+! #define Little_endian_magic_number (Base_magic_number + 3)
+  #define First_valid_magic_number Base_magic_number
+  #define Last_valid_magic_number (Base_magic_number + 3)
+  #else
+! #define Big_endian_magic_number Base_magic_number
+! #define Little_endian_magic_number (Base_magic_number + 1)
+! #define First_valid_magic_number Base_magic_number
+! #define Last_valid_magic_number (Base_magic_number + 1)
+  #endif
+  
+  static void alloc_table()
+--- 24,48 ----
+  #define Hash(v) (((asize_t) ((v) >> 2)) % extern_table_size)
+  
+  #define Base_magic_number 0x8495A6B9
+  #define Big_endian_32_magic_number Base_magic_number
+  #define Little_endian_32_magic_number (Base_magic_number + 1)
+! #define Big_endian_64_magic_number (Base_magic_number + 2)
+! #define Little_endian_64_magic_number (Base_magic_number + 3)
+  #define First_valid_magic_number Base_magic_number
+  #define Last_valid_magic_number (Base_magic_number + 3)
++ 
++ #ifdef SIXTYFOUR
++ # ifdef BIG_ENDIAN
++ #  define Extern_magic_number Big_endian_64_magic_number
++ # else
++ #  define Extern_magic_number Little_endian_64_magic_number
++ # endif
+  #else
+! # ifdef BIG_ENDIAN
+! #  define Extern_magic_number Big_endian_32_magic_number
+! # else
+! #  define Extern_magic_number Little_endian_32_magic_number
+! # endif
+  #endif
+  
+  static void alloc_table()
+***************
+*** 179,184 ****
+--- 186,192 ----
+    offset_t res;
+  
+    extern_size = INITIAL_EXTERN_SIZE;
++ 
+    extern_block =
+      (offset_t *) stat_alloc(extern_size * sizeof(unsigned long));
+    extern_pos = 0;
+***************
+*** 188,198 ****
+    res = emit_all(v);
+    if (extern_pos >= Max_wosize) extern_too_big();
+    stat_free((char *) extern_table);
+! #ifdef BIG_ENDIAN
+!   putword(chan, Big_endian_magic_number);
+! #else
+!   putword(chan, Little_endian_magic_number);
+! #endif
+    putword(chan, extern_pos);
+    if (extern_pos == 0)
+      putword(chan, res);
+--- 196,202 ----
+    res = emit_all(v);
+    if (extern_pos >= Max_wosize) extern_too_big();
+    stat_free((char *) extern_table);
+!   putword(chan, Extern_magic_number);
+    putword(chan, extern_pos);
+    if (extern_pos == 0)
+      putword(chan, res);
+***************
+*** 281,286 ****
+--- 285,292 ----
+  
+  #ifdef SIXTYFOUR
+  
++ /* Routines to convert 32-bit externed objects to 64-bit memory blocks. */
++ 
+  typedef int32 value32;
+  
+  /* Reverse all words in a block, in case of endianness clash.
+***************
+*** 287,293 ****
+     Works with 32-bit words. */
+  
+  void rev_pointers_32(p, size)
+!      value32 *p;
+       mlsize_t size;
+  {
+    value32 * q;
+--- 293,299 ----
+     Works with 32-bit words. */
+  
+  void rev_pointers_32(p, size)
+!      value32 * p;
+       mlsize_t size;
+  {
+    value32 * q;
+***************
+*** 398,406 ****
+        }
+      case Double_tag:
+        *d++ = Make_header(Double_wosize, Double_tag, color);
+!       *((double *) d) = *((double *) p);
+        p += sizeof(double) / sizeof(value32);
+!       d += sizeof(double) / sizeof(value);
+        break;
+      case Abstract_tag:
+      case Final_tag:
+--- 404,416 ----
+        }
+      case Double_tag:
+        *d++ = Make_header(Double_wosize, Double_tag, color);
+!       /* Cannot do *((double *) d) = *((double *) p) directly
+!          because p might not be 64-aligned. */
+!       Assert(sizeof(double) == sizeof(value));
+!       ((value32 *) d)[0] = p[0];
+!       ((value32 *) d)[1] = p[1];
+        p += sizeof(double) / sizeof(value32);
+!       d += 1;
+        break;
+      case Abstract_tag:
+      case Final_tag:
+***************
+*** 450,457 ****
+--- 460,669 ----
+    }
+  }
+  
++ #else /* !SIXTYFOUR */
++ 
++ #ifndef NO_SIXTYFOUR_INTERN
++ 
++ /* Routines to convert 64-bit externed objects to 32-bit memory blocks. */
++ 
++ typedef double value64;         /* Should work on just about any machine */
++ 
++ #ifdef BIG_ENDIAN
++ #define MSword(p) (((value*) p)[0])
++ #define LSword(p) (((value*) p)[1])
++ #else
++ #define MSword(p) (((value *) p)[1])
++ #define LSword(p) (((value *) p)[0])
+  #endif
+  
++ /* Reverse all words in a block, in case of endianness clash.
++    Works with 64-bit words.
++    Returns (-1) if a header too large is encountered, 0 otherwise. */
++ 
++ int rev_pointers_64(p, size)
++      value64 * p;
++      mlsize_t size;             /* size in 64-bit words */
++ {
++   value64 * q;
++   header_t hd;
++   mlsize_t n;
++ 
++   q = p + size;
++   while (p < q) {
++     Reverse_int64(p);
++     hd = (header_t) LSword(p);
++     if (MSword(p) != 0) return -1;
++     p++;
++     n = Wosize_hd(hd);
++     switch(Tag_hd(hd)) {
++     case Abstract_tag:
++     case Final_tag:
++       Assert (0);       /* Should not happen. Fall through for compatibility */
++     case String_tag:
++       p += n;
++       break;
++     case Double_tag:
++       Reverse_double(p);
++       p += n;
++       break;
++     default:
++       for( ; n > 0; n --, p++) {
++         Reverse_int64(p);
++       }
++     }
++   }
++   return 0;
++ }
++ 
++ /* Compute the size of the shrinkage of a 64-bit externed block to a
++    32-bit block. The size is returned in 32-bit words.
++    Return 0 if a block cannot be shrunk because its size is too big. */
++ 
++ static mlsize_t size_after_shrinkage(p, len)
++      value64 * p;
++      mlsize_t len;              /* length in 64-bit words */
++ {
++   mlsize_t res;
++   value64 * q;
++   header_t hd;
++   mlsize_t n;
++ 
++   for (q = p + len, res = 0; p < q; /*nothing*/) {
++     hd = (header_t) LSword(p);
++     if (MSword(p) != 0) return 0;
++     p++;
++     n = Wosize_hd(hd);
++     res++;
++     switch(Tag_hd(hd)) {
++     case String_tag:
++       { mlsize_t ofs_last_byte, len, new_sz;
++         ofs_last_byte = n * sizeof(value64) - 1;
++         len = ofs_last_byte - Byte(p, ofs_last_byte);
++         new_sz = (len + sizeof(value)) / sizeof(value);
++         res += new_sz;
++         break;
++       }
++     case Double_tag:
++       res += sizeof(double) / sizeof(value);
++       break;
++     case Abstract_tag:
++     case Final_tag:
++       Assert(0);                /* should not happen. */
++       break;
++     default:
++       res += n;                 /* all fields will be shrunk 64 -> 32 */
++       break;
++     }
++     p += n;
++   }
++   return res;
++ }
++ 
++ /* Convert a 64-bit externed block to a 32-bit block. The resulting block
++    is a valid 32-bit object.
++    Return -1 if the block cannot be shrunk because some integer literals
++    or relative displacements are too large, 0 otherwise. */
++ 
++ static int shrink_block(source, dest, source_len, dest_len, color)
++      value64 * source;
++      value * dest;
++      mlsize_t source_len, dest_len;
++      color_t color;
++ {
++   value64 * p, * q;
++   value * d, * e;
++   header_t hd;
++   mlsize_t sz;
++   tag_t tag;
++   offset_t * forward_addr;
++   offset_t dest_ofs;
++   value v;
++ 
++   /* First pass: copy the objects and set up forwarding pointers.
++      The pointers contained inside blocks are not resolved. */
++ 
++   for (p = source, q = source + source_len, d = dest; p < q; /*nothing*/) {
++     hd = (header_t) LSword(p);
++     p++;
++     sz = Wosize_hd(hd);
++     tag = Tag_hd(hd);
++     forward_addr = (offset_t *) p;
++     dest_ofs = d + 1 - dest;
++     switch(tag) {
++     case String_tag:
++       { mlsize_t ofs_last_byte, len, new_sz;
++         ofs_last_byte = sz * sizeof(value64) - 1;
++         len = ofs_last_byte - Byte(p, ofs_last_byte);
++         new_sz = (len + sizeof(value)) / sizeof(value);
++         *d++ = Make_header(new_sz, String_tag, color);
++         Field(d, new_sz - 1) = 0;
++         bcopy(p, d, len);
++         ofs_last_byte = new_sz * sizeof(value) - 1;
++         Byte(d, ofs_last_byte) = ofs_last_byte - len;
++         p += sz;
++         d += new_sz;
++         break;
++       }
++     case Double_tag:
++       *d++ = Make_header(Double_wosize, Double_tag, color);
++       Store_double_val(d, Double_val(p));
++       p += sizeof(double) / sizeof(value64);
++       d += sizeof(double) / sizeof(value);
++       break;
++     case Abstract_tag:
++     case Final_tag:
++       Assert(0);
++     default:
++       *d++ = Make_header(sz, tag, color);
++       for (/*nothing*/; sz > 0; sz--, p++, d++) {
++         value lsw = LSword(p);
++         value msw = MSword(p);
++         if ((lsw & 1) == 0) {      /* If relative displacement: */
++           if (msw != 0) return -1; /* Check unsigned displacement fits in 32 */
++         } else {                   /* Otherwise, it's a signed integer */
++           if ((lsw >= 0 && msw != 0) || (lsw < 0 && msw != -1)) return -1;
++         }
++         *d = lsw;
++       }
++     }
++     *forward_addr = dest_ofs;   /* store the forwarding pointer */
++   }
++   Assert(d == dest + dest_len);
++ 
++   /* Second pass: resolve pointers contained inside blocks,
++      replacing them by the corresponding forwarding pointer. */
++ 
++   for (d = dest, e = dest + dest_len; d < e; /*nothing*/) {
++     hd = (header_t) *d++;
++     sz = Wosize_hd(hd);
++     tag = Tag_hd(hd);
++     if (tag >= No_scan_tag) {
++       d += sz;
++     } else {
++       for (/*nothing*/; sz > 0; sz--, d++) {
++         v = *d;
++         switch(v & 3) {
++         case 0:                 /* 0: a block represented by its offset */
++           Assert(v >= 0 && v < source_len * sizeof(value64) && (v & 7) == 0);
++           *d = (value) (dest + *((offset_t *)((char *) source + v)));
++           break;
++         case 2:                 /* 2: an atom */
++           v = v >> 2;
++           Assert(v >= 0 && v < 256);
++           *d = Atom(v);
++           break;
++         default:                /* 1 or 3: an integer */
++           break;
++         }
++       }
++     }
++   }
++   return 0;
++ }
++ 
++ #endif /* NO_SIXTYFOUR_INTERN */
++ #endif /* SIXTYFOUR */
++ 
+  static int really_getblock(chan, p, n)
+       struct channel * chan;
+       char * p;
+***************
+*** 493,498 ****
+--- 705,711 ----
+  #ifdef SIXTYFOUR
+    if (magic == Little_endian_32_magic_number ||
+        magic == Big_endian_32_magic_number) {
++     /* Expansion 32 -> 64 required */
+      mlsize_t whsize32;
+      value32 * block;
+      whsize32 = whsize;
+***************
+*** 503,512 ****
+      }
+  #ifdef BIG_ENDIAN
+      if (magic == Little_endian_32_magic_number)
+!       rev_pointers_32(block, whsize);
+  #else
+      if (magic == Big_endian_32_magic_number)
+!       rev_pointers_32(block, whsize);
+  #endif
+      whsize = size_after_expansion(block, whsize32);
+      wosize = Wosize_whsize(whsize);
+--- 716,725 ----
+      }
+  #ifdef BIG_ENDIAN
+      if (magic == Little_endian_32_magic_number)
+!       rev_pointers_32(block, whsize32);
+  #else
+      if (magic == Big_endian_32_magic_number)
+!       rev_pointers_32(block, whsize32);
+  #endif
+      whsize = size_after_expansion(block, whsize32);
+      wosize = Wosize_whsize(whsize);
+***************
+*** 516,541 ****
+      Assert (color == White || color == Black);
+      expand_block(block, Hp_val(res), whsize32, whsize, color);
+      stat_free((char *) block);
+    }
+!   else
+  #endif
+!   {
+      res = alloc_shr(wosize, String_tag);
+      hd = Hd_val (res);
+      color = Color_hd (hd);
+      Assert (color == White || color == Black);
+      if (really_getblock(chan, Hp_val(res), bhsize) == 0) {
+        Hd_val (res) = hd;                      /* Avoid confusing the GC. */
+        failwith ("intern : truncated object");
+      }
+  #ifdef BIG_ENDIAN
+!     if (magic == Little_endian_magic_number)
+        rev_pointers(Hp_val (res), whsize);
+  #else
+!     if (magic == Big_endian_magic_number)
+        rev_pointers(Hp_val (res), whsize);
+  #endif
+      adjust_pointers(Hp_val (res), whsize, color);
+    }
+    return res;
+  }
+--- 729,814 ----
+      Assert (color == White || color == Black);
+      expand_block(block, Hp_val(res), whsize32, whsize, color);
+      stat_free((char *) block);
++   } else {
++     /* Block has natural word size (64) */
++     res = alloc_shr(wosize, String_tag);
++     hd = Hd_val (res);
++     color = Color_hd (hd);
++     Assert (color == White || color == Black);
++     if (really_getblock(chan, Hp_val(res), bhsize) == 0) {
++       Hd_val (res) = hd;                      /* Avoid confusing the GC. */
++       failwith ("intern : truncated object");
++     }
++ #ifdef BIG_ENDIAN
++     if (magic == Little_endian_64_magic_number)
++       rev_pointers(Hp_val (res), whsize);
++ #else
++     if (magic == Big_endian_64_magic_number)
++       rev_pointers(Hp_val (res), whsize);
++ #endif
++     adjust_pointers(Hp_val (res), whsize, color);
+    }
+! #else /* !SIXTYFOUR */
+!   if (magic == Little_endian_64_magic_number ||
+!       magic == Big_endian_64_magic_number) {
+!     /* Shrinkage 64 -> 32 required */
+! #ifdef NO_SIXTYFOUR_INTERN
+!     failwith("intern: 64-bit object, cannot load");
+! #else
+!     mlsize_t whsize64;
+!     value64 * block;
+!     whsize64 = whsize;
+!     block = (value64 *) stat_alloc(whsize64 * sizeof(value64));
+!     if (really_getblock(chan, block, whsize64 * sizeof(value64)) == 0) {
+!       stat_free((char *) block);
+!       failwith ("intern : truncated object");
+!     }
+! #ifdef BIG_ENDIAN
+!     if (magic == Little_endian_64_magic_number) {
+! #else
+!     if (magic == Big_endian_64_magic_number) {
+  #endif
+!       if (rev_pointers_64(block, whsize64) == -1) {
+!         stat_free((char *) block);
+!         failwith("intern: 64-bit object too big");
+!       }
+!     }
+!     whsize = size_after_shrinkage(block, whsize64);
+!     if (whsize == -1) {
+!       stat_free((char *) block);
+!       failwith("intern: 64-bit object too big");
+!     }
+!     wosize = Wosize_whsize(whsize);
+      res = alloc_shr(wosize, String_tag);
+      hd = Hd_val (res);
+      color = Color_hd (hd);
+      Assert (color == White || color == Black);
++     if (shrink_block(block, Hp_val(res), whsize64, whsize, color) == -1) {
++       Hd_val (res) = hd;                      /* Avoid confusing the GC. */
++       stat_free((char *) block);
++       failwith("intern: 64-bit object too big");
++     }
++     stat_free((char *) block);
++ #endif /* !NO_SIXTYFOUR_INTERN */
++   } else {
++     /* Block has natural word size (32) */
++     res = alloc_shr(wosize, String_tag);
++     hd = Hd_val (res);
++     color = Color_hd (hd);
++     Assert (color == White || color == Black);
+      if (really_getblock(chan, Hp_val(res), bhsize) == 0) {
+        Hd_val (res) = hd;                      /* Avoid confusing the GC. */
+        failwith ("intern : truncated object");
+      }
+  #ifdef BIG_ENDIAN
+!     if (magic == Little_endian_32_magic_number)
+        rev_pointers(Hp_val (res), whsize);
+  #else
+!     if (magic == Big_endian_32_magic_number)
+        rev_pointers(Hp_val (res), whsize);
+  #endif
+      adjust_pointers(Hp_val (res), whsize, color);
+    }
++ #endif /* !SIXTYFOUR */
+    return res;
+  }
+diff -c -r /tmp/cl6/src/runtime/str.c ./src/runtime/str.c
+*** /tmp/cl6/src/runtime/str.c	Tue Sep 21 20:13:17 1993
+--- ./src/runtime/str.c	Tue May 10 13:49:25 1994
+***************
+*** 67,83 ****
+  }
+  
+  #ifdef unix
+! static unsigned char printable_chars_ascii[32] = /* 0x20-0x7E */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\177\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000";
+! static unsigned char printable_chars_iso[32] = /* 0x20-0x7E 0xA1-0xFF */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\177\000\000\000\000\376\377\377\377\377\377\377\377\377\377\377\377";
+  #endif
+  #ifdef macintosh
+! static unsigned char printable_chars[32] = /* 0x20-0x7E 0x80-0xC9 0xCB-0xD8 */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\177\377\377\377\377\377\377\377\377\377\373\377\001\000\000\000\000";
+  #endif
+  #ifdef MSDOS
+! static unsigned char printable_chars[32] = /* 0x20-0xFE */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177";
+  #endif
+  
+--- 67,83 ----
+  }
+  
+  #ifdef unix
+! static unsigned char printable_chars_ascii[] = /* 0x20-0x7E */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\177\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000\000";
+! static unsigned char printable_chars_iso[] = /* 0x20-0x7E 0xA1-0xFF */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\177\000\000\000\000\376\377\377\377\377\377\377\377\377\377\377\377";
+  #endif
+  #ifdef macintosh
+! static unsigned char printable_chars[] = /* 0x20-0x7E 0x80-0xC9 0xCB-0xD8 */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\177\377\377\377\377\377\377\377\377\377\373\377\001\000\000\000\000";
+  #endif
+  #ifdef MSDOS
+! static unsigned char printable_chars[] = /* 0x20-0xFE */
+    "\000\000\000\000\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\377\177";
+  #endif
+  
+***************
+*** 87,93 ****
+    int c;
+  #ifdef unix
+    static int iso_charset = -1;
+!   char * printable_chars;
+  
+    if (iso_charset == -1) {
+      char * lc_ctype = (char *) getenv("LC_CTYPE");
+--- 87,93 ----
+    int c;
+  #ifdef unix
+    static int iso_charset = -1;
+!   unsigned char * printable_chars;
+  
+    if (iso_charset == -1) {
+      char * lc_ctype = (char *) getenv("LC_CTYPE");
+diff -c -r /tmp/cl6/src/tools/dumpobj.ml ./src/tools/dumpobj.ml
+*** /tmp/cl6/src/tools/dumpobj.ml	Thu Jul 01 02:16:08 1993
+--- ./src/tools/dumpobj.ml	Wed Mar 23 23:21:30 1994
+***************
+*** 48,58 ****
+          if op == ACCESS or op == DUMMY or op == ENDLET
+          or op == CONSTBYTE or op == ATOM or op == GETFIELD or op == SETFIELD
+          or op == MAKEBLOCK1 or op == MAKEBLOCK2 or op == MAKEBLOCK3
+!         or op == MAKEBLOCK4 or op == C_CALL1 or op == C_CALL2 or op == C_CALL3
+!         or op == C_CALL4 or op == C_CALL5 then
+            print_int(input_byte ic)
+!         else if op == GETGLOBAL or op == SETGLOBAL or op == PUSH_GETGLOBAL_APPLY
+!         or op == PUSH_GETGLOBAL_APPTERM then
+            print_int(input_u16 ic)
+          else if op == CONSTSHORT then
+            print_int(input_s16 ic)
+--- 48,59 ----
+          if op == ACCESS or op == DUMMY or op == ENDLET
+          or op == CONSTBYTE or op == ATOM or op == GETFIELD or op == SETFIELD
+          or op == MAKEBLOCK1 or op == MAKEBLOCK2 or op == MAKEBLOCK3
+!         or op == MAKEBLOCK4 then
+            print_int(input_byte ic)
+!         else if op == GETGLOBAL or op == SETGLOBAL
+!         or op == PUSH_GETGLOBAL_APPLY or op == PUSH_GETGLOBAL_APPTERM
+!         or op == C_CALL1 or op == C_CALL2 or op == C_CALL3
+!         or op == C_CALL4 or op == C_CALL5 then
+            print_int(input_u16 ic)
+          else if op == CONSTSHORT then
+            print_int(input_s16 ic)
+***************
+*** 74,79 ****
+--- 75,84 ----
+               done)
+          else if op == BRANCHINTERVAL then
+            (print_depl ic; print_string ", "; print_depl ic)
++         else if op == C_CALLN then
++           (print_int(input_byte ic);
++            print_string ", ";
++            print_int(input_u16 ic))
+          else
+            ();
+          print_newline()
+diff -c /tmp/cl6/KNOWN-BUGS ./KNOWN-BUGS 
+*** /tmp/cl6/KNOWN-BUGS Wed Sep 29 20:16:03 1993
+--- ./KNOWN-BUGS        Wed May 11 15:57:52 1994
+***************
+*** 1,23 ****
+  The following problems have not been fixed at the time of this release:
+  
+- 1- Patterns of the format (C x) where C has several arguments:
+- 
+-    In the following code:
+- 
+-         type t = A | B of int * int;;
+-         match B(1,2) with B x - > x;;
+- 
+-    the pair bound to x is not equal to (1,2): its first component is 1,
+-    its second component is 2, but it is not correctly tagged, hence
+-    x = (1,2) returns false, and x and (1,2) have different hash values.
+-    The difference between x and (1,2) is observable only with ad-hoc
+-    polymorphic primitives such as equality (=) and hashing.
+- 
+-    To avoid this problem, match against a more precise pattern and rebuild
+-    the tuple of arguments in the right-hand side:
+- 
+-         match B(1,2) with B(y,z) -> (y,z);;
+- 
+  2- Stream concatenation using [< ... >] does not always preserve the
+     sharing among streams, and sometimes duplicate stream subcomponents.
+     For instance, if you define s' = [< '1; s >] and then read alternatively
+--- 1,5 ----
+diff -c /tmp/cl6/src/compiler/version.ml ./src/compiler/version.ml
+*** /tmp/cl6/src/compiler/version.ml    Mon Sep 13 19:30:23 1993
+--- ./src/compiler/version.ml   Wed May 11 15:59:20 1994
+***************
+*** 1 ****
+! let banner = "The Caml Light compiler, version 0.6";;
+--- 1 ----
+! let banner = "The Caml Light compiler, version 0.61";;
+diff -c /tmp/cl6/src/launch/camlc.tpl ./src/launch/camlc.tpl
+*** /tmp/cl6/src/launch/camlc.tpl       Fri Oct 08 18:56:22 1993
+--- ./src/launch/camlc.tpl      Wed May 11 15:59:20 1994
+***************
+*** 45,51 ****
+        stdlib=$2
+        shift;;
+      -v|-version)
+!       echo "The Caml Light system, version 0.6"
+        echo "  (standard library from $stdlib)"
+        camlrun -V
+        camlrun $stdlib/camlcomp -version
+--- 45,51 ----
+        stdlib=$2
+        shift;;
+      -v|-version)
+!       echo "The Caml Light system, version 0.61"
+        echo "  (standard library from $stdlib)"
+        camlrun -V
+        camlrun $stdlib/camlcomp -version
+diff -c /tmp/cl6/src/librar/version.ml ./src/librar/version.ml
+*** /tmp/cl6/src/librar/version.ml      Mon Sep 13 19:30:23 1993
+--- ./src/librar/version.ml     Wed May 11 15:59:20 1994
+***************
+*** 1 ****
+! let banner = "The Caml Light librarian, version 0.6";;
+--- 1 ----
+! let banner = "The Caml Light librarian, version 0.61";;
+diff -c /tmp/cl6/src/linker/version.ml ./src/linker/version.ml
+*** /tmp/cl6/src/linker/version.ml      Mon Sep 13 19:30:22 1993
+--- ./src/linker/version.ml     Wed May 11 15:59:20 1994
+***************
+*** 1 ****
+! let banner = "The Caml Light linker, version 0.6";;
+--- 1 ----
+! let banner = "The Caml Light linker, version 0.61";;
+diff -c /tmp/cl6/src/runtime/version.c ./src/runtime/version.c
+*** /tmp/cl6/src/runtime/version.c      Mon Sep 13 19:30:20 1993
+--- ./src/runtime/version.c     Wed May 11 15:59:20 1994
+***************
+*** 1,2 ****
+  char version_string[] =
+!   "The Caml Light runtime system, version 0.6\n";
+--- 1,2 ----
+  char version_string[] =
+!   "The Caml Light runtime system, version 0.61\n";
+diff -c /tmp/cl6/src/toplevel/version.ml ./src/toplevel/version.ml
+*** /tmp/cl6/src/toplevel/version.ml    Mon Sep 13 19:30:21 1993
+--- ./src/toplevel/version.ml   Wed May 11 15:59:21 1994
+***************
+*** 1 ****
+! let banner = ">       Caml Light version 0.6";;
+--- 1 ----
+! let banner = ">       Caml Light version 0.61";;
+diff -c /tmp/cl6/README ./README
+*** /tmp/cl6/README    Sat Sep 25 01:57:22 1993
+--- ./README      Wed May 11 16:23:58 1994
+***************
+*** 1,4 ****
+!   This is the release 0.6 of the Caml Light system, for Unix machines.
+  
+  OVERVIEW:
+  
+--- 1,4 ----
+!   This is the release 0.61 of the Caml Light system, for Unix machines.
+  
+  OVERVIEW:
+  
+
+
+

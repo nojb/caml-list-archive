@@ -1,0 +1,176 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A9906BB84
+	for <caml-list@yquem.inria.fr>; Tue, 11 Jul 2006 04:09:51 +0200 (CEST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k6B29RA2004305
+	for <caml-list@yquem.inria.fr>; Tue, 11 Jul 2006 04:09:37 +0200
+Received: from localhost (suiren [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.7/8.13.6) with ESMTP id k6B29Nge007007;
+	Tue, 11 Jul 2006 11:09:23 +0900 (JST)
+Date: Tue, 11 Jul 2006 11:09:16 +0900 (JST)
+Message-Id: <20060711.110916.22502254.garrigue@math.nagoya-u.ac.jp>
+To: brogoff@speakeasy.net
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Polymorphic method question
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <Pine.LNX.4.58.0607101215080.5875@shell2.speakeasy.net>
+References: <Pine.LNX.4.58.0607101215080.5875@shell2.speakeasy.net>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 44B30857.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; slap:01 ocaml:01 foobar:01 escapes:01 foobar:01 inference:01 inference:01 recursion:01 recursion:01 recursive:01 abstracting:01 variants:01 verbose:01 odersky:01 sig:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.0.3
+
+From: brogoff <brogoff@speakeasy.net>
+Subject: [Caml-list] Polymorphic method question
+Date: Mon, 10 Jul 2006 12:21:26 -0700 (PDT)
+
+> Hi,
+>     I'm sure I'll slap my forehead in disgust when someone lifts the
+> scales from my eyes, but I'm once again perplexed by a type error
+> from OCaml when using objects. Can someone tell me why I get the
+> error from the second case (with the classes connected by "and") when
+> the first case is OK?
+> # class virtual ['a] bar =
+>     object
+>       method virtual get : 'a
+>     end
+>   and foobar =
+>     object
+>       method virtual f : 'a . 'a bar -> 'a
+>     end;;
+>               Characters 115-132:
+>         method virtual f : 'a . 'a bar -> 'a
+>                            ^^^^^^^^^^^^^^^^^
+> This type scheme cannot quantify 'a :
+> it escapes this scope.
+
+Because bar is not yet completely defined when you use it in foobar.
+This is all related with parameter constraint inference: we don't know
+yet wether bar's parameter is really polymorphic or is constraint (e.g.
+'a = 'b * 'c).
+Note that the problem does not occur with direct type definitions, as
+constraint inference is not done in that case (this is one of the
+reasons you cannot combine type and class definitions.)
+
+# type 'a bar = < get: 'a > and foobar = < f : 'a. 'a bar -> 'a >;;
+type 'a bar = < get : 'a >
+and foobar = < f : 'a. 'a bar -> 'a >
+
+The only way to solve this problem would be to remove parameter
+constraint inference from classes. It would certainly break some
+programs, so this seems difficult.
+
+By the way, if you're ready to define your types first, then you
+can do this properly.
+ 
+# class virtual ['a] bar = object method virtual get : 'a end
+  and virtual foobar = object method virtual f : 'a . 'a bar_t -> 'a end;;
+class virtual ['a] bar : object method virtual get : 'a end
+and virtual foobar : object method virtual f : 'a bar_t -> 'a end
+
+>    BTW, This example was distilled from one in which I could not cleanly
+> remove the class recursion, one involving an "extensible visitor" in
+> which there is a recursion between the visited and visitor classes.
+> Assuming there's an obvious answer to my first question, is there a
+> nice workaround in this case?
+
+Extensible visitor is more complex. You can already find the
+polymorphic variant solution at
+   http://www.math.nagoya-u.ac.jp/~garrigue/papers/
+There is a new solution using private rows and recursive modules
+inside "Private rows: abstracting the unnamed".
+
+With Keiko Nakata, we found another solution using objects in place of
+polymorhic variants. This is rather verbose, but here is the code.
+This is close to the Odersky&Zenger approach in Scala, but here our
+visitor is purely functional.
+Note how we are not able to use eval's self directly for recursion, as
+we need an abstract row.
+
+Jacques Garrigue
+
+(* OO decomposition in Objective Caml *)
+
+class type ['a,'exp] visit_add = object
+  method visitNum : int -> 'a
+  method visitAdd : 'exp -> 'exp -> 'a
+end
+
+module type AddTE = sig
+  type ('a,'exp) t
+  type exp = < accept : 'a. ('a, exp) t -> 'a >
+  val num : int -> exp
+  val add : exp -> exp -> exp
+end
+
+module type AddT = sig
+  include AddTE
+  val eval : (int, exp) t Lazy.t
+end
+
+module AddF(X : AddT with type ('a,'exp) t = private ('a,'exp) #visit_add) =
+struct
+  type ('a, 'exp) t = ('a, 'exp) X.t
+  class type exp = object ('e) method accept : 'a. ('a, 'e) t -> 'a end
+  class num x = object (_ : #exp) method accept v = v#visitNum x end
+  let num x = new num x
+  class add a b = object (_ : #exp) method accept v = v#visitAdd a b end
+  let add x = new add x
+  class eval = object
+    method visitNum (i : int) = i
+    method visitAdd (r : exp) (l : exp) =
+      r#accept (Lazy.force X.eval) + l#accept (Lazy.force X.eval)
+  end
+  let eval = lazy (new eval)
+end
+
+module rec Add : AddT with type('a,'exp) t = ('a,'exp) visit_add = AddF(Add)
+
+class type ['a,'exp] visit_add_neg = object
+  inherit ['a,'exp] visit_add
+  method visitNeg : 'exp -> 'a
+end
+
+module type AddNegT = sig
+  include AddT
+  val neg : exp -> exp
+end
+
+module AddNegF(X : AddNegT with
+               type ('a,'exp) t = private ('a,'exp) #visit_add_neg) =
+struct
+  module Add = AddF(X)
+  include (Add : AddTE with type ('a,'e) t = ('a,'e) X.t)
+  class neg x = object (_ : #Add.exp) method accept v = v#visitNeg x end
+  let neg x = new neg x
+  class eval = object
+    inherit Add.eval
+    method visitNeg (e : exp) = - e#accept (Lazy.force X.eval)
+  end
+  let eval = lazy (new eval)
+end
+
+module rec AddNeg : AddNegT with type ('a,'exp) t = ('a,'exp) visit_add_neg =
+  AddNegF(AddNeg)
+
+
+# open Add;;
+# let e1 = (add (num 2) (num 3));;
+val e1 : Add.exp = <obj>
+# e1#accept (Lazy.force eval);;
+- : int = 5
+# open AddNeg;;
+# let e2 = neg (e1 : Add.exp :> exp);;
+val e2 : AddNeg.exp = <obj>
+# e2#accept (Lazy.force eval);;
+- : int = -5
+

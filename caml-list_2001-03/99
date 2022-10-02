@@ -1,0 +1,200 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA08960; Mon, 12 Mar 2001 18:13:39 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA10169 for <caml-list@pauillac.inria.fr>; Mon, 12 Mar 2001 18:13:38 +0100 (MET)
+Received: from uni-sb.de (uni-sb.de [134.96.252.33])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f2CHDbP13047
+	for <caml-list@inria.fr>; Mon, 12 Mar 2001 18:13:37 +0100 (MET)
+Received: from cs.uni-sb.de (cs.uni-sb.de [134.96.252.31])
+	by uni-sb.de (8.11.3/2001022100) with ESMTP id f2CHDZx02564;
+	Mon, 12 Mar 2001 18:13:35 +0100 (CET)
+Received: from ps.uni-sb.de (grizzly.ps.uni-sb.de [134.96.186.68])
+	by cs.uni-sb.de (8.11.3/2001020500) with ESMTP id f2CHDaq01140;
+	Mon, 12 Mar 2001 18:13:36 +0100 (CET)
+X-Authentication-Warning: rigel.cs.uni-sb.de: Host grizzly.ps.uni-sb.de [134.96.186.68] claimed to be ps.uni-sb.de
+Received: from ps.uni-sb.de (grieg.ps.uni-sb.de [134.96.186.139])
+	by ps.uni-sb.de (8.11.0/8.11.0) with ESMTP id f2CHDZe02467;
+	Mon, 12 Mar 2001 18:13:35 +0100
+Message-ID: <3AAD03BF.BDABDE1@ps.uni-sb.de>
+Date: Mon, 12 Mar 2001 18:13:35 +0100
+From: Andreas Rossberg <rossberg@ps.uni-sb.de>
+Organization: =?iso-8859-1?Q?Universit=E4t?= des Saarlandes
+X-Mailer: Mozilla 4.76 [en] (X11; U; Linux 2.2.17-14 i686)
+X-Accept-Language: de, en
+MIME-Version: 1.0
+To: caml-list@inria.fr
+CC: Christophe Raffalli <Christophe.Raffalli@univ-savoie.fr>
+Subject: Re: [Caml-list] Caml 3.01 : pb with include
+References: <20010311060436.A14277@verdot.inria.fr> <3AACB899.5206E211@univ-savoie.fr>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Christophe Raffalli wrote:
+> 
+> I tried to use the new include feature for my algebra library. I failed
+> !
+> Am I missing something ?
+
+Actually it is not the include feature causing the trouble, but rather
+your use of with module constraints.
+
+> Here is a small example I created just to show the problem:
+> 
+> module type Semi_Group =
+> sig
+>   type t
+>   val e : t
+>   val ( ** ) : t -> t -> t
+> end
+> 
+> module type Group =
+> sig
+>   include Semi_Group
+>   val inv : t -> t
+> end
+> 
+> module type Semi_Group_Morphism =
+> sig
+>   module SG1 : Semi_Group
+>   module SG2 : Semi_Group
+>   val f : SG1.t -> SG2.t
+> end
+> 
+> module type Group_Morphism =
+> sig
+>   module G1 : Group
+>   module G2 : Group
+>   include Semi_Group_Morphism with module SG1 = G1 and module SG2 = G2
+> end
+> 
+> (*
+> Nice : SG1 et SG2 are groups : Here isCaml answer
+
+Well, not so nice really, because this treatment exactly is what causes
+the later error. See below.
+
+> module type Group_Morphism =
+>   sig
+>     module G1 : Group
+>     module G2 : Group
+>     module SG1 :
+>       sig
+>         type t = G1.t
+>         val e : t
+>         val ( ** ) : t -> t -> t
+>         val inv : t -> t
+>       end
+>     module SG2 :
+>       sig
+>         type t = G2.t
+>         val e : t
+>         val ( ** ) : t -> t -> t
+>         val inv : t -> t
+>       end
+>     val f : SG1.t -> SG2.t
+> 
+> end
+> *)
+> 
+> module Idt_Semi_Group_Morphism(SG : Semi_Group) = (
+> struct
+>   module SG1 = SG
+>   module SG2 = SG
+>   let f = fun x -> x
+> end : Semi_Group_Morphism with module SG1 = SG and module SG2 = SG)
+> 
+> module Idt_Group_Morphism(G : Group) = (
+> struct
+>   module G1 = G
+>   module G2 = G
+>   include (Idt_Semi_Group_Morphism(G) : Semi_Group_Morphism with module
+> SG1 = G and module SG2 = G)
+> end : Group_Morphism with module SG1 = G and module SG2 = G and module
+> G1 = G and module G2 = G)
+
+Just an aside: some of the outer module constraints here are redundant,
+because they are already specified in the signature Group_Morphism. It
+should suffice to say:
+
+ ... : Group_Morphism with module G1 = G and module G2 = G
+
+The signature annotation (at the include) also is a bit unnecessary, but
+is the one that seems to be causing the error.
+
+> (*
+> Heavy and does not work !
+> 
+> Signature mismatch:
+> Modules do not match:
+>   sig
+>     module SG1 : sig type t = G.t val e : t val ( ** ) : t -> t -> t end
+>     module SG2 : sig type t = G.t val e : t val ( ** ) : t -> t -> t end
+>     val f : SG1.t -> SG2.t
+>   end
+
+That is the result signature of the functor application
+Idt_Semi_Group_Morphism(G).
+
+> is not included in
+>   sig
+>     module SG1 :
+>       sig
+>         type t = G.t
+>         val e : t
+>         val ( ** ) : t -> t -> t
+>         val inv : t -> t
+>       end
+>     module SG2 :
+>       sig
+>         type t = G.t
+>         val e : t
+>         val ( ** ) : t -> t -> t
+>         val inv : t -> t
+>       end
+>     val f : SG1.t -> SG2.t
+>   end
+
+And that is the signature the compiler seems to calculate for
+
+  Semi_Group_Morphism with module SG1 = G and module SG2 = G
+
+Like in the case of Group_morphism above, SG1 and SG2 contain an inv
+member in this signature. I think this semantics of module constraints
+is not right - it should not extend subsignatures, only propagate type
+identities. This not exactly is a bug, but IMHO not what you want in
+most situations - at least not in this particular situation. Was there a
+particular motivation to design the language this way?
+
+> Modules do not match:
+>   sig type t = G.t val e : t val ( ** ) : t -> t -> t end
+> is not included in
+>   sig type t = G.t val e : t val ( ** ) : t -> t -> t val inv : t -> t
+> end
+> The field `inv' is required but not
+> provided
+> *)
+
+And this is correct, given the semantics of module constraints.
+
+The simplest workaround is to remove the signature annotation at the
+include spec (did not try it, though). Alternatively, you could avoid
+using module constraints and restrict yourself to type constraints, ie.
+
+  include (Idt_Semi_Group_Morphism(G) : Semi_Group_Morphism
+           with type SG1.t = G.t and type SG2.t = G.t)
+
+And similar in signature Group_Morphism.
+
+Best regards,
+
+	- Andreas
+
+-- 
+Andreas Rossberg, rossberg@ps.uni-sb.de
+
+"Computer games don't affect kids.
+ If Pac Man affected us as kids, we would all be running around in
+ darkened rooms, munching pills, and listening to repetitive music."
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

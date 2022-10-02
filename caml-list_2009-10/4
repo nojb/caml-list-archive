@@ -1,0 +1,185 @@
+Return-Path: <rixed@happyleptic.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.6 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id D2FF0BC37
+	for <caml-list@yquem.inria.fr>; Thu,  1 Oct 2009 14:10:17 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkMCAI84xErUGyoFkWdsb2JhbACabQEBCQsKGgO7GoQpBA
+X-IronPort-AV: E=Sophos;i="4.44,487,1249250400"; 
+   d="ml'?scan'208";a="35403090"
+Received: from smtp5-g21.free.fr ([212.27.42.5])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 01 Oct 2009 14:10:16 +0200
+Received: from smtp5-g21.free.fr (localhost [127.0.0.1])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 1F75ED48158
+	for <caml-list@yquem.inria.fr>; Thu,  1 Oct 2009 14:10:11 +0200 (CEST)
+Received: from yeeloong (happyleptic.org [82.67.194.89])
+	by smtp5-g21.free.fr (Postfix) with SMTP id 39993D480AE
+	for <caml-list@yquem.inria.fr>; Thu,  1 Oct 2009 14:10:08 +0200 (CEST)
+Received: by yeeloong (sSMTP sendmail emulation); Thu, 01 Oct 2009 14:09:46 +0200
+Date: Thu, 1 Oct 2009 14:09:46 +0200
+From: rixed@happyleptic.org
+To: caml-list@yquem.inria.fr
+Subject: Missing the cmi files required to use toplevellib.cma
+Message-ID: <20091001120946.GA17610@yeeloong>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="fdj2RfSjLxBAspz7"
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-06-14)
+X-Spam: no; 0.00; cmi:01 toplevellib:01 ocaml:01 cmi:01 toplevel:01 toplevellib:01 printtyp:01 typemod:01 ocaml-:01 compilation:01 flags:01 sig:01 sig:01 flags:01 printf:01 
+X-Attachments: name="cmidump.ml" name="Makefile" 
+Status: O
+Content-Length: 4461
+Lines: 146
+
+
+--fdj2RfSjLxBAspz7
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+While learning OCaml, I just coded a small program that dumps
+the full content of a cmi file. I find this more usefull than
+ocamlbrowser or to use the toplevel to have a small command line
+driven dumper, and it was also a good pretext to have a look
+under the cover.
+
+The problem is : most of the usefull types and functions are
+installed in the toplevellib.cma but I can't use this without
+the proper cmi files (I need config.cmi for cmi_magic_number,
+printtyp.cmi and typemod.cmi for printing signatures, but
+env.cmi would be nice to have as well for read_signature).
+
+Of course I can use those left in ocaml-3.11.1 directory after
+compilation, but having them installed would help the creation
+and distribution of such tools.
+
+But maybe there is an other way to use toplevellib.cma that I'm
+unaware of ? If not, then why not install these cmi files along
+with toplevellib ?
+
+Anyway, if anyone is interrested the tool is attached.
+
+--fdj2RfSjLxBAspz7
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="cmidump.ml"
+
+open Format
+
+let want_magic = ref false
+let want_crc = ref false
+let want_name = ref false
+let want_flags = ref false
+let want_sig = ref false
+let simplify_sig = ref false
+
+(* Stolen from env.ml - would be great of exported *)
+type flags = Rectypes
+
+let print_flags flags =
+	let flag_name = function
+	| Rectypes -> "Rectypes" in
+	printf "@[Flags@ =@ [@[" ;
+	List.iter (fun f -> printf "%s@ " (flag_name f)) flags ;
+	printf "]@]@]@."
+
+let print_magic m =
+	printf "@[Cmi magic number@ =@ %s (%s)@]@."
+		m (if m = Config.cmi_magic_number then "OK" else "Wrong!")
+
+let print_name name = printf "@[Name@ =@ %s@]@." name
+
+let print_crcs crcs =
+	let print_crc (modname, crc) = printf "@[%s [%s]@]@ " modname (String.escaped crc) in
+	printf "@[CRCs = @[" ; List.iter print_crc crcs ; printf "@]@]@."
+
+let print_sig sign =
+	fprintf std_formatter "@[Signature@ =@ @[<1>%a@]@]@."
+		Printtyp.signature
+		(if !simplify_sig then (Typemod.simplify_signature sign) else sign)
+
+(* Reading persistent structures from .cmi files - Stolen from typing/env.ml
+ * We'd rather use this instead of Env.read_signature so that we get all
+ * components of the cmi files, not just signature *)
+
+let process_cmi_file filename =
+	let show_sig = !want_sig ||
+		(not !want_magic && not !want_crc && not !want_name && not !want_flags) in
+	let ic = open_in_bin filename in
+	let magic_len = String.length (Config.cmi_magic_number) in
+	let buffer = String.create magic_len in
+	really_input ic buffer 0 magic_len ;
+	let (name, sign) = input_value ic in
+	let crcs = input_value ic in
+	let flags = input_value ic in
+	close_in ic ;
+	if !want_magic then print_magic buffer ;
+	if !want_name  then print_name name ;
+	if !want_crc   then print_crcs crcs ;
+	if !want_flags then print_flags flags ;
+	if show_sig    then print_sig sign
+
+let process_file fname =
+	if Filename.check_suffix fname "cmi" then process_cmi_file fname
+	else printf "Don't know what to do with file '%s'\n" fname
+
+let _ =
+	Arg.parse [
+		"-magic",    Arg.Set want_magic,   " Display cmi magic number" ;
+		"-name",     Arg.Set want_name,    " Display module name" ;
+		"-crc",      Arg.Set want_crc,     " Display CRC" ;
+		"-flags",    Arg.Set want_flags,   " Display flags" ;
+		"-sig",      Arg.Set want_sig,     " Display signature" ;
+		"-simplify", Arg.Set simplify_sig, " Do not simplify the signature" ]
+		process_file
+		"Syntax :
+	cmidump [options] files...
+Shows the content of cmi files.
+If no option is given, shows only the signature.
+Possible options :
+"
+
+--fdj2RfSjLxBAspz7
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename=Makefile
+
+OCAMLC   = ocamlfind ocamlc
+OCAMLDEP = ocamlfind ocamldep
+OCAMLFLAGS    = -w Ae -g
+
+EXTCMI = env.cmi printtyp.cmi typemod.cmi config.cmi
+
+.PHONY: all clean install uninstall
+
+all: checkcmi cmidump
+
+cmidump: cmidump.cmo
+	$(OCAMLC) -o $@ /usr/local/lib/ocaml/toplevellib.cma $(OCAMLFLAGS) $^
+
+checkcmi:
+	@for i in $(EXTCMI) ; do if ! test -f $$i ; then echo "Ocamlc will fail if it cant access $$i" ; fi ; done
+
+# Common rules
+.SUFFIXES: .ml .mli .cmo .cmi .cmx
+
+.ml.cmo:
+	$(OCAMLC) $(OCAMLFLAGS) -I /usr/local/lib/ocaml -c $<
+
+.mli.cmi:
+	$(OCAMLC) $(OCAMLFLAGS) -c $<
+
+# Clean up
+clean:
+	rm -f cmidump.cmi *.cmo *.s
+
+# Dependencies
+.depend: *.ml
+	$(OCAMLDEP) *.ml > .depend
+
+include .depend
+
+--fdj2RfSjLxBAspz7--
+

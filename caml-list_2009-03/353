@@ -1,0 +1,118 @@
+Return-Path: <furr@cs.umd.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id DA4B7BBC4
+	for <caml-list@yquem.inria.fr>; Thu, 19 Mar 2009 05:02:05 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmsCAJZgwUmACH+ThWdsb2JhbACVcQEBAQoLCgUTrROHJIhOg34G
+X-IronPort-AV: E=Sophos;i="4.38,387,1233529200"; 
+   d="scan'208";a="22796457"
+Received: from server-nat-4.cs.umd.edu (HELO bakedbeans.cs.umd.edu) ([128.8.127.147])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 19 Mar 2009 05:02:05 +0100
+X-CSD-MailScanner-Watermark: 1238040118.10897@HSlQTJBscQPWTdObbZ3mtg
+Received: from circular.cs.umd.edu (circular.cs.umd.edu [128.8.128.176])
+	by bakedbeans.cs.umd.edu (8.13.1/8.14.1) with ESMTP id n2J41vKE025907
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Thu, 19 Mar 2009 00:01:57 -0400
+Received: from loompa.cs.umd.edu (loompa.cs.umd.edu [128.8.128.63])
+	by circular.cs.umd.edu (8.13.1/8.14.1) with ESMTP id n2J41vZ4012255
+	for <caml-list@yquem.inria.fr>; Thu, 19 Mar 2009 00:01:57 -0400
+Received: from localhost (localhost [127.0.0.1])
+	by loompa.cs.umd.edu (8.13.8+Sun/8.14.1) with ESMTP id n2J41vxr022686
+	for <caml-list@yquem.inria.fr>; Thu, 19 Mar 2009 00:01:57 -0400 (EDT)
+Date: Thu, 19 Mar 2009 00:01:57 -0400 (EDT)
+From: Michael Furr <furr@cs.umd.edu>
+X-X-Sender: furr@loompa
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Cannot safely evaluate the definition of the
+ recursively-defined module
+In-Reply-To: <49C0E44F.6040603@inescporto.pt>
+Message-ID: <Pine.GSO.4.64.0903182355520.29910@loompa>
+References: <49C0E44F.6040603@inescporto.pt>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Greylist: Sender IP whitelisted, not delayed by milter-greylist-4.0 (bakedbeans.cs.umd.edu [172.24.3.39]); Thu, 19 Mar 2009 00:01:57 -0400 (EDT)
+X-Spam: no; 0.00; functors:01 run-time:01 sig:01 val:01 val:01 struct:01 pervasives:01 elt:01 sig:01 struct:01 cheers:01 -mike:01 constants:01 beginners:01 wrote:01 
+
+
+On Wed, 18 Mar 2009, Hugo Ferreira wrote:
+
+> I hope this is not a beginners questions.
+> I am trying to reuse code via functors,
+> however I am getting the following error:
+>
+> Cannot safely evaluate the definition of the recursively-defined module
+> (refers to "AA.empty" when implemented as a constant value)
+>
+> I circumvented the problem by not using a
+> constant value but a function instead. As I
+> understand it this may cause run-time errors.
+> My question is: is their any way to make the
+> following example work.
+
+If you only need to store a constant value in the module, then you can get 
+around the restriction by splitting the module into a (recursively-)safe 
+module, and an extension that adds the constants.  Here is a slightly 
+modified version of your code showing the transformation:
+
+----
+module type AA_Safe =
+sig
+   type q
+   type t = string
+
+   val compare: t -> t -> int
+   val add: t -> q -> q
+   (* omit empty here, since it is not "safe" *)
+end
+
+module rec A1 : AA_Safe with type q = ASet.t  =
+struct
+   type q = ASet.t
+   type t = string
+   let compare s1 s2 = Pervasives.compare s1 s2
+   let add e s = ASet.add e s
+end
+and ASet : Set.S with type elt = A1.t = Set.Make(A1)
+
+(* now create the full module *)
+module type AA = sig
+   include AA_Safe
+   val empty: q
+end
+
+module A2 : AA = struct
+   include A1
+   let empty = ASet.empty
+end
+
+module type Wrap_A =
+sig
+   type t
+   type q
+
+   val init: q
+   val add: t -> q -> q
+end
+module Make_A (An_A : AA) : Wrap_A
+   =
+struct
+   type t = An_A.t
+   type q = An_A.q
+
+   (*let init = ASet.empty*)
+   let init = An_A.empty
+   let add t q = An_A.add t q
+end
+
+module Wrap_A1 = Make_A( A2 )
+----
+
+Cheers,
+-Mike
+

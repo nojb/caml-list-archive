@@ -1,0 +1,75 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 58329BBCA
+	for <caml-list@yquem.inria.fr>; Wed,  2 Apr 2008 06:02:10 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgUCAGOh8keFBoIFiGdsb2JhbACRTAEBAQ8mmis
+X-IronPort-AV: E=Sophos;i="4.25,591,1199660400"; 
+   d="scan'208";a="24482941"
+Received: from rabbit.math.nagoya-u.ac.jp ([133.6.130.5])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 02 Apr 2008 06:02:09 +0200
+Received: from localhost (millas [172.16.30.29])
+	by rabbit.math.nagoya-u.ac.jp (8.12.11/3.7W) with ESMTP id m3242573025701;
+	Wed, 2 Apr 2008 13:02:05 +0900 (JST)
+Date: Wed, 02 Apr 2008 13:02:05 +0900 (JST)
+Message-Id: <20080402.130205.125897873.garrigue@math.nagoya-u.ac.jp>
+To: cedilla@gmail.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] enter_blocking_section() and string modifications
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <47F2F9BC.4020502@gmail.com>
+References: <47F2F9BC.4020502@gmail.com>
+X-Mailer: Mew version 4.0.69 on Emacs 22.0.50 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; low-level:01 ocaml:01 ocaml:01 allocating:01 compaction:01 deallocated:01 camlparam:01 lablgtk:01 compaction:01 camlprim:01 camlparam:01 mlsize:01 wosize:01 wosize:01 val:01 
+
+From: Reed Wilson <cedilla@gmail.com>
+
+> I'm currently writing a multi-threaded program, and part of the program 
+> is low-level string manipulation. I found that (with the code I'm using) 
+> making a tight C loop is quite a bit faster than using OCaml, so I'm 
+> using an external function for that.
+> 
+> My question is: can I use enter_blocking_section() for character 
+> replacement on an OCaml string? I know I can't use it for allocating 
+> anything on the heap due to the possibility of the GC doing funny things 
+> with it, but would straight replacement of existing string data be OK?
+
+In general, you can't. The GC may move strings around.
+However, if you disable compaction, and if your string is on the old
+heap (i.e. it is not young), and you make sure it cannot be
+deallocated (the usual CAMLparam macros should be enough for that),
+then it should be ok.
+Of course there is no point in going through this pain if you're
+not sure that concurrency is going to improve performance.
+
+Here is a snippet from ml_gpointer.c, in lablgtk, which copies an
+abstract block to the old heap when it is young. Such a block is then
+stable as long as there is no compaction.
+
+CAMLprim value ml_stable_copy (value v)
+{
+    if (Is_block(v) && (char*)(v) < young_end && (char*)(v) > young_start)
+    {
+        CAMLparam1(v);
+        mlsize_t i, wosize = Wosize_val(v);
+        int tag = Tag_val(v);
+        value ret;
+        if (tag < No_scan_tag) invalid_argument("ml_stable_copy");
+        ret = alloc_shr (wosize, tag);
+        for (i=0; i < wosize; i++) Field(ret,i) = Field(v,i);
+        CAMLreturn(ret);
+    }
+    return v;
+}
+
+Jacques Garrigue
+

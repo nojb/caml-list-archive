@@ -1,0 +1,256 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA31515 for caml-redistribution; Thu, 22 Apr 1999 18:58:06 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA09629 for <caml-list@pauillac.inria.fr>; Thu, 22 Apr 1999 14:01:14 +0200 (MET DST)
+Received: from mail12.svr.pol.co.uk (mail12.svr.pol.co.uk [195.92.193.215])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id OAA20232
+	for <caml-list@inria.fr>; Thu, 22 Apr 1999 14:01:13 +0200 (MET DST)
+Received: from modem-88.atenolol.dialup.pol.co.uk
+	([62.136.54.88] helo=toy.william.bogus ident=williamc)
+	by mail12.svr.pol.co.uk with esmtp (Exim 2.12 #1)
+	id 10aHMD-0005Wk-00
+	for caml-list@inria.fr; Thu, 22 Apr 1999 12:09:25 +0100
+Received: (from williamc@localhost)
+	by toy.william.bogus (8.8.7/8.8.7) id MAA03862;
+	Thu, 22 Apr 1999 12:59:42 +0100
+Date: Thu, 22 Apr 1999 12:59:42 +0100
+Message-Id: <199904221159.MAA03862@toy.william.bogus>
+From: William Chesters <williamc@dai.ed.ac.uk>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+To: caml-list@inria.fr
+Subject: (again) patch: ocamldebug prints float arrays without barfing
+In-Reply-To: <199904220000.BAA03017@toy.william.bogus>
+References: <199904220000.BAA03017@toy.william.bogus>
+X-Mailer: VM 6.34 under Emacs 20.2.1
+Sender: weis
+
+William Chesters writes:
+ >    Here's a patch to allow ocamldebug to display the value of float array
+ > variables in the debuggee---currently it terminates with an
+ > uncaught [Debugcom.Marshalling_error].
+
+Sorry, wasn't functioning late at night and got inelegant error
+handling (though functionally correct).  Here's the right thing in case
+anyone wants to use it as the base of a fix in the CVS.
+
+
+diff -r -C 2 ocaml-2.02/byterun/debugger.c ocaml-2.02-w3/byterun/debugger.c
+*** ocaml-2.02/byterun/debugger.c	Thu Apr 22 00:54:07 1999
+--- ocaml-2.02-w3/byterun/debugger.c	Thu Apr 22 00:47:43 1999
+***************
+*** 303,307 ****
+        val = getval(dbg_in);
+        i = getword(dbg_in);
+!       putval(dbg_out, Field(val, i));
+        flush(dbg_out);
+        break;
+--- 303,315 ----
+        val = getval(dbg_in);
+        i = getword(dbg_in);
+!       if (Tag_val(val) == Double_array_tag) {
+! 	double d = Double_field(val, i);
+! 	putch(dbg_out, 1);
+! 	really_putblock(dbg_out, (char *)&d, sizeof(double));
+!       }
+!       else {
+! 	putch(dbg_out, 0);
+! 	putval(dbg_out, Field(val, i));
+!       }
+        flush(dbg_out);
+        break;
+diff -r -C 2 ocaml-2.02/debugger/debugcom.ml ocaml-2.02-w3/debugger/debugcom.ml
+*** ocaml-2.02/debugger/debugcom.ml	Thu Apr 22 00:54:30 1999
+--- ocaml-2.02-w3/debugger/debugcom.ml	Thu Apr 22 12:53:56 1999
+***************
+*** 156,160 ****
+  
+  let value_size = if 1 lsl 31 = 0 then 4 else 8
+! 
+  let input_remote_value ic =
+    let v = String.create value_size in
+--- 156,161 ----
+  
+  let value_size = if 1 lsl 31 = 0 then 4 else 8
+! let double_array_tag = 254
+!     
+  let input_remote_value ic =
+    let v = String.create value_size in
+***************
+*** 168,210 ****
+  module Remote_value =
+    struct
+!     type t = string
+!     
+!     let obj v =
+!       output_char !conn.io_out 'M';
+!       output_remote_value !conn.io_out v;
+!       flush !conn.io_out;
+!       try
+!         input_value !conn.io_in
+!       with End_of_file | Failure _ ->
+!         raise Marshalling_error
+! 
+!     let is_block v =
+!       Obj.is_block (Array.unsafe_get (Obj.magic v : Obj.t array) 0)
+! 
+!     let tag v =
+!       output_char !conn.io_out 'H';
+!       output_remote_value !conn.io_out v;
+!       flush !conn.io_out;
+!       let header = input_binary_int !conn.io_in in
+!       header land 0xFF
+  
+!     let size v =
+!       output_char !conn.io_out 'H';
+!       output_remote_value !conn.io_out v;
+!       flush !conn.io_out;
+!       let header = input_binary_int !conn.io_in in
+!       header lsr 10
+  
+      let field v n =
+!       output_char !conn.io_out 'F';
+!       output_remote_value !conn.io_out v;
+!       output_binary_int !conn.io_out n;
+!       flush !conn.io_out;
+!       input_remote_value !conn.io_in
+  
+      let of_int n =
+        let v = String.create value_size in
+        Array.unsafe_set (Obj.magic v : int array) 0 n;
+!       v
+  
+      let local pos =
+--- 169,234 ----
+  module Remote_value =
+    struct
+!     type t = UnboxedFloat of float | NormalValue of string
+  
+!     let obj = function
+!       |	UnboxedFloat d ->
+! 	  Obj.magic d
+!       |	NormalValue v ->
+! 	  output_char !conn.io_out 'M';
+! 	  output_remote_value !conn.io_out v;
+! 	  flush !conn.io_out;
+! 	  try
+! 	    input_value !conn.io_in
+! 	  with End_of_file | Failure _ ->
+! 	    raise Marshalling_error
+! 
+!     let is_block = function
+!       |	UnboxedFloat _ -> false
+!       |	NormalValue v ->
+! 	  Obj.is_block (Array.unsafe_get (Obj.magic v : Obj.t array) 0)
+! 
+!     let tag = function
+!       |	UnboxedFloat _ ->
+! 	  raise (Invalid_argument "Debugcom.Remote_value.tag")
+!       |	NormalValue v ->
+! 	  output_char !conn.io_out 'H';
+! 	  output_remote_value !conn.io_out v;
+! 	  flush !conn.io_out;
+! 	  let header = input_binary_int !conn.io_in in
+! 	  header land 0xFF
+! 
+!     let size = function
+!       |	UnboxedFloat _ ->
+! 	  raise (Invalid_argument "Debugcom.Remote_value.size")
+!       |	NormalValue v ->
+! 	  output_char !conn.io_out 'H';
+! 	  output_remote_value !conn.io_out v;
+! 	  flush !conn.io_out;
+! 	  let header = input_binary_int !conn.io_in in
+! 	  header lsr
+! 	    (if header land 255 = double_array_tag && value_size = 4
+! 	    then 11
+! 	    else 10)
+  
+      let field v n =
+!       match v with
+!       |	UnboxedFloat _ ->
+! 	  raise (Invalid_argument "Debugcom.Remote_value.field")
+!       |	NormalValue v ->
+! 	  output_char !conn.io_out 'F';
+! 	  output_remote_value !conn.io_out v;
+! 	  output_binary_int !conn.io_out n;
+! 	  flush !conn.io_out;
+! 	  if input_byte !conn.io_in = 0 then
+! 	    NormalValue (input_remote_value !conn.io_in)
+! 	  else
+! 	    let buf = String.create 8 in
+! 	    really_input !conn.io_in buf 0 8;
+! 	    UnboxedFloat (Array.unsafe_get (Obj.magic buf) 0)
+  
+      let of_int n =
+        let v = String.create value_size in
+        Array.unsafe_set (Obj.magic v : int array) 0 n;
+!       NormalValue v
+  
+      let local pos =
+***************
+*** 212,216 ****
+        output_binary_int !conn.io_out pos;
+        flush !conn.io_out;
+!       input_remote_value !conn.io_in
+  
+      let from_environment pos =
+--- 236,240 ----
+        output_binary_int !conn.io_out pos;
+        flush !conn.io_out;
+!       NormalValue (input_remote_value !conn.io_in)
+  
+      let from_environment pos =
+***************
+*** 218,222 ****
+        output_binary_int !conn.io_out pos;
+        flush !conn.io_out;
+!       input_remote_value !conn.io_in
+  
+      let global pos =
+--- 242,246 ----
+        output_binary_int !conn.io_out pos;
+        flush !conn.io_out;
+!       NormalValue (input_remote_value !conn.io_in)
+  
+      let global pos =
+***************
+*** 224,239 ****
+        output_binary_int !conn.io_out pos;
+        flush !conn.io_out;
+!       input_remote_value !conn.io_in
+  
+      let accu () =
+        output_char !conn.io_out 'A';
+        flush !conn.io_out;
+!       input_remote_value !conn.io_in
+  
+!     let closure_code v =
+!       output_char !conn.io_out 'C';
+!       output_remote_value !conn.io_out v;
+!       flush !conn.io_out;
+!       input_binary_int !conn.io_in
+  
+    end
+--- 248,266 ----
+        output_binary_int !conn.io_out pos;
+        flush !conn.io_out;
+!       NormalValue (input_remote_value !conn.io_in)
+  
+      let accu () =
+        output_char !conn.io_out 'A';
+        flush !conn.io_out;
+!       NormalValue (input_remote_value !conn.io_in)
+  
+!     let closure_code = function
+!       |	UnboxedFloat _ ->
+! 	  raise (Invalid_argument "Debugcom.Remote_value.closure_code")
+!       |	NormalValue v ->
+! 	  output_char !conn.io_out 'C';
+! 	  output_remote_value !conn.io_out v;
+! 	  flush !conn.io_out;
+! 	  input_binary_int !conn.io_in
+  
+    end
+
+
+

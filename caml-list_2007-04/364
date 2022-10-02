@@ -1,0 +1,136 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id B93FFBC6B;
+	Sun, 29 Apr 2007 06:43:14 +0200 (CEST)
+Received: from ipmail01.adl2.internode.on.net (ipmail01.adl2.internode.on.net [203.16.214.140])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l3T4hBdl018373;
+	Sun, 29 Apr 2007 06:43:13 +0200
+X-IronPort-AV: E=Sophos;i="4.14,465,1170595800"; 
+   d="scan'208";a="120791937"
+Received: from ppp8-148.lns1.syd7.internode.on.net (HELO [192.168.1.201]) ([59.167.8.148])
+  by ipmail01.adl2.internode.on.net with ESMTP; 29 Apr 2007 14:13:07 +0930
+Subject: Re: [Caml-list] menhir
+From: skaller <skaller@users.sourceforge.net>
+To: Francois.Pottier@inria.fr
+Cc: caml-list@inria.fr
+In-Reply-To: <20070428165058.GA31584@yquem.inria.fr>
+References: <1177756336.11923.18.camel@rosella.wigram>
+	 <20070428165058.GA31584@yquem.inria.fr>
+Content-Type: text/plain
+Date: Sun, 29 Apr 2007 14:43:03 +1000
+Message-Id: <1177821783.25394.37.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4634225F.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; 0200,:01 ocamlopt:01 bug:01 ocamlopt:01 yup:01 ocamlyacc:01 parser:01 parsers:01 programmatic:01 recursive:01 parser:01 recursive:01 recursion:01 ocamlyacc:01 recursion:01 
+
+On Sat, 2007-04-28 at 18:50 +0200, Francois Pottier wrote:
+
+> > Third the generated ml file was 4.5 Meg.  Ocamlopt on amd64 hung for so long
+> > I almost posted a bug report for Ocamlopt, but finally it finished.
+> 
+> Yup, I am somewhat disappointed that ocamlopt does not seem to have linear
+> time complexity, but I shouldn't complain too loud, my boss may be listening
+> :)
+> 
+> An option to generate tables like ocamlyacc would clearly be useful.
+
+Although that defeats one of the future advantages of Menhir:
+embedding. To understand what I mean you might look at the Felix
+parser generator. In Felix you can write parsers in any scope,
+and the user actions bind to the containing scope.
+
+This means you can think about mixing programmatic recursive 
+descent with the parser automaton. An executable recursive
+descent parser is easily extended dynamically (but has woeful
+error handling ;(
+
+For Menhir, embedding would be nice. However even without
+it being able to use recursion and actually pass arguments --
+which ocamlyacc does not support -- should allow decoupling
+of some of your grammar into smaller subgrammars, and this
+in turn could reduce compile time.
+
+It is possible (but I'm no expert!!) that the non-linearity
+in compiling Menhir generated code is due to a very 
+large let rec/and/... being generated. Some extra analysis 
+might fix that, i.e. using recursion only when necessary,
+and let/and/in otherwise (though I have no idea how to
+do that).
+
+For embedding the 'one token overshoot' is a bit nasty.
+
+OTOH with GLR parser, extra functionality is gained,
+and user actions must have no side effects, so
+the idea to 'push back' the overshoot token cannot be used
+(since it is a side-effect), at least without some thought.. 
+hmmm ..
+
+An extensible GLR+ parser would be interesting. This is 
+an extensible list of GLR parsers that run in 'parallel',
+using the GLR idea, but the list being dynamically extensible.
+Exactly how you'd manage it i don't know.
+
+The theoretical underpinnings should be the same as
+for open-recursion idea: make a grammar with a parameter
+representing extra productions, then you can fix it
+to close the grammar. This should at least be possible
+statically (at compile time).
+
+
+> > Basically: when Ocamlyacc reduces a production, it sometimes
+> > ends on the last token, and sometimes it overshoots by 1.
+> 
+> I don't know the details of your grammar, but our (perhaps naive) view is that
+> you should modify your grammar to avoid end-of-stream conflicts (and Menhir's
+> conflict reports will help you do that). Then, Menhir will not overshoot.
+
+Actually in my grammar there is a definite user defined ENDMARKER
+for the main grammar, and 'end-of-expression' and 'end-of-statements'
+set of tokens for the extensible parts. The input is not a file,
+it's a list of tokens built by other means.
+
+So the conflicts are spurious: end of stream can't be parsed
+(but of course Menhir doesn't know that). This is good,
+because Mehir CANNOT detect end of stream, since my lexbuf
+is a dummy and is not used at all.
+
+
+> > The semantics used are: when the exprx is processed the
+> > action arranges to push the terminator token back
+> > into the token stream.
+> 
+> How is this done? 
+
+The lexer function is bound to a class object which contains
+a mutable list of tokens. The actual lexbuf is ignored,
+its a dummy. So pushing token onto the list is just
+
+	ts <- last_token :: ts
+
+:)
+
+
+> It is possible that this hack is not compatible with Menhir,
+> because Menhir keeps a local cache of the next token, which is not properly
+> updated when you push your old token back.
+
+That's what I would have guessed.
+
+In order to use an LR parser recursively, which I do, it must
+be possible to control the lookahead token somehow. My code
+just uses an implementation detail of Ocamlyacc discovered
+by accident, and the detail differs for Menhir.
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

@@ -1,0 +1,125 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id pBS4owEo028677
+	for <caml-list@sympa-roc.inria.fr>; Wed, 28 Dec 2011 05:50:58 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgIDAGmf+k7RVda2kGdsb2JhbAAoGoUPlmuQSQgiAQEBAQkJDQcUBCGBcgEBAQQSAg8dAS0LAQMMAQUFCwMKAgIJHQICIhIBBQEKEgYTEgIOh2AjmDUKix2DM4Q9iTACBQuBJIJOhnyBFgSIN4xLjX09gU2CSw
+X-IronPort-AV: E=Sophos;i="4.71,418,1320620400"; 
+   d="scan'208";a="137054140"
+Received: from mail-tul01m020-f182.google.com ([209.85.214.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 28 Dec 2011 05:50:52 +0100
+Received: by obbwd18 with SMTP id wd18so14168339obb.27
+        for <multiple recipients>; Tue, 27 Dec 2011 20:50:51 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:sender:in-reply-to:references:date
+         :x-google-sender-auth:message-id:subject:from:to:cc:content-type
+         :content-transfer-encoding;
+        bh=5GzfxJBoYu1bHpd9OCc9OQRRIGc0sLjKtTDln2SMlas=;
+        b=gk4+SV3vg7XaafuAkwbRt2nIH71g30a8iQSjAxPLQiT2ASfN2HYk9vUJM1hMgApCgz
+         8JslSiLgVtlX6YjCgOGLJSUDw/ZMoRUuaYqx7JZmLHtUNzHNKng5YimoFkmhRvYc0Nf7
+         emD8q8ltvxV+lmIe366WYziZuNtZeoNKyePU4=
+MIME-Version: 1.0
+Received: by 10.182.192.101 with SMTP id hf5mr27229762obc.3.1325047851187;
+ Tue, 27 Dec 2011 20:50:51 -0800 (PST)
+Sender: till.varoquaux@gmail.com
+Received: by 10.182.28.198 with HTTP; Tue, 27 Dec 2011 20:50:50 -0800 (PST)
+In-Reply-To: <1325014940.5036.8.camel@samsung>
+References: <CEA65716-7575-4071-8A73-71D5E61C721C@inria.fr>
+	<1325014940.5036.8.camel@samsung>
+Date: Tue, 27 Dec 2011 23:50:50 -0500
+X-Google-Sender-Auth: ivqSOn5YhIpwtSdHoC8qW_t0ASw
+Message-ID: <CAHJESt0UM8-gKLXfeguBEnb5zcR5x=_rO1h1Gwyu2PEwFRX1mA@mail.gmail.com>
+From: Till Varoquaux <till@pps.jussieu.fr>
+To: Gerd Stolpmann <info@gerd-stolpmann.de>
+Cc: Damien Doligez <damien.doligez@inria.fr>, caml users <caml-list@inria.fr>
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id pBS4owEo028677
+X-Validation-by: till@pps.jussieu.fr
+Subject: Re: [Caml-list] RFC: basename, dirname, PR#4549
+
+Like Gerd pointed out the trailing slash handing in Posix semantic is
+there because a/b/x and a/b/x/ point to the same file. When combined
+with naive (but correct in a POSIX setting) application you can end-up
+with multiple // in the middle of a path (In posix pathname resolution
+multiple /'s are treated exactly like single slashes). This can
+happen:
+
+  let mydir = "/a/b/" in
+  let myfile = mydir ^ "/myfile" in
+
+now you have myfile = "/a/b//myfile" and (with current ocaml semantic):
+
+  basename (basename myfile) = "a/b"
+
+This can be solved by using a clever Filename.concat (the one in
+janestreet's core strips out all the extra '.' and '/' around the
+concatenation point) but should really be solved in basename/filename.
+
+Till
+
+On Tue, Dec 27, 2011 at 2:42 PM, Gerd Stolpmann <info@gerd-stolpmann.de> wrote:
+> Hi,
+>
+> I've done a lot of system programming in the past years, and I cannot
+> remember that I had to work around this small incompatibility.
+>
+> Semantically, the POSIX specs are better, because only directories are
+> allowed to have trailing slashes, and if you want to get the basename of
+> "path/" you want the name of the directory in >99% of the cases. The
+> trailing slash has only the meaning that it is asserted that the path
+> refers to a directory. And operations like "basename" better ignore such
+> assertions.
+>
+> There could be a problematic area, though: URLs. A trailing slash means
+> here a different resource. I don't know whether anybody is using
+> basename in this context.
+>
+> Gerd
+>
+> Am Dienstag, den 27.12.2011, 17:29 +0100 schrieb Damien Doligez:
+>> Hello,
+>>
+>> I would like to get some comments from the OCaml community at large about
+>> the problem raised in http://caml.inria.fr/mantis/view.php?id=4549
+>>
+>> In a nutshell, the problem is that our version of basename and dirname
+>> are not exactly the same as the Open Group's definition.
+>>
+>> We can easily implement the standard behaviour for basename and dirname,
+>> and it seems desirable, but there is a catch: we will have to change
+>> the specification of the standard library slightly.
+>>
+>> Currently, we specify this:
+>>
+>>    [concat (dirname name) (basename name)] returns a file name
+>>    which is equivalent to [name]. Moreover, after setting the
+>>    current directory to [dirname name] (with {!Sys.chdir}),
+>>    references to [basename name] (which is a relative file name)
+>>    designate the same file as [name] before the call to {!Sys.chdir}.
+>>
+>> With the Open Group basename and dirname, this becomes false for
+>> names that include some trailing slashes, because such slashes
+>> are removed by basename.  This means that a name "foo/bar/"
+>> becomes "foo/bar" when put through
+>>   [concat (dirname name) (basename name)]
+>> and opening "foo/bar" may succeed if it is a file, while
+>> opening "foo/bar/" would fail.
+>>
+>> I would like to know if anyone relies on the precise behaviour
+>> documented in the standard library, and for everyone else, would
+>> you prefer the old behaviour or the new (standard) behaviour?
+>>
+>> -- Damien
+>>
+>>
+>
+>
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+

@@ -1,0 +1,131 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA05282; Wed, 6 Aug 2003 20:30:59 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA01961 for <caml-list@pauillac.inria.fr>; Wed, 6 Aug 2003 20:30:57 +0200 (MET DST)
+Received: from nexus.stwing.upenn.edu (NEXUS.STWING.UPENN.EDU [165.123.132.61])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h76IUuT16994
+	for <caml-list@inria.fr>; Wed, 6 Aug 2003 20:30:56 +0200 (MET DST)
+Received: from force.stwing.upenn.edu (root@force.stwing.upenn.edu [165.123.132.65])
+	by nexus.stwing.upenn.edu (8.12.9/8.12.9) with ESMTP id h76IUsgZ022742
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=OK)
+	for <caml-list@inria.fr>; Wed, 6 Aug 2003 14:30:55 -0400 (EDT)
+Received: from force.stwing.upenn.edu (wlovas@[127.0.0.1])
+	by force.stwing.upenn.edu (8.12.9/8.12.9) with ESMTP id h76IUr4Q024037
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=OK)
+	for <caml-list@inria.fr>; Wed, 6 Aug 2003 14:30:54 -0400 (EDT)
+Received: (from wlovas@localhost)
+	by force.stwing.upenn.edu (8.12.9/8.12.9/Submit) id h76IUrun024036
+	for caml-list@inria.fr; Wed, 6 Aug 2003 14:30:53 -0400 (EDT)
+Date: Wed, 6 Aug 2003 14:30:53 -0400
+From: William Lovas <wlovas@stwing.upenn.edu>
+To: "caml-list@inria.fr" <caml-list@inria.fr>
+Subject: Re: [Caml-list] static class member....
+Message-ID: <20030806183052.GA23352@force.stwing.upenn.edu>
+Mail-Followup-To: "caml-list@inria.fr" <caml-list@inria.fr>
+References: <20030806151051.GB29704@redhat.com> <Pine.LNX.4.44.0308060901130.15452-100000@grace.speakeasy.net> <20030806174330.GA30804@redhat.com> <20030806181148.GA30782@davidb.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20030806181148.GA30782@davidb.org>
+User-Agent: Mutt/1.5.4i
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; lovas:01 wlovas:01 stwing:01 caml-list:01 bug:01 instructive:01 new':99 foo:01 incr:01 val:01 closures:01 compiler:01 ocaml:01 0700,:01 closure:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, Aug 06, 2003 at 11:11:48AM -0700, David Brown wrote:
+> On Wed, Aug 06, 2003 at 06:43:30PM +0100, Richard Jones wrote:
+> > The question though is why does my example work? Is this a bug
+> > in the compiler?
+> [...]
+> 
+> Creating objects of classes is an unusual thing in ocaml, since it is
+> like a function application of zero arguments.
+
+Yes, i've just been playing around with it.  It's somewhat instructive to
+limit yourself to the core language, and consider instantiation via `new'
+to be something like applying a function whose first argument is ().
+
+For a class with no arguments, e.g. something like,
+
+    class foo =
+        let counter = ref 0 in
+        object
+            method next () = incr counter; !counter
+        end
+
+the equivalent in the core language might be something like the following
+interaction:
+
+    # let new_counter =
+        let counter = ref 0 in
+        fun () -> fun () -> (incr counter; !counter);;
+    val new_counter : unit -> unit -> int = <fun>
+    # let count1 = new_counter ();;
+    val count1 : unit -> int = <fun>
+    # let count2 = new_counter ();;
+    val count2 : unit -> int = <fun>
+    # count1 ();;
+    - : int = 1
+    # count2 ();;
+    - : int = 2
+    # count1 ();;
+    - : int = 3
+
+where new_counter's first unit parameter is something like `new'.
+
+But for classes that take arguments, as in
+
+    class foo x =
+        let counter = ref 0 in
+        object
+            method next () = incr counter; !counter
+        end
+
+the special initial unit parameter gets lifted up to the top, with the
+other argument:
+
+    # let new_counter () x =
+        let counter = ref 0 in
+        fun () -> (incr counter; !counter);;
+    val new_counter : unit -> 'a -> unit -> int = <fun>
+    # let count1 = new_counter () "(unused)";;
+    val count1 : unit -> int = <fun>
+    # let count2 = new_counter () "(unused)";;
+    val count2 : unit -> int = <fun>
+    # count1 ();;
+    - : int = 1
+    # count2 ();;
+    - : int = 1
+    # count1 ();;
+    - : int = 2
+
+(Note that the "class parameter" `x' is unused in both examples.)
+
+When translated into this core language representation, it's syntactically
+apparent why the counter is local to each "object" in one case and global
+to all "objects" in the other -- in the first case, `counter's scope is the
+closure that creates new "objects" (which are also closures), while in the
+second, it is local to each "object" (each new closure gets its own copy).
+
+Using this knowledge, it's possible to create a class with a parameter that
+keeps the counter global to all instances:
+
+    class foo =
+        let counter = ref 0 in
+        fun x ->
+            object
+                method next () = incr counter; !counter
+            end
+
+Maybe there's a better explanation, but viewed this way, the syntax for
+class definitions -- or at least the syntactic sugar -- is somewhat
+idiosyncratic.
+
+cheers,
+William
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

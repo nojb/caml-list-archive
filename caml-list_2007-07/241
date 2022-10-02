@@ -1,0 +1,229 @@
+Return-Path: <jeremy.yallop@ed.ac.uk>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 9D516BC69
+	for <caml-list@yquem.inria.fr>; Thu, 19 Jul 2007 02:17:45 +0200 (CEST)
+Received: from bdmail1.accesst.com (pop.bulldoghome.com [83.245.1.230])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l6J0Hi6p026010
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Thu, 19 Jul 2007 02:17:45 +0200
+Received: from host-84-9-232-140.bulldogdsl.com ([84.9.232.140] helo=[192.168.123.191])
+	by bdmail1.accesst.com with esmtpa (Exim 4.50)
+	id 1IBJVe-00058r-32; Thu, 19 Jul 2007 01:04:46 +0100
+Message-ID: <469EAE60.5060302@ed.ac.uk>
+Date: Thu, 19 Jul 2007 01:20:48 +0100
+From: Jeremy Yallop <jeremy.yallop@ed.ac.uk>
+User-Agent: Mozilla-Thunderbird 2.0.0.4 (X11/20070622)
+MIME-Version: 1.0
+To: Jon Harrop <jon@ffconsultancy.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] ANN: pretty-printing, type-safe marshalling,	dynamic
+ typing for free.
+References: <46787172.4080404@ed.ac.uk>	<200707150503.16654.jon@ffconsultancy.com> <200707170405.53762.jon@ffconsultancy.com>
+In-Reply-To: <200707170405.53762.jon@ffconsultancy.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 469EADA8.004 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; type-safe:01 marshalling:01 type-safe:01 marshalling:01 ocaml:01 mutable:01 compile-time:01 stdin:01 val:01 bool:01 simulate:01 functors:01 sig:01 val:01 struct:01 
+
+Jon,
+
+Apologies for the delay in replying!
+
+Jon Harrop wrote:
+ > On Wednesday 20 June 2007 01:14:42 Jeremy Yallop wrote:
+ > > Deriving provides functions for pretty-printing, dynamic typing,
+ > > type-safe structure-sharing marshalling, SML-style equality,
+ > > mapping, and more.
+ >
+ > I don't know how I managed to miss this awesome announcement!
+ >
+ > The idea of retrofitting equality types onto OCaml interests me
+ > greatly. Any chance you could elaborate on how this is done and what
+ > errors look like?  :-)
+
+Sure!  I suppose "SML-style equality" can be understood to include
+various things:
+
+   (1) an equality predicate that tests for physical equality at mutable
+       types and structural equality at immutable types.
+
+         SOME 3 = SOME 3
+         => true
+
+         SOME (ref 3) = SOME (ref 3)
+         => false
+
+   (2) a compile-time error if you try to use equality at a type for
+       which it's not defined (an abstract or functional type)
+
+         - op o = op o;;
+         stdIn:4.1-4.12 Error: operator and operand don't agree
+         [equality type required]
+
+   (3) a means to write functions that are polymorphic over equality
+       types:
+
+         - fn x => x = x;;
+         val it = fn : ''a -> bool
+
+With `deriving' you get (1) and (2).  You can simulate (3) using
+functors if you squint a bit.  In all cases you have to be explicit
+about types, i.e. you have to write
+
+    Eq.eq<int ref option> (Some (ref 3)) (Some (ref 3))
+
+rather than (say)
+
+    Eq.eq (Some (ref 3)) (Some (ref 3))
+
+Specifying types is perhaps a bit of a nuisance, but to make up for it
+you get a bit more flexibility: equality can be customized at
+particular types.  For example, if you define an abstract type of
+integer sets represented as unordered lists then you can give an
+appropriate definition of equality rather than just inheriting the
+definition for lists:
+
+    module IntSet : sig
+      type t
+        deriving (Eq)
+
+      val empty : t
+      val add : int -> t -> t
+      ...
+    end =
+    struct
+      type t = int list
+      module Eq =
+      struct
+        type a = t
+        val eq l r = (List.sort compare l) = (List.sort compare r)
+      end
+
+      let empty = []
+      let add item set = item :: set
+      ...
+    end
+
+and your definition will be used whenever sets are compared
+
+    module I = IntSet
+
+    Eq.eq<I.t list> [I.add 1 (I.add 2 I.empty)]
+                    [I.add 2 (I.add 1 I.empty)]
+    => true
+
+If you just want the "standard" definition of equality for your types
+you can add `deriving (Eq)' to the definition and you'll be able to
+use Eq.eq at that type.
+
+    type colour = Red | Green | Blue
+        deriving (Eq)
+
+    Eq.eq<colour> Red Blue
+    => false
+
+    type a = A of int list | B of a
+        deriving (Eq)
+
+    Eq.eq<a> = B (A [1;2;3]) = B (A [1;2;3])
+    => true
+
+As the IntSet example suggests, `deriving' works by generating a
+module definition for each derived function at each type.  For
+example, for the `colour' type, you'll get a definition that looks
+something like this:
+
+    module Eq : Eq.Eq with type a = colour
+    struct
+      type a = colour
+      let eq l r = match l, r with
+        | Red, Red
+        | Green, Green
+        | Blue, Blue -> true
+        | _ -> false
+    end
+
+which conforms to the signature for `Eq':
+
+   module type Eq =
+   sig
+     type a
+     val eq : a -> a -> bool
+   end
+
+More complicated types give rise to more complicated definitions: for
+instance, a parameterized type will generate a functor whose argument
+is a module that implements Eq for the type parameter.  Constructing
+instances of `Eq' at instantiated types is then just a matter of
+functor application: the definition at `int option ref' is obtained by
+the fragment
+
+   Eq_ref(Eq_option(Eq_ref))
+
+There are strong parallels with Haskell's type classes in all this:
+module signatures fulfill the role of classes, modules of instances,
+and so on.  (The correspondence between modules and classes is
+explored in various places in "the literature", e.g. Dreyer, Harper,
+and Chakravarty's POPL 2007 paper, "Modular Type Classes").
+
+Your question about error messages is a good one.  Syntactic
+abstractions tend to be particularly leaky, so it shouldn't come as
+too much of a surprise if the implementation is exposed occasionally
+when you write the wrong thing.  Nonetheless, I think error messages
+are generally fairly good.  If you misspell a type name then you get a
+reasonable message
+
+    Eq.eq<color> Red Blue
+    =>
+    File "color.ml", line 6, characters 2-14:
+    Unbound type constructor color
+
+An attempt to derive a class at a type that's not supported by
+`deriving' results in a quite specific message.  For example,
+
+    type 'a t = A | B of ('a * 'a) t
+      deriving (Eq)
+    =>
+    File "nonreg.ml", line 3, characters 0-48 (end at line 4,
+                                               character 15):
+    The following types contain non-regular recursion:
+       t
+    deriving does not support non-regular types
+
+or
+
+    type t = int -> int deriving (Eq)
+
+    File "fun.ml", line 2, characters 0-33:
+    Eq cannot be derived for function types
+
+Using an overloaded function at a type that doesn't match the annotation
+results in just the error you'd expect:
+
+    Eq.eq<int list> 0 1
+
+    File "intlist.ml", line 4, characters 24-25:
+    This expression has type int but is here used with type int list
+
+If you forget to add `deriving Eq' to your type definition then the
+error message is a little obscure when you come to use the type:
+
+    type 'a t = A | B of 'a t
+
+    Eq.eq<int t list>
+
+    File "t.ml", line 8, characters 0-17:
+    Unbound module Eq_t
+
+I hope this helps a bit.  The documentation on the website gives more
+examples.  There'll also be a paper out soon which should explain
+things in more depth.
+
+Jeremy.
+

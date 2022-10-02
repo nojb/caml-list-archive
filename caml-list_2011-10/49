@@ -1,0 +1,157 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p99FhAsd031494
+	for <caml-list@sympa-roc.inria.fr>; Sun, 9 Oct 2011 17:43:10 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: As8BAITAkU5KfVI0imdsb2JhbABDmH+PEQgiAQEBCgkNBxIGIYFTAQEBAQMSAhMZARsSCwEDDAYFCw0NISIBEQEFAQoSBhMSEIdjmkIKi1GCYIN3PYhvAgQGgxiEJQSOVwGFH40lPYNx
+X-IronPort-AV: E=Sophos;i="4.68,512,1312149600"; 
+   d="scan'208";a="112233034"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 09 Oct 2011 17:43:04 +0200
+Received: by wwj40 with SMTP id 40so9117015wwj.9
+        for <caml-list@inria.fr>; Sun, 09 Oct 2011 08:43:04 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=FHV8hofDfxEJ/oAJXykEZbEoUIE3umR17Fn5cSxhn8k=;
+        b=jqKGrKgxV/kqTtvL9ofVUcku9649pwIhZg75iyfhyKPJE7ejxvq8JnBZnxc6tO+Qk5
+         Qgfc5w38TZ8IxDDfZ09bpyoLCDR4X/+odi6il7+Quekk4rAK6AT90/tH/+PDpxsMPM8s
+         8N7ExM8XmUuQnaXCFDjGnHfnht3J2FeSf4WA8=
+Received: by 10.227.135.130 with SMTP id n2mr4836705wbt.51.1318174984240; Sun,
+ 09 Oct 2011 08:43:04 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.227.155.67 with HTTP; Sun, 9 Oct 2011 08:42:44 -0700 (PDT)
+In-Reply-To: <alpine.LFD.2.00.1110071828480.3251@surtur.dico.unimi.it>
+References: <alpine.LFD.2.00.1110071828480.3251@surtur.dico.unimi.it>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Sun, 9 Oct 2011 17:42:44 +0200
+Message-ID: <CAPFanBHZ9+bxTdtdqP=m_dMt9U9yq6bZpUYt+-pxniWvdJteAg@mail.gmail.com>
+To: Walter Cazzola <cazzola@dico.unimi.it>
+Cc: OCaML Mailing List <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p99FhAsd031494
+Subject: Re: [Caml-list] with clause
+
+The "with type foo = ..." construct is meant to be used on signatures
+(module interfaces), not on structures (module implementations).
+
+First, a remark: if you want to share code, it's not terribly
+comfortable if it's split into three different files of five lines
+each. You could put your three modules in the same file, and that
+would be easier to distribute:
+
+  module type OpVarADT =
+   sig
+     type a and b and c
+     val op: a -> b -> c
+     val init : c
+   end
+
+  module VarArgs (OP : OpVarADT) =
+    struct
+      let arg x = fun y rest -> rest (OP.op x y) ;;
+      let stop x = x;;
+      let f g = g OP.init;;
+    end
+
+  module ListConcat = struct
+    type a and b = a list and c = a list
+    let op = fun (x: a) y -> y @ [x] ;;
+    let init = [] ;;
+  end
+
+The problem in your code is that, in ListConcat, "type a" is an
+abstract type (because it is not of the form "type a =  ...") in an
+implementation.
+An abstract type in a signature means "there is some concrete
+definition that I hide for encapsulation".
+An abstract type in an implementation has no definition at all; for
+all purposes, it's an unique empty type. You don't have any value of
+type `a` and, therefore, you can't use your ListConcat module. You
+*can* apply the VarArgs functor to it but the result is useless:
+
+  module M = VarArgs(ListConcat);;
+
+M.arg takes an argument of type ListConcat.a and nobody knows how to
+build such a value.
+
+So you were wrong to use an abstract type where in reality you wanted
+an parametric type. What you mean is probably something like
+
+  module ListConcat = struct
+    type 'a b = 'a list
+    ...
+  end
+
+However, this is not satisfying as it doesn't respect the OpVarADT
+signature, which specifies that the type b is not parametrized. So
+with that definition you can't apply VarArgs anymore.
+
+  module ListConcatParam = struct
+    type a and 'a b = 'a list and c = a list
+    let op = fun (x: a) y -> y @ [x] ;;
+    let init = [] ;;
+  end
+
+ # module M = VarArgs(ListConcatParam);;
+ Type declarations do not match:
+    type 'a b = 'a list
+  is not included in
+     type b
+  They have different arities.
+
+So how can you have a type that is somehow parametrized (to be able to
+use this ListConcat module with different types of list elements) and
+still respect the 0-arity signature ? The answer is the following : if
+you can't use parametrized type of the base OCaml language, you can
+use the module language to add parametrization, by making your
+ListConcat module a functor over a type:
+
+  module ListConcatFunctor (T : sig type t end) = struct
+    type a = T.t and b = a list and c = a list
+    let op = fun (x: a) y -> y @ [x] ;;
+    let init = [] ;;
+  end
+
+  module M = VarArgs(ListConcatFunctor(struct type t = int end));;
+
+  # M.f (M.arg 2) (M.arg 3) (M.arg 4) M.stop;;
+  - : int list = [2; 3; 4]
+
+It's quite normal you had difficulty with this as a beginner;
+combining parametric types and the module systems is one of the most
+delicate aspects of the language. Most people don't actually use
+functors very often.
+
+On Fri, Oct 7, 2011 at 6:37 PM, Walter Cazzola <cazzola@dico.unimi.it> wrote:
+> Dear all,
+> I'm still stucked on my example to write a functor for functions with a
+> variable number of arguments. In particular I can't instantiate it with
+> a generic list ('a list).
+>
+> Attached you find my code. Sometimes ago some on the list suggested me
+> to  use with to specify the value of the generic type (a in my case but
+> I can't get rid of its syntax, what I think correct is:
+>
+>  module M1 = VarArgs(ListConcat with type ListConcat.a = int) ;;
+>
+> but I get a syntax error on the with.
+>
+> Please note that I'd like to keep OpVarADT and varargs independent of
+> the concrete type of a.
+>
+> Any help to solve this riddle would be appreciated.
+>
+> TIA
+> Walter
+>
+> --
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+

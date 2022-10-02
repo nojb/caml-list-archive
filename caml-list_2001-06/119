@@ -1,0 +1,199 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA09030; Fri, 8 Jun 2001 19:30:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA08532 for <caml-list@pauillac.inria.fr>; Fri, 8 Jun 2001 19:30:26 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f58HUAn18759;
+	Fri, 8 Jun 2001 19:30:10 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA27320; Fri, 8 Jun 2001 19:30:10 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200106081730.TAA27320@pauillac.inria.fr>
+Subject: Re: [Caml-list] let mutable (was OCaml Speed for Block Convolutions)
+In-Reply-To: <20010608084947C.garrigue@kurims.kyoto-u.ac.jp> from Jacques Garrigue at "Jun 8, 101 08:49:47 am"
+To: garrigue@kurims.kyoto-u.ac.jp (Jacques Garrigue)
+Date: Fri, 8 Jun 2001 19:30:10 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> About the introduction of a let mutable construct,
+> Tom _ <tom7ca@yahoo.com> wrote
+> 
+> > In any case, whether or not the compiler in the
+> > current implementation can or cannot do good type
+> > inference and may or may not be forced to box
+> > a floating point number, the two constructs mean
+> > something different to the programmer, and they
+> > behave differently.  In particular "mutable x"
+> > can never be passed around as a reference, while
+> > "x = ref ..." can.  If not anything else, that
+> > prevents the programmer from inadvertently inhibiting
+> > a compiler optimization by passing around a reference.
+> 
+> Not exactly, the compiler may still need to build a reference.
+> 
+>     let mutable x = 0 in
+>     List.iter (fun y -> x <- x+y) l;
+>     x
+> 
+> Since x has to be modified in a function called by iter, it must be
+> wrapped into an actual reference cell.
+> 
+> As the compiler already does a good job at unboxing only locally used
+> references, let mutable would only be some syntactic sugar (with
+> exactly the same typing as a reference).
+> 
+> > Besides, the syntax is probably quite a bit more 
+> > natural to imperative programmers anyway.
+> 
+> This is actually the only argument for let mutable.
+> I would also like such a construct, but I don't know whether its worth
+> it. The real question is whether let mutable should be allowed at
+> toplevel, with problems for both answers.
+> 
+> Cheers,
+> 
+> Jacques Garrigue
+> -------------------
+> Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+> To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+
+The introduction of a ``let mutable'', more concisely noted with the
+var keyword, is not new: it has been discussed in the Caml groups 3 or
+4 years ago. We chose to abandon it for sake of semantics simplicity
+of the language. This construction would have introduced the notion of
+Lvalue in Caml, thus introducing some additional semantics complexity,
+and a new notion to explain to beginners. Furthermore, the efficiency
+gain was not clear, since Xavier had succeeded at optimizing reference
+allocations for all typical uses of references that are relevant to
+the proposed (less powerful) ``let mutable'' bound variables.
+
+Let me explain the semantics arguments (semantics is more important
+that many of us think, although all of us are syntax lovers and syntax
+alternate features advocates) for pure references and against the
+introduction of ``let mutable'' bound variables.
+
+Dynamic semantics (or evaluation mechanism)
+-------------------------------------------
+
+You may not have noticed that Caml mutable values (references or
+arrays) have a first class citizen status, being treated as regular
+values with respect to data structures manipulation and function calls
+and returns. For example, the assignment operators are regular
+functions with no magic (such as special annotations of arguments at
+definition time, or special operation at call sites). Hence you can
+define your own assigment functions using regular Caml programming:
+
+let ( += ) r v = r := !r + v;;
+val ( += ) : int ref -> int -> unit = <fun>
+
+Now, if you write x += 2 you apply the (infix) operator += to the two
+expressions x and 2. This is just regular Caml computation, hence you
+can write arbitrary programs instead of x and 2. For instance, f y +=
+g 0 means that function call f y returns a reference whose contents is
+incremented by (the value of) g 0.
+
+Note that the mechanism is also that simple for the ! operator: ! has
+no special evaluation rule, it is applied to the value of its argument
+(which must be a reference) and returns it contents. Hence you may
+write !(f y), provided that f y returns a reference.
+
+In the same vein you can redefine the usual := operator (for instance
+to count the number of assigments in your program):
+
+let assignment_count = ref 0;;
+
+let ( := ) r v =
+  incr assignment_count;
+  r := v;;
+val ( := ) : 'a ref -> 'a -> unit = <fun>
+
+If you prefer the C way, you can even use:
+
+let ( = ) r v = r := v;;
+val ( = ) : 'a ref -> 'a -> unit = <fun>
+
+Now you loose = as a short hand for the polymorphic comparison, but as
+desired, r = 1 will gladly assign 1 to r ...
+
+Another interesting point: there is no scope limitation or odity for
+references; references obey the usual scope and life time rules.
+
+Static semantics (or typechecking mechanism)
+--------------------------------------------
+
+On this (hard) side, nothing to gain with the new construct: the
+restriction on typechecking of polymorphic refs should be maintained
+for vars, or we must revert to the original complicated (and probably
+not proved sound) rule of original ML (see below).
+
+Historical (and personal) note:
+-------------------------------
+
+The proposed construct is not new: it has been introduced in original
+ML (from LCF) by Robin Milner in 1978. Mutable variables were
+introduced by letref (reminiscent of the letrec keyword that
+introduced recursive definitions at that time). You would declare a
+(so-called) reference identifier by the definition
+
+letref x = 0;;
+
+and assign it using:
+
+x := x + 1;;
+
+(Note that on the left of := you needed a left value, hence an
+identifier previously defined via letref.)
+
+During the year 1984, the ML team discovered that allocating a cell
+for letref identifiers will enhance the power of ``letref''
+definitions since references could be treated as first class citizen
+values. My first compilation programming exercise was to implement the
+new feature into the V6.1 version of the ML compiler during falls 1984
+(or may be at beginning of 1985 ?). We simultaneously maintained both
+constructs in the language; we also used the same := operator to
+assign references (desambiguated via a compiler annotation of letref
+bound identifiers), and an explicit deref function to get the contents
+of the new references. After the introduction of the shorter !
+dereferencing operator, everybody in the ML community (read community
+as ``the people logged on our vax or on the Cambridge University's
+vax''!) agreed that the old letref construct was subsumed by the new
+references stuff. Thus, I suppressed the old letref construct from the
+language. The special typing rule for letref was reinforced for the
+new references (but getting rid of the strange lambda-bound
+restriction of the letref construct) in a trivial way: at the end of
+typechecking all references defined in the program should have
+monomorphic types. As you may know this was the beginning of a long
+and difficult quest of the right typing restriction for safe
+manipulation of polymorphic mutable values in ML-like
+languages. Although the currently used value restriction rule was
+discovered by Greg Morrisset in 1995, the Caml team actively
+participated to this quest with a POPL article by Xavier Leroy and I
+in 1991, and culminated with Xavier's PHD thesis in 1992.
+
+Conclusion:
+-----------
+
+On the language design side, we worked hard to bypass the limitations
+of letrefs in order to design first class citizens references, and to
+get rid of left values in the language. On the compiler construction
+side, Xavier worked hard to optimise spurious allocations of
+references that can be treated as vars. I think we now have the power
+and conceptual simplicity of references along with the runtime
+efficiency of letrefs, I don't see the point to introduce a new
+arguably useless construct.
+
+Best regards,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

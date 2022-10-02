@@ -1,0 +1,293 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA05093; Sun, 15 Aug 2004 18:13:42 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA05375 for <caml-list@pauillac.inria.fr>; Sun, 15 Aug 2004 18:13:41 +0200 (MET DST)
+Received: from hosting.commandprompt.com (128.commandprompt.com [207.173.200.128])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i7FGDdRM024872
+	for <caml-list@inria.fr>; Sun, 15 Aug 2004 18:13:39 +0200
+Received: from hosting.commandprompt.com (65-102-118-19.tukw.qwest.net [65.102.118.19])
+	(authenticated)
+	by hosting.commandprompt.com (8.11.6/8.11.6) with ESMTP id i7FGDbP26149
+	for <caml-list@inria.fr>; Sun, 15 Aug 2004 09:13:37 -0700
+Received: by hosting.commandprompt.com (sSMTP sendmail emulation); Sun, 15 Aug 2004 09:18:28 -0700
+Date: Sun, 15 Aug 2004 09:18:28 -0700
+From: Jeff Henrikson <jehenrik@yahoo.com>
+To: caml-list@inria.fr
+Subject: [Caml-list] accidentally mutating caml grammar with camlp4?
+Message-ID: <20040815161827.GB2742@respighi.local.>
+Mail-Followup-To: caml-list@inria.fr
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.4i
+X-OS: Darwin respighi.local. 6.0 Power Macintosh
+X-Miltered: at concorde with ID 411F8BB3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; henrikson:01 jehenrik:01 camlp:01 camlp:01 pcaml:01 mlast:01 expr:01 mlast:01 val:01 henrikson:01 pcaml:01 expr:01 frontc:01 struct:01 extern:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+-- 
+Hello,
+
+I am experiencing a camlp4 effect I do not understand.  I use (Grammar.Entry.create Pcaml.gram) and EXTEND to build up a quick and dirty grammar for C types.  (patterns on C types, actually.)  I intend to ultimately extend MLast.expr and/or MLast.patt with some derived form to incorporate the expansion that I write on my pattern type as a camlp4 macro, but for now I have only run EXTEND on my own entry points, not any MLast entry.
+
+The problem is that once I run all these, I somehow break the basic caml grammar.  I have used the keywords "int" and "float" as they are used in C, but somehow inadvertently I have made these valid caml expressions unparsable:
+
+# let f (x:int) = x;;
+Toplevel input:
+# let f (x:int) = x;;
+           ^^^
+Parse error: [type] expected after ':' (in [patt])
+# let f (x:float) = x;;
+Toplevel input:
+# let f (x:float) = x;;
+           ^^^^^
+Parse error: [type] expected after ':' (in [patt])
+
+I am currently surmising that it is related to my use of the corresponding C keywords, since 
+
+# let f (x:string) = x;;
+val f : string -> string = <fun>
+
+Works just fine.  I have summarized a reproduction of the problem into one file as I will append below.  I would appreciate the eyes of any camlp4 wizard who might be able to tell why I am breaking.
+
+Regards,
+
+
+Jeff Henrikson
+
+
+
+#load "camlp4o.cma";;
+#load "pr_o.cmo";;
+
+#load "q_MLast.cmo";;
+#load "pa_extend.cmo";;
+
+
+open Pcaml;;  (* for str_item, etc. *)
+let loc = (0,0);;    (* for <:expr< >> *)
+
+
+
+module Cabs =  (* extracted from frontc *)
+  struct
+    type expression = unit
+    and size = NO_SIZE | SHORT | LONG | LONG_LONG
+    and sign = NO_SIGN | SIGNED | UNSIGNED
+    and storage = NO_STORAGE | AUTO | STATIC | EXTERN | REGISTER
+    and base_type =
+	NO_TYPE
+      | VOID
+      | CHAR of sign
+      | INT of size * sign
+      | BITFIELD of sign * expression
+      | FLOAT of bool
+      | DOUBLE of bool
+      | PTR of base_type
+      | ARRAY of base_type * expression
+      | STRUCT of string * name_group list
+      | UNION of string * name_group list
+      | PROTO of proto
+      | OLD_PROTO of old_proto	
+      | NAMED_TYPE of string
+      | ENUM of string * enum_item list
+      | CONST of base_type
+      | VOLATILE of base_type
+and name = string * base_type * unit * expression
+and name_group = base_type * storage * name list
+and single_name = base_type * storage * name
+and enum_item = string * expression
+and proto = base_type * single_name list * bool
+and old_proto = base_type * string list * bool
+end;;
+
+
+
+type pat_iden =
+    PIDEN_LIT of string              (* spat *)
+  | PIDEN_CASEI of string * string  (* spat, id *)
+  | PIDEN_REGEXP of string * string (* regexp, id *)
+  | PIDEN_BIND of string;;           (* id *)
+
+type pat_size = PSIZE_ANY | PNO_SIZE | PSHORT | PLONG 
+  | PLONG_LONG | PSIZE_BIND of string
+and pat_sign = PSIGN_ANY | PNO_SIGN | PSIGNED | PUNSIGNED 
+  | PSIGN_BIND of string
+and pat_storage = PNO_STORAGE | PAUTO | PSTATIC | PEXTERN 
+  | PREGISTER | PSTOR_BIND of string;;
+
+type pat_base_type =
+    PBT_BIND of string (* id for the unknown, not a type *)
+  | PBT_ANY            (* same but throw away id.  _ equivalent *)
+  | PBT_DIM of string  (* id for the unknown, not a number *)
+  | PBT_DIM_LIT of string (* the number *)
+  | PBT_AS of pat_base_type * string   (* binding *)
+  | MPBT_CONSEC of (bool * pat_iden option * pat_base_type) list 
+            (* bool is for multi-occupancy*)
+  | MPBT_SKIP0
+  | MPBT_PERM of (bool * pat_iden option *pat_base_type) list  
+            (* bool is for multi-occupancy *)
+  | BT_NO_TYPE
+  | BT_VOID
+  | BT_CHAR of pat_sign
+  | BT_INT of pat_size * pat_sign
+  | BT_BITFIELD of pat_sign * Cabs.expression
+  | BT_FLOAT of bool                                                         
+  | BT_DOUBLE of bool                                                        
+  | BT_PTR of pat_base_type
+  | BT_ARRAY of pat_base_type * (MLast.expr option)
+  | BT_STRUCT of string * pat_name_group list
+  | BT_UNION of string * pat_name_group list
+  | BT_PROTO of pat_proto
+  | BT_OLD_PROTO of pat_old_proto        
+  | BT_NAMED_TYPE of string
+  | BT_ENUM of string * pat_enum_item list
+  | BT_CONST of pat_base_type
+  | BT_VOLATILE of pat_base_type
+and pat_name = string * pat_base_type * unit * Cabs.expression
+and pat_name_group = pat_base_type * Cabs.storage * pat_name list
+and pat_single_name = pat_base_type * Cabs.storage * pat_name
+and pat_enum_item = string * Cabs.expression
+and pat_proto = pat_base_type * pat_single_name list * bool
+and pat_old_proto = pat_base_type * string list * bool;;
+
+
+let default d opt = 
+  match opt with
+    Some a -> a
+  | None -> d;;
+
+
+let gpat_bt_sign = (Grammar.Entry.create Pcaml.gram "gpat_bt_sign") ;;
+EXTEND
+  gpat_bt_sign: [ [ "signed" -> PSIGNED ] ];
+  gpat_bt_sign: [ [ "unsigned" -> PUNSIGNED ] ];
+  gpat_bt_sign: [ [ "sign"; "("; id = LIDENT; ")" -> PSIGN_BIND id ] ];
+  gpat_bt_sign: [ [ "sign"; "("; "_"; ")" -> PSIGN_ANY ] ];
+END;;
+
+let gpat_bt = (Grammar.Entry.create Pcaml.gram "gpat_bt") ;;
+EXTEND
+    gpat_bt: [ [ sn = OPT gpat_bt_sign; "char" -> 
+                BT_CHAR(default PNO_SIGN sn) ] ];
+    gpat_bt: [ [ sn = OPT gpat_bt_sign; "int" -> 
+      BT_INT(PNO_SIZE,default PNO_SIGN sn) ] ];
+    gpat_bt: [ [ sn = OPT gpat_bt_sign; "long"; OPT "int" -> 
+      BT_INT(PLONG,default PNO_SIGN sn) ] ];
+    gpat_bt: [ [ sn = OPT gpat_bt_sign; "long"; "long"; OPT "int" -> 
+      BT_INT(PLONG_LONG,default PNO_SIGN sn) ] ];
+    gpat_bt: [ [ sn = OPT gpat_bt_sign; "short"; OPT "int" -> 
+      BT_INT(PSHORT,default PNO_SIGN sn) ] ];
+    gpat_bt: [ [ "float" -> BT_FLOAT(false) ] ];
+    gpat_bt: [ [ "double" -> BT_DOUBLE(false) ] ];
+
+    gpat_bt: [ [ "'"; i = UIDENT -> BT_NAMED_TYPE(i) ] ];
+    gpat_bt: [ [ "'"; i = LIDENT -> BT_NAMED_TYPE(i) ] ];
+
+    gpat_bt: [ [ t = gpat_bt; "*" -> BT_PTR(t) ] ];
+    gpat_bt: [ [ t = gpat_bt; "["; e = OPT expr; "]" -> BT_ARRAY(t,e) ] ];
+    gpat_bt: [ [ "Type"; "("; id = LIDENT; ")" -> PBT_BIND(id) ] ];
+    gpat_bt: [ [ "_" -> PBT_ANY ] ];
+
+    gpat_bt: [ [ a = gpat_bt; "as"; id = LIDENT -> PBT_AS(a,id) ] ];
+END;;
+Grammar.Entry.print gpat_bt;;
+
+Grammar.Entry.parse gpat_bt (Stream.of_string "char");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned char");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "sign(x) char");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned char");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned short");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned long");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned int");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned long int");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "double as x");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "unsigned long* as x");;
+
+Grammar.Entry.parse gpat_bt (Stream.of_string "int[5]");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "char* [5*7]");;
+
+Grammar.Entry.parse gpat_bt (Stream.of_string "'MyStruct[5]");;
+Grammar.Entry.parse gpat_bt (Stream.of_string "'myStruct[5]");;
+
+
+let gpat_iden = Grammar.Entry.create Pcaml.gram "gpat_iden";;
+EXTEND
+    gpat_iden: [ [ s = STRING -> PIDEN_LIT(s) ] ];
+    gpat_iden: [ [ "re"; r = STRING; ","; id = LIDENT -> 
+      PIDEN_REGEXP(r,id) ] ];
+    gpat_iden: [ [ "re"; r = STRING -> PIDEN_REGEXP(r,"") ] ];
+    gpat_iden: [ [ "bind"; id = LIDENT -> PIDEN_BIND(id) ] ];
+END;;
+
+Grammar.Entry.parse gpat_iden (Stream.of_string "\"hello\"");;
+Grammar.Entry.parse gpat_iden (Stream.of_string "re \"hello\", x");;
+Grammar.Entry.parse gpat_iden (Stream.of_string "re \"hello\"");;
+
+
+let gpat_bt_iden = Grammar.Entry.create Pcaml.gram "gpat_bt_iden";;
+EXTEND
+    gpat_bt_iden: [ [ a = gpat_bt; nopt = OPT gpat_iden -> (a,nopt) ] ];
+END;;
+
+
+let gpat_alt = Grammar.Entry.create Pcaml.gram "gpat_alt";;
+EXTEND
+    gpat_alt: [ [ "["; a = LIST1 gpat_bt_iden SEP ";"; "]" ->
+		List.map (fun (a,nopt) -> (false, nopt, a)) a ] ];
+    gpat_alt: [ [ p = gpat_bt_iden ->
+		let (a,nopt) = p in [false, nopt, a] ] ];
+END;;
+
+
+let gpat_bt_guard = Grammar.Entry.create Pcaml.gram "gpat_bt_guard";;
+EXTEND
+    gpat_bt_guard: [ [ "when"; g = expr -> g ] ];
+END;;
+
+
+let gpat_bt_line = Grammar.Entry.create Pcaml.gram "gpat_bt_line";;
+EXTEND
+    gpat_bt_line: [ [ p = gpat_alt; g = OPT gpat_bt_guard; "->"; e = expr ->
+      (p,g,e) ] ];
+END;;
+
+
+
+
+type macro_param_type = EXPR_PARAM | SYM_PARAM;;
+
+let gmacro_param = (Grammar.Entry.create Pcaml.gram "gmacro_param") ;;
+EXTEND
+    gmacro_param: [ [ "@"; id = UIDENT; ":"; id2 = UIDENT 
+		      -> (SYM_PARAM, id, Some <:expr< $lid:id2$>>) ] ];
+    gmacro_param: [ [ "@"; id = LIDENT; ":"; id2 = LIDENT 
+		      -> (SYM_PARAM, id, Some <:expr< $lid:id2$>>) ] ];
+    gmacro_param: [ [ "@"; id = LIDENT
+		      -> (SYM_PARAM, id, None ) ] ];
+    gmacro_param:
+      [ [ id = TILDEIDENT; ":"; e = expr -> (EXPR_PARAM,id,Some e) ] ];
+    gmacro_param:
+      [ [ id = TILDEIDENT -> (EXPR_PARAM,id,None) ] ];
+END;;
+
+let gmacro_param_list = (Grammar.Entry.create Pcaml.gram "gmacro_param_list");;
+EXTEND
+    gmacro_param_list: [ [ a = LIST0 gmacro_param -> a ] ];
+END;;
+
+Grammar.Entry.parse gmacro_param_list 
+(Stream.of_string "@foo ~bar @Mama:Mama @baz:yoyo ~bubba:(joe+2)");;
+
+
+let f (x:int) = x;;
+let f (x:float) = x;;
+let f (x:string) = x;;
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

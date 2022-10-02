@@ -1,0 +1,256 @@
+Return-Path: <jon@ffconsultancy.com>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id EAFA2BC48
+	for <caml-list@yquem.inria.fr>; Thu, 31 Mar 2005 15:41:43 +0200 (CEST)
+Received: from ptb-relay03.plus.net (ptb-relay03.plus.net [212.159.14.214])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j2VDfhOn021899
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Thu, 31 Mar 2005 15:41:43 +0200
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay03.plus.net with esmtp (Exim) id 1DGzva-000LZm-Ld
+	for caml-list@yquem.inria.fr; Thu, 31 Mar 2005 13:41:42 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] 32- and 64-bit performance
+Date: Thu, 31 Mar 2005 14:42:24 +0100
+User-Agent: KMail/1.7.1
+References: <200503300340.15874.jon@ffconsultancy.com> <20050330.084642.68557580.sumii@saul.cis.upenn.edu>
+In-Reply-To: <20050330.084642.68557580.sumii@saul.cis.upenn.edu>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200503311442.24425.jon@ffconsultancy.com>
+X-Miltered: at nez-perce with ID 424BFE17.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 eijiro:01 sumii:01 timings:01 ocamlopt:01 bigarray:01 rec:01 argv:01 printf:01 printf:01 argv:01 iostream:01 bool:01 argc:01 char:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+On Wednesday 30 March 2005 14:46, Eijiro Sumii wrote:
+> From: "Jon Harrop" <jon@ffconsultancy.com>
+> > I just bought a new Athlon 64 laptop and installed 32- and 64-bit Debian.
+> > Here are some timings, showing the performance change when moving from
+> > 32- to 64-bit using ocamlopt (3.08.2) and g++ (3.4.4):
+>
+> Would you mind publishing the source code of these benchmark programs?
+> I want to try them in my environments too.
+
+Sure:
+
+
+SIEVE
+
+open Bigarray
+
+let nsieve n =
+  let a =  Array1.create int8_unsigned c_layout ((n lsr 3) + 2) in
+  Array1.fill a 0xFF;
+  let rec clear i j =
+    if j <= n then (
+      let ic = j lsr 3 in
+      let bit = a.{ic} land lnot(1 lsl (j land 0x7)) in
+      if a.{ic} <> bit then a.{ic} <- bit;
+      clear i (j + i)
+    ) in
+  let count = ref 0 in
+  for i = 2 to n do
+    if a.{i lsr 3} land (1 lsl (i land 0x7)) > 0 then begin
+      incr count;
+      if i*i <= n then clear i (2*i)
+    end
+  done;
+  !count
+
+let () =
+  let n =
+    try int_of_string Sys.argv.(1)
+    with _ -> Printf.printf "usage: %s <n>\n" Sys.argv.(0); exit 1 in
+  Printf.printf "Primes up to %8i%8i\n" n (nsieve n)
+
+
+#include <iostream>
+#include <vector>
+#include <cstring>
+
+int sieve(int n) {
+  std::vector<bool> t(n+1);
+
+  int count = 0;
+
+  fill(t.begin(), t.end(), true);
+
+  for (int i=2; i<=n; ++i)
+    if (t.at(i)) {
+      ++count;
+      for (int j=i*2; j<=n; j+=i)
+        t.at(j) = false;
+    }
+
+  return count;
+}
+
+int main(int argc, char *argv[]) {
+  if (argc != 2) {
+    std::cerr << "Usage: sieve <n>\n";
+    return 1;
+  }
+  int n = atoi(argv[1]);
+  std::cout << "Primes up to " << n << ": " << sieve(n) << "\n";
+  return 0;
+}
+
+
+
+NTH
+
+This example is taken from my book. The OCaml source is available from the 
+on-line "Complete Examples" chapter. The C++ is too long to post here. I've 
+submitted it to the shootout but I'll put it up on the web ASAP. I've 
+actually done some more detailed performance measurements on this as it is 
+one of the few non-micro benchmarks. :-)
+
+
+
+BUBBLE
+
+open Array
+
+let fold_left (f : float -> float -> float) (x : float) (a : float array) =
+  let r = ref x in
+  for i = 0 to length a - 1 do
+    r := f !r (unsafe_get a i)
+  done;
+  !r
+
+let _ = match Sys.argv with
+    [| _; n |] ->
+      let n = int_of_string n in
+      let a = make n 0. in
+      for i=0 to n-1 do
+        a.(i) <- log (Random.float 1.)
+      done;
+      let sorted = ref false in
+      while (not !sorted) do
+        sorted := true;
+        for i=0 to n-2 do
+          if a.(i) > a.(i+1) then
+            let t = a.(i) in
+            a.(i) <- a.(i+1);
+            a.(i+1) <- t;
+            sorted := false
+        done;
+      done;
+      Printf.printf "%f\n" (fold_left ( +. ) 0. a)
+  | _ -> output_string stderr "Usage: ./sort <n>"
+
+
+#include <cstdlib>
+#include <cmath>
+#include <iostream>
+#include <vector>
+#include <numeric>
+
+typedef std::vector<double> C;
+
+double frand() {
+  return double(rand()) / RAND_MAX;
+}
+
+int main(int argc, char *argv[]) {
+  if (argc != 2) {
+    std::cerr << "Usage: ./sort <n>\n";
+    return 1;
+  }
+  int n=atoi(argv[1]);
+  C a(n);
+  for (C::iterator it=a.begin(); it != a.end(); ++it)
+    *it = log(frand());
+  bool sorted=false;
+  while (!sorted) {
+    sorted = true;
+    for (int i=0; i<n-1; ++i)
+      if (a.at(i) > a.at(i+1)) {
+        double t=a.at(i);
+        a.at(i) = a.at(i+1);
+        a.at(i+1) = t;
+        sorted = false;
+      }
+  }
+  double sum = accumulate(a.begin(), a.end(), 0.);
+  std::cout << sum << std::endl;
+  return 0;
+}
+
+
+MANDELBROT
+
+Ruthlessly stolen from the shootout.
+
+
+
+FFTs
+
+Evilly plagiarised from Isaac Trotts.
+
+  http://caml.inria.fr/pub/ml-archives/caml-list/2003/03/f47b42a88cf17b8de52cc70d409883d1.en.html
+
+
+
+LORENTZIAN
+
+let _ = match Sys.argv with
+    [| _; r |] ->
+      let r = int_of_string r in
+      let accu = ref 0. in
+      let radius x y z =
+        let x = float x and y = float y and z = float z in
+        x *. x +. y *. y +. z *. z in
+      let r2 = float (r*r) in
+      for x = -r to r do
+        for y = -r to r do
+          for z = -r to r do
+            let r2' = radius x y z in
+            if r2' < r2 then accu := !accu +. 1. /. (1. +. r2')
+          done
+        done
+      done;
+      Printf.printf "%f\n" !accu
+  | _ -> output_string stderr "Usage: ./series <n>\n"
+
+
+#include <iostream>
+#include <cmath>
+
+double radius(int i, int j, int k) {
+  double x(i), y(j), z(k);
+  return x*x + y*y + z*z;
+}
+
+int main(int argc, char *argv[]) {
+  if (argc != 2) {
+    std::cerr << "Usage: ./series <n>\n";
+    return 1;
+  }
+  int r=atoi(argv[1]);
+  double r2(r*r);
+  double accu=0.;
+  for (int x=-r; x<=r; ++x)
+    for (int y=-r; y<=r; ++y)
+      for (int z=-r; z<=r; ++z) {
+        double r2p = radius(x, y, z);
+        if (r2p < r2) accu += 1. / (1. + r2p);
+      }
+  std::cout << accu << std::endl;
+  return 0;
+}
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+Objective CAML for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists
+

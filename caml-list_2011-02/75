@@ -1,0 +1,128 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p1AAeFSI015898
+	for <caml-list@sympa-roc.inria.fr>; Thu, 10 Feb 2011 11:40:15 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhELANJPU01V2gB5Zmdsb2JhbACmAA0LCAgSJLonDYVPBI9F
+X-IronPort-AV: E=Sophos;i="4.60,451,1291590000"; 
+   d="scan'208";a="99626030"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 10 Feb 2011 11:39:55 +0100
+X-Alinto-smtpauth-localdomain: Yes
+Received: from seldon (unknown [85.218.92.99])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id C333D834021;
+	Thu, 10 Feb 2011 11:39:49 +0100 (CET)
+Received: from yziquel by seldon with local (Exim 4.72)
+	(envelope-from <guillaume.yziquel@citycable.ch>)
+	id 1PnTwH-0005qW-DL; Thu, 10 Feb 2011 11:39:53 +0100
+Date: Thu, 10 Feb 2011 11:39:53 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+To: orbitz@ezabel.com
+Cc: caml-list@inria.fr
+Message-ID: <20110210103953.GU17055@localhost>
+References: <50AF76A1-30E0-4735-AFB2-88BB603899CE@ezabel.com>
+ <77df810e993b3002f8b97622102da8dd.squirrel@mail.mpi-sws.org>
+ <F325FC2E-D852-4A7A-8550-F77797392BD0@ezabel.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <F325FC2E-D852-4A7A-8550-F77797392BD0@ezabel.com>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p1AAeFSI015898
+Subject: Re: [Caml-list] Scoped Bound Resource Management just for C++?
+
+Le Wednesday 09 Feb 2011 à 10:15:43 (-0500), orbitz@ezabel.com a écrit :
+> Thanks for the answers everyone.
+> 
+> How does one safely write code in Ocaml that guarantees resources
+> will be freed?  Guillaume mentioned the with-idiom, but even that
+> doesn't seem entirely safe.
+
+It was Dmitry Grebeniuk that mentioned it. Not me.
+
+To me, the closest you can get is:
+
+module type Resource = sig
+
+	type t (* opaque type for mystuff. *)
+
+	val v : t option ref
+
+	val free : t -> unit
+
+	(* Some functions manipulating type t, without storing
+	 * type t values in any other structures such as lists.
+	 * Should avoid anything that 'unopacifies' type t *)
+
+end
+
+let sbrm (x : (module Resource)) =
+	let module R = (val x : Resource) in
+	let do_stuff z =
+		(* Write your code here *)
+	in
+	let Some w = !v in
+	let return_value = do_stuff w in
+	v := None;
+	free w;
+	return_value
+	
+let wrap_my_stuff (my_stuff : my_type) = (module struct
+
+	type t = my_type
+
+	let v = ref (Some my_stuff)
+
+	(* Declarations of other functions *)
+
+end : Resource)
+
+Essentially, you put my_stuff into a first-class module, when calling
+the sbrm function, the module is unpacked, and the type R.t is local to
+the scope of the function sbrm. This forbids you to store the value in
+the reference v anywhere else (excepts if you use existentialish-type stuff
+like objects, first-class modules, or funky records). So you code your
+do_stuff function under this typing constraints, when you're done, you
+invalidate the reference v, and then free the w stuff, and then return
+the value.
+
+This code is glaringly unsatisfactory and inefficient. It's however the
+only way I see of (mildly) forbiding at the type level to put the value
+that is supposed to have a scope-bounded lifecycle somewhere else in the
+heap that might tell the GC that it should live longer.
+
+This also assumes that as soon as you create an object of mystuff, it is
+immediately wrapped using wrap_my_stuff, and not used anywhere else.
+
+The memory content of mystuff may live on, but it gets 'finalised' in
+the scope of the sbrm function.
+
+You still have issues with putting your stuff into existential types (I
+do not think this can be avoided). And in the current state, this idiom
+is error-prone. Could perhaps be lifted to a Camlp4 syntax extension
+which would make it more 'robust'. Something like
+
+opaque Resource = struct
+
+	opaque type t = mytype
+
+	(* manipulations of type t or of type 'mytype' that gets
+	 * rewritten to 't' by Camlp4 *)
+
+end
+
+would generate the module type, the embedding of mytypes into
+first-class modules, and the adequate sbrm function, together with an
+sbrm keyword mimicking the with idiom.
+
+Needless to say, the with- idiom is much more practical.
+
+Otherwise you would need to refine the type system of OCaml to include
+information as to whether an argument can be attached to another
+datastructure inside a given function. I do not see why it could not be
+done, but I do not see why it should be done.
+
+-- 
+     Guillaume Yziquel
+

@@ -1,0 +1,92 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA15466; Thu, 20 Nov 2003 17:35:41 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA16107 for <caml-list@pauillac.inria.fr>; Thu, 20 Nov 2003 17:35:40 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hAKGZd125718;
+	Thu, 20 Nov 2003 17:35:39 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA15942; Thu, 20 Nov 2003 17:35:38 +0100 (MET)
+Date: Thu, 20 Nov 2003 17:35:38 +0100
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Christian Schaller <Christian.Schaller@siemens.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] closing file descriptors and channels
+Message-ID: <20031120173538.B14255@pauillac.inria.fr>
+References: <A1364BC6814D92479D4EED572D6F6FD806953B@uranus.certw2k.net>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <A1364BC6814D92479D4EED572D6F6FD806953B@uranus.certw2k.net>; from Christian.Schaller@siemens.com on Thu, Nov 20, 2003 at 05:14:11PM +0100
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 descriptor:01 openfile:01 rdwr:01 descriptor:01 buffer:01 descriptors:01 flush:01 underlying:01 underlying:01 typechecker:02 exception:02 exception:02 unix:02 unix:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Can anyone tell me how to close a file descriptor successfully?  In the
+> code below
+> 
+> (* Append new line if condition cond is not satisfied on any line.
+>    Otherwise, raise exception and return the line that fulfills the
+> condition. *)
+> let append_line_cond file_name line cond = 
+>   let file_descr = Unix.openfile file_name [Unix.O_RDWR; Unix.O_APPEND]
+> 0o644 in
+>   let ic = Unix.in_channel_of_descr file_descr in
+>   let oc = Unix.out_channel_of_descr file_descr in
+>   try
+>   (* Read line by line and check if condition is true.  If so, leave the
+>      function and return the line that satisfied the condition *)
+>   while true do 
+>     let line = input_line ic in
+>     if cond line
+>     then raise (Found line)
+>   done          
+>   with          
+>   End_of_file -> output_string oc (line ^ "\n");
+>   (* close all channels *)
+>   Unix.close file_descr;
+>   close_out oc;
+>   close_in ic
+> 
+> I get a Sys_error "Bad file descriptor".  As far as I figured out, the
+> problem is related with the creation of the two channels for input and
+> output.  If I comment out the Unix.close, everything works fine, but I
+> don't know if the file_descr will be automatically closed.  Hm...
+
+close_out and close_in both perform the equivalent of a Unix.close on
+the underlying Unix file descriptor, and, yes, closing something that
+is already closed is an I/O exception.  So, one possibility is to
+close only one of the three entities file_descr, oc and ic.  It's best
+to close the output channel oc, since this will flush its buffer.
+
+The other possibility is to use close_out_noerr and close_in_noerr
+that will just ignore the errors arising from the closing of the
+underlying file descriptor.  But this can be dangerous: certain
+implementations of NFS can report write errors not at the time of the
+writing, but at the time of the closing, and presumably you're
+interested in getting these errors reported.
+
+Side remark: you'd need to close the file descriptor also in the case
+where the line is found and the exception Found is raised.
+
+> Yet another closing-channels-question.  If I use streams instead of
+> reading a file line by line, where exactly do I have to close the
+> channel?  Is close_in on the right position below?
+> 
+> let read_lines ch =
+>   let read_new_line n =
+>     try Some (input_line ch)
+>     with End_of_file -> close_in ch in
+>   Stream.from read_new_line
+
+This looks fine, except that you need to return None in the
+End_of_file case.  (The typechecker will remind you about this :-)
+
+Hope this helps,
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,162 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA14008; Mon, 24 Jun 2002 23:34:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA13920 for <caml-list@pauillac.inria.fr>; Mon, 24 Jun 2002 23:34:27 +0200 (MET DST)
+Received: from moutng1.kundenserver.de (moutng1.kundenserver.de [212.227.126.171])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g5OLYQH22326
+	for <caml-list@inria.fr>; Mon, 24 Jun 2002 23:34:26 +0200 (MET DST)
+Received: from [212.227.126.160] (helo=mrelayng0.kundenserver.de)
+	by moutng1.kundenserver.de with esmtp (Exim 3.22 #2)
+	id 17MbTe-00055I-00; Mon, 24 Jun 2002 23:34:26 +0200
+Received: from [80.129.99.204] (helo=gate.gerd-stolpmann.de)
+	by mrelayng0.kundenserver.de with asmtp (Exim 3.35 #1)
+	id 17MbTd-0001b5-00; Mon, 24 Jun 2002 23:34:25 +0200
+Received: from ice.gerd-stolpmann.de (ice.gerd-stolpmann.de [192.168.0.13])
+	by gate.gerd-stolpmann.de (Postfix) with ESMTP
+	id 84BD9CCDD; Mon, 24 Jun 2002 23:34:22 +0200 (CEST)
+Received: from ice (localhost [127.0.0.1])
+	by ice.gerd-stolpmann.de (Postfix) with ESMTP
+	id 130811AD7D; Mon, 24 Jun 2002 23:34:19 +0200 (MEST)
+Date: Mon, 24 Jun 2002 23:34:19 +0200
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Alessandro Baretta <alex@baretta.com>
+Cc: Ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Recursive classes are impossible?
+Message-ID: <20020624233419.C760@ice.gerd-stolpmann.de>
+References: <3D1725D9.7060409@baretta.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-15
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <3D1725D9.7060409@baretta.com>; from alex@baretta.com on Mon, Jun 24, 2002 at 15:59:53 +0200
+X-Mailer: Balsa 1.2.4
+Lines: 123
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+On 2002.06.24 15:59 Alessandro Baretta wrote:
+>  > Due to the typing system it is more or less impossible to
+>  > derive recursive classes in O'Caml. To get around this, it
+>  > is common practice to put the modifiable or extensible
+>  > part of recursive objects into parallel objects.
+> <http://www.ocaml-programming.de/packages/documentation/pxp/manual/x550.html#AEN582>
+> 
+> Hmmm... Now I am no object specialist, but this sounds a 
+> little weird to me. Now, let's see, doesn't the following 
+> code show that recursive classes are indeed possible in 
+> O'Caml? Or have I completely misunderstood what is meant by 
+> recursive object?
+> 
+> class ['a] broccoli =
+> 	object (s)
+> 	val mutable portion = None;
+> 	method set (x:'a option) = portion <- x
+> end;;
+> 
+> let broccolo = new broccoli in
+> 	broccolo#set (Some new broccoli);;
+> 
+> let broccolo = new broccoli in
+> 	broccolo#set (Some broccolo);;
+> 
+> Sorry for mentioning broccoli, but it seemed appropriate 
+> given the recursive nature of their geometry.
+
+No, this is not the problem. Try the following:
+
+class tree =
+object(self:'self)
+  val mutable v = (None : int option)
+  val mutable ch = ([] : 'self list)
+  method get = v
+  method set x = v <- x
+  method children = ch
+  method set_children x = ch <- x
+end
+
+This definition works at the first glance, but if you try to
+inherit from this class and subtype this class at the same
+time, you will run into problems.
+
+class broccoli =
+object
+  inherit tree
+  method color = "green"
+end
+
+# let t = new tree;;
+val t : tree = <obj>
+# let b = new broccoli;;
+val b : broccoli = <obj>
+# t # set_children [b];;
+This expression has type
+  broccoli =
+    < children : broccoli list; color : string; get : int option;
+      set : int option -> unit; set_children : broccoli list -> unit >
+but is here used with type
+  tree =
+    < children : tree list; get : int option; set : int option -> unit;
+      set_children : tree list -> unit >
+Only the first object type has a method color
+# t # set_children [ (b :> tree) ];;
+This expression cannot be coerced to type
+  tree =
+    < children : tree list; get : int option; set : int option -> unit;
+      set_children : tree list -> unit >;
+it has type
+  broccoli =
+    < children : broccoli list; color : string; get : int option;
+      set : int option -> unit; set_children : broccoli list -> unit >
+but is here used with type
+  < children : broccoli list; color : string; get : int option;
+    set : int option -> unit; set_children : tree list -> unit >
+Type
+  broccoli =
+    < children : broccoli list; color : string; get : int option;
+      set : int option -> unit; set_children : broccoli list -> unit >
+is not compatible with type
+  tree =
+    < children : tree list; get : int option; set : int option -> unit;
+      set_children : tree list -> unit > 
+Only the first object type has a method color
+
+What's going on? broccoli is not a subtype of tree, although it "only"
+adds a new method, which is normally no hindrance.
+
+Why is broccoli not a subtype of tree? The method set_children does not
+fulfill the contravariance rule. This rule is a general subtyping rule,
+and here it would mean that for all methods m:
+
+- if broccoli.m has the function type s -> t
+- and if tree.m has the function type u -> v
+- the type u must be a subtype of s, and t must be a subtype of v.
+
+broccoli.set_children has the type broccoli list -> unit,
+and tree.set_children has the type tree list -> unit, but
+tree list is not a subtype of broccoli list because tree is
+not a subtype of broccoli. This means: if you want to show that 
+broccoli is a subtype of tree, you need the assumption that tree is a
+subtype of broccoli - this works only if both types are identical.
+And the cause for this strange result is that the argument of the
+method set_children refers recursively to the class type.
+
+That means: You cannot define classes with methods whose arguments
+refer recursively to the class, and extend the class definitions later
+by inheritance. This is the reason why PXP does not have a DOM-like
+interface that can be extended by inheritance.
+
+See the thread http://caml.inria.fr/archives/200111/msg00302.html for
+more explanations of subtyping rules.
+
+Gerd
+-- 
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 45             
+64293 Darmstadt     EMail:   gerd@gerd-stolpmann.de
+Germany                     
+----------------------------------------------------------------------------
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

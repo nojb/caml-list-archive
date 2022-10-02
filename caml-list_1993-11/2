@@ -1,0 +1,93 @@
+Received: by margaux.inria.fr, Thu, 4 Nov 93 09:39:09 +0100
+Received: from concorde.inria.fr by margaux.inria.fr, Wed, 3 Nov 93 20:37:10 +0100
+Received: from dcs.ed.ac.uk (stroma.dcs.ed.ac.uk) by concorde.inria.fr; Wed, 3 Nov 1993 20:38:49 +0100
+Received: from whalsay.dcs.ed.ac.uk by dcs.ed.ac.uk id aa12578;
+          3 Nov 93 19:37 GMT
+Date: Wed, 3 Nov 93 19:37:23 GMT
+Message-Id: <14297.9311031937@whalsay.dcs.ed.ac.uk>
+From: Christophe Raffalli <cr@dcs.ed.ac.uk>
+Sender: weis@margaux
+To: lsanchez@dit.upm.es
+Cc: caml-list@margaux
+In-Reply-To: <199311021046.AA05690@yeti.dit.upm.es> (lsanchez@dit.upm.es)
+Subject: Lazy evaluation and caml-light
+Status: O
+
+
+The problem in your program is this function~:
+
+let rec recursive sb sd=selec({state=Evaluated (append true sb)},sd,
+   F(fun ()->distr2(sb,{state=Evaluated (recursive sb sd)})));;
+
+With the recursive call you compute an infinite number of time the value of 
+(recusive sb sd) !!!!!
+
+Here is a better way to write the same program:
+
+******************************************************************************
+type 'a stream_aux = Str of ('a * 'a stream)
+                   | Unevaluated of (unit -> 'a stream)
+                   | Not_Ready (* use for fix_point only *)
+
+and 'a stream == 'a stream_aux ref;;
+
+let rec Eval p = p := Eval' !p; !p
+where Eval' = function
+  Str _ as s -> s
+| Unevaluated f -> Eval (f ())
+| Not_Ready -> raise (Failure "Can't evaluate any more")
+;;
+  
+let fix_point f = 
+  let fp = ref Not_Ready in 
+  fp := !(f fp);
+  fp
+;;
+
+let append x ls = ref (Str (x,ls));; (* not usefull *)
+let append' x f a = ref (Str(x, ref (Unevaluated (fun () -> f a))));;
+let stop_eval f a = ref (Unevaluated (fun () -> f a));;
+
+let rec selec (f,g,h) = 
+match  (Eval f) with Str (sf,rf) -> 
+  if sf then
+    match (Eval g) with Str(sg,rg) -> append' sg selec (rf,rg,h)
+  else
+    match (Eval h) with Str(sh,rh) -> append' sh selec (rf,g,rh);;
+
+let rec distr2 (f,g)= 
+let (Str(sf,rf)) = (Eval f) and (Str(sg,rg)) = (Eval g) in 
+  if not sf then 
+    append' sg distr2 (rf,rg)
+  else 
+    distr2 (rf,rg);;
+
+let rec recursive (sb,sd) = 
+  fix_point f where
+  f = function x -> selec (
+        (append true sb),sd,
+        stop_eval distr2 (sb,x))
+;;
+
+
+let rec strinf =fun []->failwith "lista vacia" | (a::b)-> append' a strinf b;;
+
+let rec l1=false::false::false::false::false::true::true::false::false::true::l1;;
+let rec l2=1::2::3::4::5::6::7::8::9::l2;; 
+let s1=stop_eval strinf l1;; 
+let s2=stop_eval strinf l2;; 
+let s3=recursive (s1,s2);;
+
+let rec get s = function
+  0 -> ()
+| n -> match  (Eval s) with Str (sf,rf) ->
+ print_int sf; print_string " "; get rf (n -1)
+;;
+
+
+
+
+
+
+
+

@@ -1,0 +1,545 @@
+Return-Path: <zilles@1969web.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 946B5BB84
+	for <caml-list@yquem.inria.fr>; Tue,  1 Aug 2006 02:40:28 +0200 (CEST)
+Received: from woodstock.1969.ws (lgb-static-208.57.241.22.mpowercom.net [208.57.241.22] (may be forged))
+	by concorde.inria.fr (8.13.6/8.13.6) with SMTP id k710eLs2014919
+	for <caml-list@yquem.inria.fr>; Tue, 1 Aug 2006 02:40:27 +0200
+Received: (qmail 29857 invoked from network); 1 Aug 2006 00:40:14 -0000
+Received: from unknown (HELO ?10.3.2.21?) (10.3.2.21)
+  by 0 with SMTP; 1 Aug 2006 00:40:14 -0000
+Message-ID: <44CEA364.3050902@1969web.com>
+Date: Mon, 31 Jul 2006 17:42:12 -0700
+From: Karl Zilles <zilles@1969web.com>
+Organization: 1969 Communications,  Inc.
+User-Agent: Thunderbird 1.5.0.5 (Windows/20060719)
+MIME-Version: 1.0
+To: Joel Reymont <joelr1@gmail.com>
+Cc: caml-list <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] Web page scraping packages
+References: <FA4F65EE-B014-4BDB-9245-0E63C81543ED@gmail.com>
+In-Reply-To: <FA4F65EE-B014-4BDB-9245-0E63C81543ED@gmail.com>
+Content-Type: multipart/mixed;
+ boundary="------------070404090201000501060909"
+X-Miltered: at concorde with ID 44CEA2F5.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 ocaml:01 netstring:01 parsing:01 buffer:01 buffer:01 pcre:01 printf:01 netchannels:01 netchannels:01 rec:01 rec:01 iter:01 iter:01 iterator:01 
+X-Attachments: name="htmltreeutils.ml" name="htmltreeutils.ml" name="utility.ml" name="utility.ml" 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+This is a multi-part message in MIME format.
+--------------070404090201000501060909
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+
+Joel Reymont wrote:
+> Are there any screen-scraping packages for OCaml?
+> 
+> I'm looking for something that would let me analyze the contents of a 
+> web page and extract, for example, all the image tags.
+
+I don't think of this as screen scraping.  Spidering might be a better word.
+
+I've done a good bit of this in OCaml.  I use the curl package for 
+downloading web pages and the netstring package for parsing them.
+
+I'm going to attach a couple of files that I use for this sort of stuff. 
+  The file htmltreeutils.ml has a bunch of functions for working with 
+the results of a nethtml parse tree.
+
+So your program would look something like this.. and this hasn't been 
+tested:
+
+open Htmltreeutils
+
+
+     let result = Buffer.create 2000 in
+     let connection = Curl.init () in
+     Curl.set_httpget connection true;
+     Curl.set_url connection "http://www.yahoo.com/randompage.html";
+     Curl.set_writefunction connection (fun s -> Buffer.add_string 
+result s);
+     Curl.set_headerfunction connection (fun s -> ());
+     Curl.perform connection;
+     Curl.cleanup connection;
+
+     let dom = get_parsed_html_from_string result in
+     let img_tags = list_tags "img" dom in
+     .... do something with img tags here like pull out their src
+       attributes
+
+
+Here are the two helper files:
+
+--------------070404090201000501060909
+Content-Type: text/plain;
+ name="htmltreeutils.ml"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline;
+ filename="htmltreeutils.ml"
+
+(** Functions to generate and search parsed html pages.  
+ Uses the Nethtml module to do the heAvy lifting. *)
+
+(** Author: Karl Zilles, released into public domain *)
+
+open Nethtml
+open Pcre
+open Printf
+
+open Utility
+
+(** {1:Fix questionable "form" decision in dtd} *)
+let fix_dtd dtd = 
+    List.map (function 
+        | (name, (elclass, _)) when name = "form" ->
+            (name, (elclass, `Sub_exclusions( ["form"], `Flow )))
+        | line -> line
+    ) dtd
+
+let my_dtd = fix_dtd relaxed_html40_dtd 
+
+(** {1:create Create an html tree} *)
+
+let get_parsed_html_from_channel inchannel = 
+    let parsed = List.hd (parse ~dtd:my_dtd inchannel) in
+    inchannel#close_in ();
+    parsed
+
+(** [ get_parsed_html file ] returns an html tree of the contents of file.
+ See the Nethtml documentation for the format *)
+let get_parsed_html file = 
+    let inchannel = new Netchannels.input_channel (open_in file) in
+    get_parsed_html_from_channel inchannel
+
+(** [ get_parsed_html file ] returns an html tree of the contents of file.
+ See the Nethtml documentation for the format *)
+let get_parsed_html_from_string str = 
+    let inchannel = new Netchannels.input_string str in
+    get_parsed_html_from_channel inchannel
+
+(** {1:inspect Inspecting a tag} *)
+
+(** [ match_tag tag doc] returns true if the current tag has type "tag".  
+ Example: [match_tag "td" doc] will return true if doc is a "td" tag. *)
+let match_tag thistag = function
+        | Element (tag,_,_) when tag = thistag -> true 
+        | _ -> false
+
+let tag_type = function
+        | Element (tag,_,_) -> tag
+        | _ -> raise Not_found
+
+(** [ attribute doc attr ] returns the value of the attribute attr if it 
+ exists in the current tag, or throws a [ Not_found ] exception if it doesn't *)
+let attribute doc name = match doc with 
+        | Element (_,attributes,_) -> 
+            List.assoc name attributes 
+        | _ -> raise Not_found
+
+let as_text, as_text_list =
+    let rec as_text' = function
+        | Element (_,_,subdocs) -> as_text_list' subdocs
+        | Data text -> replace ~pat:"(\\r|\\n)" text
+    and as_text_list' l = 
+        replace ~pat:"\\s+" ~templ:" " 
+            (List.fold_left (fun current doc -> current ^ 
+                (as_text' doc)) "" l) in
+    (compose strip as_text', compose strip as_text_list')
+
+(** [ as_text doc] returns a string of the text contents of this tag and
+ all of it's subtags*)
+let as_text = as_text
+
+(** [ as_text_list doc] returns a string of the text contents of all the tags
+in this list and all of their subtags*)
+let as_text_list = as_text_list
+
+let rec as_text_formatted = function
+    | Element (_,_,subdocs) -> as_text_list_formatted subdocs
+    | Data text -> text
+and as_text_list_formatted l = 
+    (List.fold_left (fun current doc -> current ^ 
+        (as_text_formatted doc)) "" l)
+
+(** [ as_html doc] returns a string of the html contents of all the tags
+in this list and all of their subtags*)
+let as_html_list documentlist = 
+    let result = Buffer.create 2000 in
+    let outbuffer = new Netchannels.output_buffer result in
+    write ~dtd:my_dtd outbuffer documentlist;
+    Buffer.contents result
+
+let as_html document = as_html_list [document]
+
+(** {1:search Search or process an html tree} *)
+
+
+(** [ iter_document f doc ] runs the function f on every tag in the document *)
+let rec iter_document f doc =
+    f doc;
+    match doc with 
+        | Element (_,_,subdocs) -> 
+            List.iter (iter_document f) subdocs
+        | _ -> ()
+
+let fold_left f = fold_left_from_iterator iter_document f
+
+(** [ iter_document f doc ] runs the function f on every tag in the document.
+ In addition to passing the current element to f, it also passes a list
+ of all the parent tags of that element. *)
+let iter_document_with_parents f doc =
+    let rec iter_document_with_parents' f parents doc =
+        f doc parents;
+        match doc with 
+            | Element (_,_,subdocs) -> 
+                List.iter (iter_document_with_parents' f (doc::parents)) 
+                    subdocs
+            | _ -> () 
+    in
+    iter_document_with_parents' f [] doc 
+
+(** [ list_tags tagname doc ] returns a list of all tags of a certain type
+ in the html tree *)
+let list_tags tagname doc =
+    let tags = ref [] in
+    iter_document (fun doc ->
+        if match_tag tagname doc then
+            tags := doc :: !tags) doc;
+    List.rev !tags
+
+(** [ list_tags_with_parents tagname doc ] returns a list of all tags of a
+ certain type in the html tree, and also includes a list of their parents
+ with each one. *)
+let list_tags_with_parents tagname doc =
+    let tags = ref [] in
+    iter_document_with_parents (fun doc parents ->
+        if match_tag tagname doc then
+            tags := (doc,parents) :: !tags) doc;
+    List.rev !tags
+
+
+(** [ find filter doc ] returns the first element that filter returns
+ true on, searching the document in a depth first search. Raises a [ Not_found ]
+ exception if nothing is matched. *)
+let find filter document = 
+    let rec find' filter document =
+        if filter document then
+            Some document
+        else
+            match document with
+                | Element (_,_,subdocs) -> 
+                    let rec loop  = (function 
+                        | h::t ->
+                            (match find' filter h with
+                                | Some x as result -> result
+                                | None -> loop t)
+                        | [] -> None) in
+                    loop subdocs
+                | _ -> None in
+
+    match find' filter document with
+        | Some x -> x
+        | None -> raise Not_found
+
+(** [ find filter doc ] returns the first element that filter returns
+ true on, searching the document in a depth first search.  Note that in
+ this function we also pass along a list of parents to the filter, and
+ return the list of parents with the matching object.  Raises a [ Not_found ]
+ exception if nothing is matched. *)
+let find_with_parent filter document = 
+    let rec find' filter parents document =
+        if filter parents document then
+            Some (document,parents)
+        else
+            match document with
+                | Element (_,_,subdocs) -> 
+                    let add_parents = document :: parents in
+                    let rec loop  = (function 
+                        | h::t ->
+                            (match find' filter add_parents h with
+                                | Some x as result -> result
+                                | None -> loop t)
+                        | [] -> None) in
+                    loop subdocs
+                | _ -> None in
+
+    match find' filter [] document with
+        | Some x -> x
+        | None -> raise Not_found
+
+(** [ parse_tags_at_same_level tag doc]  looks down from the passed document
+ and finds the first matching tag, then returns a list of
+ matching tags with the same parent as the first match. *)
+let parse_tags_at_same_level tag document = 
+    let is_tag = match_tag tag in
+    let first_tr, parents = find_with_parent (function _ -> is_tag) 
+        document in
+    let siblings = match List.hd parents with 
+        Element (_,_,x) -> x | _ -> assert false in
+    List.filter is_tag siblings
+
+(** [parse_trs doc] calls parse_tags_at_same_level matching "tr" tags *)
+let parse_trs = parse_tags_at_same_level "tr"
+
+(** [parse_tds doc] calls parse_tags_at_same_level matching "td" tags *)
+let parse_tds = parse_tags_at_same_level "td"
+
+let get_tag_with_name tag name document = 
+    find (
+        fun el -> 
+            try match_tag tag el && (attribute el "name")=name 
+            with Not_found -> false
+    ) document
+
+(* form handling *)
+let decode = Netencoding.Html.decode_to_latin1 
+
+let get_form = get_tag_with_name "form"
+
+let get_select = get_tag_with_name "select"
+
+let select_selection selection =
+    try
+        (* look for a "selected" value *)
+        find (fun el -> 
+            try ignore (attribute el "selected"); true 
+            with Not_found-> false) selection
+    with Not_found -> 
+        (* otherwise, take first option element *)
+        find (match_tag "option") selection
+       
+let select_value selection =
+	decode (attribute (select_selection selection) "value")
+let select_label selection =
+	decode (as_text (select_selection selection)) 
+
+let get_select_value form name =
+	select_value (get_select name form)
+let get_select_label form name =
+	select_label (get_select name form)
+
+let input_value input = 
+	decode (attribute input "value")
+let get_input_value form name = 
+    input_value (get_tag_with_name "input" name form) 
+
+let textarea_value textarea = 
+	decode (as_text_formatted textarea)
+let get_textarea_value form name = 
+	textarea_value (get_tag_with_name "textarea" name form)
+
+let element_name default el = try attribute el "name" 
+    with Not_found -> default
+
+let list_forms document = 
+    list_tags "form" document
+
+let form_names document = 
+    List.map (element_name "[No name]") (list_forms document)
+
+let element_to_accessor = [
+    "select", select_value;
+    "input", input_value;
+    "textarea", textarea_value;
+]
+
+let get_field_list form = 
+    List.rev (fold_left (fun current el ->
+        try
+            let accessor = List.assoc (tag_type el) element_to_accessor in
+(*             printf "%s: %s \n" (tag_type el) (element_name "noname" el); *)
+            ( element_name "noname" el, accessor el ) :: current
+        with Not_found -> current
+    ) [] form)
+
+let print_field_list a = 
+    printf "[\n";
+    List.iter (function name,value ->
+        printf "    \"%s\",\"%s\";\n" (String.escaped name) (String.escaped value)
+    ) a;
+    printf "]\n"
+
+--------------070404090201000501060909
+Content-Type: text/plain;
+ name="utility.ml"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline;
+ filename="utility.ml"
+
+(** Utility functions for general use.  Most of these deal with the 
+   default data structures, but some require the pcre library, and some
+   require the Unix module *)
+(** Author: Karl Zilles, released into public domain *)
+
+open Pcre
+open Printf
+
+(** {1:generic Generic functions:} *)
+
+(** [ compose f g ] returns a new function that is like
+ running g on the inputs and then f on the results of g *)
+let compose f g = fun x -> f (g x)
+
+(** [ fold_left_from_iterator iter ] returns a fold_left function on 
+ the same datastructure that your iter function works on.  You may have
+ to use it as so:
+
+    let fold_left f = fold_left_from_iterator iter_document f
+
+ to avoid "cannot be generalized" errors
+*)
+let fold_left_from_iterator iter = 
+    (fun f init data -> 
+        let cur = ref init in
+        iter (fun el -> cur := f !cur el) data;
+        !cur)
+
+(** {1:hash Hash table functions:} *)
+
+(** Returns the unique list of keys in a Hashtable *)
+let hash_keys h = 
+    Hashtbl.fold (fun key _ l ->
+        if l = [] || (List.hd l) <> key then key :: l else l 
+    ) h []
+
+(** Returns the unique list of values in a Hashtable *)
+let hash_values h = 
+    Hashtbl.fold (fun _ value l -> 
+        if not (List.mem value l) then value :: l else l) h []
+
+(** Get a value or fail with error *)
+let get_value_or_fail hash key error = 
+    try Hashtbl.find hash key
+    with Not_found -> raise (Failure error)
+
+(** {1:list List functions:} *)
+
+(** [ list_iteri f l ] runs the function f on every element of l, passing
+ the 0-based index of the element, and the element itself *)
+let list_iteri f l = 
+    let rec list_iteri' i = function
+        | [] -> ()
+        | h::t -> f i h; list_iteri' (i+1) t
+    in
+    list_iteri' 0 l
+
+(** [ list_mapi f l ] returns a list of the results of runing the function f on every element of l, passing the 0-based index of the element, and the element itself *)
+let list_mapi f l = 
+    let rec list_mapi' i = function
+        | [] -> [] 
+        | h::t -> (f i h)::(list_mapi' (i+1) t)
+    in
+    list_mapi' 0 l
+
+(** [ list_skip n l ] returns the list l with the first n elements removed, or
+ the empty list if it runs out of elements to skip *)
+let rec list_skip n l =
+    if n = 0 || l = [] then l else list_skip (n-1) (List.tl l)
+
+(** [ list_first n l ] returns the first n element of list l, or as many as it
+ can find  *)
+let rec list_first n l =
+    if n = 0 then [] else 
+        match l with 
+        | [] -> []
+        | h::t -> h::list_first (n-1) t
+
+(** [ assoc_merge_with_replace first second ] returns a merge of two association
+ * lists with any duplicate keys using the values from the second list. *)
+let assoc_merge_with_replace first second = 
+    List.fold_left (fun cur entry -> 
+        if not (List.mem_assoc (fst entry) second) then entry::cur else cur) 
+        second (List.rev first)
+
+(** {1:string String functions:} *)
+
+let list_of_string s =
+    let rec chars s index so_far = 
+        if index < 0 then so_far 
+        else chars s (index-1) (s.[index] :: so_far)
+    in
+    chars s ((String.length s)-1) []
+
+(** [ string_ends_with contents end ] returns true if the last characters
+ * of the string contents are the string end *)
+let string_ends_with s e =
+    let len_s = String.length s in
+    let len_e = String.length e in
+    if len_s >= len_e then
+        (String.sub s (len_s - len_e) len_e) = e
+    else false
+
+
+(** {1:system System commands:} *)
+
+(** [ command_to_string_list command ] runs command as an external process
+ and then copies the stdout of the results into a list of strings.  Stderr
+ goes to the ocaml stderr *)
+let command_to_string_list command = 
+    let input = Unix.open_process_in command in
+    let results = ref [] in
+    (try
+        while true do
+            results := (input_line input) :: !results
+        done
+    with 
+        End_of_file -> ());
+    List.rev !results
+
+(** [ quiet_mkdir dir permission ] runs the standard Unix.mkdir, but 
+ does not throw an exception if the directory already exists *)
+let quiet_mkdir dir permission = 
+    try Unix.mkdir dir permission 
+    with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+
+(** {1:pcre Pcre tools:} *)
+
+(** Returns the string with all leading and trailing spaces removed 
+ including \160 which is some weird space like character that excel
+ seems to like *)
+let strip s = replace ~pat:"(^(\\s|\160|&nbsp;)+|(\\s|\160|&nbsp;)+$)" s
+
+(** A pregenerated option list for doing caseless matches in Pcre *)
+let caseless = cflags [`CASELESS]
+
+(** {1:config Configuration file tools:} *)
+let parse_config_file config_file = 
+    let results = Hashtbl.create 10 in
+    foreach_file [config_file] (fun _ input ->
+    foreach_line ~ic:input (fun line ->
+        try
+            let m = extract ~pat:"(.*)=(.*)" line in
+            Hashtbl.replace results (strip m.(1)) (strip m.(2));
+        with Not_found -> 
+            if strip line <> "" then 
+                eprintf "Unable to parse configuration file line:\n%s\n"
+                    line;
+    ));
+    results
+
+(** {1:File tools:} *)
+let file_to_string file = 
+    let ic = open_in file in
+    let len = in_channel_length ic in
+    let result = String.create len in
+    let rec readdata start =
+        let read = input ic result start (len-start) in
+        if read = 0 then start
+        else readdata (start+read) in
+    let real_length = readdata 0 in
+    close_in ic;
+    String.sub result 0 real_length
+
+let string_to_file file data = 
+    let oc = open_out file in
+    output_string oc data;
+    close_out oc
+
+
+--------------070404090201000501060909--
+

@@ -1,0 +1,344 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA13499; Tue, 18 Nov 2003 22:24:05 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA13997 for <caml-list@pauillac.inria.fr>; Tue, 18 Nov 2003 22:24:03 +0100 (MET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hAILO2128679
+	for <caml-list@inria.fr>; Tue, 18 Nov 2003 22:24:02 +0100 (MET)
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id hAILNqC13665;
+	Tue, 18 Nov 2003 15:23:53 -0600 (CST)
+Date: Tue, 18 Nov 2003 16:23:20 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: skaller <skaller@ozemail.com.au>
+cc: Caml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] GC and file descriptors
+In-Reply-To: <1069168323.18363.83.camel@pelican>
+Message-ID: <Pine.LNX.4.44.0311181514270.5009-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 recursion:01 arbitrarily:01 recursion:01 doable:01 hides:01 unacceptable:01 vogue:99 hacks:01 finalizers:01 constrain:01 ocaml's:01 interscript:01 tightly:01 bug:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On 19 Nov 2003, skaller wrote:
+
+> On Tue, 2003-11-18 at 08:20, Brian Hurt wrote:
+> > On 18 Nov 2003, skaller wrote:
+> > 
+> 
+> > > But it is irrelevant, because programmers do not intend to write
+> > > arbitrary code. They intend to write comprehensible code, whose
+> > > correctness is therefore necessarily easy to prove.
+> > 
+> > What they intend to do and what they do do are often completely different.  
+> > It is a rare programmer who *intentionally* adds bugs to his code.  Yet 
+> > bugs still happen.
+> 
+> Of course. But my point is that a lot of the arguments
+> I have seen that 'we cannot do that because the general
+> problem is NP-complete' are irrelevant.
+
+The problem isn't NP-complete, it's unsolvable in the general case.
+
+The fact that it's insolvable means that the language can not issue 
+blanket gaurentees, just "best effort" requirements.  Which work fine 
+right up until the point that the best effort fails.  An example of this 
+problem in action, consider tail recursion optimization.  But even here it 
+fails- for most inputs, functions that aren't properly tail recursive 
+still work correctly.  And when it doesn't work correctly, it fails in an 
+obvious (and easy to debug) way- a stack overflow.
+
+With precise destruction of objects, as you yourself point out, encourages
+the programmer to depend upon it.  When the program hits some point of
+complexity where best effort fails (and since the problem is unsolvable in 
+the general case, there will be a point where complexity pass this 
+threshold), suddenly the program is struck by subtle, hard to debug bugs 
+(lines being written to files in the wrong order, etc).
+
+> 
+> > But my point here is that determining the *exact* time that an object 
+> > becomes garbage can be arbitrarily complex.  Most of the time, I agree, it 
+> > won't be.  
+> 
+> The point is though: when it matters, the onus is on
+> the programmer to make sure the design is able to 
+> determine an 'exact enough' time, using whatever
+> tools the language may provide.
+
+What may be obvious to the programmer may not be obvious to the compiler.  
+To me, the code:
+let rec append src dst =
+	match src with
+		| [] -> dst
+		| h :: t -> h :: (append t dst)
+;;
+
+should be tail recursion optimizable.  The ocaml compiler, however, 
+doesn't.
+
+If the programmer can specify exactly when a resource should be released,
+then there should be a function he can call at that point to release the 
+resource.  At which point the destructor doesn't need to do anything.  
+
+> An obvious candidate is a pure stack protocol
+> (automatic store) and another is a hierarchical 
+> system (ref count).
+
+A stack based store would be tricky with a functional language, but
+*might* be doable.  It's completely unworkable with an object oriented 
+language.  The whole idea of OO programming is that the object interface 
+hides the internal details of the object, including it's size.  
+
+Reference counting has an unacceptable performance penalty compared to
+mark and sweep, let alone more advanced garbage collection algorithms.  
+Plus it has problems with circular data structures (which is why most
+reference counting implementations have a backup mark and sweep).  Which
+is why reference counting went out of vogue in the 1970's.
+
+Note that if all else fails, you *can* implement reference counting GC on 
+top of Ocaml (you probably need to do some Obj.magic hacks).
+
+> 
+> When there are circularities .. due to the complexity
+> it would be unwise to count on synchronous finalisation,
+> since it isn't clear when that is (by definition it
+> is rather hard to determine ..)
+
+My point *exactly*. 
+
+> 
+> > Once you allow for the fact that finalizers/destructors may not happen in 
+> > a defined order or at defined times, why not go whole-hog?  
+> 
+> Hard question. One job a language is often required to do
+> is emulate the behaviour of a program written in another
+> language .. that's not always easy to do when the object,
+> type, allocation or execution models are different.
+
+Which is why languages should be carefull to constrain their 
+implementations as little as possible.  Is the problem Ocaml's, for not 
+having the type of GC required by Interscript, or Interscript's, for to 
+tightly defining what type of GC they have?  Or programmers, for 
+programming by coincidence ("It worked on my machine...")?
+
+This also allows the language to improve it's implementations- for example 
+replacing a reference counting GC with a mark and sweep GC.
+
+> 
+> 
+> > In the most intractible cases, neither the compiler nor the programmer may 
+> > be able to determine when the last reference is released.  But even in the 
+> > simple cases, the programmer may have the intent to release the resources 
+> > and simply doesn't.  It's called a bug.  
+> 
+> I agree. Bugs happen. Perhaps I can give an example:
+> in Java, variables must be initialised. Unlike Ocaml though,
+> they do not have to be initialised at the point of
+> declaration. Java requires instead 'manifest initialisation':
+> its a compromise between initialisation at the point
+> of declaration like Ocaml, or arbitrary initialisation
+> (onus on programmer) as in C++.
+> 
+> The language picked a constraint that is easy to check
+> for both the compiler and for humans which is more
+> flexible than the Ocaml model, but still assures
+> freedom from unitialised variable errors. It still
+> can't handle complex cases, which can be done in C++,
+> but they're rarely needed because if they seem
+> to be needed there is a good chance the design
+> is flawed.
+
+
+So long as I can declare variables when I first need them, I've never had 
+a problem with initialization as part of allocation.  Using an 
+uninitialized variable is *always* wrong.  I will occassionaly not 
+initialize variables in C, because I have to declare all my variables at 
+the begining of the function, and I don't know the correct initial value 
+at that point.  In Ocaml, and in Java, I simply move the variable 
+declaration up to where I do know it's initial value.
+
+Note that Java is even more imprecise about when objects get freed than
+Ocaml is.  In Ocaml, the GC runs inside the same thread as the main
+program.  In Java, it's specified that the GC runs in a seperate thread.  
+Meaning that destructors execute asynchronous from the main program.  If
+the destructor for object X accesses object Y which is not garbage, and
+the main thread is also accessing object Y, you have a possible race
+condition.  You can not write non-multithreaded programs in Java.
+
+Were I writting the spec for Ocaml, I'd not only allow for the possibility 
+of GC running in it's own thread, I'd also allow for the possibility of 
+multiple threads of GC running in parallel.  
+
+> Normally I wouldn't. But here there was no choice.
+> You have to understand first that Interscript is a library
+> with a driver program that looks like this:
+> 
+> 	read a line
+> 	if at end of file, delete user space else
+> 	if the line starts with @ execute it
+> 	otherwise if we're in tangle mode 
+> 		write to current source file
+> 	otheriwse we have to be in document mode
+> 		write to current document
+> 	repeat
+>
+> 
+> Now, the user code looks like this:
+> 
+> 	@h = tangler('src/x.ml')
+> 	@select(h)
+> 	print_endline "I'm an ocaml program"
+> 	<EOF>
+> 
+> Do you see the problem? The open file lives
+> in USER space. The language syntax does not
+> require the user close open files, because
+> that would leave a dangling reference.
+
+So when does @h fall out of scope?  Other than at eof, obviously.
+
+> 
+> But the engine has no idea which things
+> are files that need closing, and which
+> are documents that need tables of contents.
+> 
+> The ONLY way to finalise
+> each object correctly is in the destructor
+> method (__del__ method). I could add a 
+> 'finalise' method to each object and call it
+> but that would not help -- the __del__
+> method is precisely that anyhow,
+> and it gets invoked automatically so it
+> relieves me of the task of finding
+> all the objects.
+> 
+> You can see that the problem arises
+> from a design decision not to require
+> the USER to close files.
+
+And from the users doing programming by coincidence.  Looks like you're 
+going to have to implement reference counting.
+
+> 
+> > If it matters when the buffers are flushed, manually flush the buffers.  
+> 
+> See above. It isn't always possible: the program doesn't
+> always know which files are open. This is quite typical
+> in object oriented programs -- the program doesn't know
+> what kinds of objects exist, there is no master
+> that can call the 'finalise' method.
+> 
+> In C++ code, particularly GUI code, callbacks often
+> lead to suicide 'delete this' simply because there
+> is no one around to delete an object.
+>
+
+Yep.  IMHO, OO pretty much demands GC.  But if the program doesn't know 
+what is going on, and when it's releasing the last reference to an object, 
+how is the compiler supposed to know?  Welcome to the general case.  
+ 
+> 
+> > > 
+> > > On thing is for sure .. I *hate* seeing
+> > > "program terminated with uncaught "Not_found" exception"
+> > > because I do hundreds of Hashtbl.find calls....
+> 
+> > There is a religous debate between returning 'a and throwing an exception 
+> > if the item isn't found, or returning 'a option.  
+> 
+> I don't think it is religious. There is a genuine problem here.
+> I do not know how to state it exactly, but I'll try.
+> 
+> Checking error codes and poping the stack is not only
+> tedious and obscures the normal control flow,
+> it does so to such an extent in certain cases
+> as to be totally and unequivocably out of the question.
+> For example in math calculations you simply cannot
+> afford to check every single function call either
+> before or after invocation:
+> 
+> 	x = (a + b/c ^ d)
+> 
+> for example would turn into many lines of spagetti.
+> I will say:
+> 
+> 	"the error detection is too localised"
+> 
+> for this kind of code. On the other hand the
+> uncaught exception of dynamic EH clearly
+> shows that that mechanism leads to
+> 
+> 	"the error detection is too global"
+> 
+> What alternatives are there? 
+> 
+> One is to  have exception specifications on functions,
+> but that is known not to work very well. The first
+> difficulty is that once you have them, they must
+> become part of the type system. They then 'snowball'
+> through the whole program (in the same way 'const'
+> does to C programs).
+
+Type inference is your friend here, as it relieves the programmer of a lot
+of burden of handling more complex types.  But the fundamental problem is
+that we want the programmer to think about and handle error cases, and
+many programmers doesn't want to as that's extra work.
+
+> 
+> It isn't possible to deduce what exceptions can
+> be thrown when functions are passed as arguments
+> to functions, so this pollution of the type system
+> would also be manifest in code in the form
+> of annotations .. basically higher order functions
+> would be screwed completely by this.
+
+No.  If a function is defined to take an argument of type "unit -> int",
+and you try to pass it a function of type "unit -> int throws Not_found"  
+(or whatever the syntax is), this is a type error.  The other direction 
+should be ok, however.
+
+Some generality would be needed.  You'd want to be able to express a 
+function type like:
+val foo: (unit -> int throws 'a) -> int throws 'a
+
+
+> 
+> So exception specifications are out for
+> 'engineering' reasons.
+> 
+> Another alternative is static exception handling.
+> I tried that in Felix. It is very good for a
+> wide class of problems. Static EH implies
+> block structured code with the handler visible
+> from the throw point... its really a structured goto.
+
+I'd have to take a look at this.
+
+> 
+> This solves many cases where we really wanted
+> 'alternate control flow constructs' rather
+> than error handling, but not all. And it doesn't
+> work where a more dynamic transmission of
+> error notifications is required.
+> 
+> What else? Continuations? Can monads be used?
+> We really do need a mechanism with better
+> locality (easily control scope).
+> 
+> 
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

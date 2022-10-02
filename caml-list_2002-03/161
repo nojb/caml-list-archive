@@ -1,0 +1,175 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA20230; Thu, 21 Mar 2002 18:37:53 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA17996 for <caml-list@pauillac.inria.fr>; Thu, 21 Mar 2002 18:37:51 +0100 (MET)
+Received: from lobus.fungible.com (adsl-64-161-114-6.dsl.snfc21.pacbell.net [64.161.114.6])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g2LHboX20620
+	for <caml-list@inria.fr>; Thu, 21 Mar 2002 18:37:50 +0100 (MET)
+Received: by lobus.fungible.com (Postfix, from userid 1000)
+	id 82BE78086; Thu, 21 Mar 2002 09:37:46 -0800 (PST)
+Message-Id: <1191-Thu21Mar2002093746-0800-tim@fungible.com>
+X-Mailer: emacs 21.1.1 (via feedmail 8 I)
+Date: Thu, 21 Mar 2002 07:13:58 -0700
+From-Tims-Fingers: true
+To: jehenrik@yahoo.com
+Cc: caml-list@inria.fr
+In-reply-to: <003001c1d0e2$9129b320$0b01a8c0@mit.edu> (jehenrik@yahoo.com)
+Subject: [Caml-list] Type-safe DLL's with OO (was DLL-hell of O'Caml)
+References:  <003001c1d0e2$9129b320$0b01a8c0@mit.edu>
+From: tim@fungible.com (Tim Freeman)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: "Jeff Henrikson" <jehenrik@yahoo.com>
+>Imagine if the computer on your desk was built out of a (C
+>based) source distro.  Not just a source distro, but one
+>with the "all downstream dependencies recompile" policy.  (I
+>don't think anybody has been so deluded to suggest this in a
+>large system.)  Now suppose you write device drivers.
+>Device driver programmers were frustrated enough before the
+>linux kernel was modularized so that they could load and
+>unload them without relinking the kernel and rebooting.  You
+>mean to tell them now that they must recompile not only the
+>kernel, but therefore the entire machine every time they
+>make a one line bugfix?
+
+No matter how this binary compatibility issue is resolved, you could
+represent the API for the for the device driver as a virtual OCaml
+object and have a function in the OS that registers a new instance of
+a subclass of the virtual class as a device driver in future calls.
+
+With this scheme, when you change a device driver, you wouldn't have
+to recompile the world.  You'd have to recompile the code that
+registers the device driver, and everything from there to the top
+level of the program.  If the first thing the top level does is
+register the new device driver, then that's just recompiling two
+things, the device driver and the top level.
+
+Unfortunately you'd then have to restart the "program" to get your new
+device driver, and in this scenario the "program" is the operating
+system.  Yuck.
+
+If we assume good object oriented design at the API for the device
+driver, the minimal support you'd need to do this without restarting
+the operating system is to be able to dynamically load a module and do
+the static initialization for it.  You don't need to access anything
+inside the module.  You don't need to get any information out of your
+DLL except by side effects of the static initialization.  In this case
+the static initialization would do nothing but register new the device
+driver.
+
+I have sample code for this below.  It deals with upgraded API's in a
+type-safe way.  It substitutes an "open" statement for loading and
+initializing a DLL, since ocaml doesn't presently support loading
+ocaml DLL's.  
+
+This would also solve the issue of the lablgtk executable size that I
+raised earlier.  The machinery is somewhat of a burden on the library
+writer unless a code generator could be used.
+
+I think this idea is mostly from Lakos' book "Large-Scale C++ Software
+Design".
+
+There would then be some value in teaching the garbage collector to
+garbage collect object files from no-longer-used DLL's.  Otherwise if
+you load enough device drivers you run out of VM.
+
+-- 
+Tim Freeman       
+tim@fungible.com
+
+P. S. Here's the illustration code.  Version 1 of the library has a
+function "boring".  Version 2 of the library adds a function
+"interesting" and a bugfix for "boring".  There are three
+applications: v1_user that uses version 1, v2_user that uses version
+2, and v1_user_against_v2 that simulates the version 1 application
+linked against the version 2 library.  It sees the bugfix.
+
+----- lib_static_v1_decl.ml -----
+class virtual simple = object
+  method virtual boring: unit
+end;;
+----- lib_static_v1.ml -----
+let v1_ptr:Lib_static_v1_decl.simple option ref = ref None;;
+let boring () =
+  match !v1_ptr with
+    Some f -> f#boring
+  | None -> assert (false);;
+----- lib_dynamic_v1.ml -----
+class simpleImpl = object
+  inherit Lib_static_v1_decl.simple
+  method boring = print_string "Inside boring!\n"
+end;;
+Lib_static_v1.v1_ptr := Some new simpleImpl;;
+----- v1_user.ml -----
+(* I'd like to dynamically load Lib_dynamic_v1 here, but that*)
+(* primitive doesn't exist, so I'll just open it instead.  Note that I*)
+(* never directly use anything from it. *)
+open Lib_dynamic_v1;;
+Lib_static_v1.boring ();;
+----- lib_static_v2_decl.ml -----
+class virtual fancy = object
+  inherit Lib_static_v1_decl.simple
+  method virtual interesting: unit
+end;;
+----- lib_static_v2.ml -----
+let v2_ptr:Lib_static_v2_decl.fancy option ref = ref None;;
+include Lib_static_v1;;
+let interesting () =
+  match !v2_ptr with
+    Some f -> f#interesting
+  | None -> assert (false);;
+----- lib_dynamic_v2.ml -----
+class fancyImpl = object
+  inherit Lib_static_v2_decl.fancy
+  method boring = print_string "Inside bugfixed boring!\n"
+  method interesting = print_string "Inside interesting!\n"
+end;;
+Lib_static_v1.v1_ptr := Some (new fancyImpl :> Lib_static_v1_decl.simple);;
+Lib_static_v2.v2_ptr := Some new fancyImpl;;
+----- v2_user.ml -----
+(* I'd like to dynamically load Lib_dynamic_v2 here, but that*)
+(* primitive doesn't exist, so I'll just open it instead.  Note that I*)
+(* never directly use anything from it. *)
+open Lib_dynamic_v2;;
+Lib_static_v2.boring ();;
+Lib_static_v2.interesting ();;
+----- v1_user_against_v2.ml -----
+(* The next line should really be loading a DLL.  We should pick up a*)
+(* different file because the old DLL was updated in place, so if we*)
+(* could really load ocaml dll's, this file would be identical to*)
+(* v1_user.ml. *)
+open Lib_dynamic_v2;;
+Lib_static_v1.boring ();;
+----- Makefile -----
+.DELETE_ON_ERROR:
+EXES = v2_user v1_user v1_user_against_v2
+
+.PHONY: run
+run: $(EXES)
+	./v1_user
+	./v2_user
+	./v1_user_against_v2
+
+.PHONY: clean
+clean:
+	rm -f $(EXES) *.cmo *.cmi *~ make.dep
+
+make.dep: $(wildcard *.ml)
+	ocamldep *.ml > make.dep
+include make.dep
+
+%.cmi %.cmo: %.ml
+	ocamlc -c $+
+
+v1_user: lib_static_v1.cmo lib_dynamic_v1.cmo v1_user.cmo
+	ocamlc -o v1_user lib_static_v1_decl.cmo lib_static_v1.cmo lib_dynamic_v1.cmo v1_user.cmo
+v2_user: lib_static_v2.cmo lib_dynamic_v2.cmo lib_static_v1.cmo lib_dynamic_v1.cmo v2_user.cmo
+	ocamlc -o v2_user lib_static_v1_decl.cmo lib_static_v2_decl.cmo lib_static_v1.cmo lib_dynamic_v1.cmo lib_static_v2.cmo lib_dynamic_v2.cmo v2_user.cmo
+v1_user_against_v2: lib_static_v2.cmo lib_dynamic_v2.cmo lib_static_v1.cmo lib_dynamic_v1.cmo v1_user_against_v2.cmo
+	ocamlc -o v1_user_against_v2 lib_static_v1_decl.cmo lib_static_v2_decl.cmo lib_static_v1.cmo lib_dynamic_v1.cmo lib_static_v2.cmo lib_dynamic_v2.cmo v1_user_against_v2.cmo
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

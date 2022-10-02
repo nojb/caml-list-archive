@@ -1,0 +1,133 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA16593; Mon, 19 Aug 2002 22:51:59 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA16554 for caml-list@pauillac.inria.fr; Mon, 19 Aug 2002 22:51:58 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA09159 for <caml-list@pauillac.inria.fr>; Mon, 19 Aug 2002 15:58:20 +0200 (MET DST)
+Received: from wptx49.physik.uni-wuerzburg.de (wptx49.physik.uni-wuerzburg.de [132.187.40.49])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g7JDwJD04570
+	for <caml-list@inria.fr>; Mon, 19 Aug 2002 15:58:19 +0200 (MET DST)
+Received: from wptx47.physik.uni-wuerzburg.de (wptx47.physik.uni-wuerzburg.de [132.187.40.47])
+	by wptx49.physik.uni-wuerzburg.de (8.10.0/8.10.0.Beta6) with ESMTP id g7JDwIj20486;
+	Mon, 19 Aug 2002 15:58:18 +0200 (METDST)
+Received: (from ohl@localhost)
+	by wptx47.physik.uni-wuerzburg.de (8.10.0.Beta12/8.10.0.Beta12) id g7JDwIj09172;
+	Mon, 19 Aug 2002 15:58:18 +0200
+From: Thorsten Ohl <ohl@physik.uni-wuerzburg.de>
+Message-ID: <15712.63866.575444.515916@wptx47.physik.uni-wuerzburg.de>
+Date: Mon, 19 Aug 2002 15:58:18 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] Inlining across functors (was: O'Caml vs C++: a little benchmark)
+In-Reply-To: <20020819150201.B6276@pauillac.inria.fr>
+References: <200208181716.NAA10426@hickory.cc.columbia.edu>
+	<15711.57520.125841.25102@beertje.william.bogus>
+	<20020819150201.B6276@pauillac.inria.fr>
+X-Mailer: VM 6.84 under Emacs 20.7.1
+Reply-To: ohl@physik.uni-wuerzburg.de
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Xavier Leroy <xavier.leroy@inria.fr> writes:
+
+> Just for the record: ocamlopt does perform inlining across
+> compilation units (via the information stored in .cmx files).  What
+> it doesn't do, however, is inlining and specialization of recursive
+> function definitions.
+
+However, it appears that it doesn't inline across functors.  For
+example, in
+
+  module type M = 
+    sig
+      type t
+      val op : t -> t -> t
+      val of_int : int -> t
+      val to_int : t -> int
+    end
+  
+  module M : M =
+    struct
+      type t = int
+      let op = ( + )
+      let of_int n = n
+      let to_int n = n
+    end
+  
+  module F (A : M) =
+    struct
+      let f a b = A.to_int (A.op  (A.of_int a) (A.of_int b))
+    end
+  
+  module M1 =
+    struct
+      let f1 a b = M.to_int (M.op  (M.of_int a) (M.of_int b))
+    end
+      
+  module M2 =
+    struct
+      module FM = F(M)
+      let f2 a b = FM.f a b
+    end
+
+all functions used in M1.f1 are expanded inline
+
+  *** Linearized code
+  Opt_f1_66:
+    n/10[%eax] := a/8[%eax] + b/9[%ebx] + -1
+    return R/0[%eax]
+
+while M2.f2 retains a lot of auxiliary code:
+  
+  *** Linearized code
+  Opt_f2_72:
+    spilled-a/30[s0] := a/8[%eax] (spill)
+    b/9[%eax] := R/1[%ebx]
+    A/11[%ebx] := [env/10[%ecx] + 12]
+    env/12[%ecx] := [A/11[%ebx]]
+    spilled-env/29[s1] := env/12[%ecx] (spill)
+    A/13[%ebx] := [env/12[%ecx] + 12]
+    fun/14[%ebx] := [A/13[%ebx] + 8]
+    spilled-fun/27[s3] := fun/14[%ebx] (spill)
+    A/15[%ebx] := [env/12[%ecx] + 12]
+    fun/16[%ebx] := [A/15[%ebx] + 4]
+    A/17[%ecx] := [fun/16[%ebx]]
+    {spilled-fun/27[s3]* spilled-env/29[s1]* spilled-a/30[s0]*}
+    R/0[%eax] := call A/17[%ecx]
+    R/0[%eax]
+    R/1[%ebx]
+    A/28[s2] := A/18[%eax] (spill)
+    env/31[%eax] := spilled-env/29[s1] (reload)
+    A/19[%eax] := [env/31[%eax] + 12]
+    fun/20[%ebx] := [A/19[%eax] + 4]
+    A/21[%ecx] := [fun/20[%ebx]]
+    a/32[%eax] := spilled-a/30[s0] (reload)
+    {spilled-fun/27[s3]* A/28[s2]* spilled-env/29[s1]*}
+    R/0[%eax] := call A/21[%ecx]
+    R/0[%eax]
+    R/1[%ebx]
+    env/33[%ebx] := spilled-env/29[s1] (reload)
+    A/23[%ebx] := [env/33[%ebx] + 12]
+    A/24[%ecx] := [A/23[%ebx]]
+    A/34[%ebx] := A/28[s2] (reload)
+    {spilled-fun/27[s3]*}
+    R/0[%eax] := call "caml_apply2" R/0[%eax]
+    R/1[%ebx]
+    R/2[%ecx]
+    fun/35[%ebx] := spilled-fun/27[s3] (reload)
+    A/26[%ecx] := [fun/35[%ebx]]
+    tailcall A/26[%ecx]
+    R/0[%eax]
+    R/1[%ebx]
+
+Is this because the signature M can make no guarantee that op is never
+a recursive function? Do all functor applications fall under the `no
+inlining and specialization of recursive function definitions' clause?
+
+Cheers,
+-Thorsten
+-- 
+Thorsten Ohl, Physics Dept., Wuerzburg Univ. -- ohl@physik.uni-wuerzburg.de
+http://theorie.physik.uni-wuerzburg.de/~ohl/     [<=== PGP public key here]
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

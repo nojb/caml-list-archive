@@ -1,0 +1,256 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA28146; Mon, 22 Sep 2003 10:41:50 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA24597 for <caml-list@pauillac.inria.fr>; Mon, 22 Sep 2003 10:41:49 +0200 (MET DST)
+Received: from tcs.inf.tu-dresden.de (orchid.inf.tu-dresden.de [141.76.75.101])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h8M8fmH07354
+	for <caml-list@inria.fr>; Mon, 22 Sep 2003 10:41:48 +0200 (MET DST)
+Received: from ithif51 (ithif51 [141.76.75.51])
+	by tcs.inf.tu-dresden.de (8.12.9/8.12.9) with ESMTP id h8M8fceX003575
+	for <caml-list@inria.fr>; Mon, 22 Sep 2003 10:41:42 +0200 (MET DST)
+Received: from tews by ithif51 with local (Exim 3.36 #1 (Debian))
+	id 1A1MGI-0003zn-00
+	for <caml-list@inria.fr>; Mon, 22 Sep 2003 10:41:38 +0200
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16238.46530.168784.624111@ithif51.inf.tu-dresden.de>
+Date: Mon, 22 Sep 2003 10:41:38 +0200
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] parsing included files recursively using ocamllex and ocamlyacc
+In-Reply-To: <3F6C665E.5030508@socialtools.net>
+References: <3F6C665E.5030508@socialtools.net>
+X-Mailer: VM 7.16 under Emacs 21.2.1
+From: Hendrik Tews <tews@tcs.inf.tu-dresden.de>
+X-Scanned-By: MIMEDefang 2.33 (www . roaringpenguin . com / mimedefang) at tcs.inf.tu-dresden.de
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 recursively:01 hendrik:01 tews:01 tews:01 caml-list:01 recursively:01 disadvantage:01 span:99 prerr:01 endline:01 stderr:01 util:01 util:01 divert:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+Benjamin Geer writes:
+   Subject: [Caml-list] parsing included files recursively using ocamllex and ocamlyacc
+   
+   I'm writing an interpreter for a small language (to be released as an 
+   open source library), using ocamllex and ocamlyacc.  I'd like this 
+   language to support an instruction that, at compile time, recursively 
+   includes source code from another file.
+   
+I use the following approach:
+- recognize the include directive in the lexer
+- built an abstract lexer that wraps the original lexer and that
+  + maintains a stack of lexers with some additional state
+  + treats INCLUDE and EOF tokens
+- the parser is called on this abstract lexer
+
+This is all straightforward, the only subtle thing is that the
+abstract lexer has to substitute the lexbuf argument coming from
+the parser with the top of its internal lexer stack. Except for
+the first call: In this case the lexbuf argument describes the
+top-level input stream. You use this first lexbuf to initialize
+the lexer stack.
+
+The disadvantage of this approach is that you cannot have tokens
+that span over several files.
+
+In the following I give a few code samples. 
+
+The lexer contains the following rule:
+
+     | "#include" [' ' '\t'] '"'
+				{ let f = string lexbuf
+				  in 
+				    INCLUDE( f, get_loc lexbuf )
+				}
+
+(get_loc is not relevant; it tracks line and character numbers.
+ string matches everything until the next ``"'')
+
+The grammar does not mention the INCLUDE token, instead the
+parser is called as 
+
+  Grammar.file Abstract_lexer.token
+
+The Abstract_lexer module contains the following:
+
+
+    exception Include_error
+(* to signal an error with the include directive *)
+
+
+    let empty s = 
+      try
+	ignore(Stack.top s); false
+      with
+	| Stack.Empty -> true
+(* Stack.empty, which was missing in earlier releases *)
+
+
+    let d s =
+      if debug_level _DEBUG_LEXER
+      then begin
+	prerr_endline s;
+	flush stderr
+      end
+(* give diagnostic output *)
+
+
+    let get_current_directory () = match !current_top_level_input with
+      | None -> assert(false)
+      | Some f -> Filename.dirname f
+(* compute the base directory for relative includes *)
+
+
+    type lexing_pos = 
+	{
+	  lexbuf : Lexing.lexbuf;
+	  util_state : Parser_util.state_type;
+	  closing_action : unit -> unit
+	}
+(* the record I save on the lexer stack. The state field saves
+   line and character numbers. The closing action is for 
+   close_in <include file. I prefer a closure here because the
+   toplevel input might be a string.
+*)
+
+
+    let lexer_stack = (Stack.create () : lexing_pos Stack.t)
+(* this is the stack of open lexers *)
+
+
+    let initialize top_file_name =
+      current_top_level_input := Some top_file_name;
+      Parser_util.reset_line top_file_name;
+      Stack.clear lexer_stack
+(* initialize this module for the next toplevel input *)
+
+
+    let token_from_top () = 
+      Lexer.token (Stack.top lexer_stack).lexbuf
+(* read a token from the current lexer;
+   might raise Stack.Empty if there is no current lexer, which
+   happens on the first token of a toplevel input
+*)
+
+
+
+(* divert into the next include file *)
+
+    let divert lexbuf file closing_action =
+(* give some diagnostics *)
+      let _ = d ("Diverting into " ^ file ) in
+      let _ =
+
+(* if we are leaving an input stream to process an include, we
+   have to save line and character numbers
+*)
+	if not (empty lexer_stack) then
+	  let including_lex_pos =
+	    { (Stack.pop lexer_stack) with
+		util_state = Parser_util.get_state()
+	    }			
+	  in 
+	    Stack.push including_lex_pos lexer_stack 
+      in
+
+(* reset line and character numbers *)
+      let _ = Parser_util.reset_line file in
+
+(* and put the new lexer on top of the stack
+      let included_lex_pos =
+	{ lexbuf = lexbuf;
+	  util_state = Parser_util.get_state();
+	  closing_action = closing_action
+	}
+      in
+	Stack.push included_lex_pos lexer_stack
+
+
+
+
+(* The main function we provide: Read the next token, but treat
+   EOF's and INCLUDE directives magically. This function is
+   recursive on INCLUDE's, on EOF's of include files, and on the
+   first token.
+*)
+    let rec token lexbuf = 
+      try
+
+(* ignore the lexbuf argument, use the lexer on top of the stack *)
+	(match token_from_top() with
+
+(* process an INLCUDE *)
+	   | INCLUDE(filename, loc) ->
+	       let relocated_name = 
+		 Filename.concat (get_current_directory()) filename in
+	       let included_channel = 
+		 try
+		   open_in relocated_name
+		 with
+		   | Sys_error msg -> 
+		       begin
+			 error_message loc msg;
+			 raise Include_error
+		       end
+	       in 
+		 begin
+		   divert (Lexing.from_channel included_channel)
+		     relocated_name (fun () -> close_in included_channel);
+		   token lexbuf
+		 end
+
+(* process EOF's *)
+	   | EOF ->
+	       begin
+		 (Stack.pop lexer_stack).closing_action ();
+
+		 if empty lexer_stack 
+(* This was EOF on the top level! )
+		 then EOF
+
+(* It's an EOF in an include file *)
+		 else 
+		   let top = Stack.top lexer_stack in
+		   let top_state = top.util_state in
+		   let (line, line_start, file) = top_state 
+		   in begin
+		       Parser_util.set_state top_state;
+		       d ("Continuing lexing in file " ^ file ^
+			  " at line " ^
+			  (string_of_int line) ^
+			  " char " ^
+			  (string_of_int 
+			     ((Lexing.lexeme_end top.lexbuf) - line_start)));
+		       token lexbuf
+		 end
+	       end
+
+(* no include, no EOF -> pass it on
+	   | othertoken -> othertoken
+*)
+	)
+
+      with
+(* catch the empty stack exception on the first token of the
+   toplevel input; initialize the stack and retry
+*)
+	| Stack.Empty ->
+	    begin
+	      divert lexbuf 
+		(remove_option !current_top_level_input)
+(* the toplevel is not closed here *)
+		(fun () -> ());
+	      token lexbuf
+	    end
+
+
+Bye,
+
+Hendrik
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

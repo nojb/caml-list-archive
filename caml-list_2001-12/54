@@ -1,0 +1,148 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA00468; Mon, 10 Dec 2001 12:19:24 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA00466 for <caml-list@pauillac.inria.fr>; Mon, 10 Dec 2001 12:19:23 +0100 (MET)
+Received: from red.csi.cam.ac.uk (red.csi.cam.ac.uk [131.111.8.70])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id fBABJMH06318
+	for <caml-list@inria.fr>; Mon, 10 Dec 2001 12:19:22 +0100 (MET)
+Received: from mrs35-1.clare.cam.ac.uk ([131.111.230.199] ident=mail)
+	by red.csi.cam.ac.uk with esmtp (Exim 3.22 #1)
+	id 16DOSw-0006Au-00
+	for caml-list@inria.fr; Mon, 10 Dec 2001 11:19:22 +0000
+Received: from 127.0.0.1 (ident=mrs) by mrs35-1.clare.cam.ac.uk with
+ esmtp (MasqMail 0.1.14) id 16DOVF-19Y-00 for caml-list@inria.fr; Mon,
+ 10 Dec 2001 11:21:45 +0000
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] mutability analysis too strict?
+References: <OFF96B3E7D.145DD6FC-ONC2256B1E.00379C10@telaviv.ibm.com>
+X-Mailer: Mew version 1.94.1 on XEmacs 21.1 (Crater Lake)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20011210112135B.mrs35@cam.ac.uk>
+Date: Mon, 10 Dec 2001 11:21:35 GMT
+From: Mark Seaborn <mrs35@cam.ac.uk>
+X-Dispatcher: imput version 991025(IM133)
+Lines: 116
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+"Ohad Rodeh" <ORODEH@il.ibm.com> writes:
+
+> Well, that's a strong argument ...
+> 
+> How do you propose building a repository of polymorphic values then?
+> 
+>      Ohad.
+
+I assume you don't want to store polymorphic values (eg. polymorphic
+functions) but want to store values of different (but monomorphic)
+types.  One way is to wrap your values up in a variant type.  However,
+that limits you to a fixed, finite number of types which must be
+declared in the same place.  Here's some code which effectively lets
+you create an open (extensible) variant type:
+
+
+module type Stamp = sig
+  type t
+  val make : unit -> t
+  val eq : t -> t -> bool
+end
+
+(* This is vulnerable to overflow, and will not garbage collect
+   unused stamps.  However, the one advantage of this is that new
+   stamps require no heap allocation. *)
+module Stamp_Int : Stamp = struct
+  type t = int
+  let c = ref 0
+  let make() = let v = !c in c := v+1; v
+  let eq s1 s2 = s1 = s2
+end
+
+module Stamp_Cell : Stamp = struct
+  type t = unit ref
+  let make() = ref()
+  let eq s1 s2 = s1 == s2
+  (* An interesting difference between SML and OCaml is that
+     in OCaml, `=' will recursive into references, whereas in
+     SML, `=' stops at references and compares their locations. *)
+end
+
+module Stamp = Stamp_Cell
+
+
+(* Should obey these axioms:
+     unpack b (pack b x) = Some x
+     unpack b1 (pack b2 x) = None    provided b1 != b2
+     unpack b null = None
+   (ie. for the last one, the brand for null is closely-held)
+   and lastly:
+     make_brand() != make_brand()
+   NB. The equality used here is behavioural equality (which
+   is undecidable) rather than OCaml's `=' or `=='.
+*)
+module type Dyn = sig
+  type 'a brand
+  type t
+  val make_brand : unit -> 'a brand
+  val pack : 'a brand -> 'a -> t
+  val unpack : 'a brand -> t -> 'a option
+  val null : t
+end
+
+(* The aim is that this should be type sound.  The reason this should be
+   sound is that it is not possible to create polymorphic brands,
+   since the same restriction that applies to polymorphic references
+   applies here, and brands, like references, are generative, so that
+   eta-converting will change the semantics and not break
+   soundness. *)
+(* GC properties:
+   If you discard a dyn value, its hidden value will be GC'd.
+   But if you discard a brand, the hidden values in the dyn types won't. *)
+module Dyn_Cast : Dyn = struct
+  (* Don't care about this type; it is cast to and from,
+     the equivalent of C's void*. *)
+  type any = int
+  type 'a brand = Stamp.t
+  type t = Stamp.t * any
+  let make_brand() = Stamp.make()
+  let pack brand value = (brand, Obj.magic value)
+  let unpack brand1 (brand2, value) =
+    if Stamp.eq brand1 brand2 then Some (Obj.magic value) else None
+  let null = pack (make_brand()) ()
+end
+
+(* Implementation using `energetic secrets'.  Does not require unsafe
+   constructs like Obj.magic, but will not work as expected if
+   temporal encapsulation is violated, eg. by concurrency.  OCaml
+   doesn't have re-enterable continuations to violate this with,
+   though if it did I'm not sure if you'd be able to capture a
+   continuation inside the unpacking operation. *)
+module Dyn_ES : Dyn = struct
+  type 'a brand = 'a option ref
+  (* Passing an action saves having to create two closures *)
+  type action = Fill | Clear
+  type t = action -> unit
+  let make_brand() = ref None
+  let pack brand value = function
+    | Fill -> brand := Some value
+    | Clear -> brand := None
+  (* Invariant applies before these are called:  all brands are empty. *)
+  let unpack brand f =
+    f Fill;
+    let r = !brand in
+      f Clear; r
+  (* This packed value modifies no brand when invoked *)
+  let null _ = ()
+end
+
+module Dyn = Dyn_Cast
+
+-- 
+         Mark Seaborn
+   - mseaborn@bigfoot.com - http://www.srcf.ucam.org/~mrs35/ -
+
+        ``Cambridge?  Didn't that used to be a polytechnic?''
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

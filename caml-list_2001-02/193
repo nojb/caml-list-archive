@@ -1,0 +1,179 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA28871; Wed, 14 Feb 2001 20:44:56 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA28791 for <caml-list@pauillac.inria.fr>; Wed, 14 Feb 2001 20:44:55 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f1EJiqP19425;
+	Wed, 14 Feb 2001 20:44:52 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA28780; Wed, 14 Feb 2001 20:44:52 +0100 (MET)
+Date: Wed, 14 Feb 2001 20:44:52 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Don Syme <dsyme@microsoft.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] RE: OCaml on CLR/JVM?
+Message-ID: <20010214204452.C28371@pauillac.inria.fr>
+References: <0C682B70CE37BC4EADED9D375809768A48FD3A@red-msg-04.redmond.corp.microsoft.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+In-Reply-To: <0C682B70CE37BC4EADED9D375809768A48FD3A@red-msg-04.redmond.corp.microsoft.com>; from dsyme@microsoft.com on Tue, Feb 13, 2001 at 11:31:10PM -0800
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> If you're compiling to bytecode you can
+> also ensure more compatibilities of representations, e.g. make sure ML
+> int64's are exactly representationally equivalent to C's int64s.  Note if
+> you don't compile to a bytecode then you even have to marshal integers
+> across the interop boundary in Caml, though this could be automated.
+
+The point I'd like to argue is that compiling to bytecode doesn't
+guarantee that Caml's int64's (or any other data structure) are
+representationally equivalent to C's int64s.
+
+What you're describing is the favorable case where the source language
+can be compiled to bytecode with a "natural mapping" (little or no
+encoding at all) of the data types and data structures.  This is
+indeed a boon for interoperability: data doesn't need to be marshalled
+across language boundaries, objects can be physically shared, funny
+things like cross-language class inheritance become possible, etc.
+
+But: this can be impossible to achieve if the source language doesn't
+fit the assumptions of the target virtual machine.  This is what
+happens with Caml and .NET (or the JVM, for that matter).
+
+Parametric polymorphism is the most well-known issue (.NET and the JVM
+support only object-based subtyping polymorphism, meaning that a
+method cannot operate both on objects and on integers or floats).
+Your work on building parametric polymorphism on top of .NET (an
+amazing feat of engineering, by the way) shows that this can be
+overcome.
+
+But what about other nasty features of Caml?  E.g. functors, row
+polymorphism on objects, the Caml class system?  None of these map
+naturally to the .NET intermediate language.  I estimate that a
+"natural mapping" of these features would require two or three more
+"tour de force" of the kind you did with parametric polymorphism...
+
+(I can make these statements with some confidence, since at INRIA Bruno
+Pagano spent one whole year, with significant input from Luc Maranget
+and I, struggling with these issues.)
+
+So, when the source language isn't quite what the VM designers had in
+mind, the "natural mapping" doesn't work and one has to revert to
+encodings of data structures.  For instance, integers and floats may
+have to be boxed (wrapped inside an object) most of the time.
+Source-level objects may have to be mapped to VM objects that manage
+themselves their own vtable of methods, bypassing that of the VM.
+Source-level classes map to even more complicated encodings.  (I'm
+describing what Bruno Pagano did here.)  Etc.
+
+All this can be made to work, and Bruno managed to do it.  But
+it totally misses the point of interoperability: since your data
+structures are not represented "like everyone else's", conversions are
+again required at language boundaries, thus losing most of the
+benefits of the .NET approach: no cross-language sharing of objects or
+inheritance; need to generate the conversion code at boundary points;
+etc.
+
+And if one has to convert the data structures at boundaries anyway,
+why bother generating VM code?  (And putting up with all the issues
+that Bruno had to deal with.)  Why not just keep the existing
+Caml implementation, which already manages its own things quite well,
+thank you, and call into the JVM or the .NET machine (via a
+foreign-function interface) for cross-language calls?  Conversion stub
+code still needs to be generated, but is not much more complex than if
+we were already in the VM, and the other problems just go away!
+
+At the very least, I think one should understand the conversion issues
+*before* embarking on generating VM code.  The opposite approach of
+what we did with Bruno :-)  Using the foreign-function interface
+approach allows to test the conversion issues first.
+
+> While at a certain level I like Xavier's approach, i.e. maintaining two
+> runtimes, garbage collectors etc., I have troubles seeing it scaling to the
+> multi-language component programming envisioned as part of .NET approach
+> (and indeed currently in practice with C#, C++, VB.NET and other .NET
+> langauges).  Two GC's are already trouble enough (performance might suck as
+> they will both be tuned to fill up the cache), but if you have components  
+> from 10 languages in one process?  10 GCs competing for attention?
+
+Why not?  When you have 10 functions in your program, they are already
+competing for the attention of the cache.  From a hardware standpoint,
+10 GCs are just 10 functions :-)  
+
+More seriously, I agree that there is certainly a performance penalty
+on cross-language calls.  But there is a performance gain on
+inter-language calls: the Caml code can run at full speed, without
+paying the price of the data encodings into someone else's ideas of
+"primitive" data structures.  And most of the libraries we're
+interested with do quite a lot of work on most calls (think GUIs,
+Fortran numerical libraries, or database interfaces).  A serious
+performance investigation of the two approaches would be very
+interesting indeed.
+
+> Maybe it
+> can be made to work, but there's a certain conceptual clarity in just
+> accepting that a GC should form part of the computing infrastructure, and
+> share that service.  These are the aspects of the .NET approach that I find
+> quite compelling.
+
+And these are the aspects that frighten me :-)  I think GC's are
+"haute couture": tailor-made clothing, hand-fitted on the body of the
+customer... err, I meant, the source language.  .NET is
+"prêt-à-porter": mass-produced, one-size-fits all clothes.  It might fit
+many customers, but probably not all, or not all well.  
+
+(At this point of the discussion, readers might find it useful to
+picture themselves a regular Saharian camel wearing a pair of Levis'
+and a Gap baggy sweatshirt, and trying to get its four hooves into a
+pair of brand-new Nike :-)
+
+> As an aside, I think it would be an interesting question to say "OK, let's
+> take it for granted that the end purpose of our language is to produce
+> components whose interface is expressed in terms of the Java or .NET type  
+> systems, but which retains as many of the features and conceptual simplicity
+> of OCaml and ML as possible."  I'm not sure exactly what you'd end up with,
+> but whatever it was it could be the language to take over from C# and/or
+> Java (if that's what you're interested in...)  But without really taking 
+> Java/.NET component building seriously right from the start I feel you're
+> always just going to end up with a bit of a hack - an interesting, usable
+> hack perhaps, but not a really _good_ language.
+
+This is one direction for research; the MLj folks, for instance,
+started to do something like this, lifting Java classes and objects as
+straightforwardly as possible into SML.
+
+However, it is also a bit frightening, as evidenced by Fabrice Le
+Fessant's inflammatory reply, because it means that all languages will
+start to look more and more the same: object-oriented, class-based,
+single inheritance with multiple interfaces -- Java clones, in short.
+
+Actually, we already see some evidence of this in the .NET world: C# is C++
+mixed with Java; the new Visual Basic is the old Visual Basic with a
+solid dash of Java in it; etc.  My mental picture of .NET is a
+vortex with Java at the center and all .NET languages spiraling around
+it and getting closer and closer to the center...
+
+One could argue that it is actually beneficial to the programmers that
+all languages share a basic model, thus interoperating well; then
+each language can have some added value in other areas.  But I don't
+feel this appealing from a language designer's point of view.  I feel we
+researchers in this area have a duty to promote more diversity.  But
+cynics could say that we think so because we feel our jobs being
+threatened :-)
+
+I think I should stop here and not even mention the "Windows only"
+controversy around .NET.  Dang!  I did it!  Briefly, then: the Caml
+party line is that we've supported Unix and Windows (and a few others)
+for almost 10 years now, and are commited to continue doing this in
+the future.  If Microsoft shows similar commitments for .NET, that is
+great; if not, that is a real show-stopper.
+
+Apologies for this long rant.
+
+Cheers,
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

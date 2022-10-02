@@ -1,0 +1,140 @@
+Return-Path: <rajb@rice.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 2214FBB84
+	for <caml-list@yquem.inria.fr>; Mon, 28 Jul 2008 04:04:08 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AukCAHfFjEiAKgEfiGdsb2JhbACLF4c2AQEBDyCZTQ
+X-IronPort-AV: E=Sophos;i="4.31,261,1215381600"; 
+   d="scan'208";a="15557629"
+Received: from mail.cs.rice.edu ([128.42.1.31])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 28 Jul 2008 04:04:07 +0200
+Received: from mail.cs.rice.edu (localhost.localdomain [127.0.0.1])
+	by mail.cs.rice.edu (Postfix) with ESMTP id B32D92C2D1D
+	for <caml-list@yquem.inria.fr>; Sun, 27 Jul 2008 21:04:05 -0500 (CDT)
+X-Virus-Scanned: by amavis-2.4.0 at mail.cs.rice.edu
+Received: from mail.cs.rice.edu ([127.0.0.1])
+	by mail.cs.rice.edu (mail.cs.rice.edu [127.0.0.1]) (amavisd-new, port 10024)
+	with LMTP id S0PPUOdxYToC for <caml-list@yquem.inria.fr>;
+	Sun, 27 Jul 2008 21:04:05 -0500 (CDT)
+Received: from [10.121.20.231] (unknown [10.121.20.231])
+	(using TLSv1 with cipher DHE-RSA-AES256-SHA (256/256 bits))
+	(No client certificate requested)
+	by mail.cs.rice.edu (Postfix) with ESMTP id 146922C2D0E
+	for <caml-list@yquem.inria.fr>; Sun, 27 Jul 2008 21:04:05 -0500 (CDT)
+Message-ID: <488D290E.4070001@rice.edu>
+Date: Sun, 27 Jul 2008 21:03:58 -0500
+From: Raj Bandyopadhyay <rajb@rice.edu>
+User-Agent: Thunderbird 2.0.0.14 (X11/20080502)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Array copying in OCaml
+References: <4888AE76.2030204@rice.edu> <666572260807241246m4ef1c4aclc6078db154d68c7a@mail.gmail.com>
+In-Reply-To: <666572260807241246m4ef1c4aclc6078db154d68c7a@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 ocaml:01 compiler:01 initializing:01 camlprim:01 ofs:01 camlparam:01 ofs:01 mlsize:01 wsize:01 val:01 val:01 wosize:01 wosize:01 alloc:01 
+
+As a follow up to this: I got a 3x performance improvement by writing my 
+own version of the Array.sub function in C, patterned after the 
+caml_make_vect function in the OCaml compiler.
+
+I don't think that C is the main reason for the improvement, it's more 
+fundamental:
+
+1) The OCaml library version of Array.sub creates an array, 
+***initializes it***, and then copies to it. The initialization is quite 
+unnecessary, and algorithmically makes the function about twice as 
+expensive as it should be.
+
+2) From reading OCaml source code, it looks like caml_initialize is a 
+much cheaper function to use than caml_modify due to GC issues. Yet, the 
+OCaml library version uses caml_modify by initializing the target array 
+with a default value first, instead of using the source array to 
+initialize. I guess this is why on profiling, caml_modify shows up as 
+really expensive, paired with lots of GC calls.
+
+I do believe that this calls for a better version of the Array.sub 
+function in the next version of OCaml. Here is my C code  below (I am 
+only using it for an array of records, so the code is specialized to 
+that). I would be glad to submit a more general version if people want 
+it (and someone tells me where to submit it).
+
+Thanks!
+Raj
+
+
+CAMLprim value caml_my_array_sub(value source, value ofs, value len)
+{
+    CAMLparam3 (source,ofs,len);
+    CAMLlocal1 (res);
+    mlsize_t size, wsize, i,offset;
+
+    size = Long_val(len);
+    offset = Long_val(ofs);
+    if (size == 0)
+    {
+        res = Atom(0);
+    }
+    else
+    {
+        if (size > Max_wosize) caml_invalid_argument("Array.sub");
+        if (size < Max_young_wosize)
+        {
+            res = caml_alloc_small(size, 0);
+            for (i = 0; i < size; i++)
+            {
+                Field(res, i) = Field(source,i+offset);
+            }
+        }
+        else
+        {
+            caml_minor_collection();
+            res = caml_alloc_shr(size, 0);
+            for (i = 0; i < size; i++)
+            {
+                caml_initialize(&Field(res, i), Field(source,i+offset));
+            }
+            res = caml_check_urgent_gc (res);
+        }
+    }
+    CAMLreturn (res);
+}
+
+
+Adrien wrote:
+> You can compile with the -unsafe flag. If you're using arrays a lot,
+> it can easily speed your program by 50%. If your program is array
+> based, the speedup can be even more important.
+>
+>
+>
+> 2008/7/24 Raj Bandyopadhyay <rajb@rice.edu>:
+>   
+>> Hi
+>>
+>> I have an application which copies a lot of (small) OCaml arrays using the
+>> Array library (Array.sub and Array.blit) functions. This is turning out to
+>> be extremely expensive.
+>>
+>> Is there any general way/trick to reduce the cost of this kind of operation?
+>> I haven't found a way not to copy as much, because the program semantics
+>> seems to demand it.
+>>
+>> Thanks
+>> Raj
+>>
+>> _______________________________________________
+>> Caml-list mailing list. Subscription management:
+>> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+>> Archives: http://caml.inria.fr
+>> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>>
+>>     
+

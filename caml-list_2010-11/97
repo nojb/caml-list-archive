@@ -1,0 +1,80 @@
+Return-Path: <jamiiecb@googlemail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 873DDBC57
+	for <caml-list@yquem.inria.fr>; Mon, 15 Nov 2010 18:58:33 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am0CADsD4UzRVdQ0kGdsb2JhbACUVY17CBYBAQEJCQwHEQMfpHeLeAEFhHGJBwEEhUqKW4kq
+X-IronPort-AV: E=Sophos;i="4.59,200,1288566000"; 
+   d="scan'208";a="65735814"
+Received: from mail-vw0-f52.google.com ([209.85.212.52])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 15 Nov 2010 18:58:32 +0100
+Received: by vws3 with SMTP id 3so1145184vws.39
+        for <caml-list@yquem.inria.fr>; Mon, 15 Nov 2010 09:58:32 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=googlemail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:sender:received
+         :in-reply-to:references:date:x-google-sender-auth:message-id:subject
+         :from:to:content-type;
+        bh=IN8arbmVbCJkEkpD9kWaYA3wD5SIf+NgjAbfy1wfOiU=;
+        b=rtBVvJ/7c47bpTFaxFtb5/6AAPcV7bZ3xJAkQIeVE2YqOIWgB2RGBDuYf9yKYrKVBB
+         MlnbdMroTjKlsgDXtcOsdBFojgwcbt+Xqkk7qJUOB8qDeIW/9XqE4qYknQYLJhat/ZbQ
+         yhUIu9hXgeNNodzSPtbGkFRmhoIMZdkOB+Sak=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=googlemail.com; s=gamma;
+        h=mime-version:sender:in-reply-to:references:date
+         :x-google-sender-auth:message-id:subject:from:to:content-type;
+        b=IWgDltLQNPwKOo34C4lya8y3ezRvf9Uubr8nsXhhizIK/ZHHKprw/Qdc/N11bSYp+Y
+         TOdNqFO2kx04ICkgjZUA5+R0nsHYQryVCMov25+IShyf7YDA0K3+ZH+oyGistmA4UOTd
+         Pkc9pXAyMdBx8HCwKMVTAKp6iaCZxXfR/zvzw=
+MIME-Version: 1.0
+Received: by 10.229.219.2 with SMTP id hs2mr5222952qcb.276.1289843912312; Mon,
+ 15 Nov 2010 09:58:32 -0800 (PST)
+Sender: jamiiecb@googlemail.com
+Received: by 10.229.187.133 with HTTP; Mon, 15 Nov 2010 09:58:32 -0800 (PST)
+In-Reply-To: <AANLkTimz80mU6nG-dT5VJCyfr70s4OVO31c=Te9e8SJV@mail.gmail.com>
+References: <AANLkTi=SqQpDJc4p8nq9zRuTK5n6ctu8meZFF_Fp7HJg@mail.gmail.com>
+	<AANLkTik3Pryi5+QLyeZeuHPHjQwgy7-vce0KMY+mOvWs@mail.gmail.com>
+	<384325291.294734.1288998871132.JavaMail.root@zmbs3.inria.fr>
+	<20101106025118.GA23041@yquem.inria.fr>
+	<AANLkTi=PdjhMuri3BfPEuiR81xemop5F15xJdpQzG_J6@mail.gmail.com>
+	<AANLkTi=EW-PV_xSY6NkNje=FzxwMpGTLdiAcwDSGRA-L@mail.gmail.com>
+	<AANLkTimz80mU6nG-dT5VJCyfr70s4OVO31c=Te9e8SJV@mail.gmail.com>
+Date: Mon, 15 Nov 2010 17:58:32 +0000
+X-Google-Sender-Auth: Vvu4KzdSisIb0a4Pkl_M4SPOG_0
+Message-ID: <AANLkTimhKsAnR78N0pR2QwN7wrQ4-KbHbAyrrX1ihOPp@mail.gmail.com>
+Subject: Re: [Caml-list] Causes for segfaults
+From: Jamie Brandon <jamie@scattered-thoughts.net>
+To: caml-list@yquem.inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; segfaults:01 marshaled:01 segfault:01 marshaled:01 segfaults:01 recursive:01 arrays:01 ocaml:01 segfault:01 gdb:01 ocaml:01 brandon:98 incremental:01 overflows:01 stack:01 
+
+I finally fixed this. The difficulty was down to the sheer number of
+different causes:
+
+During incremental updates (but not bulk updates) the wrong data
+structure was marshaled to disk so the next process to load from the
+disk would segfault
+
+DynArray contains functional values so compiling with -g breaks
+previously marshaled values
+
+Marshal segfaults on large data structures unless 'ulimit -s unlimited' is set
+
+List.merge is not tail recursive and segfaults on large lists unless
+'ulimit -s unlimited' is set (this only happens during bulk updates)
+
+On 32 bit machines the arrays used in the suffix array are too large,
+in older versions of ocaml this causes a segfault
+
+I'm still not sure why gdb reliably tracked a segfault to
+caml_ml_close_channel but the very next instruction was accessing the
+data structure marshaled from disk.
+
+I do feel that this would have been much easier to fix if ocaml raised
+more informative errros. The change to Array.make and String.make to
+raise exceptions instead of segfaulting is welcome. Is there a way to
+cause stack overflows to raise exceptions in native compiled ocaml as
+well?
+

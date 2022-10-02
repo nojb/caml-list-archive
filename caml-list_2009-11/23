@@ -1,0 +1,108 @@
+Return-Path: <sideskate@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 345F5BBAF
+	for <caml-list@yquem.inria.fr>; Tue,  3 Nov 2009 06:08:11 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhcBAEVJ70rRVdvWkGdsb2JhbACRaoktPwEBAQEJCQwHEwOwLIE5hViIaAEDAwWEOAQ
+X-IronPort-AV: E=Sophos;i="4.44,672,1249250400"; 
+   d="scan'208";a="49687221"
+Received: from mail-ew0-f214.google.com ([209.85.219.214])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 03 Nov 2009 06:08:10 +0100
+Received: by ewy10 with SMTP id 10so5577244ewy.9
+        for <caml-list@inria.fr>; Mon, 02 Nov 2009 21:08:10 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:from:date:message-id
+         :subject:to:content-type;
+        bh=dRXhVgq40ODKlfjvFWOOEwVnZ5DzhyXOsRQkfIrLvNs=;
+        b=vVCF3us+eGNQfDITFhw0raxb2gBvCXKt+/bVMU4Va44mUdMmMd/FO+C+l53reGC/rg
+         10ymlV9quzaQ0dEV2/40j83Wj65dSqRmg5OBQe4FENXBi422dW7jS8CKmQRZCp5f7nwy
+         gyzWHJXiq4NyTaufW9gY9U60IjOMZEBvxU5lU=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:from:date:message-id:subject:to:content-type;
+        b=THru3Q/4p6/oXpvJfOUIqsT+ZW2aNakv9fCYQSs/+tyRMUAUj9RG1X/NBhRqe4SyNY
+         /nzxJ2pKjPHMpqTlSCMwHrtTg/6kmiTjNRI1LMQFM/YsZ6NeMW/v18AMDhvPF93aoE8T
+         b2q0XWWCjm5W7DQhBL9mRHrPBXJeAryBba/wA=
+MIME-Version: 1.0
+Received: by 10.216.85.144 with SMTP id u16mr5854173wee.3.1257224890103; Mon, 
+	02 Nov 2009 21:08:10 -0800 (PST)
+From: Tim Hanson <sideskate@gmail.com>
+Date: Tue, 3 Nov 2009 00:07:50 -0500
+Message-ID: <9d2084740911022107g3ea468c3xa5b34a38258dfd40@mail.gmail.com>
+Subject: Lwt try_bind question...
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; sockets:01 ocaml:01 ocamlfind:01 ocamlc:01 -package:01 syntax:01 camlp:01 setsockopt:01 setsockopt:01 buffer:01 buffer:01 calibration:98 3.0:98 3.0:98 unix:01 
+
+Hi All,
+I've been trying to use Lwt in my application (robot control).
+(Background: there are 3 executables, all running simultaneously,
+which communicate via sockets.  The ocaml program coordinates/controls
+the video program and servo control program. )
+
+In the file below, @ line 43 using the try_bind function I try to read
+from the socket, and if it fails, wait 3 seconds before trying again.
+But, I can't figure out how to make it compile.  I'm sorry if this is
+fairly obvious, but the web has yet to turn up anything to fix it.
+(perhaps it will in the future now :-)
+
+I compile with the following line:
+ocamlfind ocamlc -c -package lwt,lwt.unix,lwt.syntax -syntax camlp4o relay.ml
+
+any advice will be much appreciated!
+
+Tim
+--------
+open Lwt
+
+let new_socket () = Lwt_unix.socket Unix.PF_INET Unix.SOCK_DGRAM 0
+let local_addr num = Unix.ADDR_INET (Unix.inet_addr_any, num)
+
+let _ =
+	Lwt_unix.run (
+		(* init a 'server' port for video prog to connect to *)
+		let video_socket = new_socket () in
+		Lwt_unix.setsockopt video_socket Unix.SO_REUSEADDR true;
+		Lwt_unix.bind video_socket (local_addr 4594);
+		Lwt_unix.listen video_socket 1;
+		(* init a 'client' address to connect to the servocontroller *)
+		let banger_socket = new_socket () in
+		Lwt_unix.setsockopt banger_socket Unix.SO_REUSEADDR true;
+		ignore_result(Lwt_unix.connect banger_socket (local_addr 4593));
+		
+		let printo s = ignore_result(Lwt_io.printl s) in
+		
+		(* Wait for a connection from video tracker*)
+		ignore_result(Lwt_unix.accept video_socket >>= (fun (inp, _) ->
+			printo "video socket connected!\n%!";
+			let buffer = String.create 512 in
+			(* set up a calibration sequence .. just to test *)
+			let rec calib () =
+				let msg = "L\n" in
+				ignore_result(Lwt_unix.write inp msg 0 (String.length msg)) ;
+				Lwt_unix.read inp buffer 0 512 >>= (fun len ->
+					let ss = String.sub buffer 0 len in
+					printo("got video data:"^ss);
+					Lwt_unix.sleep 3.0 >>= calib
+				)
+			in
+			calib ()
+		));
+		(* simultaneously, read from the servocontroller *)
+		let buffer = String.create 512 in
+		let rec read_banger len =
+			if len > 0 then (
+				let ss = String.sub buffer 0 len in
+				printo("got servo data:"^ss)
+			);
+			try_bind
+				(fun () -> (Lwt_unix.read banger_socket buffer 0 512))
+				(fun n -> read_banger n )
+				(fun _ -> (Lwt_unix.sleep 3.0) >>= read_banger 0 )
+		in
+		read_banger 0
+	)
+

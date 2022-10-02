@@ -1,0 +1,214 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA16229 for caml-redistribution; Mon, 9 Feb 1998 17:02:18 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA16200 for <caml-list@pauillac.inria.fr>; Mon, 9 Feb 1998 17:00:38 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.5) with ESMTP id RAA23536;
+	Mon, 9 Feb 1998 17:00:35 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA16195; Mon, 9 Feb 1998 17:00:35 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199802091600.RAA16195@pauillac.inria.fr>
+Subject: Re: Weak types ?
+In-Reply-To: <199802031546.QAA21882@scrasmeustache.labri.u-bordeaux.fr> from Pierre CASTERAN at "Feb 3, 98 04:46:22 pm"
+To: Pierre.Casteran@labri.u-bordeaux.fr (Pierre CASTERAN)
+Date: Mon, 9 Feb 1998 17:00:34 +0100 (MET)
+Cc: caml-list@inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+>  I suppose the following problem concerns "weak" types, but i don't see
+>  the reason (I have no assignment at all in this definitions !)
+
+This is an excerpt from the ``expert'' part of the Caml FAQ
+
+that explains the problem, its solution in Caml, and why it is considered a
+good solution.
+
+http://pauillac.inria.fr/caml/FAQ/FAQ_EXPERT-eng.html
+
+You could read it in french as well in the FAQ, at URL:
+
+http://pauillac.inria.fr/caml/FAQ/FAQ_EXPERT-fra.html
+
+How to introduce polymorphism ?
+Polymorphism appears when we introduce type schemes, that is types
+with universally quantified type variables. These type scheme
+parameters are denoted by the prefix ' (for instance 'a). All type
+scheme parameters are universally quantified at the head of the
+schema: so 'a -> 'a means: For all types 'a, 'a -> 'a. This
+quantification of type parameters is implicit in Caml:
+
+#map;;
+- : ('a -> 'b) -> 'a list -> 'b list = <fun>
+
+The type (schema) of map means For all types 'a, 'b, ('a -> 'b) -> 'a
+list -> 'b list.
+The polymorphism is only introduced by the definition of names during
+a let construct (either local, or global).
+
+The problem and its solution:
+The original rule for the local definition 
+let name = expr1 in expr2
+
+states that you have to type check expr1 first, then give name a type
+scheme (a polymorphic type) according to the type obtained for expr1,
+then type-check expr2, taking a copy of the type scheme of name for
+each occurrence of name. The schema of name is obtained by finding
+type parameters, that is all the type variables that have been
+introduced during the type-checking of expr1, and that remain
+unconstrained at the end of the type-checking of expr1. For instance:
+
+let id = function x -> x in ...
+
+id gets the type scheme: For all 'a. 'a -> 'a, and can be used with
+several incompatible types in the rest of the program, for instance
+with types int -> int and bool -> bool, if the in part is id 1; id
+true.
+Unfortunately this simple rule is not correct in the presence of
+mutable values (such as references, arrays, or records with mutable
+fields). Consider:
+
+let bad_ref = ref [] in ...
+
+With the original let rule, bad_ref has the type schema ``For all
+'a. 'a list ref''. So the reference can be used with different
+incompatible types in the rest of the program, which is erroneous
+(lists must be homogeneous in Caml). For instance, if you use bad_ref
+with types int list ref and bool list ref, then you can write: 
+
+let bad_ref = ref [] in
+    bad_ref := [1];
+    if hd (!bad_ref) then ...
+
+(bad_ref := [1] is correctly type-checked, since bad_ref can be used
+with type int list ref, hd (!bad_ref) is correctly type-checked, since
+bad_ref can be used with type type bool list ref. But this program
+leads to a fatal error at run-time, since after the assignment,
+bad_ref contains an integer list not a boolean list.  
+
+The new rule to define names:
+In short, a secure type system for Caml must forbid the existence of
+polymorphic mutable values at run-time. This has been extensively
+studied, and many complex systems have been proposed. It appears now
+that a very simple modification of the original rule is almost
+completely satisfactory. When type-checking 
+
+let name = expr1 ...
+
+The type of expr1 is generalized when expr1 is a function, an
+identifier or a constant. Otherwise the identifier name is not
+polymorphic (type variables are not generalized).
+
+Which programs are now monomorphic ?
+The new rule implies that if expr1 is a function application, then the
+identifier name is monomorphic. For instance
+
+let bad_ref = ref [] in ...
+
+bad_ref is not polymorphic, and that's what we want. In contrast: 
+let map_id = map (function x -> x) in ...
+
+Since map_id is defined by an application, its type is not generalized
+and map_id cannot be used with several different types. So:
+
+#let map_id = map (function x -> x) in
+map_id [1]; map_id [true];;
+Toplevel input:
+>map_id [1]; map_id [true];;
+>                   ^^^^^^
+This expression has type bool list,
+but is used with type int list.
+
+is ill-typed (the first use of map_id, that is map_id [1] implies that
+map_id has type int list -> int list, and map_id [true] is
+ill-typed). The next section explains how to get a polymorphic
+definition for map_id, and how to get a polymorphic result when a
+polymorphic function is partially applied.
+
+My function is not polymorphic (enough) ?
+
+How to allow polymorphic definitions obtained via partial application ?
+The more common case to get a ``not polymorphic enough'' definition is
+when defining a function via partial application of a general
+polymorphic function. In this case, you recover a fully polymorphic
+definition by clearly exhibiting the functionality to the
+type-checker: define the function with an explicit functional
+abstraction, that is, add a function construct or an extra parameter
+(this rewriting is known as eta-expansion):
+
+let map_id l = map (function x -> x) l in ...
+
+or alternatively 
+
+let map_id = function l -> map (function x -> x) l in ...
+
+The new definition is semantically equivalent and can be assigned a
+polymorphic type scheme, since it is no more a function application.
+
+A type variable starts with _ ?
+When an identifier is defined by an expression which cannot be
+generalized, the identifier can have a type with unknowns (that is
+type variables which cannot be generalized) which will be determined
+(that is assigned a type value) by the usage of the identifier in the
+rest of the program. These unknown types are special type variables,
+prefixed by an underscore (e.g. '_a). Beware, these variables stand
+for unknown types to be determined by the type checking process:
+that's why these variables may disappear, precisely because their type
+value has been discovered.
+
+let map_id = map (function x -> x) in
+map_id [1];;
+
+After its definition map_id has type '_a list -> '_a list, where '_a
+means some type a. When typing map_id [1] this unknown type gets bound
+to int (and map_id has type int list -> int list for the rest of the
+program).
+This phenomenon appears even more clearly if we break the let in
+construct in two phrases:
+
+#let map_id = map (function x -> x);;
+map_id : '_a list -> '_a list = <fun>
+#map_id [1];;
+- : int list = [1]
+
+Now the unknown '_a in the type of map_id is determined, and map_id
+has a type without unknowns:
+
+#map_id;;
+- : int list -> int list = <fun>
+
+The following section 
+
+My program is not polymorphic (enough)?
+Semantically, the definition of an identifier by a let construct is
+equivalent to a function application. More exactly, let ident = e1 in
+e2 is equivalent to (function ident -> e2) e1. This means that the two
+programs produce the same results and the same effects.
+
+However, the two programs are not completely equivalent as far as type
+checking is concerned: in effect, the let version may introduce some
+polymorphism, while the function application does not, and forces
+ident to be completely monomorphic when typing the expression
+e2. Thus:
+
+#let id = function x -> x in id id;;
+- : '_a -> '_a = <fun>
+
+But: 
+
+#(function id -> id id) (function x -> x);;
+Toplevel input:
+>(function id -> id id) (function x -> x);;
+>                   ^^
+This expression has type 'a -> 'b,
+but is used with type 'a.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+
+
+
+

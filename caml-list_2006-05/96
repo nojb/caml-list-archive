@@ -1,0 +1,110 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 26FFEBB83
+	for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 13:22:13 +0200 (CEST)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.187])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4CBMCEw013542
+	for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 13:22:12 +0200
+Received: from [84.58.134.244] (helo=gate.lan.gerd-stolpmann.de)
+	by mrelayeu.kundenserver.de (node=mrelayeu10) with ESMTP (Nemesis),
+	id 0ML31I-1FeVij42RX-0006AF; Fri, 12 May 2006 13:22:12 +0200
+Received: from flakew.lan.gerd-stolpmann.de (flakew.lan.gerd-stolpmann.de [192.168.0.32])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id 9C052C105;
+	Fri, 12 May 2006 13:22:09 +0200 (CEST)
+Subject: Re: [Caml-list] Co-existing with non OCaml threads
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: francois@rouaix.org
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <f2d6cc680605111729l4d35470ey7e45dcc73822a2b0@mail.gmail.com>
+References: <f2d6cc680605111729l4d35470ey7e45dcc73822a2b0@mail.gmail.com>
+Content-Type: text/plain
+Date: Fri, 12 May 2006 13:22:08 +0200
+Message-Id: <1147432929.19900.18.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: kundenserver.de abuse@kundenserver.de login:a6865a839c0178d9aa0ce41878507ea2
+X-Miltered: at concorde with ID 44646FE4.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 threads:01 gerd:01 stolpmann:01 donnerstag:01 ocaml:01 threads:01 interfacing:01 o'caml:01 thread-safe:01 o'caml:01 stub:01 foo:01 stub:01 camlparam:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Am Donnerstag, den 11.05.2006, 17:29 -0700 schrieb Francois Rouaix:
+> I'm contemplating writing an OCaml interface for a C++ middleware
+> library that my company develops and uses internally. Typically this
+> middleware will start an event loop on a thread in the background,
+> leaving the application responsible for its own threads (and
+> potentially using none and having its own code running entirely on
+> events within the eventloop thread). 
+> How's this likely to be compatible with OCaml use of native threads
+> (this is on Linux by the way)?
+> The manual section for interfacing with C isn't mentionning threads
+> anywhere.
+> Should Caml code be restricted to run on threads it has created? Or
+> can it run on any threads? 
+> How can I synchronize between a thread running C++ code and a thread
+> running OCaml code (i.e. both communicating on a message queue)?
+> Thanks for any suggestions.
+
+If you compile ocaml with pthread support, the O'Caml threads are real
+Linux threads. When using them, be aware of:
+
+- The memory management code is not thread-safe. That means 
+  only one thread is allowed to run O'Caml code at any time.
+  To ensure this there is the so-called "master lock". You
+  can acquire the master lock by calling
+
+  leave_blocking_section()
+
+  and you can release it by
+
+  enter_blocking_section()
+
+  When you call a C function that may block for indefinite time
+  one usually releases the lock first, calls the function, and
+  then requires it. The stub function looks like
+
+  value foo_stub (...) {
+     ...
+     enter_blocking_section();
+     /* From here: NO ACCESS to any O'Caml memory, not even
+      * CAMLparam/CAMLlocal variables!
+      */
+     ...
+     foo();
+     ...
+     leave_blocking_section();
+     /* Normal rules for stub functions apply again */
+     ...
+  }
+
+  For callbacks from C code you will typically first call 
+  leave_blocking_section() and later enter_blocking_section()
+  before you return.
+
+- O'Caml must never see threads not created by itself. This 
+  means a thread created by your middleware must not run
+  O'Caml code. (You get immediately a segfault if you try.)
+
+- Although O'Caml mutexes and condition variables actually
+  base on their pthread counterparts, there is no interface
+  from the C side. So you better do any synchronization 
+  completely in C, i.e. the message queue is written in C
+  and uses the normal pthread primitives. The O'Caml stub
+  functions accessing this queue need to call
+  enter/leave_blocking_section as explained.
+
+Hope this helps. Had to solve a similar problem for a customer.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

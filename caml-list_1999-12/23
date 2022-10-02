@@ -1,0 +1,153 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA20388 for caml-redistribution; Sun, 5 Dec 1999 23:25:38 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA24065 for <caml-list@pauillac.inria.fr>; Sat, 4 Dec 1999 07:54:21 +0100 (MET)
+Received: from isil.maya.com (HOPKINS.PC.CS.CMU.EDU [128.2.215.35])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id HAA13098
+	for <caml-list@inria.fr>; Sat, 4 Dec 1999 07:54:18 +0100 (MET)
+Received: (from prevost@localhost)
+	by isil.maya.com (8.9.3/8.9.3) id BAA14561;
+	Sat, 4 Dec 1999 01:45:44 -0500
+X-Authentication-Warning: isil.maya.com: prevost set sender to prevost@maya.com using -f
+Sender: weis
+To: caml-list@inria.fr
+Subject: Module hierarchy revisited
+From: John Prevost <prevost@maya.com>
+Date: 04 Dec 1999 01:45:44 -0500
+Message-ID: <87bt876w6f.fsf@isil.maya.com>
+Lines: 130
+User-Agent: Gnus/5.0803 (Gnus v5.8.3) Emacs/20.4
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+Idea for namespace management, followed by a question or two, and
+explanation of why.
+
+
+I just came up with what seems like a reasonable way to package my
+modules hierarchically (to avoid namespace collisions) in a reasonable
+way.
+
+The idea:
+
+For each "package" of stuff, the various modules (individual object
+files) have short names, like "Foo", "Bar", and "Baz".  The danger, of
+course, is that other packages from other sources will have names like
+Foo Bar and Baz, because they're so short.
+
+My current working solution is to add as the last object file
+something like this:
+
+===mypackage.ml===
+module Foo = Foo
+module Bar = Bar
+module Baz = Baz
+==================
+
+Why am I doing this?  Well, with Gord Stolpmann's findlib, there's a
+convenient way to link against a bunch of "packages" by name.  This is
+nice, because you don't have to manage ordering and -Iing of all of
+those files and directories by hand.  The difficulty is that control
+over which modules come first is a problem.  Say we have two packages:
+
+package1 => package1.cma (foo.cmo frubble.cmo)
+package2 => package2.cma (foo.cmo bar.cmo zotz.cmo)
+
+If I do:
+
+ocamlc package1.cma package2.cma
+
+I lose access to package1's Foo module in any files I use after this.
+If I do it in the other order, I lose access to package2's Foo module.
+I can work around this by putting things that want foo from
+package1.cma before the reference to package2.cma, but this can be a
+pain.  I could also insert a file between the two which binds
+package1's Foo to something else:
+
+===foobinder.ml===
+module Zot = Foo
+==================
+
+Now I can refer to Foo from either package later on (which is
+important if I want to use both in one file, or I have dependencies
+which don't allow a simple ordering of my modules and the libraries.)
+Even more, it's a pain to have to think about this stuff.  I'd rather
+just be able to know it won't happen.
+
+What adding the extra module at the end of the library does for me as
+a library author is arrange for an "automatic" binding like this to
+take place.  Mypackage.Foo Mypackage.Bar and Mypackage.Baz will always
+be the modules from Mypackage unless Mypackage is shadowed.  And the
+namespace of packages tends to be nicer and cleaner than the namespace
+of individual modules in those packages.  (Say, Text.Parser for
+low-level Unicode parsers vs XML.Parser for a module that does XML
+parsing.)  One could extend this further by having super-packages
+which provide namespace to a number of other packages:
+
+module Apollo =
+  struct
+    module XML =
+      struct
+        module Parser = ...
+        ...
+      end
+    module Text =
+      struct
+        module Parser = ...
+        ...
+      end
+  end
+
+or
+
+module Apollo =
+  struct
+    module XML = XML
+    module Text = Text
+  end
+
+
+
+So the question I have is whether people think that organizing things
+in this manner is a Good Thing, and if people have opinions on whether
+there's a Right Way to go about doing this and choosing names for
+things.  As an example, I have a package I call "text" which has a
+text.cma containing a module Text which points at the other modules by
+name.  But the name "Text" is pretty broad, and could collide easily
+with other people, even when both packages would be useful.
+
+A second question is whether anyone has recommendations for hiding the
+"other" bindings of modules (i.e. I don't want Iso_10646 to appear in
+the top-level namespace, I only want Text to appear, containing
+Text.Iso_10646) to keep people from referring to the modules in less
+safe ways.
+
+
+
+I'm thinking about this because I'd like to put some modules out there
+for people to use, and the community-driven standards in the world of
+Perl, for example, allow huge numbers of modules from all over to be
+mixed and matched at will.  O'Caml stuff, on the other hand, tends to
+be much more willy-nilly, making me think of the world of C libraries,
+where people are much more likely to write their own library to do
+something than to use someone else's, just because hooking things
+together and finding libraries and the like is so painful.
+
+findlib provides some nice features along these lines (though I think
+it'd be nice if some of this functionality were folded into the
+standard ocaml distribution, to encourage people to use it), but
+without a discipline (community-driven, of course) for managing the
+published module namespace, I don't think library development is
+likely to grow like it has in Perl and Java-land--even with more
+people developing.
+
+
+In short, it's nice that ocaml has a compilation model that allows
+more traditional models of building software than SML's CM package.
+I'm much more comfortable with Makefiles and separate compilation than
+with CM.  But there *are* amenities that would make library creation,
+publication, and use much more common.
+
+
+jmp
+
+
+

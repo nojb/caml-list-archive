@@ -1,0 +1,108 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA23467; Tue, 23 Dec 2003 19:18:48 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA23605 for <caml-list@pauillac.inria.fr>; Tue, 23 Dec 2003 19:18:47 +0100 (MET)
+Received: from smtp3.pp.htv.fi (smtp3.pp.htv.fi [213.243.153.173])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBNIIkv03553
+	for <caml-list@inria.fr>; Tue, 23 Dec 2003 19:18:46 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp3.pp.htv.fi (Postfix) with ESMTP id D6B2127B4FD
+	for <caml-list@inria.fr>; Tue, 23 Dec 2003 20:18:45 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBNIIjT15460
+	for <caml-list@inria.fr>; Tue, 23 Dec 2003 20:18:45 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AYr7D-0005OA-00
+	for <caml-list@inria.fr>; Tue, 23 Dec 2003 20:18:43 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] Fixing remaining problems with dynamically freeing code
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Tue, 23 Dec 2003 20:18:42 +0200
+Message-ID: <87k74no0sd.fsf@iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; dynamically:01 dynamically:01 finalization:01 symtable:01 symtable:01 closures:01 reusing:01 anyhow:01 million:98 caml:01 garbage:01 garbage:01 closure:01 closure:01 int:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Well, like mentioned in the patch - the problems that remain in having
+dynamically loaded code garbage collected mainly concentrate around
+the global table - eg. Module requires, provides and literals.
+
+And I think I have come up with a solution.
+
+We create one more custom block type - and that's a global
+reference. It takes a global table slot number on creation, and the
+only thing it ever does is go place the unit value in the global slot
+on finalization.
+
+Then, we make Symtable.patch_object create an array from the custom
+block that references the actual code - and custom blocks for every
+global the code uses - and we place this array into every closure
+created. This array must not reference the modules that are provided
+by the code block though. Instead, we place the references for those
+globals in the ident lookup table for modules.
+
+Some ascii art on how it would work.
+
+  ,----------------------------------------------------------------------.
+  v                            Symtable.global_table                     |
+ +---------+------+----------+ +-----+-------------------+-----+         |
+ | Closure | Code | Field(1) | | ... | Ident.t, int, ref | ... |         |
+ +---------+------+----------+ +-----+----------------|--+-----+         |
+                        |                             |                  |
+  ,---------------------'                             `----------.       |
+  v                                                              |       |
+ +-------+----------+----------+----------+----------+           |       |
+ | Array | Field(1) | Field(2) | Field(3) | Field(4) |           |       |
+ +-------+----------+----------+----------+----------+           |       |
+               |          |          =A6          |                |       |
+        ,------'       ,--'          |          `--.             |       |
+        v              v             v             v             v       |
+ +-------------+ +-----------+ +-----------+ +-----------+ +-----------+ |
+ | Staticalloc | | Globalref | | Globalref | | Globalref | | Globalref | |
+ +-------------+ +-----------+ +-----------+ +-----------+ +-----------+ |
+ Custom | blocks       |             |             |             |       |
+        |              |             |             |             |       |
+  ,-----'              `------.      `----.        `--.          `.      |
+  |                           |           |           |           |      |
+  v                           v           v           v           v      |
+ +--------------+ +-----+-----------+-----------+-----------+-----------+|
+ | Code         | | ... | Field(16) | Field(17) | Field(18) | Field(19) ||
+ +--------------+ +-----+-----------+-----------+-----------+-----------+|
+                  Global data                                     `------'
+
+So, how this would work in garbage collection then would be that if
+neither the ident lookup table, nor any other module by depending,
+used the global provided by the code, then that global would be set to
+unit - which in turn would mean that if no other closures are
+anywhere, the last references to the array would drop, which would
+then again allow freeing the code and let the globals referenced by
+the code to freed in turn.
+
+This should address the freeing problem entirely, for both module
+references and literals. Then some sort of a simple solution would
+have to be made for reusing freed slots in the global table - a free
+list will probably do.
+
+Anyhow, this builds on an awful lot of assumptions, and there's still
+quite a bunch of open questions on the implementation - but I am quite
+confident that those will get solved and the implementation can be done.
+
+And if so, it's again a rather nice solution - minimal changes to the
+core, no impact at all for normal code, only memory management
+overhead for dynamically loaded code. After this, loading a module one
+million times, private or not, should leave behind no overhead what so
+ever - and yet it is safe, as any references will keep the blocks
+alive.
+
+Merry Christmas,
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,154 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id C954CBB9C
+	for <caml-list@yquem.inria.fr>; Tue,  6 Dec 2005 01:41:39 +0100 (CET)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jB60fbsA014843
+	for <caml-list@yquem.inria.fr>; Tue, 6 Dec 2005 01:41:38 +0100
+Received: from rosella (ppp33-4.lns1.syd6.internode.on.net [59.167.33.4])
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.6) with ESMTP id jB60fZCV061132
+	for <caml-list@yquem.inria.fr>; Tue, 6 Dec 2005 11:11:35 +1030 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] Another nasty with ocamlyacc: magic needed?
+From: skaller <skaller@users.sourceforge.net>
+To: caml-list@yquem.inria.fr
+In-Reply-To: <1133760933.8957.125.camel@rosella>
+References: <1133760933.8957.125.camel@rosella>
+Content-Type: text/plain
+Date: Tue, 06 Dec 2005 11:41:35 +1100
+Message-Id: <1133829695.9871.97.camel@rosella>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4394DE41.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocamlyacc:01 ocamlyacc:01 expr:01 expr:01 forall:01 forall:01 lalr:01 parser:01 recursive:01 parser:01 non-terminal:01 grammar:01 token:01 terminating:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Thank you to all who helped on this and my other ocamlyacc problem.
+A proof-of-principle implementation is now working!!
+
+------USER DEFINED STATEMENTS DEMO-------
+#statement while expr do statements done ;
+#keyword whenever
+#statement repeat statements whenever expr ;
+#statement forall ident in expr do statements done ;
+
+repeat 
+  f x; g k; 
+whenever 1>0;
+
+while 1>0 do 
+  f x;
+  g x;
+done;
+
+forall i in (1,2,3) do 
+  f i; 
+done;
+--------------------------------------
+
+The code integrates Ocamlyacc LALR1
+parser for a complex language (Felix) including expressions and
+statements, with a hand written recursive descent parser engine
+driven by a table of extensions to the statement non-terminal 
+of the Ocamlyacc grammar. 
+
+With respect to Felix these extensions can be added
+on the fly (dynamically) as illustrated in the example.
+
+To make this all work I had to cast two spells,
+however the code is free of the evil Obj.magic
+and is reentrant: no global variables!
+
+Spell 1: 
+
+to parse expressions, I had to add a special
+entry point:
+
+%type<expr_t * token> exprx
+
+exprx: expr expr_terminating_token { $1, $2 }
+expr_terminating_token: 
+  | TOK1 { TOK1 $1 }
+  | TOK2 { TOK2 $1 }
+  ...
+
+and the function parsing an expression has to 'put back'
+the gratuitous lookahead token into the token source.
+
+Having to list, by hand, all the tokens which terminate
+an expression is a maintenance problem .. but it does work.
+I formed the list by adding ALL tokens, and then using
+ocamlyacc -v output to remove tokens that caused a conflict.
+
+Spell 2:
+
+In order to parse anything, the token source must
+be available, however it is defined *after* the
+ocamlyacc parser and so cannot be embedded into
+the token, because there is no way then to specify
+the type of the token. In addition, it cannot be placed
+in the token at the point of defining the grammar
+extensions either, because that is handled by the
+pre-processor, whose job is to *construct* the token
+source -- it doesn't exist until after the preprocessor
+has run.
+
+So I used a two phase approach. A new USER_STATEMENT_KEYWORD
+token is used to capture the grammar production in the
+preprocessor -- the production is just a list of tokens,
+and so it can be defined in the ocamlyacc parser,
+it has type:
+
+%token<Flx_ast.srcref * string * token list> USER_STATEMENT_KEYWORD
+
+Then, I modified the token source function itself,
+so that when this token is seen it is replaced by:
+
+%token<Flx_ast.srcref * string * (unit -> Flx_ast.statement_t)>
+USER_STATEMENT_DRIVER
+
+The function here is a closure, here is the actual code:
+
+  method token_src (dummy :Lexing.lexbuf) =
+    let tmp = List.hd tokens in
+    tokens <- List.tl tokens;
+    current_token_index <- current_token_index + 1;
+    match tmp with
+    | Flx_parse.USER_STATEMENT_KEYWORD (sr,s,tks) ->
+      let f = fun () -> self#parse_user_statement s tks in
+      Flx_parse.USER_STATEMENT_DRIVER (sr,s,f)
+    | _ -> tmp
+
+and so, by delaying the binding until the token source
+object is known, and then currying it into the new
+driver token, I was able to hide all the gritty details
+defined after the ocamlyacc parser from it. The Ocamlyacc
+parser then calls back the function stored in the token,
+which calls the RD parser, which in turn can recursively
+call ocamlyacc parser entry points: the actual 
+ocamlyacc production used is just:
+
+user_statement:
+  | USER_STATEMENT_DRIVER  {  let srt, kw, f = $1 in f ()  }
+
+In effect, this is 'covariant open recursion' closed by the dynamically
+extensible driver tables. The LALR1/RD combination is pleasing
+because it is expected to be faster and more reliable
+than a pure RD parser, yet many of the advantages, including
+the ease of extension remain available: in particular the
+compiler writer can extend the Ocamlyacc grammar and the user
+can extend the RD grammar: the coupling is fairly well isolated.
+
+Again thanks to those who encouraged my to continue seeking
+a solution!
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

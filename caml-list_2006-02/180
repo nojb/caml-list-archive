@@ -1,0 +1,164 @@
+Return-Path: <martin_jambon@emailuser.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 975A5BBBB
+	for <caml-list@yquem.inria.fr>; Tue, 21 Feb 2006 04:50:53 +0100 (CET)
+Received: from out4.smtp.messagingengine.com (out4.smtp.messagingengine.com [66.111.4.28])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k1L3oqZe010484
+	for <caml-list@yquem.inria.fr>; Tue, 21 Feb 2006 04:50:52 +0100
+Received: from frontend1.internal (mysql-sessions.internal [10.202.2.149])
+	by frontend1.messagingengine.com (Postfix) with ESMTP id 1593CD362B0;
+	Mon, 20 Feb 2006 22:50:50 -0500 (EST)
+Received: from frontend2.messagingengine.com ([10.202.2.151])
+  by frontend1.internal (MEProxy); Mon, 20 Feb 2006 22:50:50 -0500
+X-Sasl-enc: oiX4m3TQ2YAJmzfPd5oDGNR10JPRf0NS0IxEbVEjYtB8 1140493846
+Received: from [172.16.13.151] (burnham.ljcrf.edu [192.231.106.2])
+	by frontend2.messagingengine.com (Postfix) with ESMTP id 421AC571482;
+	Mon, 20 Feb 2006 22:50:45 -0500 (EST)
+Date: Mon, 20 Feb 2006 19:49:08 -0800 (PST)
+From: Martin Jambon <martin_jambon@emailuser.net>
+X-X-Sender: martin@droopy
+To: ocaml_beginners@yahoogroups.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: "ocaml_beginners"::[] Rephrasing of dynamic module selection
+ problem
+In-Reply-To: <43FA64C8.1050704@cs.utah.edu>
+Message-ID: <Pine.LNX.4.63.0602201922330.9335@droopy>
+References: <43FA64C8.1050704@cs.utah.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at concorde with ID 43FA8E1C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 beginners:01 run-time:01 statically:01 compile-time:01 struct:01 struct:01 sig:01 val:01 val:01 runtime:01 hashtbl:01 hashtbl:01 howto:01 nathan:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+On Mon, 20 Feb 2006, Nathan Cooprider wrote:
+
+> So I am still trying to get modules to be dynamically (run-time)
+> selectable instead of only statically (compile-time). The closest I have
+> come to so far is bellow. I want to be able to choose between a set of
+> modules (hello1 and hello2 in this example) fairly transparently.
+>
+> [coop@ender example]$ cat hello1.ml
+> type t = int
+> let of_int i =
+>  i
+> let print i =
+>  print_int i;
+>  print_string " says Hello1\n"
+>
+> [coop@ender example]$ cat hello2.ml
+> type t = float
+> let of_int i =
+>  float_of_int i
+> let print i =
+>  print_float i;
+>  print_string " says Hello2\n"
+>
+> [coop@ender example]$ cat main.ml
+> module Hello1 = struct
+>  #include "hello1.ml"
+> end ;;
+> module Hello2 = struct
+>  #include "hello2.ml"
+> end ;;
+> (* This works . . . *)
+> module H = Hello1
+> (* But I would like this to be something like this instead:
+> let parameter = 1
+> module H =
+>  match parameter with
+>    1 -> Hello1
+>  | _ -> Hello2
+> *)
+
+That's not possible because Hello1 and Hello2 don't have the same "type" 
+(same module signature though): what I mean is that if you represent them 
+as objects, the objects would have different types since Hello1.t and 
+Hello2.t are incompatible.
+
+Try the following code (which fails when I try to mix the objects):
+
+module type HELLO =
+sig
+   type t
+   val of_int : int -> t
+   val print : t -> unit
+   val obj : < of_int : int -> t; print : t -> unit >
+end
+
+module Hello1 : HELLO =
+struct
+   type t = int
+   let of_int i =
+     i
+   let print i =
+     print_int i;
+     print_string " says Hello1\n"
+
+   let obj =
+   object
+     method of_int = of_int
+     method print = print
+   end
+end
+
+module Hello2 : HELLO =
+struct
+   type t = float
+   let of_int i =
+     float_of_int i
+   let print i =
+     print_float i;
+     print_string " says Hello2\n"
+
+   let obj =
+   object
+     method of_int = of_int
+     method print = print
+   end
+end
+
+let param = 2 (* defined at runtime *)
+let obj =
+   match param with
+       1 -> Hello1.obj
+     | 2 -> Hello2.obj
+     | _ -> assert false;;
+
+         Characters 63-73:
+       | 2 -> Hello2.obj
+              ^^^^^^^^^^
+This expression has type
+   < of_int : int -> Hello2.t; print : Hello2.t -> unit >
+but is here used with type
+   < of_int : int -> Hello1.t; print : Hello1.t -> unit >
+Types for method of_int are incompatible
+
+
+So if you want to do that, you must give the same type to your objects.
+That would work if your modules Hello* all use a common type t instead of 
+their own. In this case you just have to include the same code at the end 
+of each Hello* module so that obj is defined. You can also add a line 
+which places obj in a global table, e.g.
+   let obj = ...
+   let _ = Hashtbl.add Hello_modules.tbl 1 obj
+
+And your main program would be:
+
+   let param = ...
+   let obj = Hashtbl.find Hello_modules.tbl param in
+   ...
+
+
+Martin
+
+--
+Martin Jambon, PhD
+http://martin.jambon.free.fr
+
+Visit http://wikiomics.org, the Bioinformatics Howto Wiki
+

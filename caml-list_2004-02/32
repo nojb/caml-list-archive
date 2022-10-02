@@ -1,0 +1,128 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA01901; Wed, 4 Feb 2004 03:57:54 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA31530 for <caml-list@pauillac.inria.fr>; Wed, 4 Feb 2004 03:57:53 +0100 (MET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id i142vpP03714
+	for <caml-list@inria.fr>; Wed, 4 Feb 2004 03:57:52 +0100 (MET)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2-20030924/3.7W) with ESMTP id LAA08317;
+	Wed, 4 Feb 2004 11:57:45 +0900 (JST)
+To: Damien.Pous@ens-lyon.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] functors and objects
+In-Reply-To: <20040203190635.6cc61ff0.Damien.Pous@ens-lyon.fr>
+References: <20040203190635.6cc61ff0.Damien.Pous@ens-lyon.fr>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20040204115745J.garrigue@kurims.kyoto-u.ac.jp>
+Date: Wed, 04 Feb 2004 11:57:45 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 functors:01 jacques:01 damien:01 damien:01 ens-lyon:01 sigh:01 struct:01 val:01 struct:01 val:01 ro':99 unsound:01 functor:01 soundness:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 2154
+Lines: 92
+
+From: Damien <Damien.Pous@ens-lyon.fr>
+
+> I would like to write something like
+> 
+> <<
+> class type o = 
+> object 
+> 	method react: unit
+> end
+> 
+> module type O = 
+> sig
+> 	type t :> o (* sigh... *)
+> end
+> 
+> module R(M: O) = 
+> struct
+> 	let l: M.t list ref = []
+> 	let register (o: M.t) = l := o :: !l
+> 	let react() = List.iter (fun o -> o#react) !l
+> end
+> >>
+
+The closest I can see to what you ask for is
+
+module type O = sig
+  type t
+  val as_o : t -> o
+end
+
+module R(M: O) = struct
+  let l: M.t list ref = ref []
+  let register (o: M.t) = l := o :: !l
+  let react() = List.iter (fun o -> (M.as_o o)#react) !l
+end
+
+module RO = R(struct type t = o let as_o x = x end)
+
+Then your second layer would be
+
+class type o' = object 
+  inherit o
+  method render: unit
+end
+
+module type O' = sig
+  include O
+  val as_o' : t -> o'
+end
+
+module R(M: O') = struct
+  include R(M)
+  let render() = List.iter (fun o -> (M.as_o' o)#render) !l
+end
+
+module O' = struct
+  type t = o'
+  let as_o  x = (x : t :> o)
+  let as_o' x = x
+end
+
+module RO' = R(O')
+
+> Is it unsound to let a functor use an object type ?
+> (not to inherit from the class, 
+> just to use the methods of objects belonging to this type)
+
+This isn't a problem of soundness.
+There is just no such thing as a "partially abstract" object type.
+But as shown above, you can easily simulate it by coupling an abstract
+type with a coercion to an object type.
+
+Note however that it would be probably simpler to turn your functors
+into parameterized classes: then you can specify constraints on the
+parameters with #-types.
+
+class ['a] r = object
+  constraint 'a = #o
+  val mutable l : 'a list = []
+  method register o = l <- o :: l
+  method react = List.iter (fun o -> o#react) l
+end
+
+class ['a] r' = object
+  constraint 'a = #o'
+  inherit ['a] r
+  method render = List.iter (fun o -> o#render) l
+end
+
+But I don't know what you have precisely in mind.
+
+     Jacques
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

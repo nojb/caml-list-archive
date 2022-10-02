@@ -1,0 +1,194 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA31010 for caml-redistribution; Wed, 3 Feb 1999 16:45:31 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA31840 for <caml-list@pauillac.inria.fr>; Wed, 3 Feb 1999 16:40:41 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id QAA01754;
+	Wed, 3 Feb 1999 16:40:38 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA21649; Wed, 3 Feb 1999 16:40:39 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199902031540.QAA21649@pauillac.inria.fr>
+Subject: Re: Polymorphic recursion in modules - impossible?
+To: mottl@miss.wu-wien.ac.at (Markus Mottl)
+Date: Wed, 3 Feb 1999 16:40:39 +0100 (MET)
+Cc: caml-list@inria.fr
+In-Reply-To: <199902012058.VAA20331@miss.wu-wien.ac.at> from "Markus Mottl" at Feb 1, 99 09:58:13 pm
+X-Mailer: ELM [version 2.4 PL24 ME8]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> Hello,
+> 
+> once again I have come across a problem concerning modules and recursion.
+> This time my question is how to get polymorphic recursion in functions
+> of modules.
+> 
+> Although I have read the FAQs about this topic and looked into the
+> archive of the mailing list, I couldn't find any solution to the problem -
+> I fear there is none.
+
+I fear too.
+
+> Code example:
+> ---------------------------------------------------------------------------
+> module RA_List =
+> struct
+>   type 'a ra_list = Nil
+>                   | Zero of ('a * 'a) ra_list
+>                   | One of 'a * ('a * 'a) ra_list
+> 
+>   let rec cons x = function
+>       Nil -> One (x, Nil)
+>     | Zero ps -> One (x, ps)
+>     | One (y,b) -> Zero (cons (x, y) ps)
+> end
+> ---------------------------------------------------------------------------
+> 
+> It is clear that this piece of code cannot compile because of the
+> polymorphic recursion found in the last match of "cons".
+> 
+> The only trick applicable to this problem would be the one with references
+> to the function(s) that introduces polymorphic recursion.
+> 
+> The (unsolvable?) problem with this possibility is that one cannot
+> initialize the reference(s). This would have to happen after definition
+> and before application, but since modules are just a static means of
+> abstraction, one cannot do so - as opposed to the trick in the FAQs,
+> where there are no modules.
+
+In fact the problem here is not related to modules in my mind. It's
+just a problem of polymorphic typechecking of recursively defined
+identifiers. As you mentioned, the trick(s) describe in the FAQ cannot
+resolved the polymorphic recursion problem in its full generality (as
+mentioned in this paragraph of the FAQ). It is just a trick to get rid
+of basic cases, where recursive calls are not polymorphic uses of the
+recursively defined identifier, and unfortunately your example belongs
+to this category. In this case, the reference trick is not applicable
+since references cannot have polymorphic contents. Anyway, the
+reference trick is just a trick, not a nice solution.
+
+> It would be nice if there were a solution to this, because this would
+> allow me the translation of the final two chapters of Okasaki's book to
+> OCAML. He uses (even if just as demonstration - SML also doesn't have
+> this feature) the technique of polymorphic recursion quite often there.
+
+Since I've been working for a long time on the subject, I summarize
+here what I did and what I know.
+
+I Related works:
+----------------
+
+A) Weak form of polymorphic recursion type inference:
+-----------------------------------------------------
+
+As mentioned earlier in this mailing list, we worked hard on this
+problem long time ago, thus we had a (weak) form of polymorphic
+recursion in Caml as soon as early 1990 (Caml V3.0). Just for fun, I
+have cut and past your example in this antique but still working
+version of Caml, and got exactly what you expected (having corrected
+the ``unbound variable ps'' error of the last clause of your program):
+
+   CAML (sun4) (V3.1) by INRIA Fri Oct  1
+
+#type 'a ra_list = Nil
+#                | Zero of ('a * 'a) ra_list
+#                | One of 'a * ('a * 'a) ra_list;;
+Type ra_list is defined
+
+#let rec cons x = function
+#    Nil -> One (x, Nil)
+#  | Zero ps -> One (x, ps)
+#  | One (y,b) -> Zero (cons (x, y) b);;
+Value cons is <fun> : 'a -> 'a ra_list -> 'a ra_list
+
+B) Type verification:
+---------------------
+
+i) Via type constraints:
+------------------------
+
+Another attempt to deal with the problem, is to tell in advance the
+typechecker what is the expected polymorphic scheme of the identifier
+that is recursively defined. This is the trick used in Haskel, and the
+trick we could use in Caml if type constraints had the ``mandatory
+semantics'' I once proposed here
+http://pauillac.inria.fr/caml/caml-list/0703.html.
+
+ii) Via forward definitions:
+----------------------------
+
+Along these lines, I added once a ``forward'' definition feature that
+in fact implemented the mandatory semantics of type constraints, and
+thus allowed ``full'' polymorphic recursion, when the ``weak'' form of
+polymorphic recursion was not able to reconstruct the expected type
+scheme.
+
+#forward cons : 'a -> 'a ra_list -> 'a ra_list;;
+Forward cons : 'a -> 'a ra_list -> 'a ra_list
+
+#let cons x = function
+#    Nil -> One (x, Nil)
+#  | Zero ps -> One (x, ps)
+#  | One (y,b) -> Zero (cons (x, y) b);;
+Value cons is <fun> : 'a -> 'a ra_list -> 'a ra_list
+
+However, we could argue that this is not as convenient as type
+reconstruction, since the user must find the correct type assignements
+by himself, instead of letting the compiler to automatically discover
+the most general type of his program.
+
+iii) To circonvent the limits of type reconstruction:
+-----------------------------------------------------
+
+On the other hand, we know that the ``full'' polymorphic recursion
+discipline is undecidable, hence we definitively need a way to help
+the type-checker in some cases, if we do not want it to fail or if we
+do not want to add some strange restrictions for polymorphic recursive
+definitions. So ``forward'' definitions can serve this purpose.
+
+(More generally, ``forward'' definitions provide a useful assign-once
+feature. So, they provide a clean way to accomodate recursion across
+modules boundaries (instead of being obliged to define a spurious
+reference on a dummy function in one module, and to assign this
+reference afterwards with the definition of the function in another
+module; moreover forward definitions properly handle the case of
+polymorphic functions, as opposed to the reference hack that simply
+fails in this case)).
+
+II Work in progress:
+--------------------
+
+Recently, the polymorphic recursion problem gets back into the scene
+with the work of François Pessaux and Xavier Leroy on static analysis
+of uncaught exceptions (see their POPL'99 article for details), since
+in this framework polymorphic treatment of recursion allows more
+accurate detection of uncaught exceptions. So, François Pessaux and I
+are working on the problem, and we already included polymorphic
+recursion in the working exceptions analyzer. We are now writing the
+detailed theory and proofs for this treatment of polymorphic
+recursion.
+
+III Future work:
+----------------
+
+If we succeed at proving the desired properties, and publish on the
+subject, the new scheme may possibly be incorporated in the O'Caml
+type-checker, and it would be the end of your problems. Furthermore, I
+would be glad to delete the corresponding embarassed paragraph of the
+FAQ!
+
+> Best regards,
+> Markus Mottl
+> 
+> -- 
+> Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+Best regards,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

@@ -1,0 +1,110 @@
+Return-Path: <ferferse@telefonica.net>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 1FC6B7EEAF
+	for <caml-list@sympa.inria.fr>; Thu, 31 Jan 2013 11:26:48 +0100 (CET)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  mfp@acm.org) identity=pra; client-ip=213.4.138.20;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="ferferse@telefonica.net";
+  x-sender="mfp@acm.org"; x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  ferferse@telefonica.net designates 213.4.138.20 as permitted
+  sender) identity=mailfrom; client-ip=213.4.138.20;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="ferferse@telefonica.net";
+  x-sender="ferferse@telefonica.net";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  postmaster@telefonica.net designates 213.4.138.20 as
+  permitted sender) identity=helo; client-ip=213.4.138.20;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="ferferse@telefonica.net";
+  x-sender="postmaster@telefonica.net";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkoBAO1FClHVBIoUi2dsb2JhbABFvzYOAQEBCA0LBxIGI4IeAQEEAScTRAsLGAklDwUoT4dwCsINjWOCSGEDlhEBk0Q
+X-IPAS-Result: AkoBAO1FClHVBIoUi2dsb2JhbABFvzYOAQEBCA0LBxIGI4IeAQEEAScTRAsLGAklDwUoT4dwCsINjWOCSGEDlhEBk0Q
+X-IronPort-AV: E=Sophos;i="4.84,575,1355094000"; 
+   d="scan'208";a="793310"
+Received: from impaqm4.telefonica.net (HELO telefonica.net) ([213.4.138.20])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 31 Jan 2013 11:26:47 +0100
+Received: from IMPmailhost6.adm.correo ([10.20.102.127])
+	by IMPaqm4.telefonica.net with bizsmtp
+	id uYCi1k00e2kvMAa3QaSnz0; Thu, 31 Jan 2013 11:26:47 +0100
+Received: from NANA.localdomain ([95.122.129.253])
+	by IMPmailhost6.adm.correo with BIZ IMP
+	id uaSm1k00K5UANXz1maSmNa; Thu, 31 Jan 2013 11:26:47 +0100
+X-Brightmail-Tracker: AAAAAA==
+X-original-sender: ferferse@telefonica.net
+Received: from mfp by NANA.localdomain with local (Exim 4.77)
+	(envelope-from <ferferse@telefonica.net>)
+	id 1U0rLx-0000aG-Rv
+	for caml-list@inria.fr; Thu, 31 Jan 2013 11:26:45 +0100
+Date: Thu, 31 Jan 2013 11:26:45 +0100
+From: Mauricio Fernandez <mfp@acm.org>
+To: caml-list@inria.fr
+Message-ID: <20130131102645.GB3017@NANA.localdomain>
+Mail-Followup-To: caml-list@inria.fr
+References: <87622dx692.fsf@golf.niidar.ru> <20130131095331.GA3017@NANA.localdomain>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20130131095331.GA3017@NANA.localdomain>
+User-Agent: Mutt/1.5.17+20080114 (2008-01-14)
+Subject: Re: [Caml-list] [lwt] multiplexing several threads
+
+On Thu, Jan 31, 2013 at 10:53:31AM +0100, Mauricio Fernandez wrote:
+> On Thu, Jan 31, 2013 at 09:37:29AM +0400, Ivan Gotovchits wrote:
+> > The following solution
+> > 
+> >    let rec loop sc =
+> >      let cmd = read_from_user () <?> read_event () in
+> >      cmd >>= (process state)
+> > 
+> >    and process sc = function
+> >      | Exit -> return sc
+> >      | cmd  -> (* modify sc*) loop sc
+> > 
+> >    let r = Lwt_main.run (loop state)
+> > 
+> > doesn't work when the event thread wakes up first. In that case the next
+> > step of the loop will call Lwt_read_line.read_line before the previous
+> > invocation finishes and it breaks user input.
+> > 
+> > Please, help me to find a feasible solution to my problem!
+> 
+
+Just remembered that you might want to cancel the other thread before
+returning too:
+
+> let process s = function
+>     Exit -> return (`Exit s)
+>   | cmd -> let s = ... in return (`State s)
+> 
+> let rec loop state user_cmd event =
+>   match_lwt
+>     Lwt.choose
+>       [ (lwt x = user_cmd in return (`User x));
+>         (lwt x = event in return (`Event x));
+>     ]
+>   with
+>     `User cmd -> begin match_lwt process state cmd with
+>                    `Exit s -> return s
+
+                      ===================
+
+                      `Exit s -> Lwt.cancel event; return s
+
+>                  | `State s -> loop s (read_from_user ()) event
+>                  end
+>   | `Event cmd -> begin match_lwt process state cmd with
+>                    `Exit s -> return s
+                                Lwt.cancel user_cmd; return s
+
+>                  | `State s -> loop s user_cmd (read_event ())
+>                  end
+-- 
+Mauricio Fernandez

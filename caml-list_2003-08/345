@@ -1,0 +1,396 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA05865; Fri, 29 Aug 2003 17:57:20 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA14668 for <caml-list@pauillac.inria.fr>; Fri, 29 Aug 2003 17:57:19 +0200 (MET DST)
+Received: from ep09.kernel.pl (ep09.kernel.pl [212.87.11.162])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h7TFvFf05056
+	for <caml-list@inria.fr>; Fri, 29 Aug 2003 17:57:15 +0200 (MET DST)
+Received: (qmail 23072 invoked by uid 566); 29 Aug 2003 15:56:31 -0000
+Date: Fri, 29 Aug 2003 17:56:27 +0200
+From: Michal Moskal <malekith@pld-linux.org>
+To: caml-list@inria.fr
+Subject: [Caml-list] unused variable patch for 3.07
+Message-ID: <20030829155627.GA20408@roke.freak>
+Mail-Followup-To: caml-list@inria.fr
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="liOOAslEiF7prFVr"
+Content-Disposition: inline
+User-Agent: Mutt/1.4.1i
+X-PGP-Fingerprint: CF89 1B14 11BE 1CC9 2CA3  7497 5E32 69B4 BC71 B4C2
+X-AntiVirus: scanned for viruses by AMaViS 0.2.1 (http://amavis.org/)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; michal:01 moskal:01 malekith:01 pld-linux:01 3.07:01 michal:01 moskal:01 malekith:01 3.07:01 asmcomp:01 asmcomp:01 asmlink:01 asmpackager:01 genprintval:01 toploop:01 
+X-Attachments: name="ocaml-unused-var-warning.patch" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--liOOAslEiF7prFVr
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+Attached you'll find updated version of Pixel's patch for ocaml compiler
+to warn about unused local variables. I also made it regular option with
+possibility of turning it on/off (off is default).
+
+BTW: what stops this patch from going upstream?
+
+-- 
+: Michal Moskal :: http://www.kernel.pl/~malekith : GCS {C,UL}++++$ a? !tv
+: When in doubt, use brute force. -- Ken Thompson : {E-,w}-- {b++,e}>+++ h
+
+--liOOAslEiF7prFVr
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="ocaml-unused-var-warning.patch"
+
+diff -ur ocaml-3.07beta2/Makefile ocaml-3.07beta2-/Makefile
+--- ocaml-3.07beta2/Makefile	2003-07-03 17:13:21.000000000 +0200
++++ ocaml-3.07beta2-/Makefile	2003-08-28 17:29:35.000000000 +0200
+@@ -82,13 +82,13 @@
+   asmcomp/emitaux.cmo asmcomp/emit.cmo asmcomp/asmgen.cmo \
+   asmcomp/asmlink.cmo asmcomp/asmlibrarian.cmo asmcomp/asmpackager.cmo
+ 
+-DRIVER=driver/pparse.cmo driver/errors.cmo driver/compile.cmo \
++DRIVER=driver/pparse.cmo driver/warn_unused_variables.cmo driver/errors.cmo driver/compile.cmo \
+   driver/main_args.cmo driver/main.cmo
+ 
+ OPTDRIVER= driver/pparse.cmo driver/opterrors.cmo driver/optcompile.cmo \
+   driver/optmain.cmo
+ 
+-TOPLEVEL=driver/pparse.cmo driver/errors.cmo driver/compile.cmo \
++TOPLEVEL=driver/pparse.cmo driver/warn_unused_variables.cmo driver/errors.cmo driver/compile.cmo \
+   toplevel/genprintval.cmo toplevel/toploop.cmo \
+   toplevel/trace.cmo toplevel/topdirs.cmo toplevel/topmain.cmo
+ 
+diff -ur ocaml-3.07beta2/driver/compile.ml ocaml-3.07beta2-/driver/compile.ml
+--- ocaml-3.07beta2/driver/compile.ml	2003-07-25 14:17:18.000000000 +0200
++++ ocaml-3.07beta2-/driver/compile.ml	2003-08-28 17:29:35.000000000 +0200
+@@ -99,6 +99,7 @@
+     try
+       Pparse.file ppf inputfile Parse.implementation ast_impl_magic_number
+       ++ print_if ppf Clflags.dump_parsetree Printast.implementation
++      ++ Warn_unused_variables.doit ppf
+       ++ Typemod.type_implementation sourcefile prefixname modulename env
+       ++ Translmod.transl_implementation modulename
+       ++ print_if ppf Clflags.dump_rawlambda Printlambda.lambda
+diff -ur ocaml-3.07beta2/driver/main_args.ml ocaml-3.07beta2-/driver/main_args.ml
+--- ocaml-3.07beta2/driver/main_args.ml	2003-07-17 10:38:27.000000000 +0200
++++ ocaml-3.07beta2-/driver/main_args.ml	2003-08-28 18:06:38.000000000 +0200
+@@ -133,10 +133,12 @@
+       \032    P/p enable/disable partial match\n\
+       \032    S/s enable/disable non-unit statement\n\
+       \032    U/u enable/disable unused match case\n\
++      \032    I/i enable/disable unused local variable\n\
+       \032    V/v enable/disable hidden instance variable\n\
+       \032    X/x enable/disable all other warnings\n\
+-      \032    default setting is \"Ale\"\n\
+-      \032    (all warnings but labels and fragile match enabled)";
++      \032    default setting is \"Alei\"\n\
++      \032    (all warnings but labels, unused variable and\n\
++      \032    fragile match enabled)";
+     "-warn-error" , Arg.String F._warn_error,
+       "<flags>  Treat the warnings enabled by <flags> as errors.\n\
+       \032    See option -w for the list of flags.\n\
+diff -ur ocaml-3.07beta2/driver/optmain.ml ocaml-3.07beta2-/driver/optmain.ml
+--- ocaml-3.07beta2/driver/optmain.ml	2003-07-17 10:38:27.000000000 +0200
++++ ocaml-3.07beta2-/driver/optmain.ml	2003-08-28 17:42:02.000000000 +0200
+@@ -149,10 +149,12 @@
+          \032    P/p enable/disable partial match\n\
+          \032    S/s enable/disable non-unit statement\n\
+          \032    U/u enable/disable unused match case\n\
++         \032    I/i enable/disable unused local variable\n\
+          \032    V/v enable/disable hidden instance variables\n\
+          \032    X/x enable/disable all other warnings\n\
+-         \032    default setting is \"Ale\"\n\
+-         \032    (all warnings but labels and fragile match enabled)";
++         \032    default setting is \"Alei\"\n\
++         \032    (all warnings but labels, unused variable and\n\
++         \032    fragile match enabled)";
+        "-warn-error" , Arg.String (Warnings.parse_options true),
+          "<flags>  Treat the warnings enabled by <flags> as errors.\n\
+          \032    See option -w for the list of flags.\n\
+diff -ur ocaml-3.07beta2/driver/warn_unused_variables.ml ocaml-3.07beta2-/driver/warn_unused_variables.ml
+--- ocaml-3.07beta2/driver/warn_unused_variables.ml	2003-08-28 18:03:53.000000000 +0200
++++ ocaml-3.07beta2-/driver/warn_unused_variables.ml	2003-08-28 18:05:54.000000000 +0200
+@@ -0,0 +1,220 @@
++open Parsetree
++
++(* initial version by Pascal Brisset <brisset@recherche.enac.fr> *)
++(* adaptation by Pascal Rigaux <pixel@mandrakesoft.com> *)
++(* further adaptation for 3.07 Michal Moskal <malekith@pld-linux.org> *)
++
++let r_ppf = ref None
++let ppf() =
++  match !r_ppf with
++  | Some ppf -> ppf
++  | None -> failwith "ppf"
++
++let check_and_warn l =
++  List.iter
++    (fun ((v,loc), r) ->
++      if not !r && not (v.[0] = '_') then begin
++ 	Location.print_warning loc (ppf()) (Warnings.Other ("unused variable " ^ v))
++      end)
++    l;;
++
++let add_var vloc r l = (vloc, r)::l;;
++
++let rec vars_of_pattern rest pat =
++  match pat.ppat_desc with
++  | Ppat_var v -> (v, pat.ppat_loc)::rest
++  | Ppat_alias (pattern, v) -> vars_of_pattern ((v, pat.ppat_loc)::rest) pattern
++  | Ppat_tuple pl -> List.fold_left vars_of_pattern rest pl
++  | Ppat_construct (_,po, _)
++  | Ppat_variant(_,po) -> 
++      begin match po with
++	Some p -> vars_of_pattern rest p
++      |	None -> rest end
++  | Ppat_record pl -> List.fold_left (fun r (_, p) -> vars_of_pattern r p) rest pl
++  | Ppat_array pl -> List.fold_left vars_of_pattern rest pl
++  | Ppat_constraint (pat, _) -> vars_of_pattern rest pat
++  | _ -> rest;;
++
++let add_pat prefix pat defined news =
++  let vs = vars_of_pattern [] pat in
++  List.fold_right
++    (fun (v, loc) (def, news) ->
++      let prefixvloc = (prefix v, loc) in
++      let r = ref false in
++      let new_def = add_var prefixvloc r def in
++      (new_def , (prefixvloc, r)::news))
++    vs (defined, news);;
++
++let add_pel prefix pel defined =
++  List.fold_right (fun (p, _e) (def, news) -> add_pat prefix p def news) pel (defined, [])
++
++let rec defined_assoc s = function
++    [] -> raise Not_found
++  | ((s',_), r)::l -> if s = s' then r else defined_assoc s l
++
++let mark_used defined = function
++    Longident.Lident string ->
++      begin try defined_assoc string defined := true with Not_found -> () end
++  | _ -> ();; (* from other modules, not yet *)
++
++let rec ws_expression defined e =
++  match e.pexp_desc with
++    Pexp_ident i -> mark_used defined i
++  | Pexp_constant _ -> ()
++  | Pexp_let (rec_flag, pel, e) ->
++      let new_defined, news = add_pel (fun s->s) pel defined in
++      ws_pel (if rec_flag = Asttypes.Recursive then new_defined else defined) pel false;
++      ws_expression new_defined e;
++      check_and_warn news
++  | Pexp_function (_label, _eo, pel) ->
++      ws_pel defined pel true;
++  | Pexp_apply (expression, lel) ->
++      ws_expression defined expression;
++      List.iter (fun (_l, e) -> ws_expression defined e) lel
++  | Pexp_match (expression, pel) ->
++      ws_expression defined expression;
++      ws_pel defined pel true
++  | Pexp_try (expression, pel) ->
++      ws_expression defined expression;
++      ws_pel defined pel true
++  | Pexp_tuple el ->
++      ws_expression_list defined el
++  | Pexp_construct (_, eo, _) ->
++      ws_expression_option defined eo
++  | Pexp_variant (_,eo) ->
++      ws_expression_option defined eo
++  | Pexp_record (iel, eo) ->
++      List.iter (fun (_l, e) -> ws_expression defined e) iel;
++      ws_expression_option defined eo
++  | Pexp_field (e, _) ->
++      ws_expression defined e
++  | Pexp_setfield (e1, _, e2) ->
++      ws_expression defined e1;
++      ws_expression defined e2
++  | Pexp_array el -> ws_expression_list defined el
++  | Pexp_ifthenelse (e1, e2, eo) ->
++      ws_expression defined e1;
++      ws_expression defined e2;
++      ws_expression_option defined eo
++  | Pexp_sequence (e1, e2) ->
++      ws_expression defined e1;
++      ws_expression defined e2
++  | Pexp_while(e1, e2) ->
++      ws_expression defined e1;
++      ws_expression defined e2
++  | Pexp_for (string, e1, e2, _, e) ->
++      ws_expression defined e1;
++      ws_expression defined e2;
++      let r = ref false in
++      let new_def = add_var (string, e.pexp_loc) r defined in
++      ws_expression new_def e;
++      if not !r then Printf.fprintf stderr "%s loop index unused ?\n" string
++  | Pexp_constraint (e, _, _) -> ws_expression defined e
++
++  | Pexp_assert e
++  | Pexp_lazy e
++  | Pexp_poly (e, _) ->
++      ws_expression defined e
++
++  | Pexp_when (e1, e2) ->
++      ws_expression defined e1;
++      ws_expression defined e2
++  | Pexp_send (e, _) ->
++      ws_expression defined e
++  | Pexp_assertfalse
++  | Pexp_new _ -> ()
++  | Pexp_setinstvar (_s, e) ->
++      ws_expression defined e
++  | Pexp_override sel ->
++      List.iter (fun (_l, e) -> ws_expression defined e) sel;
++  | Pexp_letmodule (m,me,e) ->
++      let new_defined = ws_module (fun s -> m^"."^s) defined me in
++      ws_expression defined e
++
++and ws_pel defined pel take_pat =
++  List.iter
++    (fun (p, e) ->
++      if take_pat then
++	let new_defined, news = add_pat (fun s-> s) p defined [] in
++	ws_expression new_defined e;
++	check_and_warn news
++      else
++      	ws_expression defined e) pel
++and ws_expression_option defined = function
++    Some e -> ws_expression defined e
++  | None -> ()
++and ws_expression_list defined el =
++  List.iter (ws_expression defined) el
++  
++  
++
++and ws_structure prefix defined = function
++    [] -> defined
++  | s::ss ->
++      let new_defined = 
++      	match s.pstr_desc with
++      	| Pstr_eval e ->
++	    ws_expression defined e;
++	    defined
++      	| Pstr_value (rec_flag, pel) ->
++	    let new_defined, _news = add_pel prefix pel defined in
++	    ws_pel (if rec_flag = Asttypes.Recursive then new_defined else defined) pel false;
++	    new_defined
++      	| Pstr_primitive _ -> defined
++      	| Pstr_type _ -> defined
++      	| Pstr_exception _ -> defined
++      	| Pstr_exn_rebind _ -> defined
++      	| Pstr_module (m, me) -> ws_module (fun s -> prefix (m^"."^s)) defined me
++      	| Pstr_modtype _ -> defined
++        | Pstr_recmodule mods ->
++          List.fold_left (fun defined (m, _, me) -> 
++                              ws_module (fun s -> prefix (m^"."^s)) defined me)
++                         defined mods
++      	| Pstr_open _ -> defined
++	| Pstr_include _ -> defined
++      	| Pstr_class cdl ->
++	    List.iter (fun cd -> ws_class_expr defined cd.pci_expr) cdl;
++	    defined
++      	| Pstr_class_type _ -> defined
++      in
++      ws_structure prefix new_defined ss
++and ws_module prefix defined me = 
++  match me.pmod_desc with
++    Pmod_structure s ->
++      ws_structure prefix defined s
++  | Pmod_apply (m1, m2) -> defined
++  | Pmod_ident _ -> defined
++  | _ -> defined
++and ws_class_expr defined ce =
++  match ce.pcl_desc with
++    Pcl_structure cs ->
++      ws_class_structure defined cs
++  | Pcl_fun (_, e, p, ce) ->
++      ws_class_expr defined ce
++  | Pcl_let (rec_flag, pel, ce) ->
++      let new_defined, news = add_pel (fun s->s) pel defined in
++      ws_pel (if rec_flag = Asttypes.Recursive then new_defined else defined) pel false;
++      ws_class_expr new_defined ce;
++      check_and_warn news
++  | Pcl_constr _ -> ()
++  | _ -> ()
++and ws_class_structure defined (pat, cfl) =
++  let new_defined, news = add_pat (fun s-> s) pat defined [] in
++  List.iter (ws_class_field new_defined) cfl;
++  check_and_warn news
++and ws_class_field defined = function
++    Pcf_inher _ -> ()
++  | Pcf_val _ -> ()
++  | Pcf_virt _ -> ()
++  | Pcf_meth (_string, _private_flag , expression, _loc) ->
++      ws_expression defined expression
++  | Pcf_cstr _ -> ()
++  | Pcf_let _ -> ()
++  | Pcf_init expression ->
++      ws_expression defined expression
++
++let doit ppf ast =
++  r_ppf := Some ppf ;
++  if Warnings.is_active (Warnings.Unused_variable "") then
++    ignore (ws_structure (fun s->s) [] ast);
++  ast
+diff -ur ocaml-3.07beta2/utils/warnings.ml ocaml-3.07beta2-/utils/warnings.ml
+--- ocaml-3.07beta2/utils/warnings.ml	2003-05-02 14:52:11.000000000 +0200
++++ ocaml-3.07beta2-/utils/warnings.ml	2003-08-28 17:42:38.000000000 +0200
+@@ -25,6 +25,7 @@
+   | Statement_type                   (* S *)
+   | Unused_match                     (* U *)
+   | Unused_pat                       (* U *)
++  | Unused_variable of string        (* I *)
+   | Hide_instance_variable of string (* V *)
+   | Other of string                  (* X *)
+ ;;
+@@ -39,12 +40,13 @@
+   | Partial_match _ ->          'p'
+   | Statement_type ->           's'
+   | Unused_match|Unused_pat ->  'u'
++  | Unused_variable _ ->        'i'
+   | Hide_instance_variable _ -> 'v'
+   | Other _ ->                  'x'
+ ;;
+ 
+ let check c =
+-  try ignore (String.index "acdeflmpsuvxACDEFLMPSUVX" c)
++  try ignore (String.index "acdeflmpsuvixACDEFLMPSUVIX" c)
+   with _ -> raise (Arg.Bad (Printf.sprintf "unknown warning option %c" c))
+ ;;    
+ 
+@@ -81,7 +83,7 @@
+   done
+ ;;
+ 
+-let () = parse_options false "el";;
++let () = parse_options false "eli";;
+ 
+ let message = function
+   | Partial_match "" -> "this pattern-matching is not exhaustive."
+@@ -113,6 +115,7 @@
+       "this expression should have type unit."
+   | Comment s -> "this is " ^ s ^ "."
+   | Deprecated -> "this syntax is deprecated."
++  | Unused_variable s -> "unused variable " ^ s
+   | Other s -> s
+ ;;
+ 
+diff -ur ocaml-3.07beta2/utils/warnings.mli ocaml-3.07beta2-/utils/warnings.mli
+--- ocaml-3.07beta2/utils/warnings.mli	2003-05-02 10:46:06.000000000 +0200
++++ ocaml-3.07beta2-/utils/warnings.mli	2003-08-28 17:39:51.000000000 +0200
+@@ -25,6 +25,7 @@
+   | Statement_type                   (* S *)
+   | Unused_match                     (* U *)
+   | Unused_pat                       (* U *)
++  | Unused_variable of string        (* I *)
+   | Hide_instance_variable of string (* V *)
+   | Other of string                  (* X *)
+ ;;
+
+--liOOAslEiF7prFVr--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

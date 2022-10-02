@@ -1,0 +1,862 @@
+Return-Path: <dbm@refined-audiometrics.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 8F0B9BBAF
+	for <caml-list@yquem.inria.fr>; Thu, 15 Jul 2010 20:37:31 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlkDAHfxPkzRVllBlGdsb2JhbACBQ4RPjG+MaxUBAQEBCQsICREDH784AoJ1gi0Eg34
+X-IronPort-AV: E=Sophos;i="4.55,209,1278280800"; 
+   d="scan'208,217";a="63862410"
+Received: from elasmtp-kukur.atl.sa.earthlink.net ([209.86.89.65])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 15 Jul 2010 20:37:30 +0200
+Received: from [69.254.201.214] (helo=[10.0.1.6])
+	by elasmtp-kukur.atl.sa.earthlink.net with esmtpa (Exim 4.67)
+	(envelope-from <dbm@refined-audiometrics.com>)
+	id 1OZTJI-0004Cr-RB
+	for caml-list@yquem.inria.fr; Thu, 15 Jul 2010 14:37:29 -0400
+Mime-Version: 1.0 (Apple Message framework v753.1)
+In-Reply-To: <87zkxsfvsg.fsf@frosties.localdomain>
+References: <87sk3mcaeq.fsf@frosties.localdomain> <AANLkTilJUmUCQx2DiomhBNZdWEUinjnLeu2rFMMwcZ02@mail.gmail.com> <87zkxsfvsg.fsf@frosties.localdomain>
+Content-Type: multipart/alternative; boundary=Apple-Mail-8-264137949
+Message-Id: <A8878295-C67F-40A6-A5B5-5DC8B354E826@refined-audiometrics.com>
+From: David McClain <dbm@refined-audiometrics.com>
+Subject: Re: [Caml-list] Smart ways to implement worker threads
+Date: Thu, 15 Jul 2010 11:37:28 -0700
+To: caml-list@yquem.inria.fr
+X-Mailer: Apple Mail (2.753.1)
+X-ELNK-Trace: 7a0ab3eafc8cf994b22988ad1c62733440683398e744b8a4f246482fc8fbd948d35a172962002535667c3043c0873f7e350badd9bab72f9c350badd9bab72f9c
+X-Originating-IP: 69.254.201.214
+X-Spam: no; 0.00; lear:01 ocaml:01 ocaml:01 ocaml's:01 reppy:01 translated:01 implements:01 reppy:01 requestor:01 requestor:01 nesting:01 combinators:01 accessor:01 accessor:01 lambda:01 
+
+
+--Apple-Mail-8-264137949
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain;
+	charset=ISO-8859-1;
+	delsp=yes;
+	format=flowed
+
+> It is too bad I don't want to lear CML but use Ocaml. The CML examples
+> from the book don't translate into ocaml since the interface is just a
+> little bit different and those differences are what throws me off. I
+
+That may appear to be the case from only a cursory review of CML. But =20=
+
+I find that OCaml's notions of Events, Channels, etc, correspond =20
+quite closely to what John Reppy describes.
+
+The whole point of Reppy's work was to show how "Events" could be =20
+made into functional objects, with operations for combination among =20
+them.
+
+I don't have the "sort" routine translated, but here is some Lisp =20
+code that attempts to provide the multiple-readers / single-writer =20
+locks as might be used in a database application. It demonstrates the =20=
+
+use of wrap, sync, etc...
+
+-----------------------------------
+;; rwgate.lisp -- Multiple Reader/Single Writer using Reppy's Channels
+;;
+;; DM/MCFA  01/00
+;; ----------------------------------------------------
+
+(defpackage "RWGATE"
+   (:use "USEFUL-MACROS" "COMMON-LISP" "REPPY-CHANNELS" "SPM" =20
+"LISPWORKS")
+   (:export "MAKE-LOCK"
+            "WRAP-RDLOCKEVT"
+            "WRAP-WRLOCKEVT"
+            "WITH-READLOCK"
+            "WITH-WRITELOCK"))
+
+(in-package "RWGATE")
+
+;; ---------------------------------------------------------------
+;; This package implements a multiple-reader/single-writer lock
+;; protocol using the amazing capabilities of the Reppy channels.
+;;
+;; Rule of engagement:
+;;
+;; 1. A lock is available for reading if no write locks are in place,
+;;    or else the read lock requestor is equal to the write lock holder.
+;;
+;; 2. A lock is available for writing if no read locks and no write =20
+locks
+;;    are in place,
+;;    or else the write lock requestor is equal to the write lock =20
+holder,
+;;    or else the write lock requestor is equal to every read lock =20
+holder.
+;;
+;; These rules ensure that multiple readers can run, while only one
+;; writer can run. No requirements for nesting of read/write lock
+;; requests. That is, a writer can request a read lock and vice versa,
+;; and issue lock releases in any order.
+;;
+;; A lock holder can request any number of additional locks. The lock =20=
+
+will
+;; actually be released when an equal number of releases of like kind
+;; have been obtained. For every write lock there is a write release,
+;; and for every read lock there is a read release.
+;;
+;; The Reppy protocol is protected with UNWIND-PROTECT to ensure that
+;; locks held are released on exit from the function block being =20
+executed
+;; within the province of a lock. Lock releases are handled =20
+transparently
+;; to the user.
+;;
+;; ---------------------------------------------------------------
+;; Lock server protocol with event combinators
+
+(defclass rw-lock (<serviceable-protocol-mixin>)
+   ((rdlocks :accessor  rw-lock-rdlocks  :initform 0)
+    (wrlocks :accessor  rw-lock-wrlocks  :initform 0)
+    (wrowner :accessor  rw-lock-wrowner  :initform nil)
+    (rdqueue :accessor  rw-lock-rdqueue  :initform nil)
+    (rdowners :accessor rw-lock-rdowners :initform nil)
+    (wrqueue :accessor  rw-lock-wrqueue  :initform nil)))
+
+(defun make-lock ()
+   (make-instance
+    'rw-lock
+    :handlers (list
+
+               :read
+               #'(lambda (req gate who)
+                   (declare (ignore req))
+		  (labels ((take-it ()
+			     (incf (rw-lock-rdlocks gate))
+			     (push who (rw-lock-rdowners gate))
+			     (spawn #'send who t)))
+		    (cond ((eq who (rw-lock-wrowner gate))
+			   ;; we own a write lock already so go ahead...
+			   (take-it))
+		=09
+			  ((plusp (rw-lock-wrlocks gate))
+			   ;; outstanding write lock so enqueue in
+			   ;; pending readers queue...
+			   (push who (rw-lock-rdqueue gate)))
+		=09
+			  (t
+			   ;; no outstanding writer so take it...
+			   (take-it))
+			  )))
+=09
+               :release-read
+               #'(lambda (req gate who)
+                   (declare (ignore req))
+		  (removef (rw-lock-rdowners gate) who :count 1)
+                   (if (and (zerop (decf (rw-lock-rdlocks gate)))
+                            (zerop (rw-lock-wrlocks gate)))
+		      ;; no more readers and no more writers
+		      ;; (a writer might have been me...)
+		      ;; so go ahead and start writers
+		      ;; there should be no pending readers
+		      ;; since there were no writers
+                       (let ((writer (pop (rw-lock-wrqueue gate))))
+                         (when writer
+                           (incf (rw-lock-wrlocks gate))
+                           (setf (rw-lock-wrowner gate) writer)
+                           (spawn #'send writer t))
+                         )))
+=09
+               :write
+               #'(lambda (req gate who)
+                   (declare (ignore req))
+		  (labels ((take-it ()
+			     (incf (rw-lock-wrlocks gate))
+			     (setf (rw-lock-wrowner gate) who)
+			     (spawn #'send who t)))
+		    (cond ((and (zerop (rw-lock-rdlocks gate))
+				(zerop (rw-lock-wrlocks gate)))
+			   ;; gate available so take it
+			   (take-it))
+		=09
+			  ((eq who (rw-lock-wrowner gate))
+			   ;; gate already owned by requestor
+			   ;; so incr lock count and tell him its =
+okay...
+			   (take-it))
+		=09
+			  ((every #'(lambda (rdr)
+				      (eq rdr who))
+				  (rw-lock-rdowners gate))
+			   ;; only one reader and it is me...
+                            ;; but I may be in the list numerous =20
+times...
+			   ;; so go ahead and grab a write lock.
+			   (take-it))
+		=09
+			  (t
+			   ;; gate not available -- put caller on
+			   ;; waiting writers queue
+			   (conc1f (rw-lock-wrqueue gate) who))
+			  )))
+=09
+               :release-write
+               #'(lambda (req gate who)
+                   (declare (ignore req who))
+                   (labels
+                       ((run-writer ()
+                          (let ((writer (pop (rw-lock-wrqueue gate))))
+                            (if writer
+                                (progn
+				 (incf (rw-lock-wrlocks gate))
+				 (setf (rw-lock-wrowner gate) writer)
+                                  (spawn #'send writer t)
+                                  t)
+			     nil)))
+                        (run-readers ()
+                          (let ((readers (rw-lock-rdqueue gate)))
+                            (if readers
+                                (progn
+                                  (setf (rw-lock-rdqueue gate) nil)
+				 (appendf (rw-lock-rdowners gate) =
+readers)
+                                  (incf (rw-lock-rdlocks gate) =20
+(length readers))
+                                  (dolist (reader readers)
+                                    (spawn #'send reader t))
+                                  t)
+                              nil))))
+                     (when (zerop (decf (rw-lock-wrlocks gate)))
+		      ;; no more writers (was only me anyway...)
+                       (setf (rw-lock-wrowner gate) nil)
+		      (if (zerop (rw-lock-rdlocks gate))
+			  ;; if no active readers either
+			  ;; then it is a toss up whether to
+			  ;; start writers or readers
+			  (if (zerop (random 2)) ;; add some =
+non-determinism
+			      (unless (run-writer)
+				(run-readers))
+			    (unless (run-readers)
+			      (run-writer)))
+			;; but if I was a reader too,
+			;; then it is only safe to start other
+			;; readers.
+			(run-readers)))
+		    ))
+               )))
+
+(defun wrap-lockEvt (lock fn args req rel)
+   (guard
+    #'(lambda ()
+        (let ((replyCh (make-channel)))
+          (labels
+              ((acquire-lock ()
+                 (service-request req lock replyCh))
+               (release-lock ()
+                 (service-request rel lock replyCh)))
+            (spawn #'acquire-lock)
+            (wrap-abort
+             (wrap (recvEvt replyCh)
+                   #'(lambda (reply)
+                       (declare (ignore reply))
+                       (unwind-protect
+                           (apply fn args)
+                         (spawn #'release-lock))))
+             #'(lambda ()
+                 (spawn #'(lambda ()
+                            (recv replyCh)
+                            (release-lock)))))
+            )))
+    ))
+
+(defmethod wrap-rdLockEvt ((lock rw-lock) fn &rest args)
+   (wrap-lockEvt lock fn args :read :release-read))
+
+(defmethod wrap-wrLockEvt ((lock rw-lock) fn &rest args)
+   (wrap-lockEvt lock fn args :write :release-write))
+
+(defmethod with-readlock ((lock rw-lock) fn &rest args)
+   (sync (apply #'wrap-rdLockEvt lock fn args)))
+
+(defmethod with-writelock ((lock rw-lock) fn &rest args)
+   (sync (apply #'wrap-wrLockEvt lock fn args)))
+-----------------------------------
+
+Dr. David McClain
+Chief Technical Officer
+Refined Audiometrics Laboratory
+4391 N. Camino Ferreo
+Tucson, AZ  85750
+
+email: dbm@refined-audiometrics.com
+phone: 1.520.390.3995
+web: http://refined-audiometrics.com
+
+
+
+On Jul 15, 2010, at 11:24, Goswin von Brederlow wrote:
+
+> Rich Neswold <rich.neswold@gmail.com> writes:
+>
+>> On Wed, Jul 14, 2010 at 11:09 AM, Goswin von Brederlow <goswin-v-=20
+>> b@web.de>
+>> wrote:
+>>
+>>     4) Do some magic with Event.t?
+>>
+>>     Problem: never used this and I could use a small example how =20
+>> to use
+>>     this.
+>>
+>>
+>> Event.t (and its associated library) *is* magical in that it =20
+>> provides an
+>> absolutely beautiful concurrent programming model. Forget about =20
+>> select() and
+>> mutexes and other ugly threading concepts. Event.t and friends is =20
+>> how it should
+>> be done.
+>>
+>> John H. Reppy's "Concurrent Programming in ML" provides a thorough
+>> understanding of how to use this module effectively. This book =20
+>> presents the
+>> material in a very understandable way:=C2 deficiencies=C2 in current =20=
+
+>> threading
+>> models are discussed as well as how CML solves the limitations and =20=
+
+>> constraints.
+>> The book can be purchased or downloaded free online.
+>
+> It is too bad I don't want to lear CML but use Ocaml. The CML examples
+> from the book don't translate into ocaml since the interface is just a
+> little bit different and those differences are what throws me off. I
+> figue spawn becomes Thread.cread and I have to add Event.sync or
+> Event.select and Event.wrap at some points. At which point the book
+> becomes useless to understanding how Ocamls Event module is to be used
+> I'm afraid. Also doesn't tell me what Ocamls limitations and =20
+> constraints
+> are.
+>
+> So if you have used this in ocaml could you give a short example?
+> E.g. the merge sort from the book.
+>
+> MfG
+>         Goswin
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+
+
+--Apple-Mail-8-264137949
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html;
+	charset=ISO-8859-1
+
+<html><body style=3D"word-wrap: break-word; -webkit-nbsp-mode: space; =
+-webkit-line-break: after-white-space; ">
+<blockquote type=3D"cite"><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; ">It is too bad I don't want =
+to lear CML but use Ocaml. The CML examples</div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">from =
+the book don't translate into ocaml since the interface is just =
+a</div><div style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: =
+0px; margin-left: 0px; ">little bit different and those differences are =
+what throws me off. I</div></blockquote><div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+"><br></div></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">That may appear to be the case =
+from only a cursory review of CML. But I find that OCaml's notions of =
+Events, Channels, etc, correspond quite closely to what John Reppy =
+describes.&nbsp;</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">The whole point of Reppy's work was to show how =
+"Events" could be made into functional objects, with operations for =
+combination among them.</div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">I don't have the "sort" routine =
+translated, but here is some Lisp code that attempts to provide the =
+multiple-readers / single-writer locks as might be used in a database =
+application. It demonstrates the use of wrap, sync, etc...</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+">-----------------------------------</div><div>;; rwgate.lisp -- =
+Multiple Reader/Single Writer using Reppy's =
+Channels</div><div>;;</div><div>;; DM/MCFA &nbsp;01/00</div><div>;; =
+----------------------------------------------------</div><div><br></div><=
+div>(defpackage "RWGATE"</div><div>&nbsp;&nbsp;(:use "USEFUL-MACROS" =
+"COMMON-LISP" "REPPY-CHANNELS" "SPM" =
+"LISPWORKS")</div><div>&nbsp;&nbsp;(:export =
+"MAKE-LOCK"</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WRAP-RDLOCKEVT"</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WRAP-WRLOCKEVT"</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WITH-READLOCK"</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WITH-WRITELOCK"))</div><div><br></div><div>(in-package =
+"RWGATE")</div><div><br></div><div>;; =
+---------------------------------------------------------------</div><div>=
+;; This package implements a multiple-reader/single-writer =
+lock</div><div>;; protocol using the amazing capabilities of the Reppy =
+channels.</div><div>;;</div><div>;; Rule of =
+engagement:</div><div>;;</div><div>;; 1. A lock is available for reading =
+if no write locks are in place,</div><div>;; &nbsp; &nbsp;or else the =
+read lock requestor is equal to the write lock =
+holder.</div><div>;;</div><div>;; 2. A lock is available for writing if =
+no read locks and no write locks</div><div>;; &nbsp; &nbsp;are in =
+place,</div><div>;; &nbsp; &nbsp;or else the write lock requestor is =
+equal to the write lock holder,</div><div>;; &nbsp; &nbsp;or else the =
+write lock requestor is equal to every read lock =
+holder.</div><div>;;</div><div>;; These rules ensure that multiple =
+readers can run, while only one</div><div>;; writer can run. No =
+requirements for nesting of read/write lock</div><div>;; requests. That =
+is, a writer can request a read lock and vice versa,</div><div>;; and =
+issue lock releases in any order.</div><div>;;</div><div>;; A lock =
+holder can request any number of additional locks. The lock =
+will</div><div>;; actually be released when an equal number of releases =
+of like kind</div><div>;; have been obtained. For every write lock there =
+is a write release,</div><div>;; and for every read lock there is a read =
+release.</div><div>;;</div><div>;; The Reppy protocol is protected with =
+UNWIND-PROTECT to ensure that</div><div>;; locks held are released on =
+exit from the function block being executed</div><div>;; within the =
+province of a lock. Lock releases are handled transparently</div><div>;; =
+to the user.</div><div>;;</div><div>;; =
+---------------------------------------------------------------</div><div>=
+;; Lock server protocol with event =
+combinators</div><div><br></div><div>(defclass rw-lock =
+(&lt;serviceable-protocol-mixin&gt;)</div><div>&nbsp;&nbsp;((rdlocks =
+:accessor &nbsp;rw-lock-rdlocks &nbsp;:initform =
+0)</div><div>&nbsp;&nbsp; (wrlocks :accessor &nbsp;rw-lock-wrlocks =
+&nbsp;:initform 0)</div><div>&nbsp;&nbsp; (wrowner :accessor =
+&nbsp;rw-lock-wrowner &nbsp;:initform nil)</div><div>&nbsp;&nbsp; =
+(rdqueue :accessor &nbsp;rw-lock-rdqueue &nbsp;:initform =
+nil)</div><div>&nbsp;&nbsp; (rdowners :accessor rw-lock-rdowners =
+:initform nil)</div><div>&nbsp;&nbsp; (wrqueue :accessor =
+&nbsp;rw-lock-wrqueue &nbsp;:initform =
+nil)))</div><div><br></div><div>(defun make-lock =
+()</div><div>&nbsp;&nbsp;(make-instance</div><div>&nbsp;&nbsp; =
+'rw-lock</div><div>&nbsp;&nbsp; :handlers (list</div><div>&nbsp;&nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;:read</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;#'(lambda (req gate =
+who)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;(declare (ignore req))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">		</span> =
+&nbsp;(labels ((take-it ()</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; &nbsp; =
+(incf (rw-lock-rdlocks gate))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; &nbsp; =
+(push who (rw-lock-rdowners gate))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; &nbsp; (spawn #'send who t)))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">		</span> =
+&nbsp; &nbsp;(cond ((eq who (rw-lock-wrowner gate))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; ;; we own a write lock already so go =
+ahead...</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; =
+(take-it))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> =
+&nbsp;</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp;((plusp (rw-lock-wrlocks =
+gate))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp; ;; outstanding write lock so =
+enqueue in&nbsp;</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; ;; =
+pending readers queue...</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; (push who =
+(rw-lock-rdqueue gate)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> =
+&nbsp;</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp;(t</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; ;; no outstanding writer so take it...</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; (take-it))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> =
+&nbsp;)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+&nbsp;</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;:release-read</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;#'(lambda (req gate who)</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(declare (ignore =
+req))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+	</span> &nbsp;(removef (rw-lock-rdowners gate) who :count =
+1)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;(if (and (zerop (decf (rw-lock-rdlocks =
+gate)))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (zerop (rw-lock-wrlocks =
+gate)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">		</span> &nbsp; &nbsp; &nbsp;;; =
+no more readers and no more writers</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">		</span> =
+&nbsp; &nbsp; &nbsp;;; (a writer might have been me...)</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">		</span> =
+&nbsp; &nbsp; &nbsp;;; so go ahead and start writers</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">		</span> =
+&nbsp; &nbsp; &nbsp;;; there should be no pending =
+readers</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">		</span> &nbsp; &nbsp; &nbsp;;; =
+since there were no writers</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(let ((writer (pop =
+(rw-lock-wrqueue gate))))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(when =
+writer</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(incf (rw-lock-wrlocks =
+gate))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(setf (rw-lock-wrowner gate) =
+writer)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(spawn #'send writer =
+t))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;)))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; &nbsp;</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;:write</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;#'(lambda (req gate who)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(declare (ignore =
+req))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+	</span> &nbsp;(labels ((take-it ()</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; &nbsp; (incf (rw-lock-wrlocks gate))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; &nbsp; (setf (rw-lock-wrowner gate) who)</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; &nbsp; (spawn #'send who t)))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">		</span> =
+&nbsp; &nbsp;(cond ((and (zerop (rw-lock-rdlocks gate))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">				=
+</span>(zerop (rw-lock-wrlocks gate)))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; ;; gate available so take it</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; (take-it))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> =
+&nbsp;</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp;((eq who (rw-lock-wrowner =
+gate))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp; ;; gate already owned by =
+requestor</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; ;; so =
+incr lock count and tell him its okay...</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; (take-it))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> =
+&nbsp;</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp;((every #'(lambda =
+(rdr)</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+			</span> &nbsp; &nbsp; &nbsp;(eq rdr =
+who))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+			</span> &nbsp;(rw-lock-rdowners =
+gate))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp; ;; only one reader and it is =
+me...</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ;; but I may be in the list =
+numerous times...</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; ;; so go =
+ahead and grab a write lock.</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; =
+(take-it))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> =
+&nbsp;</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+			</span> &nbsp;(t&nbsp;</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; ;; gate not available -- put caller on</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; ;; waiting writers queue</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; (conc1f (rw-lock-wrqueue gate) who))</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp;)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+&nbsp;</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;:release-write</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;#'(lambda (req gate who)</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(declare (ignore req =
+who))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;(labels</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;((run-writer =
+()</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (let ((writer (pop (rw-lock-wrqueue =
+gate))))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (if =
+writer</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(progn</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+				</span> (incf (rw-lock-wrlocks =
+gate))</div><div><span class=3D"Apple-tab-span" style=3D"white-space:pre">=
+				</span> (setf (rw-lock-wrowner gate) =
+writer)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (spawn =
+#'send writer t)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; t)</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; &nbsp; =
+nil)))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; (run-readers ()</div><div>&nbsp;&nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; (let ((readers (rw-lock-rdqueue gate)))</div><div>&nbsp;&nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; (if readers</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; (progn</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(setf (rw-lock-rdqueue gate) nil)</div><div><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">				</span> (appendf =
+(rw-lock-rdowners gate) readers)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; (incf (rw-lock-rdlocks gate) (length =
+readers))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(dolist (reader readers)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; (spawn #'send reader t))</div><div>&nbsp;&nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; t)</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; nil))))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(when (zerop (decf (rw-lock-wrlocks =
+gate)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">		</span> &nbsp; &nbsp; &nbsp;;; =
+no more writers (was only me anyway...)</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(setf =
+(rw-lock-wrowner gate) nil)</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">		</span> &nbsp; &nbsp; &nbsp;(if =
+(zerop (rw-lock-rdlocks gate))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp;;; if no =
+active readers either</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp;;; then it =
+is a toss up whether to</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp;;; start =
+writers or readers</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp;(if (zerop =
+(random 2)) ;; add some non-determinism</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">			=
+</span> &nbsp; &nbsp; &nbsp;(unless (run-writer)</div><div><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">				=
+</span>(run-readers))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; =
+&nbsp;(unless (run-readers)</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span> &nbsp; &nbsp; =
+&nbsp;(run-writer)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span>;; but if I was a =
+reader too,</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span>;; then it is =
+only safe to start other</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			</span>;; =
+readers.</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">			=
+</span>(run-readers)))</div><div><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">		</span> &nbsp; =
+&nbsp;))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;)))</div><div><br></div><div>(defun wrap-lockEvt (lock fn args req =
+rel)</div><div>&nbsp;&nbsp;(guard</div><div>&nbsp;&nbsp; #'(lambda =
+()</div><div>&nbsp;&nbsp; &nbsp; &nbsp; (let ((replyCh =
+(make-channel)))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; =
+(labels</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+((acquire-lock ()</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp;(service-request req lock =
+replyCh))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(release-lock ()</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;(service-request rel lock =
+replyCh)))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (spawn =
+#'acquire-lock)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(wrap-abort</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(wrap (recvEvt replyCh)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;#'(lambda =
+(reply)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;(declare (ignore =
+reply))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;(unwind-protect</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(apply fn args)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(spawn =
+#'release-lock))))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;#'(lambda ()</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp;(spawn #'(lambda ()</div><div>&nbsp;&nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; (recv replyCh)</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(release-lock)))))</div><div>&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+)))</div><div>&nbsp;&nbsp; ))</div><div><br></div><div>(defmethod =
+wrap-rdLockEvt ((lock rw-lock) fn &amp;rest =
+args)</div><div>&nbsp;&nbsp;(wrap-lockEvt lock fn args :read =
+:release-read))</div><div><br></div><div>(defmethod wrap-wrLockEvt =
+((lock rw-lock) fn &amp;rest args)</div><div>&nbsp;&nbsp;(wrap-lockEvt =
+lock fn args :write :release-write))</div><div><br></div><div>(defmethod =
+with-readlock ((lock rw-lock) fn &amp;rest =
+args)</div><div>&nbsp;&nbsp;(sync (apply #'wrap-rdLockEvt lock fn =
+args)))</div><div><br></div><div>(defmethod with-writelock ((lock =
+rw-lock) fn &amp;rest args)</div><div>&nbsp;&nbsp;(sync (apply =
+#'wrap-wrLockEvt lock fn args)))</div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+">-----------------------------------</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+"><br></div><div> <span class=3D"Apple-style-span" style=3D"font-size: =
+12px; "><span class=3D"Apple-style-span" style=3D"border-collapse: =
+separate; -webkit-border-horizontal-spacing: 0px; =
+-webkit-border-vertical-spacing: 0px; color: rgb(0, 0, 0); font-family: =
+Helvetica; font-size: 12px; font-style: normal; font-variant: normal; =
+font-weight: normal; letter-spacing: normal; line-height: normal; =
+-webkit-text-decorations-in-effect: none; text-indent: 0px; =
+-webkit-text-size-adjust: auto; text-transform: none; orphans: 2; =
+white-space: normal; widows: 2; word-spacing: 0px; "><span =
+class=3D"Apple-style-span" style=3D"border-collapse: separate; =
+-webkit-border-horizontal-spacing: 0px; -webkit-border-vertical-spacing: =
+0px; color: rgb(0, 0, 0); font-family: Helvetica; font-size: 12px; =
+font-style: normal; font-variant: normal; font-weight: normal; =
+letter-spacing: normal; line-height: normal; =
+-webkit-text-decorations-in-effect: none; text-indent: 0px; =
+-webkit-text-size-adjust: auto; text-transform: none; orphans: 2; =
+white-space: normal; widows: 2; word-spacing: 0px; "><span =
+class=3D"Apple-style-span" style=3D"border-collapse: separate; =
+-webkit-border-horizontal-spacing: 0px; -webkit-border-vertical-spacing: =
+0px; color: rgb(0, 0, 0); font-family: Helvetica; font-size: 12px; =
+font-style: normal; font-variant: normal; font-weight: normal; =
+letter-spacing: normal; line-height: normal; =
+-webkit-text-decorations-in-effect: none; text-indent: 0px; =
+-webkit-text-size-adjust: auto; text-transform: none; orphans: 2; =
+white-space: normal; widows: 2; word-spacing: 0px; "><span =
+class=3D"Apple-style-span" style=3D"border-collapse: separate; =
+-webkit-border-horizontal-spacing: 0px; -webkit-border-vertical-spacing: =
+0px; color: rgb(0, 0, 0); font-family: Helvetica; font-size: 12px; =
+font-style: normal; font-variant: normal; font-weight: normal; =
+letter-spacing: normal; line-height: normal; =
+-webkit-text-decorations-in-effect: none; text-indent: 0px; =
+-webkit-text-size-adjust: auto; text-transform: none; orphans: 2; =
+white-space: normal; widows: 2; word-spacing: 0px; "><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">Dr. David McClain</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">Chief =
+Technical Officer</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">Refined Audiometrics =
+Laboratory</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">4391 N. Camino Ferreo</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">Tucson, AZ&nbsp; 85750</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; font: =
+normal normal normal 12px/normal Helvetica; min-height: 14px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">email: <a =
+href=3D"mailto:dbm@refined-audiometrics.com">dbm@refined-audiometrics.com<=
+/a></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">phone: 1.520.390.3995</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">web: <a =
+href=3D"http://refined-audiometrics.com">http://refined-audiometrics.com</=
+a></div><br =
+class=3D"Apple-interchange-newline"></span><span></span></span></span></sp=
+an></span><br class=3D"Apple-interchange-newline"> =
+</div><br><div><div>On Jul 15, 2010, at 11:24, Goswin von Brederlow =
+wrote:</div><br class=3D"Apple-interchange-newline"><blockquote =
+type=3D"cite"><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">Rich Neswold &lt;<a =
+href=3D"mailto:rich.neswold@gmail.com">rich.neswold@gmail.com</a>&gt; =
+writes:</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; min-height: 14px; "><br></div> =
+<blockquote type=3D"cite"><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; ">On Wed, Jul 14, 2010 at =
+11:09 AM, Goswin von Brederlow &lt;goswin-v-b@<a =
+href=3D"http://web.de">web.de</a>&gt;</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+">wrote:</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><span class=3D"Apple-converted-space">&nbsp; &nbsp; =
+</span>4) Do some magic with Event.t?</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; =
+min-height: 14px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><span =
+class=3D"Apple-converted-space">&nbsp; &nbsp; </span>Problem: never used =
+this and I could use a small example how to use</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><span class=3D"Apple-converted-space">&nbsp; &nbsp; =
+</span>this.</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; min-height: 14px; "><br></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">Event.t =
+(and its associated library) *is* magical in that it provides =
+an</div><div style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: =
+0px; margin-left: 0px; ">absolutely beautiful concurrent programming =
+model. Forget about select() and</div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">mutexes and =
+other ugly threading concepts. Event.t and friends is how it =
+should</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">be done.</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; min-height: 14px; "><br></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">John H. =
+Reppy's "Concurrent Programming in ML" provides a thorough</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">understanding of how to use this module effectively. =
+This book presents the</div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; ">material in a very =
+understandable way:=C2&nbsp;deficiencies=C2&nbsp;in current =
+threading</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">models are discussed as well as =
+how CML solves the limitations and constraints.</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">The book can be purchased or downloaded free =
+online.</div> </blockquote><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; min-height: 14px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">It is too bad I don't want to =
+lear CML but use Ocaml. The CML examples</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">from the =
+book don't translate into ocaml since the interface is just a</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">little bit different and those differences are what =
+throws me off. I</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">figue spawn becomes Thread.cread =
+and I have to add Event.sync or</div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">Event.select =
+and Event.wrap at some points. At which point the book</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">becomes useless to understanding how Ocamls Event =
+module is to be used</div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; ">I'm afraid. Also doesn't =
+tell me what Ocamls limitations and constraints</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">are.</div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; min-height: =
+14px; "><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">So if you have used this in =
+ocaml could you give a short example?</div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">E.g. the =
+merge sort from the book.</div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; min-height: =
+14px; "><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; ">MfG</div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><span =
+class=3D"Apple-converted-space">&nbsp; &nbsp; &nbsp; &nbsp; =
+</span>Goswin</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; =
+">_______________________________________________</div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">Caml-list mailing list. Subscription =
+management:</div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><a =
+href=3D"http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list">http://y=
+quem.inria.fr/cgi-bin/mailman/listinfo/caml-list</a></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">Archives: <a =
+href=3D"http://caml.inria.fr">http://caml.inria.fr</a></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; ">Beginner's list: <a =
+href=3D"http://groups.yahoo.com/group/ocaml_beginners">http://groups.yahoo=
+.com/group/ocaml_beginners</a></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; ">Bug reports: =
+<a =
+href=3D"http://caml.inria.fr/bin/caml-bugs">http://caml.inria.fr/bin/caml-=
+bugs</a></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; min-height: 14px; "><br></div> =
+</blockquote></div><br></body></html>=
+
+--Apple-Mail-8-264137949--
+

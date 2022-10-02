@@ -1,0 +1,111 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.3 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 47087BC37
+	for <caml-list@yquem.inria.fr>; Mon, 31 Aug 2009 18:20:05 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmICAEuVm0rUnwckk2dsb2JhbACCIpkBAQEBAQcLCgkTBL0ohBoFgVU
+X-IronPort-AV: E=Sophos;i="4.44,306,1249250400"; 
+   d="scan'208";a="45742318"
+Received: from relay.ptn-ipout02.plus.net ([212.159.7.36])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 31 Aug 2009 18:20:04 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Av4FAA+Vm0rUnw4R/2dsb2JhbACCItZohBoFgVU
+Received: from pih-relay04.plus.net ([212.159.14.17])
+  by relay.ptn-ipout02.plus.net with ESMTP; 31 Aug 2009 17:20:04 +0100
+Received: from [87.114.1.46] (helo=leper.local)
+	 by pih-relay04.plus.net with esmtp (Exim) id 1Mi9bv-0001TA-Op
+	for caml-list@yquem.inria.fr; Mon, 31 Aug 2009 17:20:03 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Optimizing Float Ref's
+Date: Mon, 31 Aug 2009 18:30:53 +0100
+User-Agent: KMail/1.9.9
+References: <D3041D62-4F8D-4121-8CEF-5EE810D8FFA6@MIT.EDU> <D27BEB0C-F919-4077-ABE6-36D20206CB34@gmail.com>
+In-Reply-To: <D27BEB0C-F919-4077-ABE6-36D20206CB34@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200908311830.53339.jon@ffconsultancy.com>
+X-Plusnet-Relay: 355c9b86ae44613012d8396b062e6b96
+X-Spam: no; 0.00; ref's:01 yaron:01 minsky:01 unboxed:01 mutable:01 unboxed:01 unboxing:01 runtime:01 ocaml:01 ocaml:01 2009:98 $2,:98 1.0:98 $2,:98 frog:98 
+
+On Sunday 30 August 2009 20:43:17 Yaron Minsky wrote:
+> Float refs are not unboxed automatically, because refs 
+> Are polymorphic containers. If you create your own pseudo-ref, i.e., a
+> record with a single mutable float field, then I believe you should
+> get the behaviour you expect.
+
+I believe you are talking at cross purposes. Will wants his accumulator in a 
+register. You are referring to float references in data structures being 
+boxed because records are boxed.
+
+Look at the compiled forms of the inner loops of these dot products, for 
+example:
+
+let dot a b =
+  let x = ref 0.0 in
+  for i=0 to Array.length a - 1 do
+    x := !x +. a.(i) *. b.(i)
+  done;
+  !x
+
+.L101:
+.L103:  movl    caml_young_ptr, %eax
+        subl    $12, %eax
+        movl    %eax, caml_young_ptr
+        cmpl    caml_young_limit, %eax
+        jb      .L104
+        leal    4(%eax), %eax
+        movl    $2301, -4(%eax)
+        fldl    -4(%edi, %ecx, 4)
+        fmull   -4(%ebx, %ecx, 4)
+        faddl   (%esi)
+        fstpl   (%eax)
+        movl    %eax, %esi
+        movl    %ecx, %eax
+        addl    $2, %ecx
+        cmpl    %edx, %eax
+        jne     .L101
+
+let dot2 a b =
+  let x = ref 0.0 in
+  for i=0 to Array.length a - 1 do
+    x := !x +. a.(i) *. b.(i)
+  done;
+  1.0 *. !x
+
+.L107:
+        fldl    -4(%eax, %ecx, 4)
+        fmull   -4(%ebx, %ecx, 4)
+        faddl   0(%esp)
+        fstpl   0(%esp)
+        movl    %ecx, %edx
+        addl    $2, %ecx
+        cmpl    %esi, %edx
+        jne     .L107
+
+In the latter case, "x" is unboxed into a register.
+
+> Come to think of it, I wonder if it would be better to implement ref
+> on top of a single-cell array, since then everyone would get the float
+> unboxing whenever applicable. I imagine there is some runtime overhead
+> to this, though.
+
+All-float (including one-float) records are unboxed anyway.
+
+Boxing was discussed in the book OCaml for Scientists and the OCaml Journal 
+articles about optimization and the SciMark2 benchmark.
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/?e
+

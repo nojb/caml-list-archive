@@ -1,0 +1,118 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 8F865BC57
+	for <caml-list@yquem.inria.fr>; Sun, 12 Dec 2010 18:14:56 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Aq0AAKeRBE3UnwckkGdsb2JhbACDXJMyjQEVAQEBAQkJDAcRBCWvN49MgSGDNXQEjg0
+X-IronPort-AV: E=Sophos;i="4.59,333,1288566000"; 
+   d="scan'208";a="70354596"
+Received: from relay.ptn-ipout02.plus.net ([212.159.7.36])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 12 Dec 2010 18:14:56 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Av0EAKeRBE1UXeb0/2dsb2JhbACDXJMyjQF4rzePTIEhgzV0BI4N
+Received: from outmx03.plus.net ([84.93.230.244])
+  by relay.ptn-ipout02.plus.net with ESMTP; 12 Dec 2010 17:14:55 +0000
+Received: from [84.93.149.66] (helo=WinEight)
+	 by outmx03.plus.net with esmtp (Exim) id 1PRpVe-0001Tc-Ro; Sun, 12 Dec 2010 17:14:55 +0000
+From: "Jon Harrop" <jon@ffconsultancy.com>
+To: =?utf-8?Q?'T=C3=B6r=C3=B6k_Edwin'?= <edwintorok@gmail.com>
+Cc: <caml-list@inria.fr>
+References: <036001cb9a0c$725acef0$57106cd0$@com> <20101212175524.73a8e285@deb0>
+In-Reply-To: <20101212175524.73a8e285@deb0>
+Subject: RE: Value types (Was: [Caml-list] ocamlopt LLVM support)
+Date: Sun, 12 Dec 2010 17:14:45 -0000
+Message-ID: <038301cb9a20$13af7d10$3b0e7730$@com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="utf-8"
+Content-Transfer-Encoding: quoted-printable
+X-Mailer: Microsoft Office Outlook 12.0
+Thread-Index: AcuaFQKruyOFbGrnSXSt1zYUOPXInAAASeKQ
+Content-Language: en-gb
+X-Spam: no; 0.00; ocamlopt:01 compiler:01 'int:01 compiler:01 'int:01 ocamlopt:01 ocaml:01 hash:01 gcc:01 ocaml:01 unboxing:01 unboxing:01 unboxed:01 cheers:01 edwin:98 
+
+T=C3=B6r=C3=B6k Edwin wrote:
+> Problem #1: Int64.rem n 2 -> another idiv instruction
+>=20
+> A C compiler would optimize this to an 'and' instruction.
+> Change that to 'Int64.logand n 1L =3D 0L'/
+
+Yes. LLVM did that for me.
+
+> Problem #2: Int64.div n 2 -> idiv instruction.
+>=20
+> A C compiler would optimize this to a right shift. Changing that to
+> 'Int64.shift_right n 1' speeds
+> up the code.
+
+Yes. LLVM also did that for me. In fact, I have been bitten by ocamlopt =
+not optimizing div and mod by a constant in real OCaml code before. This =
+problem also turns up in the context of hash table implementations where =
+you want to % by the length of the spine.
+
+> With these changes I get almost the same speed as the C code:
+> $ ocamlopt x.ml -o x && time ./x
+> 837799
+> real    0m0.664s
+> user    0m0.667s
+> sys     0m0.000s
+>=20
+> $ gcc -O3 x.c && time ./a.out
+> 837799
+> real    0m0.635s
+> user    0m0.633s
+> sys     0m0.000s
+>=20
+> Here's the OCaml code:
+> let rec collatzLen(c, n) : int =3D
+>     if n =3D 1L then c else
+>       collatzLen (c+1, if Int64.logand n 1L =3D 0L then =
+Int64.shift_right
+> n 1 else Int64.add (Int64.mul 3L n) 1L);;
+>=20
+>   let rec loop(i, (nlen, n)) =3D
+>     if i =3D 1L then n else
+>       let ilen =3D collatzLen(1, i) in
+>       let nlen, n =3D if ilen > nlen then ilen, i else nlen, n in
+>       loop (Int64.sub i 1L, (nlen, n));;
+>=20
+>   let _ =3D
+>       let s =3D loop (1000000L, (1,1000000L)) in
+>       print_int (Int64.to_int s);;
+
+I am unable to reproduce your results. Here, the time falls from 24s to =
+19.5s (using ocamlopt 3.12.0 on Intel x86) which is still 26=C3=97 =
+slower than HLVM.
+
+> > 1. Unboxing can give huge performance improvements on serial code,
+>=20
+> s/Unboxing/arithmetic optimizations/
+> Please find an example where the performance benefit is due to
+> unboxing, and not due to arithmetic optimizations performed on the
+> unboxed code.
+
+The last example I gave (array of key-value pairs) demonstrates some of =
+the performance improvements offered by unboxing in the heap (12.3=C3=97 =
+faster than OCaml in that case). I'm still not sure that this example is =
+invalid because I cannot reproduce your results.
+
+> > let alone parallel code. The optimized HLVM is running 32=C3=97 =
+faster
+> > than the OCaml here.
+> >
+> > 2. LLVM makes it easy to JIT fast code from OCaml. HLVM is using it
+> > to beat GCC-compiled C code here.
+>=20
+> One advantage of using LLVM is that it would notice arithmetic
+> optimizations like this and perform it itself (even if you use the
+> boxed representation).
+
+Yes. LLVM hopefully optimizes div/mod by any constant which is quite =
+tricky in the general case.
+
+Cheers,
+Jon.
+
+

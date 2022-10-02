@@ -1,0 +1,92 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA16784; Wed, 23 Apr 2003 20:53:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA16153 for <caml-list@pauillac.inria.fr>; Wed, 23 Apr 2003 20:53:21 +0200 (MET DST)
+Received: from relay.pair.com (relay.pair.com [209.68.1.20])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with SMTP id h3NIrKT21030
+	for <caml-list@inria.fr>; Wed, 23 Apr 2003 20:53:20 +0200 (MET DST)
+Received: (qmail 24502 invoked from network); 23 Apr 2003 18:53:17 -0000
+Received: from arda.pair.com (HELO compaqreview.d6.com) (209.68.1.133)
+  by relay.pair.com with SMTP; 23 Apr 2003 18:53:17 -0000
+X-pair-Authenticated: 209.68.1.133
+Message-Id: <4.3.2.7.2.20030423112334.04b60558@localhost>
+X-Sender: checker@localhost
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Date: Wed, 23 Apr 2003 11:47:40 -0700
+To: Daniel Andor <Daniel.Andor@physics.org>, caml-list@inria.fr
+From: Chris Hecker <checker@d6.com>
+Subject: Re: [Caml-list] Bigarray vs. array - mixing?
+In-Reply-To: <200304231556.20335.da209@cam.ac.uk>
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"; format=flowed
+X-Spam: no; 0.00; hecker:01 checker:01 caml-list:01 bigarrays:01 interfacing:01 lacaml:01 co-exist:01 ignores:01 genarray:01 counted:01 blas:01 lapack:01 pointers:01 expressing:01 hoisting:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+>I've looked through the archives, but could not find any talk of this
+>particular problem.
+>Basically I have numerical code that uses Bigarrays in some parts (for 
+>example  in interfacing with Lacaml), but other parts that use arrays.  It 
+>doesn't seem to be that clean to make them co-exist.  Which should I use?
+
+There's been some discussion of this on the list a long time ago (by 
+me:).  I decided to just use bigarrays for all arbitrary sized matrices 
+used for linear algebra, but use arrays for fixed things like 3x3 matrices 
+and whatnot.  I still end up doing tons of submatrix stuff and calculations 
+into and out of the bigarrays, just like you do.
+
+I think the Right Thing is to optimize the native compiler to output better 
+bigarray access code, so that using bigarrays is less painful.  I've looked 
+at it and done some minor prototyping, and it doesn't seem like it would be 
+that hard.  It seems like the Caml team doesn't feel this is necessary (at 
+least based on previous replies) because you're only supposed to use 
+bigarrays to interface with external libraries, but this ignores how you 
+get the data into the bigarray in the first place, as you've found.
+
+I think we only need a few optimizations to get most of the way there (I 
+would do all of this on bigarray1d, using a different implementation for it 
+than the genarray structure and using a real conversion function instead of 
+the current typecast, since any real numerical code in caml is going to 
+want to manage strides and row/column access manually on a 1d array, in my 
+opinion):
+
+- a lighter weight "pointer"-ish slice type so caml code can reference 
+individual rows of a bigarray1d in an outer loop without an allocation of a 
+new reference counted bigarray C structure and data, blas and lapack use 
+the fortran version of this all over the place, and C code does this using 
+pointers everywhere as well...we need a way of expressing that operation in 
+caml
+
+- some simple/naive special-cased hoisting of the bigarray data pointer 
+load out of loops, it's currently fetched every access...having the above 
+lightweight slice be in caml code would help with this I think...these 
+pointer reloads are the big culprit, I think
+
+- allow unsafe access (both with unsafe_get and with operators...I was 
+going to use foo.\{i} for unsafe, and then also extend it to arrays and 
+strings with foo.\(i) and foo.\[i] while I was at it, since why not make it 
+consistent and that operator combination is available and works)...not 
+bounds checking will begin to make a difference if you get a lot of the 
+other inefficiencies out of the system (it's common to hear on this list 
+that bounds checking doesn't cost that much, which is true until you've 
+optimized the rest of the access code)
+
+- then look for low-hanging fruit in the FPU code, especially for x86 
+(which has been talked about recently on the list)...in general, I think 
+the entire x86 code generator could greatly benefit from a simple peephole 
+optimization pass, too
+
+I'm not a compiler person, and I just messed around with the above, so I 
+have no idea how hard it would really be (especially the data 
+pointer  hoisting), but it didn't seem too bad when I looked at 
+it.  However, I do think it's worth doing stuff like this, because the 
+often mentioned retort of "use C for numerical stuff" just doesn't scale 
+well to projects that do a lot of math dispersed throughout the program.
+
+Chris
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

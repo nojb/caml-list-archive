@@ -1,0 +1,155 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA07344; Thu, 9 Sep 2004 21:10:16 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA09127 for <caml-list@pauillac.inria.fr>; Thu, 9 Sep 2004 21:10:15 +0200 (MET DST)
+Received: from ptb-relay02.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id i89JAEv6016692
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Thu, 9 Sep 2004 21:10:14 +0200
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1C5UJC-000Cwv-7W; Thu, 09 Sep 2004 19:10:14 +0000
+From: Jon Harrop <jon@jdh30.plus.com>
+To: caml users <caml-list@inria.fr>
+Subject: Re: [Caml-list] Gripes with array
+Date: Thu, 9 Sep 2004 17:58:05 +0100
+User-Agent: KMail/1.6.2
+References: <200409090310.29295.jon@jdh30.plus.com> <EA60BA7F-0243-11D9-AAE1-00039310CAE8@inria.fr>
+In-Reply-To: <EA60BA7F-0243-11D9-AAE1-00039310CAE8@inria.fr>
+Cc: Damien Doligez <damien.doligez@inria.fr>
+MIME-Version: 1.0
+Content-Disposition: inline
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Message-Id: <200409091758.05679.jon@jdh30.plus.com>
+X-Miltered: at concorde with ID 4140AA96.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 2004:99 damien:01 non-float:01 doom:01 invariants:01 justified:01 bottleneck:01 inlined:01 inlined:01 admittedly:01 gettimeofday:01 timings:01 0.,:01 timings:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thursday 09 September 2004 10:37, Damien wrote:
+> ...
+> > Am I right in thinking that the maximum
+> > non-float array size on a 64-bit machine is 18,014,398,509,481,983?
+>
+> That's correct.  It's a good thing that 32-bitters are on their way out.
+
+If I upgrade I'll surely end up playing Doom 3 and not get any work 
+done... :-)
+
+> > Also, can Array.init be made to fill the elements only once?
+>
+> No, that's impossible without breaking the GC invariants.
+
+Could it not even be done by dragging Array.init inside the compiler, giving 
+it the same status as Array.make?
+
+> >  This would make quite a few things twice as fast
+>
+> Twice?  I doubt it very much.
+
+That was an estimate based upon the assumption that, on large arrays (well, 
+~4M elements ;-), the time taken is limited by the filling of elements which 
+is currently done twice but which only needs to be done once. I believe this 
+is justified because of the high-cost of memory writes (to main memory for 
+out-of-cache sized arrays), even sequential ones, compared to (trivial, 
+inlineable) function calls, a single heap allocation etc.
+
+What is the bottleneck in the asymptotic limit?
+
+For measurements on 4,000,000 element int arrays (using the code at the end of 
+this mail) I get:
+
+Array.make took 0.131528823272 secs.
+Array.init took 0.311059344899 secs.
+array_init took 0.179279577732 secs.
+
+Measuring memset from C gives me 0.0311secs. So element-setting must be at 
+least 10% of Array.init. Also, the array_init function is surprisingly fast, 
+presumably due to "f" not being inlined into Array.init but being inlined 
+into array_init.
+
+This came up because my wavelet transform code in OCaml is within 15% of the 
+performance of my equivalent C version excluding the cost of creating the 
+array. Including that cost (even with calloc), the C version is twice as 
+fast. Admittedly calloc will use memset, and not set the elements "properly", 
+but even so...
+
+> > let copy a = init (length a) (fun i -> a.(i))
+>
+> Exactly how it's written now, except that it's inlined by hand for
+> performance reasons.
+
+Array.copy took 0.298557505888 secs.
+array_copy took 0.315200943696 secs.
+
+This optimisation gives a <6% performance improvement (and this is really 
+best-case for large arrays because the filling-function is trivial in this 
+case). I'd have gone for five times less code in the array module and more 
+code in the compiler... ;-)
+
+Perhaps the current versions are significantly faster on smaller data 
+structures...
+
+Cheers,
+Jon.
+
+-----
+
+let f i = 1+i
+
+let array_init l =
+  if l = 0 then [||] else
+  let res = Array.make l (f 0) in
+  for i = 1 to pred l do
+    Array.unsafe_set res i (f i)
+  done;
+  res 
+
+let array_copy a = Array.init (Array.length a) (fun i -> Array.unsafe_get a i)
+
+let time f =
+  let time = Unix.gettimeofday in
+  let t = time () in
+  ignore (f ());
+  (time ()) -. t
+
+let _ =
+  let timings = Array.make 5 (0., 0) in
+  let l = 4000000 in
+  let a = Array.make l 0 in
+  for i=0 to 100 do
+    let entry = Random.int 5 in
+    let t =
+      time (match entry with
+	0 -> fun () -> Array.make l 0
+      | 1 -> fun () -> Array.init l f
+      | 2 -> fun () -> array_init l
+      | 3 -> fun () -> Array.copy a
+      | 4 -> fun () -> array_copy a)
+    in
+    timings.(entry) <-
+      let (ot, n) = timings.(entry) in
+      (ot +. t, n+1);
+  done;
+  let entry = [| "Array.make";
+		 "Array.init";
+		 "array_init";
+		 "Array.copy";
+		 "array_copy" |] in
+  for i=0 to 4 do
+    print_endline (entry.(i)^": "^(string_of_int (snd timings.(i))))
+  done;
+  let timings =
+    Array.map (fun (t, n) -> string_of_float (t /. float_of_int n)) timings in
+  for i=0 to 4 do
+    print_endline (entry.(i)^" took "^timings.(i)^" secs.")
+  done
+
+-----
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

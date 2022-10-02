@@ -1,0 +1,82 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA18283; Tue, 27 Aug 2002 10:24:38 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA18242 for <caml-list@pauillac.inria.fr>; Tue, 27 Aug 2002 10:24:37 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g7R8OZf21899;
+	Tue, 27 Aug 2002 10:24:36 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA18489; Tue, 27 Aug 2002 10:24:35 +0200 (MET DST)
+Date: Tue, 27 Aug 2002 10:24:35 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: sebastien FURIC <sebastien.furic@tni-valiosys.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Hashtbl.hash and Hashtbl.hash_param
+Message-ID: <20020827102435.A17823@pauillac.inria.fr>
+References: <3D6653C0.F895EC59@tni.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <3D6653C0.F895EC59@tni.fr>; from sebastien.furic@tni-valiosys.com on Fri, Aug 23, 2002 at 05:24:48PM +0200
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>  What kind of algorithm is used to compute the hash code of objects in
+> O'Caml ?
+> 
+>  Hashtbl.hash (List.map (fun x -> Random.int 100)
+> [1;2;3;4;5;6;7;8;9;10]);;
+>  always returns 0 (Hashtbl.hash_param has the same properties) which is
+> a poor result !
+
+Yes, this is disappointing.  To understand what's going on, here is
+how "Hashtbl.hash_param v count limit" works:
+
+- v is traversed, depth-first.
+- "Interesting" information found at each node is hashed, e.g.
+      string node -> hash code of string
+      integer     -> the integer itself
+      constructor block -> integer tag of constructor
+  (Some nodes have no interesting information, e.g. certain custom blocks.)  
+- The hash values for each node are combined with a simple linear congruence.
+
+Moreover, to prevent infinite descent in cyclic values, and ensure
+that hashing doesn't take too long, the traversal is stopped when either
+- "count" interesting nodes were found, or
+- "limit" nodes (interesting or not) were traversed.
+
+Now, for your example [1;2;3;4;5;6;7;8;9;10], the interesting nodes
+and their associated hash values are
+- the integers 1 to 10, with same hash values;
+- and the 10 occurrences of the "::" constructor, which correspond to
+  0-tagged blocks, with hash values 0.
+
+The fly in the ointment is that the traversal is done right-to-left,
+hence the hash values of interest are encountered in the following order:
+
+  0 ......... 0 10 9 8 7 6 5 4 3 2 1
+
+  ------------- --------------------
+  the :: cells    the list contents
+
+Hence, with count = 10, the traversal stops at the cons cells, and
+doesn't even look at the list contents!  Result: a 0 hash value.
+
+There are several ways to remedy this behavior, such as ignoring
+zero-tagged blocks, or doing breadth-first traversal.
+
+However, we need to think twice before changing the hashing function,
+because this would cause trouble to users that store hashtables in
+files using output_value/input_value: if the hash function changes
+before writing and reading, the hashtable read becomes unusable.
+
+Hence, a request for OCaml users: if you use hashtables whose keys are
+structured data (not just strings or integers), *and* your program
+stores hashtables to files, *and* it's important for you that these
+persistent hashtables can be read back with future versions of OCaml,
+then please drop me a line.
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

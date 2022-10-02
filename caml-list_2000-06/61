@@ -1,0 +1,108 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA14875 for caml-red; Mon, 12 Jun 2000 16:10:16 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA23190 for <caml-list@pauillac.inria.fr>; Mon, 12 Jun 2000 06:33:49 +0200 (MET DST)
+Received: from jaune.inria.fr (jaune.inria.fr [128.93.11.80])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e5C4XID21510;
+	Mon, 12 Jun 2000 06:33:18 +0200 (MET DST)
+Received: (from ddr@localhost)
+	by jaune.inria.fr (8.8.7/8.8.7) id GAA20514;
+	Mon, 12 Jun 2000 06:33:18 +0200
+Date: Mon, 12 Jun 2000 06:33:18 +0200
+From: Daniel de Rauglaudre <daniel.de_rauglaudre@inria.fr>
+To: David Chemouil <David.Chemouil@enseeiht.fr>
+Cc: caml-list@inria.fr
+Subject: Re: Obj.magic
+Message-ID: <20000612063318.A20498@jaune.inria.fr>
+References: <3940B178.280A76CC@enseeiht.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <3940B178.280A76CC@enseeiht.fr>; from David.Chemouil@enseeiht.fr on Fri, Jun 09, 2000 at 10:57:28AM +0200
+Sender: weis
+
+Hello,
+
+On Fri, Jun 09, 2000 at 10:57:28AM +0200, David Chemouil wrote:
+
+> I'd like to get information about Obj.magic. I know it is some kind of
+> identity function `a -> `b, but I'd like to know how it can be used, why
+> it can be interesting and why, also, it is sometimes dangerous
+> (considering some older posts on this mailing-list).
+
+I use Obj.magic:
+
+1/ In Camlp4 in extensible grammars to type parsing trees
+2/ In GeneWeb in my data base system to optimize disk access
+
+  ---
+
+1/ Camlp4 provides a system of extensible grammars.
+
+When I write a code like this (Camlp4 syntax):
+
+   EXTEND
+     expr:
+       [ [ x = expr; "+"; y = expr -> x + y
+         | z = int -> z ] ];
+   END
+
+It is converted into something like this:
+
+   extend expr
+     [ ([Nterm expr; Term "+"; Nterm expr], fun x y -> x + y);
+       ([Nterm int], fun z -> z) ]
+
+But it is bad typed for several reasons: one of them (that you can
+see) is that the functions in the right part of these two couples have
+different types. Another one is that the Camlp4 constructor "Nterm"
+accepts any kind of 'a entry and it is perfectly possible to have a
+"int entry" and a "string entry" in the same list.
+
+To resolve that, I use Obj.magic and type constraints to type this
+expression. The code is actually something like this:
+
+   extend (Obj.magic expr : 'a entry)
+     [ ([Nterm (Obj.magic (expr : 'a1 entry)); Term "+";
+         Nterm (Obj.magic (expr : 'a2 entry))],
+              (Obj.magic (fun (x : 'a1) (y : 'a2) -> (x + y : 'a))));
+       ([Nterm (Obj.magic (int : 'a3 entry))],
+              (Obj.magic (fun (z : 'a3) -> (z : 'a)))) ]
+
+In this example, the normal type inferrence of Ocaml gives the type
+"int" to all of these above type variables 'a, 'a1, 'a2, and 'a3.
+However, in the general case, any types could be inferred.
+
+I absolutely need to give to the function "extend" the parameters with
+this form because I want to be able to extend the entry again: internally,
+I record a parsing tree (for left factorization) and I need the details of
+this tree to apply associativity rules.
+
+They are trees with these parsing patterns at each node and functions
+at each leaf. All patterns can have different types. A function in a
+given leaf has n parameters where n is the length of the path from the
+root to the leaf. The type of its parameters is respectively the same
+than the type of all patterns of the path (in the same order). The
+result type of all functions is the same.
+
+It is not dangerous if this type extension is correct. (Not proved but
+I have used it since several years...)
+
+  ---
+
+2/ In GeneWeb (genealogy software).
+
+The normal "input_value" of Ocaml is written in C. I use it to very quickly
+input large array of records (input_value is very fast). But I sometimes need
+to read just one record in such arrays. For that, I wrote an input_value
+function for an array item (the offset have been previously computed). This
+function needs Obj.magic.
+
+It is dangerous if the data on disk is not of the good type. Actually it
+is not more dangerous than input_value.
+
+-- 
+Daniel de Rauglaudre
+daniel.de_rauglaudre@inria.fr
+http://cristal.inria.fr/~ddr/
+
+
+

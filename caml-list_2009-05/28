@@ -1,0 +1,179 @@
+Return-Path: <gclci-caml-list@m.gmane.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.9 required=5.0 tests=AWL,SPF_FAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 0DAE3BBAF
+	for <caml-list@yquem.inria.fr>; Tue,  5 May 2009 16:39:37 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgEBANvs/0lQW+UCe2dsb2JhbACWdgEBFiIEuWaEAQU
+X-IronPort-AV: E=Sophos;i="4.40,297,1238968800"; 
+   d="scan'208";a="39485843"
+Received: from main.gmane.org (HELO ciao.gmane.org) ([80.91.229.2])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/AES256-SHA; 05 May 2009 16:39:36 +0200
+Received: from list by ciao.gmane.org with local (Exim 4.43)
+	id 1M1Lnw-00037E-8I
+	for caml-list@inria.fr; Tue, 05 May 2009 14:39:32 +0000
+Received: from ks300734.kimsufi.com ([91.121.65.225])
+        by main.gmane.org with esmtp (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Tue, 05 May 2009 14:39:32 +0000
+Received: from sylvain by ks300734.kimsufi.com with local (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Tue, 05 May 2009 14:39:32 +0000
+X-Injected-Via-Gmane: http://gmane.org/
+To: caml-list@inria.fr
+From: Sylvain Le Gall <sylvain@le-gall.net>
+Subject:  Re: memory profiling
+Date: Tue, 5 May 2009 14:39:21 +0000 (UTC)
+Lines: 135
+Message-ID:  <slrnh00jsp.e8q.sylvain@gallu.homelinux.org>
+References:  <BB046CA812535C45BD0029AA9D04BA79063ECF28@KL-SRV57.lmsintl.com>
+Mime-Version:  1.0
+Content-Type:  text/plain; charset=us-ascii
+Content-Transfer-Encoding:  7bit
+X-Complaints-To: usenet@ger.gmane.org
+X-Gmane-NNTP-Posting-Host: ks300734.kimsufi.com
+User-Agent: slrn/pre0.9.9-102 (Linux)
+Sender: news <news@ger.gmane.org>
+X-Spam: no; 0.00; le-gall:01 ocaml:01 toplevel:01 allocating:01 flatten:01 flatten:01 wrote:01 latency:01 latency:01 newline:02 newline:02 string:02 string:02 allocated:02 allocated:02 
+
+Hello,
+
+On 05-05-2009, Christoph Bauer <christoph.bauer@lmsintl.com> wrote:
+> Hi,
+>
+> what is the best option to do memory profiling with ocaml?
+> Is there a patch of ocaml-memprof for 3.11.0? What about
+> objsize?
+>
+
+I use a more simple approach (though I have used objsize to estimate
+some datastructure size, but only in the toplevel): GC allocation rate.
+
+You can override a little ocaml-benchmark to measure the allocation rate
+of the GC. This gives you a pretty good understanding on the fact you
+are allocating too much or not.
+
+Regards,
+Sylvain Le Gall
+
+ps: here is a part of my benchmarkExt.ml file
+
+
+(** Benchmark extension
+    @author Sylvain Le Gall
+  *)
+
+open Benchmark;;
+
+type t =
+    {
+      benchmark: Benchmark.t;
+      memory_used: float;
+    }
+;;
+
+let gc_wrap f x =
+  (* Extend sample to add GC stat *)
+  let add_gc_stat memory_used samples =
+    List.map 
+      (fun (name, lst) ->
+         name,
+         List.map 
+           (fun bt -> 
+              { 
+                benchmark = bt; 
+                memory_used = memory_used;
+              }
+           )
+           lst
+      )
+      samples
+  in
+
+  (* Call throughput1 and add GC stat *)
+  let () = 
+    print_string "Cleaning memory before benchmark"; print_newline ();    
+    Gc.full_major ()
+  in
+  let allocated_before = 
+    Gc.allocated_bytes ()
+  in
+  let samples =
+    f x
+  in
+  let () = 
+    print_string "Cleaning memory after benchmark"; print_newline ();
+    Gc.full_major ()
+  in
+  let memory_used = 
+    ((Gc.allocated_bytes ()) -. allocated_before) 
+  in
+    add_gc_stat memory_used samples
+;;
+
+let throughput1
+      ?min_count ?style
+      ?fwidth    ?fdigits
+      ?repeat    ?name
+      seconds 
+      f x =
+ 
+  (* Benchmark throughput1 as it should be called *) 
+  gc_wrap 
+    (throughput1
+       ?min_count ?style
+       ?fwidth    ?fdigits
+       ?repeat    ?name
+       seconds f) x
+;;
+
+let throughputN 
+      ?min_count ?style
+      ?fwidth    ?fdigits
+      ?repeat    
+      seconds name_f_args =
+  List.flatten
+    (List.map
+       (fun (name, f, args) ->
+         throughput1 
+           ?min_count ?style
+           ?fwidth    ?fdigits
+           ?repeat    ~name:name
+           seconds f args)
+       name_f_args)
+;;
+
+let latency1 
+      ?min_cpu ?style 
+      ?fwidth  ?fdigits 
+      ?repeat  n 
+      ?name    f x =
+  gc_wrap 
+    (latency1
+      ?min_cpu ?style 
+      ?fwidth  ?fdigits 
+      ?repeat  n 
+      ?name    f) x
+;;
+
+let latencyN 
+      ?min_cpu ?style 
+      ?fwidth  ?fdigits 
+      ?repeat  
+      n name_f_args =
+  List.flatten
+    (List.map
+       (fun (name, f, args) ->
+         latency1 
+           ?min_cpu   ?style
+           ?fwidth    ?fdigits
+           ?repeat    ~name:name
+           n          f args)
+       name_f_args)
+;;
+

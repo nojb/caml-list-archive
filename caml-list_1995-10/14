@@ -1,0 +1,210 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id KAA14120 for caml-redistribution; Thu, 19 Oct 1995 10:12:26 +0100
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id KAA13902; Thu, 19 Oct 1995 10:01:11 +0100
+From: Xavier Leroy <xleroy@pauillac.inria.fr>
+Message-Id: <199510190901.KAA13902@pauillac.inria.fr>
+Subject: Re: caml (special) light and numerics
+To: ohl@crunch.ikp.physik.th-darmstadt.de (Thorsten Ohl)
+Date: Thu, 19 Oct 1995 10:01:11 +0100 (MET)
+Cc: caml-list@pauillac.inria.fr
+In-Reply-To: <9510171557.AA19603@crunch> from "Thorsten Ohl" at Oct 17, 95 04:57:17 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Content-Length: 8206      
+Sender: weis
+Status: O
+
+
+> This may be asking too much, but are there any (written) guidelines
+> for efficient numerical CSL coding (besides the one on the WWW site
+> that gave me some hints)?
+
+As Pierre Weis said, don't worry too much about tail calls or heap
+allocations: these are pretty efficient. Other factors like boxing of
+floats (see below) will kill you much earlier if not taken into
+account.
+
+Here are what I think are the main points to remember for writing
+efficient numerical code in Caml Special Light. I don't have much
+experience with numerical code, in CSL or otherwise, so these are only
+hints.
+
+0- The cslopt compiler is poorly named because it basically does not
+optimize the user's code. That is, everything will be executed pretty
+much as written in the source. Function applications will always
+perform a function call (no inlining). Function definitions fun x -> ...
+will always heap-allocate a closure (no lambda-lifting, no closure
+hoisting). Arithmetic expressions will be computed at the point where
+they occur in the source (no loop-invariant code motion). So, the
+programmer is very much in control. (Inlining might be added some day,
+but probably no other optimization.)
+
+1- Matrices in Caml are really arrays of (pointers to) arrays. So, a
+matrix access a.(i).(j) reads the i-th element of a, which is a
+pointer to an array, then read the j-th element of that array.
+It's about as efficient as the standard layout for matrices when the
+dimensions are not known at compile-time (we're trading a dereference
+for a multiplication), but can be a big loss if the dimensions are
+statically known and one happens to be, say, a power of 2.
+
+A first consequence is that rows of a matrix are really individual
+arrays: they need not be the same length (great for triangular matrices)
+and a whole row of a matrix can be replaced in constant time: just do
+a.(i) <- some_array. There might also be some creative things you can
+do by sharing a row between several matrices.
+
+Another consequence is that matrices are row-major (hope that's the
+right term): the first coordinate should vary slower than the second.
+E.g. to sum two N*N matrices, don't write
+
+        for j = 0 to N-1 do
+          for i = 0 to N-1 do
+            c.(i).(j) <- a.(i).(j) + b.(i).(j)
+          done
+        done
+
+but write:
+
+        for i = 0 to N-1 do
+          let row_a = a.(i) and row_b = b.(i) and row_c = c.(i) in
+          for j = 0 to N-1 do
+            row_c.(j) <- row_a.(j) + row_b.(j)
+          done
+        done
+
+(Notice the application of point 0: three loop-invariant expressions
+have been lifted manually outside of the inner loop.)
+
+2- Floating-point boxing. Because of the combination of garbage
+collection, polymorphism/type abstraction, and separate compilation,
+floating-point numbers are often boxed, that is, stored in a
+heap-allocated block and handled through a pointer. Most Lisp and ML
+implementations box (or tag) floats, and that's the main reason why
+they deliver poor floating-point performance: any arithmetic operation
+on boxed floats has to load from memory its arguments, compute the
+result, heap-allocate a block, and store the result in it.
+
+One of the ancestors of Caml Special Light, the Gallium experimental
+compiler, implemented a fairly aggressive type-based unboxing strategy
+that would completely eliminate boxing from Fortran-style
+code. i.e. code without polymorphic functions. Unfortunately, it
+turned out to complicate greatly the runtime system and make the
+garbage collector less efficient, hence hampering the performance of
+symbolic code. Since symbolic computation is still the main
+application of ML, I dropped this unboxing strategy.
+
+However, some of the unboxing tricks developed for Gallium are still
+used in Caml Special Light, at least on a local scale (where they
+don't interact with the garbage collector and everything). Here are
+some hints on which floats are boxed and which are not:
+
+a. Function arguments are always boxed.
+
+b. Free variables of functions are always boxed.
+
+c. Intermediate results of arithmetic expressions are not boxed.
+   By "intermediate result", I mean the result of an arithmetic
+   operation (+. -. *. /. ** sin cos exp log ...) that is immediately
+   used as argument of an arithmetic operation.
+
+   Example: fun x -> 3.14 *. x *. x
+   The parameter x and the result are boxed, but not x *. x.
+
+d. "let"-bound results of arithmetic operations are not boxed if they
+   are only used later as arguments to arithmetic operations.
+
+   Example: let x = y +. z in x *. x               x not boxed
+            let x = y +. z in x *. x *. f x        x boxed (passed as argument)
+
+e. Floats in data structures are generally boxed. E.g. a list of
+   floats is really a list of pointers to floats. But there are two
+   exceptions:
+
+   - arrays of floats (the floats are laid out contiguously, as in C;
+                       this is not an array of pointers to floats)
+   - record types whose fields are all floats (same as arrays)
+
+   An access in a float array or in such a record avoids boxing in the
+   same way as for arithmetic operations.
+
+   Example: a.(i) <- 2.0 *. a.(i) performs only one float read and one
+   float store, instead of two reads, a boxing and a store as in most ML
+   implementations.
+
+A few consequences of these hints:
+
+a => inline small functions over floats
+
+b + d => iterate with "for" and "while" loops instead of recursive functions
+    Example:
+        let x = y +. z in
+        for i = 0 to N-1 do a.(i) <- x *. a.(i) done
+    does not box x, but
+        let x = y +. z in
+        let rec iter i =
+          if i >= N then () else (a.(i) <- x *. a.(i); iter(i+1))
+        in iter 0
+    is not only unreadable, but causes x to be boxed because it is
+    free in iter.
+
+e => use records in preference to tuples for representing points,
+    complex numbers, etc. Example:
+        type complex = {re: float; im: float}
+    saves 4 loads and 2 allocations for each complex addition compared with
+        type complex = float * float
+
+all => Fortran/C style (big functions, loops all over the place) is
+    compiled better than "classic" functional style (functions,
+    functionals, iterators, combinators till you scream).
+
+Another consequence of the optimization of float arrays is that there
+are really two formats of arrays in the system: arrays of floats and
+arrays of pointers/integers.
+
+The illusion of a parametric array type 'a array is maintained at some
+cost: when accessing an array whose static type is 'a array (e.g. in a
+polymorphic function), a run-time test is generated to distinguish the
+two array formats, and some additional boxing/unboxing may take place
+if it's a float array. When more is known on the static type of the
+array, no test is generated and no extra boxing takes place.
+
+So, for maximal performance, don't operate over float arrays with
+polymorphic array functions. For instance, transposing a float matrix with
+
+        let transpose m =
+          let m' = Array.new_matrix (Array.length m.(0)) (Array.length m) in
+          for i = 0 to Array.length m do
+            let row_i = m.(i) in
+            for j = 0 to Array.length row_i do
+              m'.(j).(i) <- row_i.(j)
+            done
+           done;
+           m'
+
+is much more efficient if you add a type constraint:
+
+        let transpose (m: float array array) = ...
+
+Well, that's all I can say in general. To know more, you'll have to
+write some code and test it. Remember: write it cleanly, then profile
+it, then optimize the hot spots -- not the other way around. And let us
+know if you beat Fortran 90 in development time + running time.
+
+One last thing:
+
+> Another example: how can I find out (without deciphering assembler
+> code) if a particular recursive function has been recognized as tail
+> recursive?
+
+Reading assembler code is always an option. You can also compile with
+the "-dcmm" option. This will print one of the intermediate
+representations, which shows pretty clearly tail calls vs. regular calls,
+direct calls vs. indirect calls, and boxing/unboxing steps. That is,
+if you can guess the semantics of that intermediate language, because
+I will not answer any questions about it. Have fun.
+
+- Xavier Leroy
+
+
+
+

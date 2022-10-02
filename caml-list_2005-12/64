@@ -1,0 +1,129 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 4F6D5BB9C
+	for <caml-list@yquem.inria.fr>; Sun,  4 Dec 2005 17:37:53 +0100 (CET)
+Received: from ash25e.internode.on.net (ash25e.internode.on.net [203.16.214.182])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jB4GbpoD026843
+	for <caml-list@yquem.inria.fr>; Sun, 4 Dec 2005 17:37:52 +0100
+Received: from rosella (ppp33-4.lns1.syd6.internode.on.net [59.167.33.4])
+	by ash25e.internode.on.net (8.12.9/8.12.6) with ESMTP id jB4GbfXV044538;
+	Mon, 5 Dec 2005 03:07:42 +1030 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] yacc question
+From: skaller <skaller@users.sourceforge.net>
+To: Brian Hurt <bhurt@spnz.org>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <Pine.LNX.4.63.0512040919570.24132@localhost.localdomain>
+References: <1133705740.11050.14.camel@rosella>
+	 <Pine.LNX.4.63.0512040919570.24132@localhost.localdomain>
+Content-Type: text/plain
+Date: Mon, 05 Dec 2005 03:37:40 +1100
+Message-Id: <1133714261.11050.35.camel@rosella>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 43931B5F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 parser:01 expr:01 buffer:01 expr:01 token:01 trailing:01 token:01 buffer:01 semicolon:01 semicolon:01 ocamlyacc:01 grammar:01 recursive:01 backtracking:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Sun, 2005-12-04 at 09:25 -0600, Brian Hurt wrote:
+> 
+> On Mon, 5 Dec 2005, skaller wrote:
+> 
+> > I have the 'usual' kind of parser for expressions, with two
+> > nonterminals 'expr' and 'atom', the latter including ( expr )
+> > and INTEGER of course.
+> >
+> > When I have input like
+> >
+> > 1;
+> > 1 + 2 ;
+> > (1 + 2) ;
+> >
+> > none of the case parse as expressions, the first and
+> > last do parse as atoms (leaving the ; in the buffer).
+> >
+> > What I want is to parse the longest possible match.
+> > The only way I can think of doing this is:
+> >
+> > top_expr:
+> >  | expr token_not_allowed_in_expressions
+> >
+> > and then 'put back' the trailing token into the buffer.
+> > Is there another way?
+> >
+> 
+> The standard way to implement this is:
+> 
+> statement:
+>  	expression SEMICOLON
+> 
+> expression:
+>  	| mul_expression
+>  	| expression PLUS mul_expression
+>  	| expression MINUS mul_expression
+> 
+> mul_expression:
+>  	atom_expression
+>  	| mul_expression TIMES atom_expression
+>  	| mul_expression DIVIDE atom_expression
+>  	| mul_expression MODULO atom_expression
+> 
+> atom_expression:
+>  	ATOM
+>  	| OPEN_PAREN expression CLOSE_PAREN
+> 
+> Notice that precedence is taken care of immediately- 3 + 4 * 5 is parsed 
+> as 3 + (4 * 5).  Also notice that the semicolon is what terminates us- we 
+> keep collecting up an expression until we see a semicolon- only then do we 
+> complete the statement.
+
+Expressions cannot be statements, but I have instead:
+
+statement:
+	NAME LEFT_ARROW expression SEMICOLON
+
+for example, so basically your example holds with a modification.
+
+The problem is I want to parse a *user defined statement*.
+This will be done by a preprocessor definition, something like:
+
+#keyword within
+#statement select expr within statement ;
+
+This makes 'select' and 'within' keywords, when ocamlyacc
+sees the user defined statement keyword 'select', it looks
+up a table and finds the grammar production. I then parse
+by recursive descent -- backtracking is cool in an FPL,
+my tokens are a list, so I can backtrack easily.
+
+When interpreting the grammar, if I see the token 'expr'
+then I parse an expression using the ocamlyacc entry point.
+Similarly for statements -- in particular, since the 
+user defined statements can be 'added' into the statement
+grammar, recursion in the 'within' clause will also include
+the new statements (the recursion is covariant?)
+
+There is no problem with statements .. but for expressions,
+I cannot just terminate on SEMICOLON -- I have to terminate
+on many symbols, which can't be part of an expression --
+and leave them in the token buffer too. In the example
+grammar, 'within' terminates the expression.
+
+The problem of course is that Ocamlyacc doesn't know about
+the new grammar .. but I'm still using it to parse expressions.
+
+Mixing LALR1 and an RD parser seems messy .. but I see
+no other way to obtain high performance for 'the usual case'
+whilst still allowing extensibility -- Ocaml doesn't come
+with an LL parser generator.
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

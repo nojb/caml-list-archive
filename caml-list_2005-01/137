@@ -1,0 +1,105 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id B6B34BB91
+	for <caml-list@yquem.inria.fr>; Sun, 16 Jan 2005 00:40:47 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j0FNeln8016820
+	for <caml-list@yquem.inria.fr>; Sun, 16 Jan 2005 00:40:47 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA22429 for <caml-list@pauillac.inria.fr>; Sun, 16 Jan 2005 00:40:47 +0100 (MET)
+Received: from mail15.bluewin.ch (mail15.bluewin.ch [195.186.18.63])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j0FNekYN016815
+	for <caml-list@inria.fr>; Sun, 16 Jan 2005 00:40:46 +0100
+Received: from [10.0.1.2] (81.62.28.94) by mail15.bluewin.ch (Bluewin AG 7.0.035)
+        id 41DE9B9E000B722C for caml-list@inria.fr; Sat, 15 Jan 2005 23:40:46 +0000
+Mime-Version: 1.0 (Apple Message framework v619)
+Content-Transfer-Encoding: 7bit
+Message-Id: <D788BB9C-674E-11D9-9C0A-000393DBC266@epfl.ch>
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+To: caml-list caml-list <caml-list@inria.fr>
+From: =?ISO-8859-1?Q?Daniel_B=FCnzli?= <daniel.buenzli@epfl.ch>
+Subject: Bigarrays and temporar C pointers
+Date: Sun, 16 Jan 2005 00:40:30 +0100
+X-Mailer: Apple Mail (2.619)
+X-Miltered: at nez-perce with ID 41E9A9FF.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 41E9A9FE.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; epfl:01 bigarrays:01 pointers:01 pointer:01 pointer:01 ocaml:01 bigarrays:01 ocaml:01 bigarray:01 bigarray:01 val:01 extern:01 stubs:01 camlprim:01 val:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+Hello,
+
+Suppose that I have a C library which allows me to access data via a 
+temporar pointer with the following interface  :
+
+> void *map(void);  /* Returns a valid pointer to data */
+> int map_size(void);  /* Returns the size of the data in bytes. */
+> void unmap(void);  /* Invalidates the last pointer returned by map. */
+
+Mapping data to a pointer must only be done for a short period of time: 
+map, get size, process data, and unmap.
+
+I would like to be able to process data in ocaml with bigarrays. To do 
+so I provide the ocaml function `map'. This function maps the pointer, 
+pass it as a bigarray to a user callback to process the data and then 
+unmaps the pointer.
+
+> open Bigarray;;
+>
+> type ('a, 'b) data = ('a, 'b, c_layout) Array1.t
+>
+> val map : ('a, b) kind -> (('a, 'b) data -> unit) -> unit
+
+Map is implemented as follow (C primitives are at the end of the mail),
+
+> external _map_ptr : ('a, 'b) kind -> ('a, 'b) data = "stub_map_ptr"
+> external _unmap_ptr : ('a, 'b) data -> unit = "stub_unmap_ptr"
+>
+> let map k f =
+>   let a = _map_ptr k in
+>   f a;
+>   _unmap_ptr a
+
+My problem is that the provided bigarray may escape the scope of the 
+user callback (e.g. by setting a global reference to the bigarray) 
+potentially allowing the user to access data at an invalid pointer 
+position after the pointer was invalidated.
+
+In fact for the bigarray itself it is not a problem, I set its 
+dimension to zero when I unmap it in _unmap_ptr (see the C 
+implementation below) so access outside the user callback raise 
+exceptions. However, according to my experiments and wandering in the 
+implementation of bigarray this doesn't work if the user extracts a 
+subarray with Array1.sub and sets it to a global variable.
+
+Is there a solution to make that completely safe or I can only warn the 
+user that he should not to try to escape data from the callback ?
+
+Thanks for your help,
+
+Daniel
+
+
+The implementation of the C primitives :
+
+> extern int bigarray_element_size[]; /* bigarray_stubs.c */
+>
+> CAMLprim value stub_map_ptr (value kind)
+> {
+>   void *p = map ();
+>   long dim = map_size () / bigarray_element_size[Int_val (kind)];
+>   int flag = Int_val (kind) | BIGARRAY_C_LAYOUT | BIGARRAY_EXTERNAL;
+>   return alloc_bigarray(flag, 1, p, &dim);
+> }
+>
+> CAMLprim value stub_unmap_ptr (value b)
+> {
+>   struct caml_bigarray *arr = Bigarray_val(b);
+>   arr->data = NULL;
+>   arr->dim[0] = 0;
+>   unmap();
+>   return Val_unit;
+> }
+

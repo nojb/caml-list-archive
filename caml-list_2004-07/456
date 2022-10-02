@@ -1,0 +1,109 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA05900; Thu, 29 Jul 2004 21:17:10 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA05624 for <caml-list@pauillac.inria.fr>; Thu, 29 Jul 2004 21:17:09 +0200 (MET DST)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i6TJH4SH018316
+	for <caml-list@inria.fr>; Thu, 29 Jul 2004 21:17:05 +0200
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id i6TJH1o22175;
+	Thu, 29 Jul 2004 14:17:02 -0500 (CDT)
+Date: Thu, 29 Jul 2004 14:25:05 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: james woodyatt <jhw@wetware.com>
+cc: Ocaml Trade <caml-list@inria.fr>
+Subject: Re: [Caml-list] looping recursion
+In-Reply-To: <B449A1C2-E187-11D8-9C86-000A958FF2FE@wetware.com>
+Message-ID: <Pine.LNX.4.44.0407291406350.6739-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at concorde with ID 41094D30.003 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 recursion:01 woodyatt:01 brogoff:01 catenable:01 deques:01 extlib:01 simplistic:01 deques:01 catenable:01 extlib:01 quicksort:01 hashtables:01 prepend:01 deque:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 29 Jul 2004, james woodyatt wrote:
+
+> On 29 Jul 2004, at 09:12, Brian Hurt wrote:
+> > On Thu, 29 Jul 2004, brogoff wrote:
+> >>
+> >> Some problems are just way easier to solve with imperative programming
+> >> though. Have you ever taken a look at purely functional catenable 
+> >> deques?
+> >
+> > Just got added to extlib, for the record.  A simplistic version that
+> > actually isn't that much more complicated than the imperitive
+> > implementation.
+> 
+> This is extraordinary!  Do you really mean to say the deques are purely 
+> functional, catenable *and* offering the same complexity as the 
+> non-persistent implementation?  Which algorithm was added to extlib?
+> 
+
+The version added is O(1) ammoritized.  It has the same problem as 
+quicksort and hashtables, in that on average about 1 operation in N has 
+cost O(N), instead of strict O(1).
+
+The library added was the simplest double list implementation.  Basically, 
+the queue is broken into two parts- a front part and a back part, both 
+kept in lists.  The back part list is kept in reverse order- so to add an 
+element to the end of the queue, you prepend it to the back part list.  
+You remove elements from head of the front part queue, and when it's 
+empty, you replace it with the reverse of the back part list.
+
+Every element that goes through the queue is touched precisely three 
+times- once when it's added to the end of the queue, once when it's 
+removed from the head of the queue, and once when we reverse the back half 
+to become the new front half.  So adding and then removing N elements from 
+the list costs O(N).
+
+The core code looks like this:
+
+type 'a deque = 'a list * 'a list
+
+let empty = ([], []) (* the empty queue *)
+
+let add q x =
+    match q with
+        | ([], []) -> (* We add the first element to the front *)
+            ([x], [])
+        | ([], _) -> assert false
+        | (front, back) -> (front, x :: back)
+
+let remove q =
+    match q with
+        | ([], []) -> invalid_arg "remove"
+        | ([], _) -> assert false
+        | (h :: [], back) -> h, ((List.rev back), [])
+        | (h :: front, back) -> h, (front, back)
+
+I will note that if you use a capability that applicative semantics give 
+us, you can get into trouble.  Imagine the following scenario: you create 
+an empty queue and add 1000 new elements.  You then remove one element.  
+This does a List.rev on a 999 element list.  You then throw the modified 
+queue away, and remove the first element from the original queue again, 
+reversing the same 999 element list.  Repeat- every removing reverses the 
+same list.
+
+The solution to this is "don't do that!"  Note that pushing an element 
+onto the head of the queue is strict O(1):
+
+let push x (front, back) = (x :: front, back)
+
+Rather than using the applicative semantics to undo the removal, use push 
+to push back the removed elements.  This way, you only reverse the back 
+half of the list once.
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

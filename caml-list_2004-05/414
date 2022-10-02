@@ -1,0 +1,128 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA07578; Sun, 23 May 2004 12:58:19 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA07580 for <caml-list@pauillac.inria.fr>; Sun, 23 May 2004 12:58:18 +0200 (MET DST)
+Received: from qrnik.knm.org.pl (paf87.warszawa.sdi.tpnet.pl [217.96.225.87])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i4NAwHSH004903
+	for <caml-list@inria.fr>; Sun, 23 May 2004 12:58:17 +0200
+Received: from qrnik ([192.168.0.1] ident=qrczak)
+	by qrnik.knm.org.pl with esmtp (Exim 3.36 #1)
+	id 1BRqgK-00080j-00
+	for caml-list@inria.fr; Sun, 23 May 2004 12:58:16 +0200
+Subject: Re: [Caml-list] Automatic wrapper generator
+From: "Marcin 'Qrczak' Kowalczyk" <qrczak@knm.org.pl>
+To: caml-list <caml-list@inria.fr>
+In-Reply-To: <1085242444.6065.51.camel@pelican.wigram>
+References: <1084869517.19838.409.camel@pelican.wigram>
+	 <1085220553.32267.49.camel@qrnik> <1085231636.774.250.camel@pelican.wigram>
+	 <1085235588.32267.78.camel@qrnik> <1085242444.6065.51.camel@pelican.wigram>
+Content-Type: text/plain; charset=ISO-8859-2
+Message-Id: <1085309896.32267.170.camel@qrnik>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.5.7 
+Date: Sun, 23 May 2004 12:58:16 +0200
+Content-Transfer-Encoding: quoted-printable
+X-Miltered: at concorde with ID 40B083C9.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 marcin:01 'qrczak':01 kowalczyk:01 qrczak:01 nie:99 organise:99 interfacing:01 low-level:01 snippets:01 inserting:01 snippets:01 runtime:01 runtime:01 ffi:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+W li=B6cie z nie, 23-05-2004, godz. 02:14 +1000, skaller napisa=B3:
+
+> For example, Felix has a specialised=20
+> 'domain specific sublanguage' which deals with C bindings.
+> There is a whole class of statements which do nothing
+> else than organise C interfacing.
+
+In some sense I am doing this right now. The constructs are very
+low-level though: they insert C snippets with specified names #defined
+to locations of given objects, provide appropriate #defines needed to
+throw exceptions from the embedded code. There are constructs for
+inserting toplevel C definitions and for implementing new types.
+
+They rely on the fact that code is compiled into C, and thus the
+compiler can insert these snippets in appropriate places and compile
+the resulting C code as a whole. Contents of the snippets rely on the
+implementation of the runtime, and use various functions and macros
+which would otherwise be internal to the runtime. For now there is a
+single implementation of my language anyway, but these constructs will
+not be portable. I always plan which parts of my language are meant to
+be implementation-dependent, and unfortunately it includes the current
+state of the FFI.
+
+Your binding language lies between my low-level binding, and my
+hand-written high-level bindings for particular libraries. We compared
+your language to my high-level interfaces, but perhaps it should be
+compared to my low-level sublanguage. Now mine is as universal as
+yours :-) but it requires some knowledge about internals of the
+compiler, comparable to what is required for OCaml extensions.
+
+I think yours is easier to use because your runtime is much closer to
+C++ than mine. I don't know the details of yours, but major differences
+between my runtime and C are:
+- dynamic typing
+- variables refer to objects, not contain them
+- garbage collection (copying, generational; pointers may change,
+  pointer stores require write barrier)
+- tail calls
+- exceptions (as lightweight as in OCaml)
+- integers are unbounded (with a separate representation for fixnums,
+  but is should be transparent to the user)
+- strings are Unicode (UTF-32 or ISO-8859-1 internally).
+
+Providing a nice interface is closing a big semantic gap. I just did
+bzip2 yesterday, 700 lines (streams & files).
+
+> In your case, you might consiser a DSSL which has
+> some static typing, just to deal with FFIs ..
+> but which is higher level than C, and interfaces
+> with the rest of your language.
+
+I'm not sure how it should look like.
+
+I feel it should wait for macros, because doing everything with
+functions is inefficient, and implementing everything inside the
+compiler is tedious.
+
+> Ok, so add a type system with two types: native and foreign.
+> You can't lose any dynamics here, since they're embodied
+> in the native part already.
+
+Hmm, interesting. I see many problems though. A native object has a
+uniform representation, but foreign objects have varying sizes. What if
+I apply a function to a foreign object? It seems I need also function
+types.
+
+How should a function with foreign parameters be represented? The
+calling convention of native functions doesn't allow passing non-native
+arguments! It passes them in virtual registers (global C variables)
+because of tail calls and garbage collection.
+
+Should a variable holding a foreign type be mutable? Should the foreign
+object be copied when passing it around? Implicing copying + mutability
+=3D weird semantics, and inconsistent with the rest of the language.
+
+Where should a foreign object be allocated? Currently I do it manually
+and have to choose: either wrap it inside a native object (possibly with
+a finalizer), or - if its address must be stable - allocate it with
+malloc and wrap a pointer (the finalizer may do something besides
+calling free()). Providing all the flexibility in a specialized language
+requires a complex language. Currently I just implement it by hand.
+
+Sometimes I wrap some other fields together with the object. For example
+in gzip & bzip2 I add two boolean fields: whether a stream has been
+completely closed (and should no longer be used nor even finalized)
+and whether decompression has seen end of stream (and I should not try
+flushing the remaining part when closing, bzip2 doesn't like that).
+It's a minor detail, but shows how hard is to do wrapping automatically.
+
+--=20
+   __("<         Marcin Kowalczyk
+   \__/       qrczak@knm.org.pl
+    ^^     http://qrnik.knm.org.pl/~qrczak/
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,69 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA21407; Fri, 9 Nov 2001 18:09:20 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA21199 for <caml-list@pauillac.inria.fr>; Fri, 9 Nov 2001 18:09:18 +0100 (MET)
+Received: from robin.mail.pas.earthlink.net (robin.mail.pas.earthlink.net [207.217.120.65])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id fA9H9H513543
+	for <caml-list@pauillac.inria.fr>; Fri, 9 Nov 2001 18:09:17 +0100 (MET)
+Received: from earthlink.net (dialup-65.56.89.182.Dial1.SanDiego1.Level3.net [65.56.89.182])
+	by robin.mail.pas.earthlink.net (8.11.5/8.9.3) with ESMTP id fA9H9AG17778;
+	Fri, 9 Nov 2001 09:09:11 -0800 (PST)
+Message-ID: <3BEC0DB5.7E9D77DD@earthlink.net>
+Date: Fri, 09 Nov 2001 09:09:09 -0800
+From: Ken Rose <kenarose@earthlink.net>
+Reply-To: rose@acm.org
+X-Mailer: Mozilla 4.76 [en] (X11; U; Linux 2.4.2-2 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: "Rafael 'Dido' Sevilla" <sevillar@team.ph.inter.net>
+CC: Caml List <caml-list@pauillac.inria.fr>
+Subject: Re: [Caml-list] how to split up a Caml float into its component bytes
+References: <20011109112909.A9417@team.ph.inter.net>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Rafael 'Dido' Sevilla wrote:
+> 
+> I've been writing a byte compiler for a small language using Objective
+> Caml, and now am thinking about incorporating floating point support
+> into the language.  I'm wondering how I would convert a floating point
+> number in OCaml (which I hope I am safe in assuming is IEEE-754) into
+> its equivalent bytes.  I need it to be able to output bytecode
+> instructions that will load floating point constants into the virtual
+> machine.  In C this is fairly trivial to do; not sure how to do it in
+> OCaml.
+
+I was having a similar problem and came up with these two functions,
+intended for a C compiler.  They produce strings encoding 32 bits at a
+time, to write into assembly output.  I'm not sure it handles gradual
+underflow correctly, but since my target hardware doesn't, it didn't
+matter to me.
+
+ - ken
+
+and cook_float f =
+  let mant, exp = frexp f in 
+  let sign = if mant < 0.0 then Int32.min_int else Int32.zero in
+  let exponent = Int32.shift_left (Int32.of_int(exp + 126)) 23 in
+  let mantissa = Int32.of_float((mant -. 0.5) *. 16777216.0) in
+  Int32.format "0x%x" (Int32.logor sign (Int32.logor exponent mantissa)) 
+
+and cook_double d =
+  if d = 0.0 then ("0","0") else
+  let mant, exp = frexp d in
+  let sign = if mant < 0.0 then Int32.min_int else Int32.zero in
+  let exponent = Int32.shift_left (Int32.of_int(exp + 1022)) 20 in
+  let f,t = modf (((abs_float mant) -. 0.5) *. 2097152.0) in
+  let highmantissa = Int32.of_float(t) in
+  let highword = Int32.logor sign (Int32.logor exponent highmantissa) in
+  let l, h = modf (f *. 65536.0) in
+  let low1 = Int32.shift_left (Int32.of_float h) 16 in
+  let low2 = Int32.of_float (l *. 65536.0) in
+  let lowmantissa = Int32.of_float(f *. (ldexp 1.0 32)) in
+  let lowword = Int32.logor low1 low2 in
+  Int32.format "0x%x" highword, Int32.format "0x%x" lowword
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

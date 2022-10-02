@@ -1,0 +1,133 @@
+Return-Path: <markus.mottl@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.1 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id A4CF8BC6B
+	for <caml-list@yquem.inria.fr>; Tue,  6 Nov 2007 18:31:10 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao8CAGYzMEdA6aaxkGdsb2JhbACDJotYAQEHAgYTEQc
+X-IronPort-AV: E=Sophos;i="4.21,379,1188770400"; 
+   d="scan'208";a="19003132"
+Received: from py-out-1112.google.com ([64.233.166.177])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 06 Nov 2007 18:31:09 +0100
+Received: by py-out-1112.google.com with SMTP id u52so3866075pyb
+        for <caml-list@yquem.inria.fr>; Tue, 06 Nov 2007 09:31:08 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=beta;
+        h=domainkey-signature:received:received:message-id:date:from:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        bh=5sIfLS5BgQjPNnBeQpn5DOfaid7tyP1bk9Rvr+pSGZI=;
+        b=KiReNKeNR5yE9eM5L8A7k3kv4nfSxS8i1oTy9nL2K27GhFn4VJaeVOAGHukasnHmoQgnAzr0LxiJ7blkeRsdHGDLStfPXpTxPpFz4iT5hoB8lyhCmKVOvHNyIGdQzHcN9xGJcHUjM7a06tMNVtxbsjnWgGjZS66wLP5/uRO7omQ=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=beta;
+        h=received:message-id:date:from:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=n6SBjLz6fpdMJgE60eEiJq4dw+jhk7d81tYM7w67UrlENTdYNRka6qsg5C/OJud3ekIS1vYNUeJ7nTiKybGcsU5Fu3CJgCnaxTXOfHKnRP0edoxGDa4raX/s/2KvGWEpzWk5hHEwBPWvF2zlmEPpkchBS+Co576EooNIIBFKGIY=
+Received: by 10.65.211.16 with SMTP id n16mr16347572qbq.1194370267318;
+        Tue, 06 Nov 2007 09:31:07 -0800 (PST)
+Received: by 10.65.121.2 with HTTP; Tue, 6 Nov 2007 09:31:07 -0800 (PST)
+Message-ID: <f8560b80711060931h20702a72j918c1f857faa78e1@mail.gmail.com>
+Date: Tue, 6 Nov 2007 12:31:07 -0500
+From: "Markus Mottl" <markus.mottl@gmail.com>
+To: "Loup Vaillant" <loup.vaillant@gmail.com>
+Subject: Re: [Caml-list] The GC is not collecting... my mistake?
+Cc: "Caml mailing list" <caml-list@yquem.inria.fr>,
+	ocaml-users@janestcapital.com
+In-Reply-To: <6f9f8f4a0711060451g1219a880gd711d997043b016@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+References: <6f9f8f4a0711060451g1219a880gd711d997043b016@mail.gmail.com>
+X-Spam: no; 0.00; markus:01 mottl:01 markus:01 mottl:01 ocaml:01 foo:01 alloc:01 alloc:01 printf:01 printf:01 argv:01 foo:01 byte:01 ocaml:01 byte:01 
+
+On 11/6/07, Loup Vaillant <loup.vaillant@gmail.com> wrote:
+> I thought the GC could collect the first values of my streams when the
+> program don't need them any more, but it doesn't seem to be the case.
+> Unfortunately, I was unable to reduce my problem to a proper minimum
+> example, so I send it all.
+
+Funny, my colleagues and I are also currently investigating a space
+leak in OCaml.  Here is a short example:
+
+file: foo.ml
+---------------------------------------------------------------------------------------------
+let alloc () = String.create 1, String.create 2
+let alloc_loop () = for i = 1 to 1_000_000 do ignore (alloc ()) done
+let print_len str = Printf.printf "%d\n%!" (String.length str)
+let finaliser str = Printf.printf "finalized\n%!"
+
+let main1 () =
+  let a, b = alloc () in
+  Gc.finalise finaliser a;
+  print_len a;
+  alloc_loop ();
+  print_len b
+
+let main2 () =
+  let a, b = alloc () in
+  Gc.finalise finaliser a;
+  print_len a;
+  let b_ref = ref b in
+  alloc_loop ();
+  print_len !b_ref
+
+let () = if Sys.argv.(1) = "1" then main1 () else main2 ()
+---------------------------------------------------------------------------------------------
+
+If you compile this to native code, running "foo 1" will print "1"
+followed by "2".  If you run "foo 2" it will print "1", then
+"finalized", then "2".  Byte code will only print "1" and "2" in any
+case - hm, weird.
+
+Obviously, OCaml does not reclaim the tuple during the allocation loop
+even though it could (and IMHO should).  This can introduce
+substantial space leaks as happened to us.
+
+It seems that OCaml keeps tuples around as long as you can still
+access a binding that was created by matching the tuple.  Though
+deferring access to tuple elements might slightly improve performance,
+because there is no need to push things on the stack, etc., it can
+make reasoning about space usage quite hard.
+
+My colleagues and I agree that the current implementation violates
+user expectations.  People will generally assume that heap objects
+which are only referenced by a binding will go away as soon as they
+cannot be accessed anymore.  The workaround as shown above in main2
+(using intermediate references) is cumbersome and obviously doesn't
+work with byte code anyway.
+
+The remaining question is how the correct behavior could be
+efficiently implemented.    I have no idea how the code generator and
+runtime interact, but my guess is that some simple heuristics could be
+used whether to defer access to tuple elements or not:
+
+Tuple access can always be deferred as long as the tuple as a whole
+could still be referenced in the same function (e.g. in the case of a
+"let x, y, z as tpl" binding, where "tpl" may still be used).
+
+If there is no function call (after inlining) or loop between the
+creation of the bindings and their last use, then the access to the
+tuple fields can also be deferred.  This would be beneficial e.g. in
+the presence of branches that only use some of the bound variables,
+but the user wants to create the match in one place only for
+convenience.
+
+Otherwise the tuple could be copied into the stack (or even
+registers), and we use this transient object for access.  As soon as
+some element cannot be accessed anymore, we simply overwrite the
+corresponding slot on the stack (or the register) with an atomic value
+(e.g. Val_unit) to destroy the reference to the object so that the GC
+can reclaim it.
+
+I hope this provides some food for thought.  Are there any plans to
+fix this problem?
+
+Best regards,
+Markus
+
+-- 
+Markus Mottl        http://www.ocaml.info        markus.mottl@gmail.com
+

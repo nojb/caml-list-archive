@@ -1,0 +1,165 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q43ESNGe031144
+	for <caml-list@sympa-roc.inria.fr>; Thu, 3 May 2012 16:28:33 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtgBAMKVok/RVdm2mGdsb2JhbABEoE+SHwgiAQEBAQEICQ0HFCeCCQEBAQQSAhMZARsSCwEDDAYFCw0NISEBAREBBQEKEgYTEgkHh1wBAwsLm1UJA4wkgnOFGwoZJwMKV4h2AQULiXuHAgSVfoERii6DIz2EDQ
+X-IronPort-AV: E=Sophos;i="4.75,523,1330902000"; 
+   d="scan'208";a="142456120"
+Received: from mail-lb0-f182.google.com ([209.85.217.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 03 May 2012 16:28:32 +0200
+Received: by lbon10 with SMTP id n10so2358523lbo.27
+        for <caml-list@inria.fr>; Thu, 03 May 2012 07:28:31 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20120113;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=QJN4c3AL/0fKTBkMb+t/RGGv8Dy7152F16cgBggsRBI=;
+        b=FLJExjsudQ0Hbq1vXd5+/0aIBHEl9uZafqzLKGbDmqQ9GHRbuEF69JBQhq0NHIN7lh
+         w4j0O7PaJqAfnBHUmQ+9qTt3yNCy08ef7bxL/aLfFWHuQGX/m6faILZhqm+T9zooTRV7
+         4sM5gbv7jZeV/787kiOAVNx02VAN7P6sSnKmtqLW4W9d2q1j01EdVycjn3t05csASc81
+         WbX4FVqgeRbAjgEL5Oh3wFu9ISAoJvN/EeTgpiMkJPmea84sePZAmnfYIylelibgmAgs
+         fdO2dcVQGcbl+H/mTf2jmSShHg+CsPTLceYZc09jiMjAJI0G3ly4NLAIQs+0O+OVq0Un
+         Hwrg==
+Received: by 10.152.123.229 with SMTP id md5mr2253086lab.34.1336055311788;
+ Thu, 03 May 2012 07:28:31 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.112.98.234 with HTTP; Thu, 3 May 2012 07:27:51 -0700 (PDT)
+In-Reply-To: <CAOQwdX25S6Wjmf=g8f19cyvx6rUYxGEmGwFnUCNn612CvxmJFA@mail.gmail.com>
+References: <CAOQwdX1f_RvxeV=NZPaN9-XwSNw3bg_nWzhFMf6Qga0L5Btt9Q@mail.gmail.com>
+ <871un1z8sq.fsf@frosties.localnet> <CAOQwdX25S6Wjmf=g8f19cyvx6rUYxGEmGwFnUCNn612CvxmJFA@mail.gmail.com>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Thu, 3 May 2012 16:27:51 +0200
+Message-ID: <CAPFanBGgwsrNXSTO-5vGzoKk3cT=+8dnY9yBeqq0b5FgHW4H-Q@mail.gmail.com>
+To: Joel Reymont <joelr1@gmail.com>
+Cc: Goswin von Brederlow <goswin-v-b@web.de>, caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q43ESNGe031144
+Subject: Re: [Caml-list] using modules to wrap c++ classes
+
+It looks like this callback pattern does not use recursion through
+this/self, but is only one standard way to build closures and
+callbacks. The most natural way to expose this to OCaml would be to
+allow the OCaml programmer to simply use a first-class function
+instead of this callback. I see two possible solutions:
+
+(1) You could define, on the C++ side, a generic GenericAdmCallbacks
+class whose constructor would take as parameter a function pointer
+implementing Alert (so the function itself only does the plumbing).
+Then you can expose this class as an OCaml abstract type, and wrap its
+constructor to expose it to OCaml, so that it takes ocaml-land
+callbacks and return the abstract type. You can then expose to OCaml
+your function manipulating AdmCallbacks (let's call it
+"call_me_later"). So you would have an OCaml interface like this
+
+  let callback : abstract_admcallbacks = amdcallback (fun p_info
+p_context ai_code -> ...)
+  call_me_later callback
+
+(2) You can put that wrapping logic in the wrapper for call_me_later
+directly (take an ocaml function, builds the GenericAdmCallbacks, and
+pass it to the underlying C++ function)
+
+   call_me_later (fun p_info p_context ai_code -> ....)
+
+If the AmdCallbacks interface really is as simple as you've shown, the
+latter technique is the most convenient. If callbacks have a richer
+interface (eg. your C++ API expose functions to build callbacks from
+other callbacks), you'll need a type to speak about callbacks, so the
+first option is better.
+
+(I think I'd go for (1): you can still re-wrap amdcallback into a more
+convenient form on the ocaml-land, so that you have as little wrapping
+logic as possible in the unsafe C++ wrapping layer.)
+
+On Thu, May 3, 2012 at 3:56 PM, Joel Reymont <joelr1@gmail.com> wrote:
+> Say I have a library class AdmCallbacks
+>
+> class AdmCallbacks
+>     {
+>     public :
+>     AdmCallbacks();
+>     virtual ~AdmCallbacks();
+>
+>     /*   ----------------------------------------------------------------   */
+>
+>     virtual int Alert(AlertInfo * pInfo,
+>                       void *      pContext,
+>                       int *       aiCode) = 0;
+>
+>     private :
+>     };
+>
+> I subclass it and implement the Alert method to receive notifications.
+>
+> I then create an instance of my derived class and pass it to some
+> initialization function so that the API knows to call the methods of
+> my instance.
+>
+> My derived class may look like this
+>
+> class MyAdmCallbacks: public AdmCallbacks
+>     {
+>     public :
+>     MyAdmCallbacks()  {};
+>     ~MyAdmCallbacks() {};
+>
+>     /*   ----------------------------------------------------------------   */
+>
+>     virtual int Alert(AlertInfo * pInfo,
+>                       void *      pContext,
+>                       int *       aiCode);
+>     };
+>
+> int MyAdmCallbacks::Alert(AlertInfo * pInfo,
+>                          void *      pContext,
+>                          int *       aiCode)
+>     {
+>     int iIgnored;
+>
+>     /*   ----------------------------------------------------------------   */
+>
+>     cout << endl << endl;
+>     if (!pInfo -> dump(&iIgnored))
+>          {
+>          cout << "error in pInfo -> dump : " << iIgnored << endl;
+>          }
+>
+>     /*   ----------------------------------------------------------------   */
+>
+>     *aiCode = API_OK;
+>     return (OK);
+>     }
+>
+> Now, suppose I want to implement the derived class on the OCaml side.
+>
+> What is the best way to do it?
+>
+> I can derive on the C++ side, keep a pointer to the OCaml instance
+> (self) in a member variable, instantiate MyAdmCallbacks in the
+> "MyAdmCallbacks_new" stub function which takes the OCaml self and then
+> set the member variable.
+>
+> The Alert method on the C++ side would then dispatch to OCaml using
+> the stored OCaml self to call the Alert method as per 18.3.5 of the
+> manual
+>
+> callback(caml_get_public_method(foo, hash_variant("bar")), foo);
+>
+> Is there a better way to implement this on the OCaml side?
+>
+>    Thanks, Joel
+>
+> --------------------------------------------------------------------------
+> Working on AlgoKit, a new algorithmic trading platform using Rithmic R|API
+> ---------------------+------------+---------------------------------------
+> http://wagerlabs.com | @wagerlabs | http://www.linkedin.com/in/joelreymont
+> ---------------------+------------+---------------------------------------
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+

@@ -1,0 +1,143 @@
+Received: by margaux.inria.fr, Mon, 26 Oct 92 17:13:11 +0100
+Received: by margaux.inria.fr, Mon, 26 Oct 92 17:10:11 +0100
+Subject: Re: Streams in Caml Light 0.5
+To: HEDDEN@ESDSDF.dnet.ge.com
+Date: Mon, 26 Oct 92 17:10:11 MET
+Cc: caml-list@margaux
+In-Reply-To: <9210260033.AA01662@aitgw.ge.com>; from "HEDDEN@ESDSDF.dnet.ge.com" at Oct 25, 92 7:33 pm
+Message-Id: <9209300722.AA26986@concorde.inria.fr>
+From: Michel.Mauny@inria.fr (Michel Mauny)
+Reply-To: Michel.Mauny@inria.fr
+Organization: INRIA, BP 105, F-78153 Le Chesnay Cedex, France
+Phone: (+33) 1 39 63 57 96 -- Fax: (+33) 1 39 63 53 30
+Sender: weis@margaux
+Status: O
+
+> I am having a small difficulty using streams in Caml Light v0.5.
+> 
+> The example below might be a bug, but is more likely due to a
+> lack of understanding on my part.
+> 
+> The exception in the following toplevel session indicates that
+> there is a problem:
+> 
+> 
+>         >       Caml Light version 0.5
+> 
+>         #include "test";;
+>         map_stream : ('a -> 'b) -> 'a stream -> 'b stream = <fun>
+>         filter_stream : ('a -> bool) -> 'a stream -> 'a stream = <fun>
+>         int_stream : int stream = <abstract>
+>         - : int = 1
+>         - : int = 9
+>         - : int = 25
+>         odd_sq_stream : int stream = <abstract>
+>         - : int = 49
+>         Uncaught exception: Parse_failure
+>         - : unit = ()
+>         #quit();;
+
+The problem is that your map_stream and filter_stream are incorrect
+(if I understand correctly what they should do) they both return a
+stream with only one element.  Your int_stream (correctly) contains
+the stream of strictly positive integers.  Considering that a
+successive match on a stream *physically* destroys the stream. Now,
+what you do is select the first odd element (1), compute its square,
+and return a stream with that single element.  The next time you do
+it, it returns 9 and so on. These calls succeed because filter_stream
+builds a new stream (with only one element) each time Now, if you
+encapsulate the process into a function, map_stream empties the result
+of filter_stream after the first call, and fails (the stream is empty)
+for subsequent calls. Cf. the comments and corrections below.
+
+> The file "test.ml" (that is loaded above) contains the following:
+> 
+> 
+>         (* Maps a function over a stream *)
+>         let rec map_stream func = function
+>             [< 'x >]  ->  [< 'func x >]
+>           | [< >]     ->  [< >]
+>         ;;
+
+I guess your map_stream function is supposed to build the stream of
+results of applying a function `func' on *all* elements of the
+argument stream. In that case, the correct definition should be:
+
+        let rec map_stream func = function
+                  [< 'x ; (map_stream func) str >] -> [< '(func x); str >]
+                | [< >] -> [< >]
+        ;;
+
+You missed the recursive call.
+
+>         (* Filters a stream according to a predicate *)
+>         let rec filter_stream pred strm =
+>           match strm with
+>               [< 'x >]  ->  if pred x then [< 'x >]
+>                                       else filter_stream pred strm
+>             | [< >]     ->  [< >]
+>         ;;
+
+Now, filter_stream is also wrong, for the same reason (a resursive
+call is missing). The correct definition should be:
+
+        let rec filter_stream pred = function
+                  [< 'x ; (filter_stream pred) str >]
+                        -> if pred x then [< 'x ; str >] else str
+                | [< >] -> [< >]
+        ;;
+
+For streams, it is very common that recursive calls occur in the
+`stream pattern' (this is by analogy with BNF grammars, cf. the part
+of the documentation dedicated to streams and parsers).
+
+>         (* The stream of positive integers *)
+>         let int_stream = ints 1
+>           where rec ints n = [< 'n; ints (succ n) >]
+>         ;;
+> 
+>         (* Use `filter_stream' and `map_stream' to create a
+>            stream of the squares of the odd integers *)
+>         (* These work correctly *)
+>         stream_next (map_stream (function x->x*x)
+>                      (filter_stream (function n->(n mod 2)= 1)
+>                      int_stream));;
+>         stream_next (map_stream (function x->x*x)
+>                      (filter_stream (function n->(n mod 2)= 1)
+>                      int_stream));;
+>         stream_next (map_stream (function x->x*x)
+>                      (filter_stream (function n->(n mod 2)= 1)
+>                      int_stream));;
+
+Above, all calls succeeded because filter_stream builds a new
+`singleton' stream, map_stream returns another singleton stream, and
+you requested only for its first element.
+
+>         (* Encapsulate the above *)
+>         let odd_sq_stream =
+>                 map_stream (function x->x*x)
+>                 (filter_stream (function n->(n mod 2)= 1)
+>                 int_stream)
+>         ;;
+> 
+>         (* Test the above encapsulation *)
+>         (* This works correctly *)
+>         stream_next odd_sq_stream;;
+> 
+>         (* This causes an error *)
+>         stream_next odd_sq_stream;;
+
+The encapsulation `odd_sq_stream' of the stream contains only one
+element, this is why the second call failed.
+
+Best regards,
+
+Michel
+----------------------------------------------
+INRIA  --  BP 105 --  F-78153 Le Chesnay Cedex
+Tel.: +33 1 39 63 57 96 Fax: +33 1 39 63 53 30
+Email: Michel.Mauny@inria.fr
+----------------------------------------------
+
+
+

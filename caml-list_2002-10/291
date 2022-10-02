@@ -1,0 +1,133 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA15945; Fri, 11 Oct 2002 22:01:09 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA15497 for <caml-list@pauillac.inria.fr>; Fri, 11 Oct 2002 22:01:08 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g9BK17509055;
+	Fri, 11 Oct 2002 22:01:07 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA15870; Fri, 11 Oct 2002 22:01:07 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200210112001.WAA15870@pauillac.inria.fr>
+Subject: Re: [Caml-list] Num library
+In-Reply-To: <Pine.SOL.4.44.0210102047030.7956-100000@clipper.ens.fr> from Alain Frisch at "Oct 10, 102 08:53:57 pm"
+To: frisch@clipper.ens.fr (Alain Frisch)
+Date: Fri, 11 Oct 2002 22:01:07 +0200 (MET DST)
+Cc: pierre.weis@inria.fr, caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> On Thu, 10 Oct 2002, Pierre Weis wrote:
+> 
+> > Once more, just one question to you: which layer of the Num library
+> > had you benchmarked ?
+> 
+> Mmmh, I did not intend to launch a new flamewar here ...
+> 
+> Maybe you can give some information yourself about the library. If I want
+> to manipulate only integers (no rational numbers), most of which will be
+> small integers, is it better to use Num or Big_int ?  Would Num benefit to
+> be specialized to (small+big) integers (that is, throwing away the Ratio
+> constructor) ?  Because int values and Big_int values can be distinguished
+> at runtime, one could imagine implementing the union "by hand" (without
+> explicit tagging, and thus avoiding a lot of memory allocation and
+> garbage collection). What would be the gain ?
+
+The Num library is fairly sophisticated and fairly well integrated
+into the Caml language. We still need some lexical additions to be
+quite confortable to input numbers, but still it is a really mature
+and useful library.
+
+Now, some quick info to understand why it is so difficult to bench
+unubounded precision arithmetic packages.
+
+Our Num library has 4 arithmetic layers:
+
+- nat: positive integers. Allocation is explicit, operations are pure
+side effects (result is stored in operands).
+
+- big_int: signed integers. Allocation is implicit, operations are
+functional.
+
+- ratio: rational numbers. Allocation is implicit, operations are
+functional, but normalization is a side-effect. Normalization is
+either automatic or explicitely required by the user. You have to know
+that this sophisticated normalization discipline is just mandatory to
+obtain good performance with this layer: just changing the
+normalization regime of rational arithmetic primitives can have an
+exponential impact on the runtime (either systematic normalization or
+no normalization at all may exponentiallly win or loose depending on
+the computation at hand!)
+
+- num: the higer layer. Numbers are small integers, big integers, or
+rational numbers. Necessary coercion between those types are handled
+automatically by the library.
+
+The num layer is the more convenient to write programs. The nat layer
+is the most efficient if you just need integers. The big_int layer is
+generally a bit faster that the num layer, but if you want to be
+really efficient you need to use the nat layer. The programmation in
+the nat layer is a bit difficult, but the efficiency is (normally)
+what you gain: you end with no garbage collection at all, the numbers
+are allocated from the beginning of the computation with the right
+size to contain the final result, the operations are minimized (both
+in the size of operands and in the number of operations required to
+obtain the final result). We use to say that nat programming was the
+algorithmic proof level: you must state and prove your invariants
+while programming; a very profitable and refreshing exercice.
+
+Also the Num library is optimized for computation, not for
+printing. The idea being that normally you compute a lot and just
+print the final result. If your bench is just printing a lot of big
+numbers that are easily obtained with almost no computation (for
+instance factorial numbers), you will think the Num library to be very
+slow. However, we know that in the Num library the printing of big
+numbers is too slow and has to be revisited to go faster.
+
+As for the suggested improvement on the num type ``by hand'', some
+Caml compilers were (once) able to automatically do the optimization
+you just described (by the way not only for small ints but for the 3
+constructors of the type). As you may suspect, the gain depends a lot
+on the application at hand. In some cases, the speedup was impressive
+(I remember a matrices package that almost never use big numbers,
+except in case of ill-conditioned problems: the improvement of num
+arithmetic versus big_int arithmetic was impressive). However, you
+cannot have the same arithmetic efficiency with small integers
+represented as num values since you need to check for potential
+overflows for each operation (meaning at least 5 to 10 instructions
+instead of 1).
+
+Also this optimization does not fit very well with the pattern
+matching compiler technology of the current compiler. In addition, it
+is not clear that it will be a big win in general (I mean out of the
+big number arithmetic domain, where it is clearly a win).
+
+> General question: the library seems to be extremely stable since a several
+> years. Does it mean you consider that it is just good as it is, or does it
+> mean you don't want to continue working on it  ?
+
+Yes, the library is extremely stable, and this is an extremely
+desirable property: bugs are also extremely well chased.
+
+Concerning the development of the library, I once wrote a new
+implementation of the library from scratch. Unfortunately, I stopped
+when facing the problem of fast printing which is not so trivial. We
+may also consider to reimplement the Num library on top of another big
+numbers implementation (GMP or Numerix, if only some volonteers added
+assembly code for as many processors as necessary to run on all
+the platforms where Objective Caml is available).
+
+Best regards,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

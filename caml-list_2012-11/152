@@ -1,0 +1,92 @@
+Return-Path: <Samuel.Hornus@inria.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by sympa.inria.fr (Postfix) with ESMTPS id 168B97EE20
+	for <caml-list@sympa.inria.fr>; Sat, 17 Nov 2012 23:45:47 +0100 (CET)
+X-IronPort-AV: E=Sophos;i="4.83,270,1352070000"; 
+   d="scan'208";a="181988647"
+Received: from 4be54-7-78-230-69-17.fbx.proxad.net (HELO [192.168.0.23]) ([78.230.69.17])
+  by mail1-relais-roc.national.inria.fr with ESMTP/TLS/AES128-SHA; 17 Nov 2012 23:45:46 +0100
+Content-Type: text/plain; charset=iso-8859-1
+Mime-Version: 1.0 (Apple Message framework v1283)
+From: Samuel Hornus <Samuel.Hornus@inria.fr>
+In-Reply-To: <CAP_800oDXyj9nQD7ip+jfriPZcSu8zCjJ+Gzt9eSOUpyX46HgA@mail.gmail.com>
+Date: Sat, 17 Nov 2012 23:45:46 +0100
+Content-Transfer-Encoding: quoted-printable
+Message-Id: <E36D483A-5F66-445B-849E-62F729FDB05F@inria.fr>
+References: <70435661-3754-4815-9EEF-B52F33D29B5F@inria.fr> <CAP_800oDXyj9nQD7ip+jfriPZcSu8zCjJ+Gzt9eSOUpyX46HgA@mail.gmail.com>
+To: O Caml <caml-list@inria.fr>
+X-Mailer: Apple Mail (2.1283)
+Subject: Re: [Caml-list] Segfault in C++ stub with many 'new' allocations
+
+On 17 nov. 2012, at 20:46, Markus Mottl wrote:
+
+> On Sat, Nov 17, 2012 at 1:29 PM, Samuel Hornus <Samuel.Hornus@inria.fr> w=
+rote:
+>> 1/ I'm writing a stub to the C++ ANN library [1] to find geometric neigh=
+boring points in space.
+>> The constructor of the main class in this library uses a lot of allocati=
+on with the "new" C++ keyword.
+>> For small input point sets (e.g. 2500 points), it all seems to work fine.
+>> For larger ones (50 K points), the C++ constructor crashes.
+>> My question is : is it possible that the C++ "new" allocator differs suf=
+ficiently from the C-style malloc, that bad interactions with OCaml heap ha=
+ppen ?
+>=20
+> Having written quite some C++ bindings, I'm unaware of any such
+> problems.  Segfaults are typically due to incorrect interaction with
+> the OCaml runtime.
+
+It turns out I was putting a bit too much faith in libANN. I must use it wr=
+ongly & need to investigate more since, even after removing input points wi=
+th same coordinates, it does enter an infinite loop while computing the nea=
+rest-neighbors data structure, and exhausts the stack, hence the crash.
+I'm glad that this is not a C++::new problem, but a more easily debug-able =
+one.
+
+>> 2/ Regarding bigarray: before using them, I let the C++ constructor acce=
+ss, and keep pointers inside regular OCaml [float array] or [float array ar=
+ray]. It was working well (again, for small input point set), but is that s=
+afe ? Or can the garbage collector eventually relocate the content of a  [f=
+loat array]  or of a [float array array] ? so that the pointer kept in the =
+C++ class would become dangling ?
+>=20
+> No, it's not safe to keep pointers into any standard OCaml array if
+> allocations can happen.  Kakadu mentions register_global_root in a
+> reply, but it is not correct that this prevents the GC from moving
+> values, it merely protects against their reclamation (i.e. it keeps
+> the values live).
+
+OK ! I'll stick to bigarrays.
+
+> Even if you want to use bigarrays, you will have to protect them from
+> being reclaimed while your C++ code is accessing them.  But otherwise
+> their contents will remain fixed in memory, because unlike with
+> standard arrays it lives outside the OCaml heap.
+
+So my Ann module defines
+
+	type internal
+	type t =3D internal * bigarray
+
+and the Ann.mli abstracts the type t.
+
+The creation of the ANN data structure returns a block of size 1 with tag A=
+bstract_tag, containing the C++pointer, as suggested in the OCaml manual. T=
+he resulting value, call it 'ptr', is stored with the abstract type "intern=
+al" in the pair (ptr,ba) where ba is the bigarray containing the points (so=
+ that the big array lives at least as long as my ANN C++ object). A special=
+ destructor is attached to that pair with Gc.finalise. I believe (perhaps n=
+aively?) that this is sufficient to avoid memory corruption (unless I write=
+ stupid code in the Ann module itself).
+
+> For numerical calculations I'd strongly suggest using bigarrays,
+> especially if the C/C++ functions can take a long time to run.  In
+> this case you could then release the OCaml runtime lock and benefit
+> from parallelism and/or improved latencies if your OCaml program needs
+> to react to the outside world.
+
+Thank you Markus,
+--=20
+Sam=

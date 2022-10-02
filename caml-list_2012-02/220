@@ -1,0 +1,159 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q1T9O5jR017309
+	for <caml-list@sympa-roc.inria.fr>; Wed, 29 Feb 2012 10:24:05 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnACAGPtTU/ZSMD3jmdsb2JhbABDs24iAQEBAQkLCQkSBSSBdwEBBAEnEzIGBAMFCwsOEyUPAQQoIRMbh2gJuCCJbYMSCwcCBAYaAgoBBgsCBgcMFIUSCIQZBJsLjSaBUwgI
+X-IronPort-AV: E=Sophos;i="4.73,501,1325458800"; 
+   d="scan'208";a="133551539"
+Received: from fmmailgate06.web.de ([217.72.192.247])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 29 Feb 2012 10:24:00 +0100
+Received: from moweb002.kundenserver.de (moweb002.kundenserver.de [172.19.20.108])
+	by fmmailgate06.web.de (Postfix) with ESMTP id 0653AD3E25F
+	for <caml-list@inria.fr>; Wed, 29 Feb 2012 10:24:00 +0100 (CET)
+Received: from frosties.localnet ([95.208.118.96]) by smtp.web.de (mrweb001)
+ with ESMTPA (Nemesis) id 0M5woT-1SM02A2pGz-00xlCf; Wed, 29 Feb 2012 10:23:59
+ +0100
+Received: from mrvn by frosties.localnet with local (Exim 4.77)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1S2flP-0006Zs-65; Wed, 29 Feb 2012 10:23:59 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Gerd Stolpmann <info@gerd-stolpmann.de>
+Cc: Goswin von Brederlow <goswin-v-b@web.de>, caml-list@inria.fr
+References: <87y5rmemr6.fsf@frosties.localnet>
+	<1330463367.2826.96.camel@thinkpad>
+Date: Wed, 29 Feb 2012 10:23:59 +0100
+In-Reply-To: <1330463367.2826.96.camel@thinkpad> (Gerd Stolpmann's message of
+	"Tue, 28 Feb 2012 22:09:27 +0100")
+Message-ID: <87d38y0z80.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Provags-ID:  V02:K0:jYrFiIgVmLUIg7Vwx31U5BK/dmP9D6lKTBmYKE5WdVR
+ iRPN0sO7Ze956cUzr2FO5g9R2CtGwVsAIIMy6KijYfNeOx9bT9
+ kJeN3LS3Pf7wjXrgsvPl3y74QEScp+34cRZ3kDnCk1wkOAV5RQ
+ D87LKJbJDWqNd9fx0q28SvCqTFkkDy42IENG29RNLxHk/mCXgA
+ o00aYMqzlDkaveriuNUng==
+Subject: Re: [Caml-list] Bigarray question: Detecting subarrays, overlaps, ...
+
+Gerd Stolpmann <info@gerd-stolpmann.de> writes:
+
+> Am Dienstag, den 28.02.2012, 21:17 +0100 schrieb Goswin von Brederlow:
+>> Hi,
+>> 
+>> I'm implementing a RAID in userspace using ocaml and NBD (Network Block
+>> Device) as protocol to export the device. For this I'm using
+>> Bigarray.Array1 as buffer for data and wrote myself the right read(),
+>> write(), pread() and pwrite() stubs. The advantage of this (over
+>> strings) is that Bigarrays are not copied around by the GC so they don't
+>> need to copy data around between the Bigarray and a temporary buffer in
+>> the C stub.
+>
+> I used the same approach for PlasmaFS. The bigarray-based reads and
+> writes are really missing in the stdlib. (If anybody wants to
+> experiment, look into the Netsys_mem module of Ocamlnet, and use the
+> functions mem_read and mem_write.)
+>
+> Btw, you should try to allocate the bigarrays in a page-aligned way.
+> This makes the syscalls even more efficient.
+
+Which is actualy a requirement for libaio. At least alignment to
+blocksize. My libaio bindings include a stub to create an aligned
+Bigarray.
+
+> In my use case, I did not write to devices directly, and could assume
+> that the blocks are backed by the page cache. So I did not run into this
+> problem you describe in the following.
+>
+>> For efficiency each request stores all its data in a single
+>> Bigarray.Array1. For reasons of the RAID implementation large requests
+>> are split into 4k chunks using Bigarray.Array1.sub and grouped into
+>> stripes. The stripes are then acted upon independently until all stripes
+>> involved in a request are finished. Then the request is completed.
+>> 
+>> Now I get a problem when 2 requests come in that overlap. Say I get a
+>> write request for blocks 0 - 6 and a read request for blocks 4-9 in
+>> that order. Since I already have the data for block 4-6 in memory from
+>> the write request I do not want to reread them from disk. On the stripe
+>> level the data looks like this:
+>> 
+>> |W0 W1 W2 W3 W4 W5 W6 .  .  .  | write 0-6
+>> |            W4 W5 W6 R7 R8 R9 | read  4-9
+>> 
+>> For the read request I need to copy W4-6 to R4-6 or send out W4-6 + R7-9
+>> in two writes. I think I would like to avoid sending each stripe chunk
+>> out seperately.
+>
+> Why not? This seems to be an elegant solution, and I don't see why this
+> should make the accesses slower. The time for the extra context switches
+> in negligible compared to the disk accesses.
+
+A lot of the time data will just move between caches so disk speed is
+secondary. And sending each chunk seperately would mean up to 32 context
+switches instead of 1. And writing to a socket in chunks can lead to the
+data being send out in frames less than the MTU which would be
+wastefull. So I think there is some gain in limiting this.
+
+>>  On the other hand I could implement (p)readv() and
+>> (p)writev() stubs.
+>> 
+>> Anyway, my question now is how to detect which subarrays in the stripes
+>> are part of a common larger array? Do I need to write my own C stub that
+>> looks into the internas of the arrays to see if they share a common
+>> ancestor?  I think that would be preferable to tracking the origin of
+>> each subarray myself.
+>
+> Yes, subarrays are tracked, but this feature exists only to catch the
+> right moment for unmmapping bigarrays (if needed). As far as I remember,
+> this is not tracked as a sub/super relationship, but the bigarrays
+> accessing the same buffer share then the same buffer descriptor, and
+> when the use count drops to 0, the buffer is finally destroyed. So, you
+> cannot say which bigarray is the original one, and it can even be that
+> the original bigarray is already deallocated but the backing buffer is
+> not yet.
+
+All subarrays share a struct caml_ba_proxy, as you say to catch the
+right moment for unmmapping bigarrays. So two subarrays are part of the
+same bigarray if they have the same proxy object. That seems like an
+easy enough test. Which one is the original bigarray doesn't matter, at
+least to me.
+
+>> On a similar note how does Bigarray.Array1.blit handle arrays that are
+>> part of the same larger array and overlap?
+>> 
+>> ----------------------------------------------------------------------
+>> I'm missing functions like:
+>> 
+>> val super : ('a, 'b, 'c) t -> ('a, 'b, 'c) t -> ('a, 'b, 'c) t
+>>     Create a merged sub-array of 2 adjacent sub-arrays of the same
+>>     big array.
+>
+> This function would be possible to implement. The requirement would be
+> that both bigarrays use the same buffer descriptor.
+>
+>> val same_parent : ('a, 'b, 'c) t -> ('a, 'b, 'c) t -> bool
+>>     True if the 2 (sub-)arrays are part of the same big array.
+>
+> I would not call it "same_parent", but "same_backing_buffer".
+
+Maybe "related" would be better?
+
+>> val offset : ('a, 'b, 'c) t -> int
+>>     Offset of the sub-array in the underlying big array.
+>
+> I think this information is in the current implementation not available.
+> As buffer sharing is also possible after reshaping, this is also not
+> meaningful in the general case.
+
+offset = array->data - array->proxy->data;
+
+After reshaping the offset would be the offset into the original array
+after reshaping that too.
+
+For me the offset would be relevant to see which 2 sub arrays could be
+merged with "super" above. That it wouldn't always be meaningfull I
+could accept.
+
+> Gerd
+
+MfG
+        Goswin

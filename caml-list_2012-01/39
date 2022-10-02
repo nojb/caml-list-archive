@@ -1,0 +1,90 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q04Imjxc016207
+	for <caml-list@sympa-roc.inria.fr>; Wed, 4 Jan 2012 19:48:45 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlcBAJSeBE9KfVM2kGdsb2JhbABDggWqXAgiAQEBAQkJDQcUBCGBcgEBAQQSAhMZARsdAQMMBgULDS4iAREBBQEcBhMioD4Ki2WCbYRWP4hxAgULjAQEjUiHPI19PYN7
+X-IronPort-AV: E=Sophos;i="4.71,457,1320620400"; 
+   d="scan'208";a="125597096"
+Received: from mail-ee0-f54.google.com ([74.125.83.54])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 04 Jan 2012 19:48:40 +0100
+Received: by eekc50 with SMTP id c50so21609982eek.27
+        for <multiple recipients>; Wed, 04 Jan 2012 10:48:39 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :cc:content-type;
+        bh=iv0f8uhJHg0ZR6ORwF0Iv7woJKz4kfR5rACQSb7CPew=;
+        b=LhdYP7YNRovD3c3LzY7Bg6IZvCF9VU0N79js8C2sydRbsKiiDvfHwyziRlS5r5ne9T
+         Zs1LrNJ2hqG6EvI2uz2r2/kmAs/LZcYHI8R4TW3BHzHY8E6FRcj7pK3vY7L849oGeH+9
+         LQvJSK+Hqi4dJsu7PQqnZ9d0NMBfpCxpnR+mk=
+MIME-Version: 1.0
+Received: by 10.213.19.72 with SMTP id z8mr4285637eba.142.1325702919269; Wed,
+ 04 Jan 2012 10:48:39 -0800 (PST)
+Received: by 10.213.104.133 with HTTP; Wed, 4 Jan 2012 10:48:38 -0800 (PST)
+In-Reply-To: <1453C993-CFD2-41AD-9611-A90398E560EC@inria.fr>
+References: <96F225D0-B458-4E25-BE34-3976989984B2@ezabel.com>
+	<CAFqqUFEO5Vxf0jWxSEbDjXY-qE_G2XsOA0uZj47jTt4NMkeBPA@mail.gmail.com>
+	<EED65A08-B24F-42CD-B4D6-4E30667EC6CA@ezabel.com>
+	<20120101124454.GA12851@annexia.org>
+	<1453C993-CFD2-41AD-9611-A90398E560EC@inria.fr>
+Date: Wed, 4 Jan 2012 19:48:38 +0100
+Message-ID: <CAP5QFJk1GSDSizVwyQw+-aX_eWC71vPEBpXUepY4Vv9iYO6=Jw@mail.gmail.com>
+From: Adrien <camaradetux@gmail.com>
+To: Damien Doligez <damien.doligez@inria.fr>
+Cc: Caml List <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Subject: Re: [Caml-list] Understanding usage by the runtime
+
+On 04/01/2012, Damien Doligez <damien.doligez@inria.fr> wrote:
+> On 2012-01-01, at 13:44, Richard W.M. Jones wrote:
+>
+>> Is compaction disabled?  lablgtk disables it unconditionally by
+>> setting the global Gc max_overhead (see also the Gc documentation):
+>>
+>>  src/gtkMain.ml:
+>>    let () = Gc.set {(Gc.get()) with Gc.max_overhead = 1000000}
+>
+> Anyone who disables compaction should seriously consider switching
+> to the first-fit allocation policy:
+>
+>   let () = Gc.set {(Gc.get ()) with Gc.allocation_policy = 1}
+>
+> This may slow down allocations a bit, but the theory tells us that
+> it completely prevents unbounded fragmentation of the OCaml heap.
+
+I've often wondered what I should do when using lablgtk. It's a pretty
+annoying issue and, as far as I understand, OCaml will only return the
+memory to the OS upon compactions.
+
+There is however something to do. Quoting lablgtk's README:
+> IMPORTANT: Some Gtk data structures are allocated in the Caml heap,
+> and their use in signals (Gtk functions internally cally callbacks)
+> relies on their address being stable during a function call. For
+> this reason automatic compation is disabled in GtkMain. If you need
+> it, you may use compaction through Gc.compact where it is safe
+> (timeouts, other threads...), but do not enable automatic compaction.
+
+I've never really understood why it worked: I'm surprised the GC would
+update addresses stored in the C side of GTK.
+
+If you want to use timeouts, the following should work:
+  Glib.Timeout.add ~ms:0 ~callback:(fun () -> Gc.compact (); false)
+
+I guess that Glib.Idle.add would work too.
+
+That guarantees nothing about the time the compaction will run however
+and in practice, adding a timeout or an idle and starting a long-running
+and uninterruptible computation right after will severely delay the
+compaction.
+
+I haven't had the time to try it but it should be possible to pump
+glib's event loop by hand in order to trigger the compaction. Another
+possibility would be to spawn a thread and use a mutex to wait until the
+compaction is done. And in case you're using Lwt, well, I don't know but
+I'd expect the callback to be callable whenever threads can be switched.
+
+Maybe that if it were possible to have a callback called each time the
+runtime would like to do a compaction, this could be automated.
+
+Regards,
+Adrien Nader

@@ -1,0 +1,104 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA01007; Thu, 23 Aug 2001 18:07:05 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA00852 for <caml-list@pauillac.inria.fr>; Thu, 23 Aug 2001 18:07:04 +0200 (MET DST)
+Received: from woozle.org (woozle.org [216.39.146.229])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f7NG73X02019
+	for <caml-list@pauillac.inria.fr>; Thu, 23 Aug 2001 18:07:03 +0200 (MET DST)
+Received: from neale by woozle.org with local auth=neale (Exim 3.12 #1 (Debian))
+	id 15Zx0U-0007sb-00
+	for <caml-list@pauillac.inria.fr>; Thu, 23 Aug 2001 09:06:58 -0700
+To: caml-list@pauillac.inria.fr
+Subject: Re: [Caml-list] Str.string_match raising Invalid_argument "String.sub" in gc
+References: <Pine.GSO.4.04.10108222115060.8254-100000@clipper.ens.fr>
+	<w53heuz25f4.fsf@woozle.org> <20010823122114.A3873@cs.uu.nl>
+From: Neale Pickett <neale-caml@woozle.org>
+Organization: WoozleWorks (woozle.org)
+X-Face: "&g4:h\nuA>dfRaRmJ5c+Mqvu!,|5@dd>:BqJ,#G:mT3`i-EF{L>6oE?di}m\;Wil(?AS(@9j"G@o-UR8(BU$)u.%I;*K9%4Vj.fO$W9-bjxPgl%|#{^W@e#1/jZ@,G:>&;JzJrBqMqomx3Z#Hg.``g5v%R[+PzjYtAa&l@EtK{R<;.,gV`5$8Go1OJB=L`R(<)U$M4YK-t;a}oA1y([AV@r$%?AJW[:_|_*r44[Gl{3@:Ff6U9XFOJxp%lZWI-d0-1l5+6aMAOAT+Ac%q@E3t|:2;lpSwi=1"gf7g{Bz+U2MI
+X-PGP-Key-Fingerprint: A862 F105 13EF 7FAF 4F08  78B4 9168 856B 48BF F157
+Date: 23 Aug 2001 09:06:58 -0700
+In-Reply-To: <20010823122114.A3873@cs.uu.nl>
+Message-ID: <w53k7zuzrod.fsf@woozle.org>
+Lines: 73
+User-Agent: Gnus/5.0808 (Gnus v5.8.8) XEmacs/21.1 (Capitol Reef)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Frank Atanassow writes:
+
+> Ocaml does not purport to have no side-effects. It has plenty of
+> side-effects.  You must be thinking of Haskell or Miranda.
+
+That's probably half of my problem, then :-)
+
+> I'm pretty sure there is no such optimization, but I'm not sure what
+> you're talking about here. Anyway, if an optimization affected the
+> behavior of a program, it would not be an optimization but rather an
+> compiler bug.
+
+Having slept on it, I think what I was experiencing might be linked with
+the fact that the Str library is apparently non-reentrant and my
+approach to using the regexp parts of Str.  What I ran into was, I
+think, a bug in either the Str library or its documentation.
+
+Originally, I was trying to do something like this:
+
+# let string_lines =
+    let sep = Str.regexp "^[ \t\n]*\\(.+\\)" in
+    let rec f = function
+      | [] -> []
+      | s :: rest -> if (Str.string_match sep s 0) then
+          (Str.matched_group 1 s) :: (f rest)
+      else
+          f rest
+    in
+    f
+  in
+  string_lines ["  hello"; "  dromedaries"];;
+Uncaught exception: Invalid_argument "String.sub".
+
+(Apologies if this is inelegant, I'm just starting out.)
+
+Alain Frisch <frisch@clipper.ens.fr> points out:
+
+> This is wrong; with the current OCaml implementation, the right
+> operand of (::) is called first; so (Str.matched_group 1 s) is called
+> after subsequent calls to Str.string_match, which is obviously
+> incorrect.
+
+I contest that this is obvious.  s is a different string each time f is
+called, and so even though I do call Str.string_match multiple times,
+it's with a different s.  The manual for the Str libary says only that I
+must pass in the same s as was given to string_match, which implies that
+s is somehow keyed to its matches.  It sounds as though I shouldn't do
+the following:
+
+  Str.string_match sep s 0;
+  Str.string_match sep s' 0;
+  print_string (Str.matched_group 1 s);
+
+If this is the case, why does Str.matched_group even bother requiring
+the original string?
+
+I may be missing some crucial aspect to OCaml, and if so, I apologize
+for this excercise in my own ignorance.  With my current understanding
+of the language, though, it looks as though to use the regexp parts of
+Str, I need to understand the underlying implementation of the library,
+or at least know not to call string_match as above.  If the former, I
+would consider this a bug; if the latter, it should just be added to the
+documentation.  Either way, it's confusing.
+
+> If I understand you correctly (but I don't think I do):
+
+> # Str.split (Str.regexp "[ \t\n]+") "  abc def  ghi j";;
+> - : string list = ["abc"; "def"; "ghi"; "j"]
+
+This is, in fact, exactly what I was trying to do.  I wanted to code it
+as a recursive function to show a friend the difference between
+functional and procedural programming, got caught up in the exception,
+and forgot what my original intent was.  Thank you!
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

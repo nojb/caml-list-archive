@@ -1,0 +1,190 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA14419; Wed, 14 May 2003 23:03:35 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA26700 for <caml-list@pauillac.inria.fr>; Wed, 14 May 2003 23:03:34 +0200 (MET DST)
+Received: from swordfish ([216.241.35.41])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h4EL3WT21787
+	for <caml-list@pauillac.inria.fr>; Wed, 14 May 2003 23:03:33 +0200 (MET DST)
+Received: from matt by swordfish with local (Exim 3.35 #1 (Debian))
+	id 19G3PQ-0007U5-00
+	for <caml-list@pauillac.inria.fr>; Wed, 14 May 2003 15:03:32 -0600
+Date: Wed, 14 May 2003 15:03:32 -0600
+From: Matt Gushee <mgushee@havenrock.com>
+To: caml-list@pauillac.inria.fr
+Subject: [Caml-list] Performance problem
+Message-ID: <20030514210332.GA27927@swordfish>
+Reply-To: Matt Gushee <mgushee@havenrock.com>
+Mail-Followup-To: caml-list@pauillac.inria.fr
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.3.27i
+X-Spam: no; 0.00; gushee:01 mgushee:01 havenrock:01 all--:01 obtains:01 outputs:01 font:99 disp:99 getenv:01 0.0:01 bug:01 buffering:01 terrible:01 serif:99 sansserif:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello, all--
+
+I am writing a utility that obtains a list of available fonts on a
+system and outputs them as a list of OCaml records. I am currently
+testing this on Linux, where the font list is obtained with 
+
+  Unix.open_process_in("xlsfonts -d " ^ disp ^ " |sort |uniq")
+
+where disp is the result of Unix.getenv "DISPLAY" or a default value of
+":0.0". Each line is then parsed using a regular expression. For further
+detail, see the complete code below.
+
+Well, the program seems to work correctly, but it is extremely slow. My
+test program calls get_font_info () once, then prints "Done" and exits.
+But with the test program compiled to *native code*, GNU time reports:
+
+  real    4m2.329s
+  user    3m54.800s
+  sys     0m0.090s
+
+Granted, the machine I'm running it on is a bit slow (Pentium 200), but
+these figures seem way beyond the pale. There must be a bug either in my
+code or one of the supporting libraries. The only obvious possibilities
+that occur to me are an output buffering problem or some delay in
+interacting with the X display, but I'm not sure how to solve either of
+those. And maybe it's something else entirely. Can anyone explain my
+terrible results?
+
+---- fontInfo.ml ----------------------------------------------------
+
+exception NotSupported
+exception InvalidXLFD
+
+type font_weight =
+  [ `Medium
+  | `Bold
+  | `DemiBold
+  | `ExtraBold
+  | `Light
+  ]
+and font_style =
+  [ `Roman
+  | `Italic
+  | `Oblique
+  ]
+and font_stretch =
+  [ `Normal
+  | `Condensed
+  | `Extended
+  ]
+and font_class =
+  [ `Serif
+  | `SansSerif
+  | `Monospaced
+  | `Cursive
+  | `Fantasy
+  ]
+
+type font_variant = {
+  ptsize: int;
+  weight: font_weight;
+  style: font_style;
+  stretch: font_stretch;
+  }
+type font = {
+  id: string;
+  family: string;
+  scalable: bool;
+  variants: font_variant array;
+  encoding: string;
+  }
+
+
+(* foundry, Family, Weight, Slant, Stretch, ?, Ptsize, pxlsize, ht, width, MCP, ?,
+   EncA, EncB *)
+let xlfd_re = Str.regexp "-.*-\(.*\)-\(.*\)-\(.*\)-\(.*\)-.*-\(.*\)-.*-.*-.*-\(.*\)-.*-\(.*-.*\)"
+
+let parse_xlfd xlfd =
+  let m = Str.string_match xlfd_re xlfd 0 in
+  if not m then raise InvalidXLFD;
+  try
+    let size = int_of_string (Str.matched_group 5 xlfd) in
+    let scalable = (size = 0)
+    and family = Str.matched_group 1 xlfd 
+    and encoding = Str.matched_group 7 xlfd
+    and var =
+      let weight =
+        match (Str.matched_group 2 xlfd) with
+        | "medium" | "book" -> `Medium
+        | "bold" -> `Bold
+        | "demibold" -> `DemiBold
+        | "light" -> `Light
+        | _ -> `Medium
+      and style =
+        match (Str.matched_group 3 xlfd) with
+        | "o" -> `Oblique
+        | "i" -> `Italic
+        | _ -> `Roman
+      and stretch =
+        match (Str.matched_group 4 xlfd) with
+        | "condensed" -> `Condensed 
+        | "extended" -> `Extended
+        | _ -> `Normal in
+      { ptsize = size;
+        weight = weight;
+        style = style;
+        stretch = stretch; } in
+    (family, scalable, encoding, var)
+  with _ -> raise InvalidXLFD
+
+let parse_xlfds xlfds =
+  let rec raw_parse_xlfds xlfds' =
+    match xlfds' with
+    | [] -> []
+    | h :: t ->
+      try
+        let fdata = parse_xlfd h in
+        fdata :: raw_parse_xlfds t
+      with InvalidXLFD ->
+        (* Normal results include some lines that are not XLFDs, so
+           we just ignore those. *)
+        prerr_endline "WARNING: Invalid XLFD";
+        flush stderr;
+        raw_parse_xlfds t in
+  raw_parse_xlfds xlfds
+
+let get_x_fonts disp =
+  let rec getlines ch =
+    try
+      let line = input_line ch in
+      line :: getlines ch
+    with End_of_file ->
+      [] in
+  let fonts =
+    getlines (Unix.open_process_in ("xlsfonts -d " ^ disp ^ " |sort |uniq")) in
+  fonts
+
+let get_font_info () =
+  match Sys.os_type with
+  | "Unix" ->
+    let disp = 
+      try
+        Unix.getenv "DISPLAY"
+      with Not_found ->
+        (* try a reasonable default *)
+        ":0.0" in
+    parse_xlfds (get_x_fonts disp)
+  | _ -> raise NotSupported
+
+
+
+-- 
+Matt Gushee                 When a nation follows the Way,
+Englewood, Colorado, USA    Horses bear manure through
+mgushee@havenrock.com           its fields;
+http://www.havenrock.com/   When a nation ignores the Way,
+                            Horses bear soldiers through
+                                its streets.
+                                
+                            --Lao Tzu (Peter Merel, trans.)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,130 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA07733; Fri, 9 Aug 2002 00:32:10 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA08077 for <caml-list@pauillac.inria.fr>; Fri, 9 Aug 2002 00:32:09 +0200 (MET DST)
+Received: from postfix3-2.free.fr (postfix3-2.free.fr [213.228.0.169])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g78MW8j00532
+	for <caml-list@inria.fr>; Fri, 9 Aug 2002 00:32:08 +0200 (MET DST)
+Received: from lfs (strasbourg-1-a7-62-147-10-196.dial.proxad.net [62.147.10.196])
+	by postfix3-2.free.fr (Postfix) with SMTP id 8B70F17E5D
+	for <caml-list@inria.fr>; Fri,  9 Aug 2002 00:32:07 +0200 (CEST)
+Date: Fri, 9 Aug 2002 00:40:20 +0200
+From: Nicolas FRANCOIS (AKA El Bofo) <nicolas.francois@free.fr>
+To: Caml List <caml-list@inria.fr>
+Subject: [Caml-list] Side effect
+Message-Id: <20020809004020.1dace6b2.nicolas.francois@free.fr>
+X-Mailer: Sylpheed version 0.8.0 (GTK+ 1.2.10; i686-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Thanks for the tip on stdout, I found the problem. Ocamldebug had me
+discover another bug (a copy-paste bug ;-), but I'm stuck on this one :
+
+  let cherche_pivot m fllig flcol =
+    try
+      for i = 0 to D.lignes - 1 do
+	if fllig.(i)
+	then
+	  for j = 0 to D.colonnes - 1 do
+	    if flcol.(j)
+	    then
+	      if A.(==) m.(i).(j) A.zero
+	      then ()
+	      else raise (Pivot_trouve (i,j))
+	  done
+      done;
+      raise Plus_de_pivot
+    with Pivot_trouve (i,j) -> (i,j)
+
+  let applique_pivot_ligne m fllig flcol i j div =
+    let m' = Array.copy m
+    and x = m.(i).(j)
+    in
+      for i' = 0 to D.lignes - 1 do
+	if fllig.(i')
+	then
+	  let y = m'.(i').(j) in
+	    for j' = 0 to D.colonnes - 1 do
+	      if flcol.(j')
+	      then m'.(i').(j') <-
+		A.(//) (A.(--)
+			  (A.( ** ) x m'.(i').(j'))
+			  (A.( ** ) y m'.(i).(j'))) div
+	    done;
+	    m'.(i').(j) <- A.zero;
+      done;
+      m'
+	
+  let pivot_ligne_sans_echange m =
+    let m' = Array.copy m
+    and fllig = Array.make D.lignes true
+    and flcol = Array.make D.colonnes true
+    and divisor = A.one
+    in
+    let rec plse_aux mat fl fc div =
+      try
+	let (i,j) = cherche_pivot mat fl fc
+	in
+	  fl.(i) <- false;
+	  fc.(j) <- false;
+	  let mat' = applique_pivot_ligne mat fl fc i j div in
+	    plse_aux mat' fl fc mat'.(i).(j)
+      with Plus_de_pivot -> mat
+    in
+      plse_aux m' fllig flcol A.one	
+end
+
+It's just a fraction free Gauss reduction without lines exchanges. It
+works :
+
+  let m = Matrice_Z.parse
+    (Stream.of_string
+       "[[ 3, 4, -2, 1, -2],[ 1, -1, 2, 2, 7],[ 4, -3, 4, -3, 2],[ -1, 1,
+        6, -1, 1]]");;
+  Matrice_Z.print m;;
+
+prints
+
+  (  3  4  -2  1  -2  )
+  (  1  -1  2  2  7  )
+  (  4  -3  4  -3  2  )
+  (  -1  1  6  -1  1  )
+
+  let m' = Pivot_Z.pivot_ligne_sans_echange m;;
+  Matrice_Z.print m';;
+
+gives the correct 
+
+  (  3  4  -2  1  -2  )
+  (  0  -7  8  5  23  )
+  (  0  0  20  72  159  )
+  (  0  0  0  -556  -1112  )
+
+Trouble is
+  
+  Matrice_Z.print m';;
+
+answers
+
+  (  3  4  -2  1  -2  )
+  (  0  -7  8  5  23  )
+  (  0  0  20  72  159  )
+  (  0  0  0  -556  -1112  )
+
+So matrix m was modified. But I work on a copy of m in
+Pivot_Z.pivot_ligne_sans_echange. What's the problem doc ?
+
+\bye
+
+-- 
+
+                   Nicolas FRANCOIS
+            http://nicolas.francois.free.fr
+ A TRUE Klingon programmer does NOT comment his code
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

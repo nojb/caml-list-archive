@@ -1,0 +1,129 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id UAA11977 for caml-redistribution; Tue, 29 Oct 1996 20:56:29 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id MAA25635 for <caml-list@pauillac.inria.fr>; Tue, 29 Oct 1996 12:13:28 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id MAA24000 for <caml-list@pauillac.inria.fr>; Tue, 29 Oct 1996 12:13:29 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.7.6/8.7.3) with ESMTP id MAA14599 for <caml-list@margaux.inria.fr>; Tue, 29 Oct 1996 12:13:23 +0100 (MET)
+Received: from daedalus.epcc.ed.ac.uk (root@[129.215.56.21]) by concorde.inria.fr (8.7.6/8.7.1) with SMTP id MAA23991 for <caml-list@margaux.inria.fr>; Tue, 29 Oct 1996 12:13:02 +0100 (MET)
+Received: from tufa.epcc.ed.ac.uk (jserot@tufa.epcc.ed.ac.uk [129.215.56.4]) by daedalus.epcc.ed.ac.uk (8.6.13/8.6.12) with ESMTP id LAA10057 for <caml-list@margaux.inria.fr>; Tue, 29 Oct 1996 11:12:55 GMT
+Message-Id: <20086.199610291112@tufa.epcc.ed.ac.uk>
+Subject: Q: float arrays
+To: caml-list@margaux.inria.fr
+Date: Tue, 29 Oct 1996 11:12:54 +0000 (GMT)
+From: Jocelyn Serot <jserot@epcc.ed.ac.uk>
+X-Mailer: ELM [version 2.4 PL25]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+
+Hello,
+
+Trying to quantify to cost of handling arrays of tuples instead of 
+multiple "parallel" arrays, i recently came to some results, which at 
+first sight, seems a little surprising.
+Can someone please enlight me (or point me the bugs i made !..) ?
+
+What i am comparing here is two functionnaly equivalent implementations
+of the same operation, namely multiplying two arrays of floats.
+The first one use a map2 higher-order-function (similar to List.map2 but
+for arrays), the second works on an single array of pairs.
+
+Here's the code:
+
+*********************** farrays.ml ******************************************
+
+open Array
+
+let map f a =		(* this is simply copied from stdlib *)
+  let l = length a in
+  if l = 0 then [||] else begin
+    let r = create l (f(unsafe_get a 0)) in
+    for i = 1 to l - 1 do
+      unsafe_set r i (f (unsafe_get a i))
+    done;
+    r
+  end
+
+let map2 f a a' =		(* a slight generalization *)
+  let l = length a in
+  if ( length a' != l ) then invalid_arg "map2" else
+  if l = 0 then [||] else begin
+    let r = create l (f(unsafe_get a 0)(unsafe_get a' 0)) in
+    for i = 1 to l - 1 do
+      unsafe_set r i (f (unsafe_get a i) (unsafe_get a' i))
+    done;
+    r
+  end
+
+let main () =
+  let a1 = Array.create (1024*1024) 123.456
+  and a2 = Array.create (1024*1024) 123.456
+  and a3 = Array.create (1024*1024) (123.456,123.456) in
+  let _ = Profile.start () in
+  let f1 = Profile.f2 "map2" (map2 (fun p p' -> p*.p')) in
+  let _ = for i = 0 to 10 do let r1 = f1 a1 a2 in () done in
+  let f2 = Profile.f1 "map_pairs" (map (function (p,p') -> (p*.p'))) in
+  let _ = for i = 0 to 10 do let r2 = f2 a3 in () done in
+  let _ = Profile.stop () in
+  ()
+
+let _ = Printexc.catch main ()
+
+*******************************************************************************
+
+Time profiling is done using the time-profiling module posted by
+Mark Hayden (hayden@cs.cornell.edu, posted 4/96) to caml mailing list.
+Both the bytecode and and the native code have been profiled.
+
+-----------------------------------------------------------------------RESULTS
+BYTECODE:
+
+jserot@tufa$ main
+ Number of samples is 11049
+ Each sample counts as 0.02 seconds.
+
+ %       self     self&            self    total
+ time    seconds  children  calls  ms/call ms/call name
+-------------------------------------------------------
+51.42   98.894   98.894       11   8.990   8.990   map2
+48.58   93.446   93.446       11   8.495   8.495   map_pairs
+
+NATIVE:
+
+jserot@tufa$ omain
+ Number of samples is 1584
+ Each sample counts as 0.02 seconds.
+
+ %       self     self&            self    total
+ time    seconds  children  calls  ms/call ms/call name
+-------------------------------------------------------
+62.56   16.198   16.198       11   1.473   1.473   map2
+37.44    9.692    9.692       11   0.881   0.881   map_pairs
+
+nb: tufa is a sun4-51 Sparc server. Compiler is ocaml-1.02
+------------------------------------------------------------------------------
+
+What i cannot understand is that map2 seems to be slower than map_pairs (in
+the range 1->2 in native compiled mode). The few i know about the Caml compiler
+is that it doesnt boxe floats in arrays. But i guess that an in an array of
+float*float, each pair has to be boxed. So accessing arguments from the
+map_pairs function should be definitly slower than from map2, 
+Does that mean that accessing two unboxed floats takes longer than
+accessing a boxed pair of float (twice the time in native mode ?!)
+
+There's also the possibility from significative innaccurcies in my measuring
+protocol ..
+
+COuld someone comment ?
+
+	Jocelyn
+
+-- 
+E-mail: jserot@epcc.ed.ac.uk (->Nov 29 1996) ................................
+S-mail: LASMEA - URA 1793 CNRS, Universite Blaise Pascal, 63177 Aubiere cedex
+Tel: (33) 73.40.73.30 - Fax: (33) 73.40.72.62 ...............................
+.... http://wwwlasmea.univ-bpclermont.fr/Personnel/Jocelyn.Serot/Welcome.html
+
+
+
+

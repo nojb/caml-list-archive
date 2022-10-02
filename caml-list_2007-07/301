@@ -1,0 +1,408 @@
+Return-Path: <Christophe.Raffalli@univ-savoie.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 71B6DBC6B
+	for <caml-list@yquem.inria.fr>; Mon, 23 Jul 2007 11:46:12 +0200 (CEST)
+Received: from smtp6-g19.free.fr (smtp6-g19.free.fr [212.27.42.36])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l6N9k9VA024848
+	for <caml-list@yquem.inria.fr>; Mon, 23 Jul 2007 11:46:12 +0200
+Received: from Tocksi.local (lns-bzn-45-82-65-145-73.adsl.proxad.net [82.65.145.73])
+	by smtp6-g19.free.fr (Postfix) with ESMTP id 93B7BB8B25
+	for <caml-list@yquem.inria.fr>; Mon, 23 Jul 2007 11:46:09 +0200 (CEST)
+Message-ID: <46A478DA.8010806@univ-savoie.fr>
+Date: Mon, 23 Jul 2007 11:46:02 +0200
+From: Christophe Raffalli <Christophe.Raffalli@univ-savoie.fr>
+User-Agent: Thunderbird 2.0.0.5 (Macintosh/20070716)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: camlp4 questions
+Content-Type: multipart/mixed;
+ boundary="------------040608050607000505030202"
+X-Miltered: at concorde with ID 46A478E1.002 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; christophe:01 raffalli:01 christophe:01 raffalli:01 univ-savoie:01 camlp:01 camlp:01 bug:01 expr:01 expr:01 bytecode:01 bytecode:01 cmo:01 lexer:01 lexer:01 
+X-Attachments: name="pa_bindlib-3.10.ml" name="pa_bindlib-3.10.ml" 
+
+This is a multi-part message in MIME format.
+--------------040608050607000505030202
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+
+
+Dear list members,
+
+I am finishing to port binlib to camlp4 of 3.10 and have a few problems 
+left :
+
+1) a bug in my extension, I have:
+
+ expr: LEVEL "simple"
+    [ [
+    "[^"; "^]" -> <:expr< Bindlib.unit [] >>     
+  | "[^"; el = expr1_semi_list; "^]" -> <:expr< $mklistupexp _loc true 
+el$ >>     
+  | "[|^"; "^|]" -> <:expr< Bindlib.unit [||] >>
+  | "[|^"; el = expr1_semi_list; "^|]" ->
+      mkarrayupexp _loc el
+  | "{^"; lel = label_expr; "^}" ->
+      mkrecordupexp _loc None lel
+  | "{^"; e = expr LEVEL "."; "with"; le = label_expr; "^}" ->
+      mkrecordupexp _loc (Some e) le
+  | "(^"; el = LIST0 expr LEVEL ":=" SEP ","; "^)" ->
+      mktuppleupexp _loc el
+    ] ];
+
+(among other thing, the complete extension is attached)
+
+and in a program using this extension, the following line:
+
+(^ (^Array.length sa^) , (^make_pat pat^) , t^)
+
+produces the following error message:
+
+File "programs.ml", line 1259, characters 1-48:
+Failure: "expr, expr: not allowed here"
+Preprocessor error
+
+I tried a lot of thing and I do not understand what is happening (a very 
+similar extension was working with 3.09)
+
+2) with 3.09 I used to produce a bytecode similar to camlp4o with my 
+extension buildin. I could not find
+the proper line to compile this bytecode (I tried to copy the compile 
+line of camlp4o and to add
+pa_bindlib.cmo somewhere, but I failed)
+
+3) I like the fact that my new delimiter "(^", "^)", ... are now 
+supported by the standard lexer of camlp4, But I think
+that spaces should not be mandatory between delimiters and therefore, 
+keywords should only be allowed to contain
+one "(", "{" or "[" at the beginning and/or one ")","}","]" at the end. 
+Still, I prefer the 3.10 version needing a few extra spaces that having 
+to rewrite my own lexer.
+
+
+
+--------------040608050607000505030202
+Content-Type: text/plain;
+ name="pa_bindlib-3.10.ml"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline;
+ filename="pa_bindlib-3.10.ml"
+
+open Camlp4.PreCast
+open Syntax
+
+let rec mklistupexp loc top = function
+  | [] -> <:expr@loc< Bindlib.unit [] >>
+  | e1::el -> 
+      <:expr@loc< Bindlib.unit_apply2 (fun x y -> [ x::y ]) $e1$ $mklistupexp loc false el$ >>  
+
+let mktuppleupexp loc el =
+  match el with 
+    [] ->
+      <:expr@loc< Bindlib.unit () >>
+  | [e] ->
+      <:expr@loc< Bindlib.unit $e$ >>
+  | _ ->
+      let et, preambule, preambule2, _ =
+	List.fold_left 
+	  (fun (et,ex,el,i) e ->
+	    let namex = "x#"^string_of_int i in
+	    let namey = "y#"^string_of_int i in
+	    (match et with
+	      Some et -> Some <:expr@loc<$et$,($lid:namex$ $lid:"v#"$)>>
+	    | None -> Some <:expr@loc<($lid:namex$ $lid:"v#"$)>>),
+            (fun next -> 
+	      ex (<:expr@loc<let ($lid:"e#"$, $lid:namey$) = special_apply $lid:"e#"$ $e$ in $next$>>)),
+	    (fun next ->
+	      el  (<:expr@loc<let $lid:namex$ = $lid:namey$ $lid:"h#"$ in $next$>>)),
+	    i+1)
+	  (None, 
+	   (fun next -> <:expr@loc<let $lid:"e#"$ = special_start in $next$ >>), 
+	   (fun next -> next), 
+	   0)
+	  el
+      in 
+      let et = match et with None -> <:expr@loc<()>> | Some et -> et in 
+      let right = preambule2 <:expr@loc<(fun $lid:"v#"$ -> $et$)>>
+      in
+      preambule <:expr@loc<special_end $lid:"e#"$ (fun $lid:"h#"$ -> $right$)>>
+
+let mkarrayupexp _loc el =
+  let et, preambule, preambule2, _ =
+    List.fold_left 
+      (fun (et,ex,el,i) e ->
+	let namex = "x#"^string_of_int i in
+	let namey = "y#"^string_of_int i in
+	(<:expr<$lid:namex$ $lid:"v#"$>>::et),
+        (fun next -> 
+	  ex (<:expr<let ($lid:"e#"$, $lid:namey$) = special_apply $lid:"e#"$ $e$ in $next$>>)),
+	(fun next ->
+	  el  (<:expr<let $lid:namex$ = $lid:namey$ $lid:"h#"$ in $next$>>)),
+	i+1)
+      ([], 
+       (fun next -> <:expr<let $lid:"e#"$ = special_start in $next$ >>), 
+       (fun next -> next), 
+       0)
+      el
+  in 
+  let right = preambule2 <:expr<(fun $lid:"v#"$ -> [|$list:List.rev et$|])>>
+  in
+  preambule <:expr<special_end $lid:"e#"$ (fun $lid:"h#"$ -> $right$)>>
+  
+let mkrecordupexp _loc w le = 
+  let ew,start = match w with
+    None -> 
+      None, 
+      (fun next -> <:expr<let $lid:"e#"$ = special_start in $next$ >>)
+  | Some e -> 
+      Some(<:expr<$lid:"w#"$ $lid:"h#"$ $lid:"v#"$>>),
+      (fun next -> <:expr<let ($lid:"e#"$,$lid:"w#"$) = 
+                                 (special_apply special_start $e$) in $next$ >>)
+  in
+  let rec rb_to_list = function
+      Ast.RbNil _ -> []
+    | Ast.RbSem(_,a,b) -> rb_to_list a @ rb_to_list b
+    | Ast.RbEq(_,idt,e) -> [idt,e]
+    | Ast.RbAnt _ -> assert false
+  in
+  let et, preambule, _ =
+    List.fold_left 
+      (fun (et,ex,i) (lbl,e) ->
+	let name = "x#"^string_of_int i in
+	(<:rec_binding<$lbl$ = ( $lid:name$ $lid:"h#"$ $lid:"v#"$ ) ; $et$>>),
+        (fun next -> 
+	  ex (<:expr<let ($lid:"e#"$, $lid:name$) = special_apply $lid:"e#"$ $e$ in $next$>>)),
+	i+1)
+      (<:rec_binding<>>, start, 0)
+      (rb_to_list le)
+  in 
+  match ew with
+    Some ew -> preambule <:expr<special_end $lid:"e#"$
+		       (fun $lid:"h#"$ $lid:"v#"$ -> { ($ew$) with $rec_binding:et$ })>>
+  | None -> preambule <:expr<special_end $lid:"e#"$
+		       (fun $lid:"h#"$ $lid:"v#"$ -> { $et$ })>>
+
+
+let expr1_semi_list = Gram.Entry.mk "bindlib_expr1_semi_list"
+let binding = Gram.Entry.mk "bindlib_binding"
+let freshin = Gram.Entry.mk "bindlib_freshin"
+let lbl_expr_list = Gram.Entry.mk "bindlib_lbl_expr_list"
+let lbl_expr = Gram.Entry.mk "bindlib_lbl_expr"
+
+let _ =
+EXTEND Gram
+  expr: LEVEL "apply"
+    [ [ e1 = SELF; "^^"; e2 = SELF ->
+	<:expr<Bindlib.bind_apply $e1$ $e2$>>
+    | e1 = SELF; "^|^"; e2 = SELF ->
+	<:expr<Bindlib.mbind_apply $e1$ $e2$>>
+    | e1 = SELF; "(^"; el = LIST0 expr LEVEL ":=" SEP "," ;"^)" ->
+      if  Ast.is_expr_constructor e1 then begin
+	let e = ref e1 in
+	let n = List.length el in
+	for i = 1 to n do
+	  e := <:expr<$!e$ $lid:"x"^string_of_int i$>>
+	done;
+	for i = n downto 1 do
+	  e := <:expr<fun $lid:"x"^string_of_int i$ -> $!e$>>
+	done;
+	match el with
+	  [] -> <:expr<Bindlib.unit $!e$>> 
+	| [e1] ->  <:expr<Bindlib.unit_apply $!e$ $e1$ >>
+	| [e1;e2] -> <:expr<Bindlib.unit_apply2 $!e$ $e1$ $e2$ >>
+	| e1::e2::el ->
+	    let e0 = <:expr<Bindlib.unit_apply2 $!e$ $e1$ $e2$ >> in
+	    List.fold_left (fun e1 e2 -> <:expr<Bindlib.apply $e1$ $e2$ >>) 
+	      e0 el
+      end else begin
+	<:expr<$e1$ $mktuppleupexp _loc el$>>
+      end ] ]
+    ;
+  
+  expr: LEVEL "top"
+    [ [
+    "letvar"; fv = expr LEVEL "simple"; id = LIDENT; str = binding;
+      fr = freshin;
+      "in";  x = expr ->
+	let name = match str with
+	  Some e -> e
+	| None ->  <:expr< $str:id$ >> 
+	in
+	begin match fr with
+	  None ->
+	    <:expr<let $lid:id$ = Bindlib.new_var $fv$ $name$ 
+            in $x$>>
+	| Some ctxt ->
+	    <:expr<let ($lid:id$,$lid:ctxt$) = 
+	      Bindlib.new_var_in $lid:ctxt$ $fv$ $name$ 
+            in $x$>>
+	end
+  | "letvar"; fv = expr LEVEL "simple"; id = LIDENT; "("; n = expr LEVEL "top";")"; 
+	str = binding; fr = freshin; "in";  x = expr ->
+	let names = match str with
+	  Some e -> e
+	| None -> 
+	    <:expr<Array.init $n$ (fun i -> $str:id$^(string_of_int i))>>
+	in
+	begin match fr with
+	  None ->
+	    <:expr<let $lid:id$ = Bindlib.new_mvar $fv$ $names$ 
+            in $x$>>
+	| Some ctxt ->
+	    <:expr<let ($lid:id$,$lid:ctxt$) = 
+	      Bindlib.new_mvar_in $lid:ctxt$ $fv$ $names$ 
+            in $x$>>
+	end
+     ] ];
+
+  match_case0: 
+    [ [
+    "bind"; fv = expr LEVEL "simple";  
+      id = LIDENT; str = binding;  fr = freshin; "in"; g = LIDENT;
+      "->"; f = expr -> 
+	let e1 = 
+	  <:expr<let $lid:g$ = Bindlib.subst $lid:"#e"$ (Bindlib.free_of $lid:id$) in $f$>> 
+	in
+	let name = match str with
+	  None -> <:expr<Bindlib.binder_name $lid:"#e"$>>
+	| Some name -> name
+	in
+	let e2 = match fr with
+	  None -> 
+	    <:expr<let $lid:id$ = Bindlib.new_var $fv$ $name$ in $e1$>> 
+	| Some ctxt -> 
+	    <:expr<let ($lid:id$,$lid:ctxt$) = 
+	      Bindlib.new_var_in $lid:ctxt$ $fv$ $name$ in $e1$>> 
+	in
+	<:match_case<
+        $lid:"#e"$ -> $e2$>>
+  | "bind"; fv = expr LEVEL "simple";  
+      id = LIDENT; "("; arity = LIDENT; ")"; 
+	str = binding;  fr = freshin; "in"; g = LIDENT;
+      "->"; f = expr LEVEL "top" -> 
+	let e1 = 
+	  <:expr<let $lid:g$ = Bindlib.subst $lid:"#e"$ (Bindlib.free_of $lid:id$) in $f$>> 
+	in
+	let names = match str with
+	  None -> 
+            <:expr<Bindlib.binder_names $lid:"#e"$>>
+	| Some names -> 
+	    <:expr<do {if (Array.length $names$ <> $lid:arity$) then
+	      invalid_argument "bad array size for names array in match ... with bind"
+		else (); 
+	    $names$}>>
+	in
+	let e2 = match fr with
+	  None -> 
+	    <:expr<
+	    let $lid:id$ = Bindlib.new_mvar $fv$ $names$ in $e1$>> 
+	| Some ctxt -> 
+	    <:expr<
+	    let ($lid:id$,$lid:ctxt$) = 
+	      Bindlib.new_mvar_in $lid:ctxt$ $fv$ $names$ in $e1$>> 
+	in
+	<:match_case<
+	$lid:"#e"$ ->
+	let $lid:arity$ = Bindlib.binder_arity $lid:"#e"$ in
+	$e2$
+	>>
+     ] ];
+
+  expr: LEVEL "~-"
+    [ [
+    "bindvar"; id = LIDENT; "in"; e = expr LEVEL "top" -> 
+      <:expr<Bindlib.bind_var $lid:id$ $e$>>
+  | "bindvar"; id = LIDENT; "("; ")"; "in"; e = expr LEVEL "top" -> 
+      <:expr<Bindlib.bind_mvar $lid:id$ $e$>>
+  | "bind"; fv = expr LEVEL "simple"; id = LIDENT; str = binding; 
+      fr = freshin; "in"; e = expr LEVEL "top" -> 
+	   let name = match str with
+	     Some e -> e
+	   | None ->  <:expr< $str:id$ >> 
+	   in
+	   begin match fr with
+	     None ->
+	       <:expr<Bindlib.bind $fv$ $name$ 
+               (fun $lid:id$ -> $e$) >>
+	   | Some ctxt -> 
+	       <:expr<Bindlib.bind_in $lid:ctxt$ $fv$ $name$ 
+               (fun $lid:id$ $lid:ctxt$ -> $e$) >>
+	   end
+  | "bind"; fv = expr LEVEL "simple"; id = LIDENT; "("; n = expr LEVEL "top"; ")"; 
+	 str = binding;  fr = freshin; "in"; e = expr LEVEL "top" -> 
+	   let names = match str with
+	     Some e -> e
+	   | None -> 
+	       <:expr<Array.init $n$ (fun i -> $str:id$^(string_of_int i))>>
+	   in
+	   begin match fr with
+	     None ->
+	       <:expr<Bindlib.mbind $fv$ $names$ 
+               (fun $lid:id$ -> $e$) >>
+	   | Some ctxt ->
+	       <:expr<Bindlib.mbind_in $lid:ctxt$ $fv$ $names$ 
+               (fun $lid:id$ $lid:ctxt$ -> $e$) >>
+	   end
+     ] ];
+
+  expr: LEVEL "simple" 
+    [ [
+    "[^"; "^]" -> <:expr< Bindlib.unit [] >>      
+  | "[^"; el = expr1_semi_list; "^]" -> <:expr< $mklistupexp _loc true el$ >>      
+  | "[|^"; "^|]" -> <:expr< Bindlib.unit [||] >>
+  | "[|^"; el = expr1_semi_list; "^|]" -> 
+      mkarrayupexp _loc el
+  | "{^"; lel = label_expr; "^}" ->
+      mkrecordupexp _loc None lel
+  | "{^"; e = expr LEVEL "."; "with"; le = label_expr; "^}" ->
+      mkrecordupexp _loc (Some e) le
+  | "(^"; el = LIST0 expr LEVEL ":=" SEP ","; "^)" -> 
+      mktuppleupexp _loc el
+    ] ];
+
+  expr: AFTER "^" 
+    [ 
+      RIGHTA 
+	[ e1 = SELF; "^::"; e2 = SELF -> 
+          <:expr< Bindlib.unit_apply2 (fun x y -> [ x::y ]) $e1$ $e2$ >> ]
+    ];
+
+  expr1_semi_list:
+    [ [ e = expr LEVEL "top"; ";"; el = SELF -> e :: el
+      | e = expr LEVEL "top"; ";" -> [e]
+      | e = expr LEVEL "top" -> [e] ] ]
+  ;
+
+ binding:
+    [ [
+      "as"; e = expr LEVEL "apply" -> Some e
+  | ->
+      None ] ]
+    ;
+
+  freshin:
+    [ [
+      "for"; id = LIDENT -> Some id
+  | ->
+      None ] ]
+    ;
+  lbl_expr_list:
+    [ [ le = lbl_expr; ";"; lel = SELF -> le :: lel
+      | le = lbl_expr; ";" -> [ le ]
+      | le = lbl_expr -> [ le ] ] ]
+  ;
+  lbl_expr:
+    [ [ i = ident; "="; e = expr LEVEL "expr1" -> (i, e) ] ]
+  ;
+  END	
+;;
+
+
+--------------040608050607000505030202--
+

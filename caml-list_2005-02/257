@@ -1,0 +1,246 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id E2607BC88
+	for <caml-list@yquem.inria.fr>; Tue,  8 Feb 2005 11:43:13 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j18AhDqY029406
+	for <caml-list@yquem.inria.fr>; Tue, 8 Feb 2005 11:43:13 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA15951 for <caml-list@pauillac.inria.fr>; Tue, 8 Feb 2005 11:43:13 +0100 (MET)
+Received: from yquem.inria.fr (yquem.inria.fr [128.93.8.37])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j18AhC20023715;
+	Tue, 8 Feb 2005 11:43:13 +0100
+Received: by yquem.inria.fr (Postfix, from userid 18180)
+	id D4B18BC88; Tue,  8 Feb 2005 11:43:12 +0100 (CET)
+Date: Tue, 8 Feb 2005 11:43:12 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Christophe TROESTLER <Christophe.Troestler@umh.ac.be>
+Cc: "O'Caml Mailing List" <caml-list@inria.fr>
+Subject: Re: [Caml-list] [Benchmark] NBody
+Message-ID: <20050208104312.GA10035@yquem.inria.fr>
+References: <20050207.195724.87945401.Christophe.Troestler@umh.ac.be>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="VS++wcV0S1rZb1Fb"
+Content-Disposition: inline
+In-Reply-To: <20050207.195724.87945401.Christophe.Troestler@umh.ac.be>
+User-Agent: Mutt/1.3.28i
+X-Miltered: at nez-perce with ID 420897C1.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 420897C0.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 unboxing:01 ocamlopt:01 -inline:01 -unsafe:01 sqrt:01 ocaml:01 corresponds:01 compiler:01 ocaml's:01 translated:01 gcc:01 gcc:01 stack:01 
+X-Attachments: type="text/x-csrc" name="nbody.c" 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+
+--VS++wcV0S1rZb1Fb
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+> For fun I have implemented an nbody simulation following
+> http://shootout.alioth.debian.org/benchmark.php?test=nbody&lang=all&sort=cpu
+> (code is attached).  
+
+Ah, another micro-benchmark.  Great pasttime!  
+
+Your OCaml code is about as good as you can write.  All the unboxing
+optimizations are triggered.  
+
+>   ocamlopt -o nbody.com -inline 3 -unsafe -ccopt -O2 nbody.ml
+
+On x86, you can get a bit more speed with -ffast-math, which turns the
+call to sqrt() into inline assembly.  As others mentioned, "-ccopt -O2"
+is useless.
+
+> I've compared with the Java program they give.  I get (on a Pentium(R)
+> 4 CPU 2.40GHz Debian):
+> 
+> n	OCaml	Java
+> 1000	0.004	0.112
+> 10000	0.016	0.112
+> 100000	0.159	0.218
+> 200000	0.284	0.370
+> 500000	0.707	0.702
+> 1000000	1.410	1.359
+> 2000000	2.884	2.453
+> 3000000	4.294	3.590
+> 4000000	5.735	4.774
+> 
+> I am interested in explanations why OCaml seems asymptotically slower
+> than Java and ways to improve that.  
+
+You don't say which Java implementation you used (there are several).
+The "0.112" overhead of Java corresponds to start-up time, which includes
+JIT-compilation.  As to why Java is asymptotically faster, we'd
+need to look at the generated assembly code.  Good luck doing that
+with a JIT compiler.
+
+So, to understand OCaml's performances here, one has to turn to a
+different baseline.  I translated your Caml code to C and looked at
+gcc output.
+
+The best gcc output is faster than the best OCaml output by about 30%.
+Looking at the asm code, the main difference is that gcc keeps some
+float variables (dx, dy, dz, etc) in the floating-point stack while
+OCaml stores them (unboxed) to the stack.  Maybe the Java
+implementation you used manages to use the float stack.  Who knows.
+
+The x86 floating-point stack is an awfully bad match for the
+register-based OCaml code generation model, so, no, I'm not going to
+the great lengths the gcc folks went to extract some performance from
+that model.
+
+(Besides, being 1.3 times slower than gcc on numerical code is within
+the design envelope for OCaml.  My performance goals have always been
+"never more than twice as slow as C".)
+
+On a "normal" (register-based) float architecture like PowerPC or
+x86_64, the OCaml-generated code is essentially identical to the
+gcc-generated one.
+
+The C translation is attached for your amusement.
+
+- Xavier Leroy
+
+--VS++wcV0S1rZb1Fb
+Content-Type: text/x-csrc; charset=us-ascii
+Content-Disposition: attachment; filename="nbody.c"
+
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define pi 3.141592653589793
+#define solar_mass (4 * pi * pi)
+#define days_per_year 365.24
+
+struct planet {
+  double x, y, z;
+  double vx, vy, vz;
+  double mass;
+};
+
+void advance(int nbodies, struct planet * bodies, double dt)
+{
+  int i, j;
+
+  for (i = 0; i < nbodies; i++) {
+    struct planet * b = &(bodies[i]);
+    for (j = i + 1; j < nbodies; j++) {
+      struct planet * b2 = &(bodies[j]);
+      double dx = b->x - b2->x;
+      double dy = b->y - b2->y;
+      double dz = b->z - b2->z;
+      double distance = sqrt(dx * dx + dy * dy + dz * dz);
+      double mag = dt / (distance * distance * distance);
+      b->vx -= dx * b2->mass * mag;
+      b->vy -= dy * b2->mass * mag;
+      b->vz -= dz * b2->mass * mag;
+      b2->vx += dx * b->mass * mag;
+      b2->vy += dy * b->mass * mag;
+      b2->vz += dz * b->mass * mag;
+    }
+  }
+  for (i = 0; i < nbodies; i++) {
+    struct planet * b = &(bodies[i]);
+    b->x += dt * b->vx;
+    b->y += dt * b->vy;
+    b->z += dt * b->vz;
+  }
+}
+
+double energy(int nbodies, struct planet * bodies)
+{
+  double e;
+  int i, j;
+
+  e = 0.0;
+  for (i = 0; i < nbodies; i++) {
+    struct planet * b = &(bodies[i]);
+    e += 0.5 * b->mass * (b->vx * b->vx + b->vy * b->vy + b->vz * b->vz);
+    for (j = i + 1; j < nbodies; j++) {
+      struct planet * b2 = &(bodies[j]);
+      double dx = b->x - b2->x;
+      double dy = b->y - b2->y;
+      double dz = b->z - b2->z;
+      double distance = sqrt(dx * dx + dy * dy + dz * dz);
+      e -= (b->mass * b2->mass) / distance;
+    }
+  }
+  return e;
+}
+
+void offset_momentum(int nbodies, struct planet * bodies)
+{
+  double px = 0.0, py = 0.0, pz = 0.0;
+  int i;
+  for (i = 0; i < nbodies; i++) {
+    px += bodies[i].vx * bodies[i].mass;
+    py += bodies[i].vy * bodies[i].mass;
+    pz += bodies[i].vz * bodies[i].mass;
+  }
+  bodies[0].vx = - px / solar_mass;
+  bodies[0].vy = - py / solar_mass;
+  bodies[0].vz = - pz / solar_mass;
+}
+
+#define NBODIES 5
+struct planet bodies[NBODIES] = {
+  {                               /* sun */
+    0, 0, 0, 0, 0, 0, solar_mass
+  },
+  {                               /* jupiter */
+    4.84143144246472090e+00,
+    -1.16032004402742839e+00,
+    -1.03622044471123109e-01,
+    1.66007664274403694e-03 * days_per_year,
+    7.69901118419740425e-03 * days_per_year,
+    -6.90460016972063023e-05 * days_per_year,
+    9.54791938424326609e-04 * solar_mass
+  },
+  {                               /* saturn */
+    8.34336671824457987e+00,
+    4.12479856412430479e+00,
+    -4.03523417114321381e-01,
+    -2.76742510726862411e-03 * days_per_year,
+    4.99852801234917238e-03 * days_per_year,
+    2.30417297573763929e-05 * days_per_year,
+    2.85885980666130812e-04 * solar_mass
+  },
+  {                               /* uranus */
+    1.28943695621391310e+01,
+    -1.51111514016986312e+01,
+    -2.23307578892655734e-01,
+    2.96460137564761618e-03 * days_per_year,
+    2.37847173959480950e-03 * days_per_year,
+    -2.96589568540237556e-05 * days_per_year,
+    4.36624404335156298e-05 * solar_mass
+  },
+  {                               /* neptune */
+    1.53796971148509165e+01,
+    -2.59193146099879641e+01,
+    1.79258772950371181e-01,
+    2.68067772490389322e-03 * days_per_year,
+    1.62824170038242295e-03 * days_per_year,
+    -9.51592254519715870e-05 * days_per_year,
+    5.15138902046611451e-05 * solar_mass
+  }
+};
+
+int main(int argc, char ** argv)
+{
+  int n = atoi(argv[1]);
+  int i;
+
+  offset_momentum(NBODIES, bodies);
+  printf ("%.9f\n", energy(NBODIES, bodies));
+  for (i = 1; i <= n; i++)
+    advance(NBODIES, bodies, 0.01);
+  printf ("%.9f\n", energy(NBODIES, bodies));
+  return 0;
+}
+
+
+--VS++wcV0S1rZb1Fb--
+

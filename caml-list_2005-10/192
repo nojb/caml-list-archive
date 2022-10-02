@@ -1,0 +1,153 @@
+Return-Path: <bhurt@spnz.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 1B140BB9A
+	for <caml-list@yquem.inria.fr>; Sat, 22 Oct 2005 23:10:05 +0200 (CEST)
+Received: from conn.mc.mpls.visi.com (conn.mc.mpls.visi.com [208.42.156.2])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j9MLA355010565
+	for <caml-list@yquem.inria.fr>; Sat, 22 Oct 2005 23:10:04 +0200
+Received: from [192.168.42.2] (bhurt.dsl.visi.com [208.42.141.66])
+	by conn.mc.mpls.visi.com (Postfix) with ESMTP
+	id 4246581D1; Sat, 22 Oct 2005 16:10:03 -0500 (CDT)
+Date: Sat, 22 Oct 2005 16:12:34 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Stephen Brackin <stephen.brackin@verizon.net>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Duplicate functionality?
+In-Reply-To: <0IOQ006I7LO24OK2@vms044.mailsrvcs.net>
+Message-ID: <Pine.LNX.4.63.0510220923370.9226@localhost.localdomain>
+References: <0IOQ006I7LO24OK2@vms044.mailsrvcs.net>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at nez-perce with ID 435AAAAB.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 ocaml:01 reals:01 integers:01 vectors:01 reals:01 rationals:01 subtraction:01 sig:01 vectors:01 val:01 subtraction:01 val:01 bool:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+
+
+On Fri, 21 Oct 2005, Stephen Brackin wrote:
+
+> My biggest initial question is why OCaml has both a modules system and
+> objects: Aren't they different ways of accomplishing the same things?
+
+No.  And this is one of the most misunderstood things about Ocaml modules- 
+that they are NOT just a weird and broken implementation of objects.  A 
+better point of reference would probably be C++ templates (although Ocaml 
+modules fix the complaints I have with C++ templates).
+
+Modules are used for code that is "based on" other code.  An example makes 
+this clearer.  Let's consider Newton's method for root find.  This is an 
+incredibly powerfull algorithm that can be applied to a huge number of 
+different number systems.  For example, it works on reals, it works on 
+complexs, it works on quaterions, it works on integers, and it works on 
+systems of non-linear equations (vectors and matricies).  And when I say 
+it works on reals, I mean it works on all representations of reals- it 
+works on IEEE floating point, it works on arbitrary precision rationals, 
+it works on arbitrary precision floats, it works on fixed precision 
+floats, etc.
+
+All we need to implement Newton's method is a small set of basic 
+operations.  We need subtraction, we need to be able to solve Ax = b given 
+A and b (which is just x = b/A in most number systems, but we express it 
+this way as it's more "natural" if A is the Jacobian matrix of partial 
+derivitives and b is the vector residual), and we need some way to say 
+we're "close enough" to the solution that we can stop.
+
+With modules, we might write:
+
+module type Req = sig
+     type t (* the basic type of the number system *)
+     type dt (* the type of derivitives- generally, this will be the same
+              * as t, but in the case of vectors/matricies, t is a vector
+              * while dt is a matrix.
+              *)
+     type et (* The type of the error value.  Often times this will be
+              * the same as t above, but for "constructed" types
+              * like complexes and vectors, type et will be whatever
+              * real type they are made out of.
+              *)
+     val sub : t -> t -> t (* subtraction *)
+     val solve : et -> dt -> t -> t (* Solve Ax = b to within epsilon.
+                                     * Generally epsilon will be ignored,
+                                     * and the solution will just be
+                                     * x = b/A.
+                                     *)
+     val default_epsilon : et
+     val within_epsilon : et -> t -> t -> bool
+         (* Returns true if the two value differ by a factor of less
+          * than epsilon.
+          *)
+end;;
+
+module Make(Alg: Req) = struct
+
+     exception Max_iters_reached of Alg.t
+
+     let meth ?(epsilon = Alg.default_epsilon) ?(max_iters = max_int)
+         f df x
+     =
+         (* Find a root to f given f and it's derivitive df starting
+          * at an initial guess of x.
+          *)
+         let rec loop i x =
+             if i > max_iters then
+                 raise (Max_iters_reached x)
+             else
+                 let x' = Alg.sub x (Alg.solve epsilon (df x) (f x)) in
+                 if Alg.within_epsilon epsilon x x' then
+                     x'
+                 else
+                     loop (i+1) x'
+         in
+         loop 0 x
+end;;
+
+Now, we could probably implement something like this in objects- Newtons 
+would be a base class calling out to virtual functions like solve and sub 
+which would be implemented in concrete subclasses.  But there are several 
+large advantages to using modules in this case.
+
+The first one is types.  Note that were I to implement Newtons with 
+floating point numbers, like:
+
+module Float = struct
+     type t = float
+     type dt = float
+     type et = float
+     let sub = ( -. )
+     let solve (_: et) a b = b /. a
+ 	let default_epsilon = 1.e-14;;
+ 	let within_epsilon e x y =
+         ((abs_float ((x -. y) /. x)) < e) || ((abs_float (x -. y)) < e)
+end;;
+
+module FloatNewtons = Make(Float);;
+
+Ocaml figures out the t, dt, and et are "all the same type", and I have a 
+function with the right signature.  This is doable with dynamic type 
+checking and objects, but not static.  Or at least I've never seen it done 
+in a static language.
+
+Another advantage of modules over structures in the type arena is to be 
+able to express the "these two objects need to be of the same 
+implementation" as a type constraint.  An example of this is the compare 
+function in Map or Set.  The compare function wants to gaurentee that the 
+two maps or sets you are comparing have the same ordering.  They can do 
+that using modules and functors.
+
+Another advantage of modules and functors is, with ocamldefun, the ability 
+to remove the layer of vituralization, and actually have myself a 
+high-performance Newton's method implementation.
+
+Another advantage is that it allows objects to be objects, and stop having 
+to be things they're not, like name spaces.  Ocaml objects have a hard 
+time implementing the Singleton pattern, for example.  Of course they do- 
+you should be using modules for that.
+
+Brian
+

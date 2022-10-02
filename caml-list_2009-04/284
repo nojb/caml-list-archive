@@ -1,0 +1,126 @@
+Return-Path: <philippe.wang@lip6.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 6FD63BBC4
+	for <caml-list@yquem.inria.fr>; Sat, 18 Apr 2009 00:15:41 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgcEALuc6EmE4zwCgWdsb2JhbACWOQEBFiK5BoN9Bg
+X-IronPort-AV: E=Sophos;i="4.40,206,1238968800"; 
+   d="scan'208";a="26425961"
+Received: from isis.lip6.fr ([132.227.60.2])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 18 Apr 2009 00:15:16 +0200
+Received: from tibre.lip6.fr (tibre.lip6.fr [132.227.74.2])
+          by isis.lip6.fr (8.13.5.20060614/lip6) with ESMTP id n3HMFEE4017773
+          ; Sat, 18 Apr 2009 00:15:14 +0200 (CEST)
+X-pt: isis.lip6.fr
+Received: from [127.0.0.1] (micmac [132.227.83.124])
+	by tibre.lip6.fr (8.13.5.20060614/8.13.3) with ESMTP id n3HMFBd2000133;
+	Sat, 18 Apr 2009 00:15:12 +0200 (MEST)
+Cc: Philippe Wang <philippe.wang@lip6.fr>
+Message-Id: <5409216D-4094-424B-BEEE-3AC3701A87DD@lip6.fr>
+From: Philippe Wang <philippe.wang@lip6.fr>
+To: caml-list@inria.fr
+In-Reply-To: <9E5A9BDB-2A67-45DC-A963-AA45B7E1693B@lip6.fr>
+Content-Type: text/plain; charset=US-ASCII; format=flowed; delsp=yes
+Content-Transfer-Encoding: 7bit
+Mime-Version: 1.0 (Apple Message framework v930.3)
+Subject: Re: [Caml-list] "ok with parallel threads" GC (aka ocaml for multicore)
+Date: Sat, 18 Apr 2009 00:15:11 +0200
+References: <50CD0BA8-B89C-49E2-9082-FFA037F251A6@lip6.fr> <BB3C091F-3BE9-4883-A7CF-9D672CDDF829@x9c.fr> <CAA74566-A3A9-4F80-90D0-3E555944928E@lip6.fr> <9E5A9BDB-2A67-45DC-A963-AA45B7E1693B@lip6.fr>
+X-Mailer: Apple Mail (2.930.3)
+X-Greylist: Sender IP whitelisted, not delayed by milter-greylist-4.0.1 (isis.lip6.fr [132.227.60.2]); Sat, 18 Apr 2009 00:15:14 +0200 (CEST)
+X-Scanned-By: MIMEDefang 2.63 on 132.227.60.2
+X-Spam: no; 0.00; ocaml:01 patched:01 ocaml:01 runtime:01 byterun:01 patched:01 runtime:01 threads:01 threads:01 wrote:01 heap:01 caml-list:01 functions:01 functions:01 reentrant:02 
+
+
+On Apr 16, 2009, at 11:45 CEDT, Philippe Wang wrote:
+
+>> A negative answer would imply that you patched the OCaml
+>> runtime to make it reentrant. To illustrate my point, I will take
+>> the example of the file "byterun/compare.c". In this file, the
+>> code for the comparison of values makes use of a global
+>> variable (named "caml_compare_unordered").
+>
+> It should be, unless bugs are still hiding under that.
+> It is supposed to have been done for a while. We'll make one more  
+> check.
+>
+>> If you patched the runtime to allow multiple threads to use
+>> it concurrently, I would also be interested by the strategy
+>> used: is the problem solved by additional parameters ?
+>> by the use of thread-local storage ? by any other mean ?
+>
+> - local variable instead of global variable in functions
+> - some functions are parameterized by thread identifier (that is,  
+> one more parameter than "before") (e.g. in amd64.S)
+
+Well, we went back into runtime code implementation.
+
+This is what can be said rapidly :
+- compare.c contains no global variables anymore, we use local  
+variables instead
+- if a Caml-C or C-Caml interface uses caml_compare_unordered, we  
+don't know what can happen with parallel threads
+- we have many global mutex locks with small scopes
+- we do use an "enter/leave blocking section" mechanism to prevent the  
+GC from waiting on a blocking operation such as I/O or mutex locking  
+etc.
+- we don't support weak values (not sure whether they don't work or  
+they became strong, if they dont work anymore, they can be back in 2  
+minutes as strong values anyway)
+- serialisation of values is a little bit tricky, though it should work
+- most important : many global variables do not exist anymore because  
+they are irrelevant in our implementation
+- we do not support unofficial-features of ocaml 3.10, e.g. the new  
+features that come with 3.11 but actually have their roots in previous  
+versions
+~ it is almost sad to see all the based-on-"one-thread-at-a-time"  
+optimisations removed...
++ (it looks like it works just fine)
+
+
+I hope there are no "hidden" bad global variables.
+
+Is it fully reentrant ? Hmmmm... maybe.
+
+We use a stop-the-world GC (which means no one is running is parallel  
+with the GC), that is actually like original ocaml, that comes with  
+its inconveniences : C calls not declared as blocking sections (which  
+has quite a cost) may prevent other threads from running when the heap  
+is full.
+
+Graphics module, for instance, is not reentrant at all (anyhow it's  
+not part of the runtime). Same for Str.
+Funny thing is we can open several windows by launching parallel  
+threads (though only one is useful at the end).
+
+
+Anyway, thank you for your questions and interest, they have helped us  
+find&fix some bugs.
+
+
+--
+Philippe Wang
+   http://www-apr.lip6.fr/~pwang/
+
+
+PS.  We tried to switch to 3.11, but it seems to need too much time,  
+it's far from being a piece of cake.
+We have tried to make it work on Leopard (actually, I failed the 1st  
+time - half the way, I may try again if I have time).
+
+=====================================
+A free very personal advice that may save you some headaches:
+do not program in concurrent shared memory style, especially when you  
+can replace "concurrent" by "parallel".
+Even if it may have a future, even if it may sound great, even if it  
+sounds exciting, even if it helps you go faster, even if <put-here- 
+whatever-you-want>,
+it is **awful**. Well, if you really really don't have a choice, never  
+mind what I said.
+

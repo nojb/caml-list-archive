@@ -1,0 +1,83 @@
+Return-Path: <goswin-v-b@web.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 384F6BC37
+	for <caml-list@yquem.inria.fr>; Sat, 30 May 2009 22:51:15 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkkCABM5IUrZSMDqi2dsb2JhbACBT5ZIAQEBCgsKBw8FtVOEDAU
+X-IronPort-AV: E=Sophos;i="4.41,276,1241388000"; 
+   d="scan'208";a="28587077"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 30 May 2009 22:51:14 +0200
+Received: from smtp05.web.de (fmsmtp05.dlan.cinetic.de [172.20.4.166])
+	by fmmailgate03.web.de (Postfix) with ESMTP id 4468BFE78D7F
+	for <caml-list@inria.fr>; Sat, 30 May 2009 22:51:14 +0200 (CEST)
+Received: from [95.208.117.111] (helo=frosties.localdomain)
+	by smtp05.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #277)
+	id 1MAVWM-00006M-00
+	for caml-list@inria.fr; Sat, 30 May 2009 22:51:14 +0200
+Received: from mrvn by frosties.localdomain with local (Exim 4.69)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1MAVWL-0003p5-Gw
+	for caml-list@inria.fr; Sat, 30 May 2009 22:51:13 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Subject: How to do thread save callbacks from C to ocaml?
+Date: Sat, 30 May 2009 22:51:13 +0200
+Message-ID: <87hbz2co1q.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) XEmacs/21.4.22 (linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1/Ku4MLXpxoDdZvjoUISClQ6dzah8aQ5VdysxWo
+	ESxOTLI0MEk8RjaaSdhQmKfNY9lemKouh/ABlrAHyRj7eP7uba
+	Zv1uv7lz8=
+X-Spam: no; 0.00; callbacks:01 ocaml:01 bindings:01 callbacks:01 ocaml:01 camlparam:01 stub:01 struct:01 camlparam:01 alloc:01 camlreturn:01 stub:01 struct:01 stubs:01 malloc:01 
+
+Hi,
+
+for my fuse bindings I have a number (~20) of callbacks from C code to
+ocaml that I want to make sure behave correctly when
+multithreaded. The libfuse runs with enter_blocking_section() so other
+ocaml threads can run while it blocks. That means I need to call
+leave_blocking_section() before I do anything ocaml in the callback,
+including registering a new root in CAMLparam0(), right?
+
+So to me it looks like I do have to write the callbacks like this:
+
+static void getattr_stub2(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    CAMLparam0();
+    CAMLlocal2(ml_req, ml_inode);
+
+    Filesystem *fs = (Filesystem*)fuse_req_userdata(req);
+    ml_req = caml_alloc(1, Abstract_tag);
+    Store_field(ml_req, 0, (intptr_t)req);
+    ml_inode = caml_copy_int64(ino);
+    caml_callback2(Field(fs->ops, GETATTR), ml_req, ml_inode);
+
+    CAMLreturn0;
+}
+
+static void getattr_stub(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info *fi) {
+    leave_blocking_section();
+    getattr_stub2(req, ino, fi);
+    enter_blocking_section();
+}
+
+
+Is this code correct? Is there another way that avoids having 2 stubs
+per callback?
+
+MfG
+        Goswin
+
+PS: fs is malloc()ed (not on ocamls heap) and fs->ops is registered as
+global value.
+

@@ -1,0 +1,124 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id CF915BC6A
+	for <caml-list@yquem.inria.fr>; Wed, 25 Oct 2006 00:32:47 +0200 (CEST)
+Received: from ash25e.internode.on.net (ash25e.internode.on.net [203.16.214.182])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k9OMWjJ5007622
+	for <caml-list@yquem.inria.fr>; Wed, 25 Oct 2006 00:32:46 +0200
+Received: from rosella (ppp229-164.lns3.syd7.internode.on.net [59.167.229.164])
+	by ash25e.internode.on.net (8.13.6/8.13.5) with ESMTP id k9OMWSb9074318;
+	Wed, 25 Oct 2006 08:02:29 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] Fairly dumb ocamlyacc question
+From: skaller <skaller@users.sourceforge.net>
+To: David Allsopp <dra-news@metastack.com>
+Cc: OCaml List <caml-list@yquem.inria.fr>
+In-Reply-To: <003401c6f7b0$01f9ca10$5a878640@countertenor>
+References: <003401c6f7b0$01f9ca10$5a878640@countertenor>
+Content-Type: text/plain
+Date: Wed, 25 Oct 2006 08:32:27 +1000
+Message-Id: <1161729147.4703.50.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.6.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 453E948D.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocamlyacc:01 kwd:01 kwd:01 parser:01 parser:01 non-terminal:01 lalr:01 failwith:01 generalise:01 refine:01 syntax:01 inputs:01 inputs:01 parsers:01 semantics:01 
+
+On Tue, 2006-10-24 at 17:04 -0400, David Allsopp wrote:
+> This should be obvious, but I can't quite solve it!
+
+> top:
+>   WEEKDAY AFTER_KWD NAME BEFORE_KWD NAME FAILS_KWD top {()}
+> | WEEKDAY relative NAME {()}
+> ;
+> 
+> relative:
+>   BEFORE_KWD {()}
+> | AFTER_KWD {()}
+> ;
+> ------------
+> 
+> Then I get a shift/reduce having parsed WEEKDAY AFTER_KWD... the parser
+> can't figure out what to do if it sees NAME. 
+
+That's right. Consider:
+
+	WEEKDAY AFTER_KWD . NAME
+	up to here  ------^
+
+There are two way to parse this: your first and second rule,
+and NAME doesn't disambiguate them.
+
+Although you may think about these as the same ..
+the parser cannot see into your action rules. 
+
+It has to choose whether to parse AFTER_KWD as a single
+token or to reduce the non-terminal 'relative',
+and either choice could be wrong depending one what can
+come *after* the token NAME -- which it can't take
+into account because it's only an LALR(1) parser:
+one token lookahead.
+
+
+> This problem can be made to
+> disappear by expanding the relative rules to give:
+> 
+> top:
+>   WEEKDAY AFTER_KWD NAME BEFORE_KWD NAME FAILS_KWD top {()}
+> | WEEKDAY AFTER_KWD NAME {()}
+> | WEEKDAY BEFORE_KWD NAME {()}
+> ;
+
+Yes. There is another way too: to *contract* the rules:
+
+relative:
+  BEFORE_KWD { `Before }
+| AFTER_KWD { `After }
+;
+-
+top:
+  WEEKDAY relative NAME BEFORE_KWD NAME FAILS_KWD top 
+  {
+    match $2 with
+    | `Before -> failwith "BEFORE not allowed here"
+    | `After -> ()
+  }
+| WEEKDAY relative NAME {()}
+;
+
+As a general rule of thumb: LR is bottom up not
+top down. It isn't goal oriented, but *driven*
+by the input. So the thing to do is provide
+a unique, no exceptions, way to build small parts
+up, such as 'relative' above, and use that always.
+
+So to generalise you should write:
+
+  WEEKDAY relative NAME relative NAME FAILS_KWD top 
+
+and use a match in the action rule to refine
+the allowed cases. Think of the syntax as a 
+CRUDE way of understanding the input, without
+much semantic content, which will parse a much
+too general set of inputs .. then subtract the
+bad inputs out with further analysis.
+
+For big parsers you get more extreme .. no semantics
+in the action rules .. just build the parse tree,
+and analyse it later.
+
+
+> I've tried a couple of tricks with %prec 
+
+Don't ;(
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

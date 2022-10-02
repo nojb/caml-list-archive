@@ -1,0 +1,167 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA09385; Fri, 23 Jul 2004 03:23:03 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA09603 for <caml-list@pauillac.inria.fr>; Fri, 23 Jul 2004 03:23:01 +0200 (MET DST)
+Received: from mproxy.gmail.com (rproxy.gmail.com [64.233.170.195])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with SMTP id i6N1N0EV028161
+	for <caml-list@inria.fr>; Fri, 23 Jul 2004 03:23:00 +0200
+Received: by mproxy.gmail.com with SMTP id 75so1878rnl
+        for <caml-list@inria.fr>; Thu, 22 Jul 2004 18:22:59 -0700 (PDT)
+Received: by 10.38.206.28 with SMTP id d28mr1071rng;
+        Thu, 22 Jul 2004 18:22:59 -0700 (PDT)
+Message-ID: <d849ad2a04072218226b2028e8@mail.gmail.com>
+Date: Thu, 22 Jul 2004 21:22:59 -0400
+From: John Prevost <j.prevost@gmail.com>
+To: Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Interesting optimization
+In-Reply-To: <Pine.LNX.4.44.0407221856200.4202-100000@localhost.localdomain>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+References: <Pine.LNX.4.44.0407221856200.4202-100000@localhost.localdomain>
+X-Miltered: at nez-perce with ID 41006874.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 slower:01 0.010:01 movl:01 addl:01 $2,:01 movl:01 cmpl:01 addl:01 $2,:01 cmpl:01 $1,:01 subl:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+update''' is a bit slower than update'' is on my system--midway
+between the two reference versions:
+
+using update''':
+real    0m12.940s
+user    0m12.930s
+sys     0m0.010s
+
+Just for reference, here's the generated intel assembly for the loop
+part of each version:
+
+update:
+.L106:
+        andl    $511, %esi
+        movl    %ecx, %edx
+        addl    $2, %ecx
+        movl    $2147483647, %ebx                    (1)
+        cmpl    %ebx, %edx
+        jne     .L106
+
+update':
+.L109:
+        movl    (%eax), %ebx
+        andl    $511, %ebx
+        movl    %ebx, (%eax)
+        movl    %ecx, %edx
+        addl    $2, %ecx
+        movl    $2147483647, %ebx
+        cmpl    %ebx, %edx
+        jne     .L109
+
+update'':
+camlTest__loop_72:
+.L101:
+        cmpl    $1, %ebx
+        jl      .L100
+        addl    $2, %ebx
+        andl    $511, %eax
+        jmp     .L101
+
+update''':
+camlTest__loop_77:
+.L103:
+        andl    $511, %eax
+        movl    $2147483647, %ecx
+        cmpl    %ecx, %ebx
+        jge     .L102
+        addl    $2, %ebx
+        jmp     .L103
+
+Looking at the above, and comparing to two more versions:
+
+let update'4 c =3D
+  let rec loop c' a =3D
+    if a =3D max_int
+      then c'
+      else loop (c' land 0xff) (succ a)
+  in
+  c :=3D (loop !c 0)
+
+camlTest__loop_83:
+.L105:
+        movl    $2147483647, %ecx
+        cmpl    %ecx, %ebx
+        jne     .L104
+        ret
+        .align  16
+.L104:
+        addl    $2, %ebx
+        andl    $511, %eax
+        jmp     .L105
+
+let update'5 c =3D
+  let c' =3D ref !c in
+  for n =3D max_int downto 0 do
+    c' :=3D !c' land 0xff
+  done;
+  c :=3D !c'
+
+.L108:
+        andl    $511, %edx
+        movl    %ebx, %ecx         (3)
+        subl    $2, %ebx
+        cmpl    $1, %ecx           (2)
+        jne     .L108
+
+
+which has about the same performance as loop''', I feel justified in
+saying the following:
+
+The main interest here is what Daniel B=FCnzli originally noted: if a
+reference is defined and then used in the local scope of a function,
+you avoid ever actually working with the reference itself, which
+removes that level of overhead.
+
+
+Everything else is really all about squeezing the last ounce of
+performance out, by as little as a single instruction.  There's really
+not much profit in this, unless the loop in question is very important
+and is known to be a bottleneck.  In fact, don't read anything more I
+say unless you're really interested in that--unless you plan to look
+at your own assembly code by hand, it's better to trust the compiler
+than to second-guess it.
+
+Specific notes from the above and from a couple of other exploratory functi=
+ons:
+
+a) if ... then ... else ... expressions bounding a tail loop should
+have the result case in the "else" clause.  Putting the result case in
+the "then" clause results in a little skip.  In essence, the compiler
+assumes that the true case is the expected case.
+
+b) match expressions seem to be man-handled more by the compiler.  You
+can still predict what's going to happen, however.  As a general rule,
+pattern matching works well when at least one case has an actual value
+to match against.  If every pattern is a don't care and some have
+guards, expect it to behave somewhat like the "if" bit above: the
+first case is assumed to be the expected case.  When it matters and
+you're not sure, look at the assembly.
+
+c) as a special warning:
+
+    match e with true -> e1 | false -> e2
+
+is much less efficient than
+
+    if e then e1 else e2
+
+
+In short, if you know which branch is more expected, put it in the
+"then" clause.  And trust that pattern matching is pretty smart unless
+you do something really silly (like case c, or like using only guarded
+don't-care patterns.)
+
+John.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

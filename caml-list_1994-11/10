@@ -1,0 +1,119 @@
+Received: by pauillac.inria.fr; Thu, 24 Nov 94 12:52:59 +0100
+Received: from concorde.inria.fr by pauillac.inria.fr; Mon, 21 Nov 94 10:32:00 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.6.9/8.6.9) with ESMTP id KAA04820 for <weis@pauillac.inria.fr>; Mon, 21 Nov 1994 10:31:59 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.6.8/8.6.6) with ESMTP id KAA13864 for <caml-list@margaux.inria.fr>; Mon, 21 Nov 1994 10:32:32 +0100
+Received: from pamir.inria.fr (pamir.inria.fr [192.93.2.24]) by concorde.inria.fr (8.6.9/8.6.9) with SMTP id KAA04816 for <caml-list@margaux.inria.fr>; Mon, 21 Nov 1994 10:31:58 +0100
+X400-Received: by /PRMD=inria/ADMD=atlas/C=fr/;
+ Relayed; 21 Nov 94 10:31:54+0100
+X400-Received: by /ADMD=ATLAS/C=FR/;
+ Relayed; 21 Nov 94 09:31:39 GMT
+X400-Received: by /PRMD=CNET/ADMD=ATLAS/C=FR/;
+ Relayed; 21 Nov 94 10:31:36+0100
+Date: 21 Nov 94 10:31:36+0100
+From: "Pierre CREGUT - FT.CNET/LAA/EIA/EVP" <cregut@LANNION.cnet.fr>
+Message-Id: <9411210931.AA13053@lsun169>
+Subject: useless #open
+To: caml-list@margaux.inria.fr
+X-Mailer: ELM [version 2.3 PL11]
+Sender: weis@pauillac.inria.fr
+Status: O
+
+I use the following (small) patch of the compiler to detect useless #open:
+
+in modules.ml
+-------------
+(* new functions *)
+
+let really_used = ref([]:string list) and declared_used = ref([]:string list);;
+let add_set r v = r := let l = !r in if mem v l then l else v :: l;;
+let clear_sets () = really_used := []; declared_used := [];;
+let not_used () = 
+  do_list (fun name ->
+                 prerr_begline " Warning: ";
+	         prerr_string name;
+                 prerr_endline2 " opened but not used.")
+          (subtract !declared_used !really_used)
+;;
+  
+(* modified function *)
+let find_desc sel_fct = function
+    GRmodname q ->
+      begin try
+        add_set really_used q.qual; (***)
+        hashtbl__find (sel_fct (find_module q.qual)) q.id
+      with Not_found ->
+        raise Desc_not_found
+      end
+  | GRname s ->
+      begin try
+        hashtbl__find (sel_fct !defined_module) s
+      with Not_found ->
+        let rec find_rec = function
+          []       -> raise Desc_not_found
+        | md::rest -> try 
+                        let obj = hashtbl__find (sel_fct md) s
+                        in add_set really_used md.mod_name; obj (***)
+                      with Not_found -> find_rec rest
+        in find_rec !used_modules
+      end
+;;
+
+in compiler.ml
+--------------
+
+let compile_impl modname filename =
+  clear_sets (); (***)
+  let source_name = filename ^ ".ml"
+  and obj_name = filename ^ ".zo" in
+  .......
+    try
+      while true do
+        compile_impl_phrase oc (parse_impl_phrase lexbuf)
+      done
+    with End_of_file ->
+      end_emit_phrase oc;
+      close_in ic;
+      close_out oc;
+      not_used () (***)
+    | x ->
+      close_in ic;
+      close_out oc;
+      remove_file obj_name;
+      raise x
+;;
+
+So it is just a small change. One could improve the implementation but 
+performance is not an issue.
+
+> > ou est difinie telle fonction ?
+> L'outil mletags (contrib/mletags dans la distribution) fait a peu pres
+> ca. Il construit un "tag file" pour Emacs qui indexe les definitions
+> de globaux.
+
+Oui mais il est presque inutilisable si plusieurs fonctions portent 
+le meme nom. En particulier quand on transporte une fonction d'un module a 
+l'autre pour simuler un systeme de modules avec sous modules avec
+quelque chose du genre "let f = f;;". C'est le cas des constructions.
+
+> > ou est appelie telle fonction ?
+> Les fonctions etant des valeurs de premiere classe, la reponse exacte
+> a cette question est difficile.
+
+Generalement il suffit de savoir ou elle est utilisee, c'est a dire
+appliquee ou passee en argument a une autre fonction. C'est un probleme
+du meme ordre que le precedent
+
+La solution est de faire generer des tables de reference croisees par le 
+compilo. SML fait ca en partie si mes souvenirs sont bons mais imparfaitement 
+car il utilise Tags ensuite pour la visualisation. En fait tout le travail
+c'est faire l'outil de visualisation qui prenne en compte les etiquettes
+internes distinguant les differentes definitions liees a un meme 
+identificateur.
+
+Pierre Cregut
+
+
+
+
+
+

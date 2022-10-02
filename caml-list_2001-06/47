@@ -1,0 +1,111 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id EAA22863; Wed, 6 Jun 2001 04:04:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA22925 for <caml-list@pauillac.inria.fr>; Wed, 6 Jun 2001 04:04:25 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f5623jr22080;
+	Wed, 6 Jun 2001 04:03:45 +0200 (MET DST)
+Received: (from herbelin@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id EAA22757; Wed, 6 Jun 2001 04:03:45 +0200 (MET DST)
+From: Hugo Herbelin <Hugo.Herbelin@inria.fr>
+Message-Id: <200106060203.EAA22757@pauillac.inria.fr>
+Subject: Re: [Caml-list] OCaml Speed for Block Convolutions
+In-Reply-To: <20010605104804.83767.qmail@web11902.mail.yahoo.com> from Tom _ at "Jun 5, 101 03:48:04 am"
+To: tom7ca@yahoo.com (Tom _)
+Date: Wed, 6 Jun 2001 04:03:45 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> >         let a = ref 0. in
+> >         for i = 0 to n-1 do
+> >           a := !a +. Array.unsafe_get xs i
+> >         done
+> ...
+> Why not have a construct that expresses what
+> the programmer really wants:
+> 
+>   let mutable a = 0. in
+>   for i = 0 to n-1 do
+>     a <- a +. Array.unsafe_get xs i
+>   done
+> 
+> Tom
+
+I was precisely asking myself the same question, initially motivated
+by explaining the imperative constructs of ML to programmers coming
+from the imperative side. I mean how to explain that you find in ML a
+regular for-loop, a regular while-loop but you need to use pointers to
+translate assignments as in the code at top above which really only
+corresponds to the following C code:
+
+int i;
+double *a = (double *) malloc(sizeof(double)); *a = 0;
+for (i=0;i<=n-1;i++) *a = *a + xs[i];
+
+
+Assume more generally that you can modify any local variable as in the
+(standard) following example:
+
+let fact (mutable n) =
+  let mutable r = 1 in
+  while n > 0 do
+     r <- r * n;
+     n <- n - 1
+  done;
+  r
+
+At first, this is in contradiction with the substitution property of
+purely functional languages, like "let x = 1 in ... x ..." should
+behave the same as "... 1 ...", but it then should be enough to
+explain that a while-loop binds over all the variables modified in its
+body, as the functional interpretation of the while-loop shows it
+
+let fact n =
+  let r = 1 in
+  let rec loop (r,n as effects) =
+     if n > 0 then
+       let r = r * n in
+       let n = n - 1 in
+       loop (r,n)
+     else effects in
+  let (r,n) = loop (r,n) in
+  r
+
+and the substitution property is preserved.
+
+The compilation model of ocaml is already able to handle this (at
+least the bytecode, in fact to realize the incrementation of the
+for-loops counter) and the typing would just be monomorphic as for 
+any mutable. May there be any problem I don't see? Is there a risk
+to allow more imperative-style algorithms? Could it really lead to
+a sensible benefit in efficiency for some typical algorithms?
+
+At least, it seems there is some limitations with higher-order
+functions.
+
+> let a = ref 0 in
+> Hashtbl.iter (fun k d -> a := !a + d) my_hash
+
+Following the same principe as before, an alternative would be
+
+let a = mutable 0 in
+Hashtbl.iter (fun k d -> a <- a + d) my_hash
+
+explaining that the substitution property is preserved by the fact
+that a function too binds over the variables it modifies, even if in
+this case, the functional translation needs to add an extra arg to
+iter.
+
+But since only "immediate" variables of a function are not copied (all
+the variables declared by and since the closer surrounding "fun"), the
+last option will not work: when building the closure, a new copy of
+the value of a is put in the closure environment and further updatings
+will not affect the initial cell.
+
+                                                  Hugo
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

@@ -1,0 +1,190 @@
+Return-Path: <dmitry.bely@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 09C71BC0B
+	for <caml-list@yquem.inria.fr>; Mon, 20 Nov 2006 19:49:25 +0100 (CET)
+Received: from wr-out-0506.google.com (wr-out-0506.google.com [64.233.184.233])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kAKInOII001142
+	for <caml-list@inria.fr>; Mon, 20 Nov 2006 19:49:24 +0100
+Received: by wr-out-0506.google.com with SMTP id 71so373481wri
+        for <caml-list@inria.fr>; Mon, 20 Nov 2006 10:49:23 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition;
+        b=m3+IEZS7lBqhnX+Gsqno/DR2/tK/yYMass+5eDjBpr/Lj6/wN2hZ9DlolWwVmZf/+tX7j26civXroZhc4Cit4YHeKNFbGOFeymfa25vpTHbpTn+iBCT79ba3uMkSwJ3JQAsw2g3b2Y4Vnlj9HR3qEVSO5aWWaGZ36sP1c63IfwU=
+Received: by 10.90.65.11 with SMTP id n11mr3713426aga.1164048563459;
+        Mon, 20 Nov 2006 10:49:23 -0800 (PST)
+Received: by 10.90.114.12 with HTTP; Mon, 20 Nov 2006 10:49:22 -0800 (PST)
+Message-ID: <90823c940611201049r15d7d5e8p5a1e0c27fbabd176@mail.gmail.com>
+Date: Mon, 20 Nov 2006 21:49:23 +0300
+From: "Dmitry Bely" <dmitry.bely@gmail.com>
+To: caml-list@inria.fr
+Subject: Inlining bigarray access
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+X-j-chkmail-Score: MSGID : 4561F8B4.000 on concorde : j-chkmail score : X : 0/20 1
+X-Miltered: at concorde with ID 4561F8B4.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; inlining:01 bigarray:01 bigarray:01 elt:01 patched:01 ocamlopt:01 -unsafe:01 jmp:01 jmp:01 allocates:01 inlined:01 sar:98 sar:98 sal:98 heap:01 
+
+Here is the small code snippet:
+
+open Bigarray
+
+type floatarray = (float, float32_elt, c_layout) Array1.t
+
+let get (a: floatarray) i = Array1.get a i
+
+let test3 (a:floatarray) i =
+  Array1.get a (i-1) > 0.0 && Array1.get a i > 0.0 && Array1.get a (i+1) > 0.0
+
+let test3m (a:floatarray) i =
+  get a (i-1) > 0.0 && get a i > 0.0 && get a (i+1) > 0.0
+
+My impression was that test3 and test3m should be compiled to the same
+machine code (x86). Strangely, this is not the case (for the
+simplicity the code is generated with patched ocamlopt, allowing
+-unsafe bigarray access and 686+ float comparison instructions):
+
+	.CODE
+	ALIGN	4
+	PUBLIC	_camlBig__test3_187
+_camlBig__test3_187:
+	sub	esp, 8
+L108:
+	mov	ecx, eax
+	fldz
+	mov	edx, ebx
+	add	edx, -2
+	sar	edx, 1
+	mov	eax, DWORD PTR [ecx+4]
+	fld	REAL4 PTR [eax+edx*4]
+	fcomip	st(0), st(1)
+	fstp	st(0)
+	jbe	L104
+	fldz
+	mov	edx, ebx
+	sar	edx, 1
+	mov	eax, DWORD PTR [ecx+4]
+	fld	REAL4 PTR [eax+edx*4]
+	fcomip	st(0), st(1)
+	fstp	st(0)
+	jbe	L105
+	fldz
+	add	ebx, 2
+	sar	ebx, 1
+	mov	eax, DWORD PTR [ecx+4]
+	fld	REAL4 PTR [eax+ebx*4]
+	fcomip	st(0), st(1)
+	fstp	st(0)
+	jbe	L107
+	mov	eax, 1
+	jmp	L106
+L107:
+	xor	eax, eax
+L106:
+	lea	eax, DWORD PTR [eax+eax+1]
+	add    esp, 8
+	ret
+L105:
+	mov	eax, 1
+	add    esp, 8
+	ret
+L104:
+	mov	eax, 1
+	add    esp, 8
+	ret
+	.CODE
+	ALIGN	4
+	PUBLIC	_camlBig__test3m_190
+_camlBig__test3m_190:
+	sub	esp, 8
+L113:
+	mov	ecx, eax
+	mov	edx, ebx
+	add	edx, -2
+L114:	mov	eax, _caml_young_ptr
+	sub	eax, 12
+	mov	_caml_young_ptr, eax
+	cmp	eax, _caml_young_limit
+	jb	L115
+	lea	esi, [eax+4]
+	mov	DWORD PTR [esi-4],2301
+	sar	edx, 1
+	mov	eax, DWORD PTR [ecx+4]
+	fld	REAL4 PTR [eax+edx*4]
+	fstp	REAL8 PTR [esi]
+	fld	REAL8 PTR [esi]
+	fstp	REAL8 PTR 0[esp]
+	fldz
+	fld	REAL8 PTR 0[esp]
+	fcomip	st(0), st(1)
+	fstp	st(0)
+	jbe	L109
+	fldz
+	mov	edx, ebx
+	sar	edx, 1
+	mov	eax, DWORD PTR [ecx+4]
+	fld	REAL4 PTR [eax+edx*4]
+	fcomip	st(0), st(1)
+	fstp	st(0)
+	jbe	L110
+	add	ebx, 2
+L117:	mov	eax, _caml_young_ptr
+	sub	eax, 12
+	mov	_caml_young_ptr, eax
+	cmp	eax, _caml_young_limit
+	jb	L118
+	lea	edx, [eax+4]
+	mov	DWORD PTR [edx-4],2301
+	sar	ebx, 1
+	mov	eax, DWORD PTR [ecx+4]
+	fld	REAL4 PTR [eax+ebx*4]
+	fstp	REAL8 PTR [edx]
+	fld	REAL8 PTR [edx]
+	fstp	REAL8 PTR 0[esp]
+	fldz
+	fld	REAL8 PTR 0[esp]
+	fcomip	st(0), st(1)
+	fstp	st(0)
+	jbe	L112
+	mov	eax, 1
+	jmp	L111
+L112:
+	xor	eax, eax
+L111:
+	sal	eax, 1
+	inc	eax
+	add    esp, 8
+	ret
+L110:
+	mov	eax, 1
+	add    esp, 8
+	ret
+L109:
+	mov	eax, 1
+	add    esp, 8
+	ret
+L118:	call	_caml_call_gc
+L119:	jmp	L117
+L115:	call	_caml_call_gc
+L116:	jmp	L114
+
+Could you explain, why the code is different and get3m allocates some
+data on the heap? (Don't blame me for unsafe/686 patch - without it
+the assembly is still different).
+
+Another strange thing is that
+
+let get: (floatarray -> int -> float) = Array1.get
+
+is not inlined at all and compiled as a C call. Why?
+
+- Dmitry Bely
+

@@ -1,0 +1,84 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p5L7DWJP009082
+	for <caml-list@sympa-roc.inria.fr>; Tue, 21 Jun 2011 09:13:32 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArsBADZDAE7RVdo2mGdsb2JhbAA+AQMFDYRJk1OOSQgUAQEBAQEICQ0HFCWoJIJKi38+gkeEajmIZgEBAwaBJYFzggKBCgSHHIpKi3s8g1I
+X-IronPort-AV: E=Sophos;i="4.65,399,1304287200"; 
+   d="scan'208";a="101670637"
+Received: from mail-yi0-f54.google.com ([209.85.218.54])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 21 Jun 2011 09:13:26 +0200
+Received: by yic13 with SMTP id 13so1330394yic.27
+        for <caml-list@inria.fr>; Tue, 21 Jun 2011 00:13:25 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:date:message-id:subject:from:to
+         :content-type;
+        bh=TY8ep1cR9HoNJG70ui6YwvZfNotTTsGJfwCTsaPnah8=;
+        b=s6klrTYIq54LRzt+vw/t4di7JW2PeyHfkqCRKOo8enlVWzevFafPIWiekwNUnxDvic
+         dqp0aUAJMTza5hhTSCLWFoLRR1RSyg8TXSLJe/6p7zxpibinioUVAzuVGDJUkaT2388k
+         ftEWzgfFKiHAdglB0VlN4+dNdL2S0QeHIkyPw=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:date:message-id:subject:from:to:content-type;
+        b=uh3obxtyNXKSsIhpNgd5pBh8SRBtqsgWdXFFyyGYnZqt0+sp7pvji8AjQ1tyo6wJdJ
+         NbedE3EBaFvJm25XgtJvVwL0UgCKhHUa6b6Qz8V17QPcRFdOj6i6w4MnHdKbN1o2ncGY
+         Ii9M9cD/iaH3DD5eKZ/gdrPW9S+aiyoUZQoEg=
+MIME-Version: 1.0
+Received: by 10.150.251.21 with SMTP id y21mr6938127ybh.273.1308640405273;
+ Tue, 21 Jun 2011 00:13:25 -0700 (PDT)
+Received: by 10.150.212.8 with HTTP; Tue, 21 Jun 2011 00:13:25 -0700 (PDT)
+Date: Tue, 21 Jun 2011 10:13:25 +0300
+Message-ID: <BANLkTi=jqHn_u3nWXM4t_K2T30Byh55AXA@mail.gmail.com>
+From: Dmitry Grebeniuk <gdsfh1@gmail.com>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=UTF-8
+Subject: [Caml-list] value restriction and records' rank-2 polymorphism
+
+Hello.
+
+  I need to create two functions that share common state, and I want to
+create this common state once per program run, and I want to make each
+function call very cheap.  When I'm doing it naively, I get "value restriction":
+
+$ ocaml
+# #use "topfind";;
+# #camlp4r;;
+# type func 'a 'r = string -> ('a -> 'r) -> 'r;
+type func 'a 'b = string -> ('a -> 'b) -> 'b
+# value mkpair1 from_string =
+  (* some common values here *)
+  ( fun s f -> try f (from_string s) with [e -> failwith "mkpair1"]
+  , fun s f -> try f (Some (from_string s)) with [e -> f None]
+  );
+value mkpair1 :
+  ('a -> 'b) -> ('a -> ('b -> 'c) -> 'c * 'a -> (option 'b -> 'd) -> 'd) = <fun>
+# value identity x = x;
+value identity : 'a -> 'a = <fun>
+# value (id11, id12) = mkpair1 identity;
+value id11 : '_a -> ('_a -> '_b) -> '_b = <fun>
+value id12 : '_a -> (option '_a -> '_b) -> '_b = <fun>
+
+  But I've found a trick that uses rank-2 polymorphism of record fields:
+
+# type pair 'a 'b =
+     { notnull : !'r . func 'a 'r
+     ; nullable : !'r . func (option 'a) 'r
+     };
+type pair 'a 'b =
+  { notnull : !'c. func 'a 'c; nullable : !'d. func (option 'a) 'd }
+# value mkpair2 from_string =
+  (* some common values here *)
+  { notnull = fun s f -> try f (from_string s) with [e -> failwith "mkpair2"]
+  ; nullable = fun s f -> try f (Some (from_string s)) with [e -> f None]
+  };
+value mkpair2 : (string -> 'a) -> pair 'a 'b = <fun>
+# value { notnull = id21 ; nullable = id22 } = mkpair2 identity;
+value id21 : func string 'a = <fun>
+value id22 : func (option string) 'a = <fun>
+#
+
+  And everything seems to work: the record is created once, then
+it is "decomposed" to id21 and id22 functions (either right after its
+creation or on each call, it should be cheap anyway).  But I don't
+know whether this solution is correct and will it remain correct in
+future versions of OCaml -- can you help me here?

@@ -1,0 +1,158 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA16065; Wed, 17 Apr 2002 11:49:34 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA24242 for <caml-list@pauillac.inria.fr>; Wed, 17 Apr 2002 11:49:33 +0200 (MET DST)
+Received: from sunny.pacific.net.au (sunny.pacific.net.au [203.25.148.40])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3H9nVX06676
+	for <caml-list@inria.fr>; Wed, 17 Apr 2002 11:49:32 +0200 (MET DST)
+Received: from wisma.pacific.net.au (wisma.pacific.net.au [210.23.129.72])
+          by sunny.pacific.net.au with ESMTP
+          id g3H9nTXt006134 for <caml-list@inria.fr>; Wed, 17 Apr 2002 19:49:29 +1000 (EST)
+Received: from ozemail.com.au (ppp177.dyn18.pacific.net.au [61.8.18.177])
+        by wisma.pacific.net.au with ESMTP
+        id TAA11910 for <caml-list@inria.fr>; Wed, 17 Apr 2002 19:49:23 +1000 (EST)
+Message-ID: <3CBD4523.6080707@ozemail.com.au>
+Date: Wed, 17 Apr 2002 19:49:23 +1000
+From: John Max Skaller <skaller@ozemail.com.au>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:0.9.2.1) Gecko/20010901
+X-Accept-Language: en-us
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: [Caml-list] Polymorphic variants
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I've been using polymorphic variants for a little while, and am
+interested in their current status. Here are some comments. The 
+executive summary is:
+they're definitely worth using, and definitely worth continued
+development.
+
+My project is a compiler. The main reason I switched to
+polymorphic variants is that term desugaring and reductions
+would appear to be best handled by a single large term type,
+and a various subsets appropriate to context. For example,
+a type expression is a subset of an expression: it admits
+addition, multiplication and exponentiation, but no
+subtraction.
+
+Unfortunately, this doesn't work out as well as I'd expected
+because of recursion:
+
+type a = [`A of a  | `B]
+type b = [`A of  b]
+
+The second type is a subtype of the first,
+but this fails:
+
+let f (x:a) =
+match x with
+  #b -> ()
+
+with the message:
+
+This pattern matches values of type [< b] = [< `A of b]
+but is here used to match values of type a = [ `A of a | `B];;
+
+Ocaml understands subtyping by subsets of variants,
+but the constructor arguments must be invariant.
+The work around is to decode the argument manually,
+but then one wonders what the gain over standard variants is.
+Here is another example:
+
+ type x = [`A of int | `A of float];;
+This variant type contains a constructor [ `A of float] which should be
+[ `A of int]
+
+No, I meant what I said! I can write both:
+
+`A 1
+
+and also
+
+`A 1.1
+
+and I am trying  to tell the compiler they both belong
+to type x. It has no right to complain here. Of course,
+this does lead to a problem:
+
+ match x with | `A a -> ..
+
+what type is a? It's 'a initially,
+and bound on the first use. Which makes
+matching on first `A 1 and then `A 1.1
+impossible.  This is a problem with the ocaml type
+inference mechanism not my type declaration!
+[So it can't deduce the type of a .. but I could specify it
+if there were syntax like
+
+| `A (a:int) -> ...
+
+[It seems to me that the type of the argument
+is taken *incorrectly* as the intersection
+type int & float, when it is actually a sum..
+in the case of a sum the constraint would be
+enough to fix the type correctly .. on the other hand,
+intersections would correctly solve the covariance
+problem .. ??]
+
+In fact I found the type inference
+engine stumbled around over legitimate matches,
+and some extra help in the form of function argument
+type  constraints was necessary (a small price to pay,
+but worth noting an example in the manual).
+
+In any case, polymorphic variant constructors really
+ARE overloaded, but when it comes to declaring
+types, overloading isn't allowed. This is an anomaly ..
+and it hit me quite hard initially, because of the natural
+attempt to try to use covariant arguments.
+
+A second problem I found is the verbose error messages.
+When you have 20 variants, a mismatch is a real pain
+to decypher. It would be useful if variants HAD to be
+declared like:
+
+variant `A of int
+variant `A of float
+variant `B of long
+
+so that spelling mistakes and type errors in constructor
+arguments could be more easily pinpointed .. but of course,
+this can't work due to recursion ... hmmm...
+
+One thing that *definitely* needed improvement is the syntax
+for declaring types: having to repeat all the cases every time
+is an error prone tedium. It appears this HAS been done in
+ocaml 3.04! THANK YOU!! One can now write:
+
+type a = [`A]
+type b = [`B]
+type c = [a | b]
+
+[#types were previously allowed in pattern matches but not
+type declarations ..]
+
+Well, are polymorphic variants worth the effort?
+I think they are: they're not perfect, they're certainly
+more error prone than standard variants .. but they're
+also a lot more expressive and save considerable
+coding, and in many cases they're much faster as well.
+[In particular, injecting a subset of cases into a supertype
+is a no-operation, whereas standard variants require
+actually building new values]
+
+
+-- 
+John Max Skaller, mailto:skaller@ozemail.com.au
+snail:10/1 Toxteth Rd, Glebe, NSW 2037, Australia.
+voice:61-2-9660-0850
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

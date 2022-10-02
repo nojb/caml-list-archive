@@ -1,0 +1,85 @@
+Return-Path: <anil@recoil.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 60E31BB9A
+	for <caml-list@yquem.inria.fr>; Sat,  8 Oct 2005 18:57:42 +0200 (CEST)
+Received: from fork.recoil.org (fork.recoil.org [194.70.3.132])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with SMTP id j98GvfJs016682
+	for <caml-list@yquem.inria.fr>; Sat, 8 Oct 2005 18:57:42 +0200
+Received: (qmail 7198 invoked from network); 8 Oct 2005 16:57:30 -0000
+Received: from localhost (HELO ?IPv6:::1?) (127.0.0.1)
+  by fork.recoil.org with SMTP; 8 Oct 2005 16:57:30 -0000
+In-Reply-To: <20051008163518.B1B262B2A62@labrador.eecs.harvard.edu>
+References: <20051008153429.A2314289004@toller> <1456CFD1-55B7-4A3B-B121-6B27529F94BE@recoil.org> <20051008163518.B1B262B2A62@labrador.eecs.harvard.edu>
+Mime-Version: 1.0 (Apple Message framework v734)
+Content-Type: text/plain; charset=US-ASCII; delsp=yes; format=flowed
+Message-Id: <710BDF7D-A164-4655-975E-553017F62321@recoil.org>
+Cc: caml-list@yquem.inria.fr
+Content-Transfer-Encoding: 7bit
+From: Anil Madhavapeddy <anil@recoil.org>
+Subject: Re: [Caml-list] trouble with Marshal.to_string 
+Date: Sat, 8 Oct 2005 17:57:40 +0100
+To: Norman Ramsey <nr@eecs.harvard.edu>
+X-Mailer: Apple Mail (2.734)
+X-Miltered: at nez-perce with ID 4347FA85.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; anil:01 anil:01 caml-list:01 bindings:01 bindings:01 alloc:01 serialize:01 def:01 byterun:01 serialize:01 byterun:01 otherlibs:01 otherlibs:01 systhreads:01 posix:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On 8 Oct 2005, at 17:35, Norman Ramsey wrote:
+
+>> Are you using any C bindings which create custom blocks?  That error
+>> occurs if your custom block does not define a serialization function
+>> (documented here: http://caml.inria.fr/pub/docs/manual-ocaml/
+>> manual032.html#s:custom).
+>>
+>
+> Thanks; at least now I have some idea what's happening.
+>
+> I'm not aware of using any C bindings at all, although I am linking
+> against the Unix library.  My final executable does contain
+> definitions of caml_alloc_custom, caml_register_custom_operations, and
+> related functions, but none of my .o or .a files refers to such a
+> function.
+>
+> Any ideas how I might track down the source of a custom block?
+
+The old-fashioned way, with grep :-)  I'm sure there are fancier  
+ways, but...
+
+shock:~/src/ocaml-3.08.4 avsm$ grep -r custom_serialize_def *
+byterun/custom.c:  ops->serialize = custom_serialize_default;
+byterun/custom.h:#define custom_serialize_default NULL
+byterun/io.c:  custom_serialize_default,
+otherlibs/graph/image.c:  custom_serialize_default,
+otherlibs/systhreads/posix.c:  custom_serialize_default,
+otherlibs/systhreads/posix.c:  custom_serialize_default,
+otherlibs/systhreads/posix.c:  custom_serialize_default,
+otherlibs/systhreads/win32.c:  custom_serialize_default,
+otherlibs/systhreads/win32.c:  custom_serialize_default,
+otherlibs/win32graph/draw.c:        custom_serialize_default,
+otherlibs/win32unix/unixsupport.c:  custom_serialize_default,
+
+So it looks like a few functions in the OCaml standard libraries  
+aren't serializable; notable the systhreads.  Are you using threads  
+in the structures you are marshalling?
+
+Confirmed with a simple test:
+
+let _ =
+     let x = Thread.create (fun () -> ()) () in
+     Marshal.to_string x [Marshal.Closures]
+
+$ ocamlopt.opt -c -thread t.ml
+$ ocamlopt.opt unix.cmxa threads.cmxa -thread -o t t.ml
+$ ./t
+Fatal error: exception Invalid_argument("output_value: abstract value  
+(Custom)")
+
+--
+Anil Madhavapeddy                                 http://anil.recoil.org
+University of Cambridge                          http://www.cl.cam.ac.uk
+

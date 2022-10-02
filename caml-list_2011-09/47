@@ -1,0 +1,140 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p87LTRIF023837
+	for <caml-list@sympa-roc.inria.fr>; Wed, 7 Sep 2011 23:29:27 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Aq8BANDhZ07RVdW2kGdsb2JhbABDhFWjEQgUAQEBAQkJDQcUBCKBXwIPBBkBGx4DEhAPAiYCJAERAQUBPRMHn0iCVQqKfECCVoU2O4htAgMGgSaELoERBIdmi0yMbjyDbg
+X-IronPort-AV: E=Sophos;i="4.68,347,1312149600"; 
+   d="scan'208";a="108069920"
+Received: from mail-yx0-f182.google.com ([209.85.213.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 07 Sep 2011 23:29:22 +0200
+Received: by yxk36 with SMTP id 36so128813yxk.27
+        for <caml-list@inria.fr>; Wed, 07 Sep 2011 14:29:21 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:date:message-id:subject:from:to:content-type;
+        bh=vG83pjjxd1iwVGvr59Q6m2Ne2oKqR91tGk5fKXFE1UE=;
+        b=O0p7DwDkU9EnBUCPHJoosK4cPxDZTQNi/v4zd9kOmHr17upJj1+4oyEJGOB6zOjiBl
+         jBF/ILjNWork13Kt0GNu9s0BsrkwrODI3gshWTbQkCnO63c5LIwk7m4RBUQtzsD9/cpj
+         y7PjQZMEoD6k9TiuTJX6Mmnesc1jy70tGadE4=
+MIME-Version: 1.0
+Received: by 10.42.168.129 with SMTP id w1mr272806icy.146.1315430960887; Wed,
+ 07 Sep 2011 14:29:20 -0700 (PDT)
+Received: by 10.42.218.10 with HTTP; Wed, 7 Sep 2011 14:29:20 -0700 (PDT)
+Date: Thu, 8 Sep 2011 00:29:20 +0300
+Message-ID: <CAPi0vKXHQ3SyChtphJ7OAtAnDNK5TpfXqq_nKBF7aA0nGHovHw@mail.gmail.com>
+From: Dmitry Grebeniuk <gdsfh1@gmail.com>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=UTF-8
+Subject: [Caml-list] recursive module, object types, tying knot
+
+Hello.
+
+  I have an usual question.  I want to make some object
+types (container-like) that can map the stored contents
+with its method.  For example, let the container will be
+the simple list:
+class ['a] (lst : list 'a) = object ...
+  method map : ('a -> 'b) -> 'b lst
+
+  The compiler yields an error:
+# class ['a] lst x = object
+   method map : 'b . ('a -> 'b) -> 'b lst
+   = fun f -> List.map f x end;;
+Error: This type scheme cannot quantify 'b :
+it escapes this scope.
+
+  I know the solution with separate function for map,
+but I don't like it: the whole mess with objects is
+to use less information to make api call: compare
+"MapIntToString.get my_map 123" with
+"my_map#get 123".  Having to remember where
+(in which module) the correct map function resides
+will ruin the purpose of the code I'm writing now.
+
+  (maybe "implicit values" could help here, but they are
+not the part of official compiler for now.)
+
+  I need to write the code that performs that map, maybe
+with help of some additional types and values.  And I
+began experimenting.
+
+
+  Now I have two pieces of code (for even simpler
+container, that contains just one value), the second one
+is derived from the first one by replacing the type "ta"
+from the record to the object type.  The first piece
+of code works, but the second does not.  Why there is
+such a difference, and, more importantly, how should
+I tweak the second piece of code to make it work?
+(if you remember, referencing the record's fields will
+require the path to the module where the record
+is declared (see the "q#tbm.L.tam" subexpression),
+so the first "solution" is not a solution for my current
+problem.)
+
+$ ocaml
+        Objective Caml version 3.12.1+rc1
+
+# module rec L
+ :
+  sig
+    type 'a ta = { tam : 'b. ('a -> 'b) -> 'b L.tb }
+    class ['a] tb : 'a -> object method tbm : 'a L.ta end
+    val make_ta : 'a -> 'a L.ta
+  end
+ =
+  struct
+    type 'a ta = { tam : 'b. ('a -> 'b) -> 'b L.tb }
+    let make_ta : 'a -> 'a L.ta = fun a -> { tam = fun f -> new L.tb (f a)}
+    class ['a] tb x = object method tbm : 'a L.ta = L.make_ta x end
+  end;;
+module rec L :
+  sig
+    type 'a ta = { tam : 'b. ('a -> 'b) -> 'b L.tb; }
+    class ['a] tb : 'a -> object method tbm : 'a L.ta end
+    val make_ta : 'a -> 'a L.ta
+  end
+
+# let q = new L.tb 123;;
+val q : int L.tb = <obj>
+
+# let w = q#tbm.L.tam string_of_int;;
+val w : string L.tb = <obj>
+
+#
+
+  (it really works -- the map is applied, the
+object is created.  I've checked it with more
+extended types that allowed me to examine
+the contents of such a great container.)
+
+$ ocaml
+        Objective Caml version 3.12.1+rc1
+
+# module rec L
+   :
+    sig
+      type 'a ta = < tam : 'b. ('a -> 'b) -> 'b L.tb >
+      class ['a] tb : 'a -> object method tbm : 'a L.ta end
+      val make_ta : 'a -> 'a L.ta
+    end
+   =
+    struct
+      type 'a ta = < tam : 'b. ('a -> 'b) -> 'b L.tb >
+      let make_ta : 'a -> 'a L.ta = fun a ->
+        object method tam : 'b. ('a -> 'b) -> 'b L.tb =
+          fun f -> new L.tb (f a)
+        end
+      class ['a] tb x = object method tbm : 'a L.ta = L.make_ta x end
+    end;;
+Error: In the definition of L.tb, type 'a L.ta should be 'b L.ta
+#
+
+  Maybe there is a problem with type "ta" in the second piece,
+because record is "concrete" type, but the object type is just
+a list of their methods.  But I can't check it successfully: trying
+to wrap occurences of "tb" with "type 'a id = Id of 'a" (and removing
+"ta" at all) does not help, just yields different types in error
+"In the definition of .., type .. should be ..".
+
+  Please help me.  Any ideas are highly appreciated.

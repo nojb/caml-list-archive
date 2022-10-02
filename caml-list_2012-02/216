@@ -1,0 +1,142 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q1SL9jop024374
+	for <caml-list@sympa-roc.inria.fr>; Tue, 28 Feb 2012 22:09:45 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AoQFAEVCTU/U436rjWdsb2JhbABEgxOCJq4tIgEBAQEJCQsJEgUkgXcBAQQBIwRLBwULCxoCJgICVwYTCRKHaAkHrWaKNoEviD+DDAEICAcGBgEQAgIDAQICAwQGDwkDBwcTAQuFBwMFNAIMBAMJFIIdgRYEjT+NXo0TgVMICA
+X-IronPort-AV: E=Sophos;i="4.73,497,1325458800"; 
+   d="scan'208";a="133453117"
+Received: from moutng.kundenserver.de ([212.227.126.171])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 28 Feb 2012 22:09:30 +0100
+Received: from office1.lan.sumadev.de (dslb-094-219-222-121.pools.arcor-ip.net [94.219.222.121])
+	by mrelayeu.kundenserver.de (node=mreu4) with ESMTP (Nemesis)
+	id 0MLmVT-1S2lHW1wwN-000PFw; Tue, 28 Feb 2012 22:09:30 +0100
+Received: from [192.168.178.17] (546BF816.cm-12-4d.dynamic.ziggo.nl [84.107.248.22])
+	by office1.lan.sumadev.de (Postfix) with ESMTPSA id 0E392C00CB;
+	Tue, 28 Feb 2012 22:09:29 +0100 (CET)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Goswin von Brederlow <goswin-v-b@web.de>
+Cc: caml-list@inria.fr
+In-Reply-To: <87y5rmemr6.fsf@frosties.localnet>
+References: <87y5rmemr6.fsf@frosties.localnet>
+Content-Type: text/plain; charset="UTF-8"
+Date: Tue, 28 Feb 2012 22:09:27 +0100
+Message-ID: <1330463367.2826.96.camel@thinkpad>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.28.3 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:Z2Bpw6Ir4o1Xn+mg1KttjnNXK7f35RjTvQLrveDVGsB
+ BzJICUSJA8Zv+wZnXWljvH2FdoRV6sbP+3irF7nEUBMVQYInHY
+ ZILDnDRnCZGfWguNy8QC5KMm4/+4jdMP32iGWCg359/F3Bg08f
+ +sNDf7c1gL85hOoqIp7B7KNSuDUUBxVy7LCjEahGbo19Za30Dr
+ EyhoSDatrdtOIZa1Rd0BQ89bVZzYfSAy8W30YpOZqzuo+/To55
+ ssS08otXhCdlQejZWJzD5JGUkhaj5UGZ+Jk10Kg5rDXiv+fbyb
+ W9MnVt50JVlT8W2Ny5qIuB5COGKr3dr6Yv6bFsCzbmzAn9C275
+ 0cew+ESOSmCjHqVVCQYwIO8b0xd1MLcovDg1ZH1CO
+Subject: Re: [Caml-list] Bigarray question: Detecting subarrays, overlaps,
+ ...
+
+Am Dienstag, den 28.02.2012, 21:17 +0100 schrieb Goswin von Brederlow:
+> Hi,
+> 
+> I'm implementing a RAID in userspace using ocaml and NBD (Network Block
+> Device) as protocol to export the device. For this I'm using
+> Bigarray.Array1 as buffer for data and wrote myself the right read(),
+> write(), pread() and pwrite() stubs. The advantage of this (over
+> strings) is that Bigarrays are not copied around by the GC so they don't
+> need to copy data around between the Bigarray and a temporary buffer in
+> the C stub.
+
+I used the same approach for PlasmaFS. The bigarray-based reads and
+writes are really missing in the stdlib. (If anybody wants to
+experiment, look into the Netsys_mem module of Ocamlnet, and use the
+functions mem_read and mem_write.)
+
+Btw, you should try to allocate the bigarrays in a page-aligned way.
+This makes the syscalls even more efficient.
+
+In my use case, I did not write to devices directly, and could assume
+that the blocks are backed by the page cache. So I did not run into this
+problem you describe in the following.
+
+> For efficiency each request stores all its data in a single
+> Bigarray.Array1. For reasons of the RAID implementation large requests
+> are split into 4k chunks using Bigarray.Array1.sub and grouped into
+> stripes. The stripes are then acted upon independently until all stripes
+> involved in a request are finished. Then the request is completed.
+> 
+> Now I get a problem when 2 requests come in that overlap. Say I get a
+> write request for blocks 0 - 6 and a read request for blocks 4-9 in
+> that order. Since I already have the data for block 4-6 in memory from
+> the write request I do not want to reread them from disk. On the stripe
+> level the data looks like this:
+> 
+> |W0 W1 W2 W3 W4 W5 W6 .  .  .  | write 0-6
+> |            W4 W5 W6 R7 R8 R9 | read  4-9
+> 
+> For the read request I need to copy W4-6 to R4-6 or send out W4-6 + R7-9
+> in two writes. I think I would like to avoid sending each stripe chunk
+> out seperately.
+
+Why not? This seems to be an elegant solution, and I don't see why this
+should make the accesses slower. The time for the extra context switches
+in negligible compared to the disk accesses.
+
+>  On the other hand I could implement (p)readv() and
+> (p)writev() stubs.
+> 
+> Anyway, my question now is how to detect which subarrays in the stripes
+> are part of a common larger array? Do I need to write my own C stub that
+> looks into the internas of the arrays to see if they share a common
+> ancestor?  I think that would be preferable to tracking the origin of
+> each subarray myself.
+
+Yes, subarrays are tracked, but this feature exists only to catch the
+right moment for unmmapping bigarrays (if needed). As far as I remember,
+this is not tracked as a sub/super relationship, but the bigarrays
+accessing the same buffer share then the same buffer descriptor, and
+when the use count drops to 0, the buffer is finally destroyed. So, you
+cannot say which bigarray is the original one, and it can even be that
+the original bigarray is already deallocated but the backing buffer is
+not yet.
+
+> On a similar note how does Bigarray.Array1.blit handle arrays that are
+> part of the same larger array and overlap?
+> 
+> ----------------------------------------------------------------------
+> I'm missing functions like:
+> 
+> val super : ('a, 'b, 'c) t -> ('a, 'b, 'c) t -> ('a, 'b, 'c) t
+>     Create a merged sub-array of 2 adjacent sub-arrays of the same
+>     big array.
+
+This function would be possible to implement. The requirement would be
+that both bigarrays use the same buffer descriptor.
+
+> val same_parent : ('a, 'b, 'c) t -> ('a, 'b, 'c) t -> bool
+>     True if the 2 (sub-)arrays are part of the same big array.
+
+I would not call it "same_parent", but "same_backing_buffer".
+
+> val offset : ('a, 'b, 'c) t -> int
+>     Offset of the sub-array in the underlying big array.
+
+I think this information is in the current implementation not available.
+As buffer sharing is also possible after reshaping, this is also not
+meaningful in the general case.
+
+Gerd
+
+> MfG
+>         Goswin
+> 
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Darmstadt, Germany    gerd@gerd-stolpmann.de
+Creator of GODI and camlcity.org.
+Contact details:        http://www.camlcity.org/contact.html
+Company homepage:       http://www.gerd-stolpmann.de
+*** Searching for new projects! Need consulting for system
+*** programming in Ocaml? Gerd Stolpmann can help you.
+------------------------------------------------------------
+

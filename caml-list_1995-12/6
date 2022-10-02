@@ -1,0 +1,124 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id OAA15697 for caml-redistribution; Fri, 15 Dec 1995 14:41:26 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id NAA14897 for <caml-list@pauillac.inria.fr>; Fri, 15 Dec 1995 13:44:27 +0100
+From: Leszek.Holenderski@gmd.de
+Received: from mail.gmd.de (postix.gmd.de [129.26.8.90]) by concorde.inria.fr (8.7.1/8.7.1) with SMTP id NAA03770 for <caml-list@pauillac.inria.fr>; Fri, 15 Dec 1995 13:43:42 +0100 (MET)
+Received: from [129.26.12.124] (greenland) by mail.gmd.de with SMTP id AA11065
+  (5.67b8/IDA-1.5 for <caml-list@pauillac.inria.fr>); Fri, 15 Dec 1995 13:39:10 +0100
+X-Sender: lhol@mail.gmd.de
+Message-Id: <v01520d0bacf6f9220314@[129.26.12.124]>
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"
+Date: Fri, 15 Dec 1995 13:40:00 +0100
+To: caml-list@pauillac.inria.fr
+Subject: Q: How to call a CSL function from C
+Sender: weis
+Status: O
+
+
+Hi Camlers,
+
+Is there any official way to call a CSL function from C? CSL 1.12 manual
+doesn't seem to mention anything about the subject.
+
+I need to call some f: 'a -> 'b (in fact, 'a and 'b are some concrete
+types, but it doesn't matter here) from my C code linked with CSL 1.12. In
+my Caml code, I'll have the function
+
+  external register_callback: ('a -> 'b) -> unit = "register_callback"
+
+such that 'register_callback f' will store, in my C code, enough
+information to call f later from the C code.
+
+I suppose the C function for calling f should have the following pattern:
+
+  value invoke_callback (f_info, arg);
+    ... f_info;
+    value arg;
+  {
+    value closure;
+    closure = ... extract/build f's closure from f_info ...;
+    return callback(closure, arg);  /* 'callback' is from interp.h */
+  }
+
+A simple solution would be to keep f's closure as f_info:
+
+  static value f_closure = NULL;
+
+  value register_callback (f);
+    value f;
+  {f_closure = f; return Val_unit;}
+
+  value invoke_callback (f, arg);
+    value f, arg;
+  {return callback(f, arg);}
+
+  ... invoke_callback(f_closure, something); ...
+
+but I suspect it's too naive, since f's closure could be reallocated by GC,
+between register_callback and invoke_callback.
+
+The following code, borrowed from CamlTk for CL 0.7 (thus, from Francois
+Rouaix), seems to avoid the problem:
+
+  static code_t f_code = NULL;
+
+  value register_callback (f);
+    value f;
+  {f_code = Code_val(f); return Val_unit;}
+
+  value invoke_callback (f, arg);
+    code_t f;
+    value arg;
+  {
+    value closure;
+    closure = alloc(2, Closure_tag);
+    Code_val(closure) = f;
+    Env_val(closure) = Atom(0);
+    return callback(closure, arg);
+  }
+
+  ... invoke_callback(f_code, something); ...
+
+When trying to port the code from CL 0.7 to CSL 1.12, I encountered the
+following problems:
+
+1. How to port the innocently looking 'Env_val(closure) = Atom(0)' if
+Env_val seems to disappear in CSL 1.12.
+
+2. Does Atom(0) still represent the empty environment? Or maybe Val_int(0)
+is used for the purpose? (The later possibility came to my mind since
+Val_unit used to be Atom(0), in CL, but it is  Val_int(0), in CSL.)
+
+3. What are atoms used for in CSL 1.12, anyway? (In CL 0.7, they were used
+for representing constant constructors. In CSl 1.12, constant constructors
+are represented by integers.)
+
+4. What functions survive GC? More precisely, for what f, Code_val(f) is
+not changed by GC? Only for those which are declared on the top level?
+
+Any help will be appreciated.
+
+Cheers,
+Leszek
+
+
+
+
+
+
+
++---------------------------------+-------------------------+
+| Leszek Holenderski              | room  C2-222            |
+| GMD-I5.SKS                      | phone ++ 02241 142412   |
+| Schloss Birlinghoven            | fax   ++ 02241 142035   |
+| Postfach 1316                   | email lhol@gmdzi.gmd.de |
+| 53757 Sankt Augustin 1, Germany |                         |
++---------------------------------+-------------------------+
+
+GMD = Gesellschaft fuer Mathematik und Datenverarbeitung, i.e.
+      National Research Centre for Comp. Sci.
+
+
+
+
+

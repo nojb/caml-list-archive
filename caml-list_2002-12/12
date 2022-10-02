@@ -1,0 +1,141 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA10120; Mon, 2 Dec 2002 21:07:28 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA10091 for caml-list@pauillac.inria.fr; Mon, 2 Dec 2002 21:07:27 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA19879 for <caml-list@pauillac.inria.fr>; Mon, 2 Dec 2002 10:03:00 +0100 (MET)
+Received: from order.if.uj.edu.pl (order.if.uj.edu.pl [149.156.90.15])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id gB292xX19178
+	for <caml-list@inria.fr>; Mon, 2 Dec 2002 10:02:59 +0100 (MET)
+Received: (from ostruszk@localhost)
+	by order.if.uj.edu.pl (8.11.6/8.11.6) id gB28tvJ20555
+	for caml-list@inria.fr; Mon, 2 Dec 2002 09:55:57 +0100
+Date: Mon, 2 Dec 2002 09:55:57 +0100
+From: "Andrzej M. Ostruszka" <ostruszk@order.if.uj.edu.pl>
+To: Caml List <caml-list@inria.fr>
+Subject: [Caml-list] yacc & lex: Does the contructor name matter?
+Message-ID: <20021202095557.A20380@order.if.uj.edu.pl>
+Mail-Followup-To: Caml List <caml-list@inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5.1i
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I've got two questions (I hope they qualify to this list -- otherwise
+my apologies)
+
+1. Does the constructor name matter in yacc and lex?
+
+I've suddenly wanted to have an interpreter (I'm rather numeric guy so
+this comes to me as an surprise :)) so as you probably guess I started
+with a calculator :).  The problem is that I don't understand behaviour
+of the following implementation -- if I change the constructor name EoL
+into EOF then everything works OK but otherwise I have a "parse error".
+Could someone enlighten me?  If the grammar (line rule especially) is
+incorrect then I should always get "parse error", if it is correct then
+it should work no matter the name of the constructor --- at least this
+is what I think.
+
+--->8--parser.mly-----
+%token <float> Num
+%token Plus Minus Times Div Pow
+%token LParen RParen
+%token EoL  <-- change this into EOF and it will work
+
+%left Plus Minus
+%left Times Div
+%right Pow
+%nonassoc UMinus
+
+%start line
+%type <float option> line
+
+%%
+line:
+  | expr { Some $1 }
+  | /* nothing */ { None }
+;
+
+expr:
+  | Num                 { $1 }
+  | LParen expr RParen  { $2 }
+  | expr Plus expr      { $1 +. $3 }
+  | expr Minus expr     { $1 -. $3 }
+  | expr Times expr     { $1 *. $3 }
+  | expr Div expr       { $1 /. $3 }
+  | expr Pow expr       { $1 ** $3 }
+  | Minus expr %prec UMinus { -. $2 }
+;
+--->8--lexer.mll-----
+{
+open Parser
+}
+
+let white = [' ' '\t']
+let digit = ['0'-'9']
+
+rule token = parse
+  | white+  { token lexbuf }    (* skip white *)
+  | digit* '.'? digit* (['e' 'E'] ['+' '-']? digit+)?
+         { Num (float_of_string (Lexing.lexeme lexbuf)) }
+  | '('  { LParen }
+  | ')'  { RParen }
+  | '+'  { Plus }
+  | '-'  { Minus }
+  | '*'  { Times }
+  | '/'  { Div }
+  | '^'  { Pow }
+  | eof  { EoL } <--- change this to EOF
+--->8----------------
+And if that matters here's calc.ml
+
+let main_loop () =
+  let go_on = ref true in
+  while !go_on do
+    begin
+      try
+	let lexbuf = Lexing.from_string (read_line ()) in
+	begin match Parser.line Lexer.token lexbuf with
+	| Some res -> print_float res; print_newline ()
+	| None -> print_endline "Give some meaningful expression"
+	end
+      with
+      | End_of_file -> go_on := false
+      | Failure s -> print_endline ("failure: " ^ s)
+      | Parsing.Parse_error -> print_endline "parse error"
+    end;
+    flush stdout
+  done
+
+let _ = main_loop ()
+
+2. My second question is what is the most efficient representation of
+the compiled expression.  I don't care how long (with some reasonable
+limits :)) it will take to compile but I want the result be the fastest
+afterwords.  The only representations I can come up with are:
+- keep AST and recursively pattern match on it
+- compile AST to stack like evaluator: there's stack of the results and
+  a list of functions that perform operations on it: push_var,
+  push_const, plus, minus etc... and the result is left as the only
+  value on the stack after applying all function in the list
+- compile AST to list of functions which will take in arguments the
+  operands and the "pointer" of the place where to store the result.
+  I don't have now a clear idea how to do it (I still think in C :)) but
+  the motivation is to remove pushing functions and stack management of
+  the previous solution
+
+I guess that most of you are quite experienced in this stuff and can shed
+a bit of light on this subject.
+
+						Best regards
+PS. Sorry for a length post
+-- 
+    ____   _  ___
+   /  | \_/ |/ _ \		Andrzej Marek Ostruszka
+  / _ |     | (_) | Instytut Fizyki, Uniwersytet Jagiellonski (Cracow)
+ /_/ L|_|V|_|\___/	(PGP <-- finger ostruszk@order.if.uj.edu.pl)
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

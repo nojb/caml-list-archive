@@ -1,0 +1,93 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p0I20Pd1012811
+	for <caml-list@sympa-roc.inria.fr>; Tue, 18 Jan 2011 03:00:25 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqYBACqDNE2A1gkBe2dsb2JhbACWPY4tAQEWIgUfwW6FUAQ
+X-IronPort-AV: E=Sophos;i="4.60,336,1291590000"; 
+   d="scan'208";a="85393889"
+Received: from courier.cs.helsinki.fi (HELO mail.cs.helsinki.fi) ([128.214.9.1])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 18 Jan 2011 03:00:20 +0100
+Received: from melkinpaasi.cs.helsinki.fi (melkinpaasi.cs.helsinki.fi [128.214.9.14])
+  (AUTH: PLAIN cs-relay, TLS: TLSv1/SSLv3,256bits,AES256-SHA)
+  by mail.cs.helsinki.fi with esmtp; Tue, 18 Jan 2011 04:00:19 +0200
+  id 00093E9A.4D34F433.00001045
+Received: by melkinpaasi.cs.helsinki.fi (Postfix, from userid 37211)
+	id 17F3B8242A; Tue, 18 Jan 2011 04:00:19 +0200 (EET)
+Date: Tue, 18 Jan 2011 04:00:19 +0200
+From: Lauri Alanko <la@iki.fi>
+To: caml-list@inria.fr
+Message-ID: <20110118020018.GI323@melkinpaasi.cs.helsinki.fi>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: [Caml-list] Signature monomorphism in functors
+
+I stumbled into a limitation in functors:
+
+
+module type S1 = sig
+  type t
+end
+
+module type S2 = sig
+  include S1
+  val v : t
+end
+
+module type S3 = sig
+  module M : S1
+end
+
+module M2 : S2 = struct
+  type t = int
+  let v = 42
+end
+
+module M3A : S3 with module M = M2 = struct
+  module M = M2
+end
+
+module F(M_ : S1) : S3 with module M = M_ = struct
+  module M = M_
+end
+
+module M3B : S3 with module M = M2 = F(M2)
+
+
+Here, M3A compiles ok, but when I try to do the same thing through a
+functor, I get an error upon the definition of M3B:
+
+Error: Signature mismatch:
+       Modules do not match:
+         sig module M : sig type t = M2.t end end
+       is not included in
+         sig module M : sig type t = M2.t val v : t end end
+       Modules do not match:
+         sig type t = M2.t end
+       is not included in
+         sig type t = M2.t val v : t end
+       The field `v' is required but not provided
+
+I can kind of understand the problem: modules are implemented as
+records, and signature coercions are translated to record
+relayouts. The functor code expects the layout for S1, so the argument
+M2 : S2 gets coerced into S1 and thus the extra fields in S2 are
+hidden and cannot be exposed in the result of the functor.
+
+In my particular situation, this isn't a horrible problem, and I can
+live with F(M2) : S3 with type M.t = M2.t, since the module M2 with
+its extra fields is visible directly and doesn't need to be accessed
+through F(M2). But still, this seems like a very unintuitive
+limitation: abstracting a module member into a functor suddenly
+changed the expressivity of the program. It also seems to stem
+directly from implementation limitations instead of any theoretical
+problems.
+
+I'd be interested in hearing if anyone has stumbled into this problem
+earlier, and if there are any known workarounds. Also, are there any
+plans to remove this limitation from the language?
+
+
+Lauri

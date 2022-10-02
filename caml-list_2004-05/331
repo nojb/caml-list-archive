@@ -1,0 +1,147 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA16538; Tue, 18 May 2004 20:35:03 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA16514 for <caml-list@pauillac.inria.fr>; Tue, 18 May 2004 20:35:01 +0200 (MET DST)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i4IIYvEV019345
+	for <caml-list@inria.fr>; Tue, 18 May 2004 20:34:59 +0200
+Received: from [192.168.1.200] (ppp119-251.lns2.syd3.internode.on.net [150.101.119.251] (may be forged))
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id i4IIYok2009111;
+	Wed, 19 May 2004 04:04:52 +0930 (CST)
+Subject: Re: [Caml-list] Automatic wrapper generator
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: Michael Hamburg <hamburg@fas.harvard.edu>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <DC0C572D-A8EF-11D8-B932-0003939A19AA@fas.harvard.edu>
+References: <1084869517.19838.409.camel@pelican.wigram>
+	 <20040518090635.GA6918@bourg.inria.fr>
+	 <1084875941.19838.446.camel@pelican.wigram>
+	 <20040518121147.GA20094@redhat.com>
+	 <DC0C572D-A8EF-11D8-B932-0003939A19AA@fas.harvard.edu>
+Content-Type: text/plain
+Message-Id: <1084905288.19838.661.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 19 May 2004 04:34:50 +1000
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 40AA5751.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 sourceforge:01 2004:99 perl's:01 interfacing:01 interfacing:01 glue:01 model:01 stub:01 malloc:01 char:01 malloc:01 ffi:01 boxing:01 boxing:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 2004-05-19 at 03:21, Michael Hamburg wrote:
+> >
+> > It sounds very similar to Perl4caml, 
+
+> I don't know how Perl's reference-counting scheme works, but I'm  
+> working on interfacing O'Caml with Cocoa, 
+
+Both these problems are more difficult than interfacing
+Ocaml with C, if only because there are THREE languages
+involved, and C is only the glue in between. So there
+is a requirement to translate object models and memory
+models.
+
+A low level C/Ocaml interface is simpler by simply
+specifying NO translations or memory model changes.
+
+It's typical to desire stub functions that map
+data types across boundaries. The approach I'm using
+is to simply NOT do this at all.
+
+Instead, you can write the type conversions as
+auxilliary functions in C, which can be called
+from Ocaml:
+
+	let s = c_str "Ocaml string" in
+	let d = c_malloc (200) in
+	c_strcpy(d,s);
+
+Note that the conversion from an Ocaml string to a 
+C string (null terminated char pointer thingo) is done
+by a separate function, this has nothing to do with
+the wrapped up functions c_strcpy and c_malloc.
+
+Any memory management issues that arise from using
+c_str, c_malloc, and c_strcpy are the clients.
+The FFI makes no attempt to do any memory management,
+it makes no attempt to do any type conversions.
+
+What makes this 'a good thing' is precisely how
+totally brain dead it is. You know excactly what it will
+do -- the same thing the underlying C does (modulo
+a need for boxing).
+
+I think the boxing is transparent as follows:
+When you need to pass a C struct to a function --
+and I mean *pass by value* -- you actually have
+a Caml pointer to a custom block. C code casts
+the custom block to form the argument .. the C calling
+convention will copy it onto the stack.
+
+At this point, if the custom block becomes unreachable
+it gets collected, but that does not matter: C has a
+copy on the stack. Returning a value requires copying
+the struct off the stack into a custom block,
+and returning a pointer instead, again, managed by Ocaml.
+
+Pointers themselves are values .. so the above applies
+to them too the same way. It should all work just fine
+because C *only* allows pass by value: the C *never*
+sees anything actually inside a custom block, it only
+ever sees a copy.
+
+There is no nesting. When you pass a pointer to an array,
+the pointer is boxed. Ocaml owns the box, the pointer is copied
+onto the stack and is owned by C, and the array is owned
+by whoever created it .. typically C, and probably malloc.
+The array itself doesn't live in a custom block so it isn't
+managed by Ocaml, rather it is managed by C + client Ocaml code,
+the latter by calling C .. 
+
+As far as I can see this has to work in all cases,
+it simply cannot fail and the wrapper can be generated
+completely automatically. Of course the client Ocaml code
+can 'free' a null pointer just the same can be done
+with the equivalent C code: the assurance the wrapper
+generator works comes from a simple isomorphism which 
+also ensures all the faults of the C memory management
+methods are also reflected.
+
+The big plus here is that you can simply use any C library
+from Ocaml 'as if writing C' so there is nothing to learn
+about a complex new safe interface.
+
+I expect *some* typemapping might be possible: certainly
+where the object models coincide it may be possible
+to skip the abstraction and just pass the common native
+representation around, but I think that's limited to
+some numeric cases plus some system types (like unix
+file handles perhaps?)
+
+BTW: Felix doesn't generally use boxing, so it will be 
+at least one level of indirection faster than Ocaml.
+It might be more though, since 'inlining' is still possible
+with Felix, since it generates source and the underlying
+C compiler can still do it's own optimisations.
+So for Felix, the term 'Foreign Function Interface' is slightly
+misleading, since C functions aren't foreign, and the wrapping
+is primarily syntactic sugar including type annotations,
+rather than requiring anything executable. The principal cost
+is the loss of automatic intensional polymorphism
+(since that requires boxing .. )
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

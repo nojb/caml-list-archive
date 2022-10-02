@@ -1,0 +1,83 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A9407BB81
+	for <caml-list@yquem.inria.fr>; Thu, 11 Nov 2004 18:27:52 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iABHRqE0028857
+	for <caml-list@yquem.inria.fr>; Thu, 11 Nov 2004 18:27:52 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA20243 for <caml-list@pauillac.inria.fr>; Thu, 11 Nov 2004 18:27:51 +0100 (MET)
+Received: from yquem.inria.fr (yquem.inria.fr [128.93.8.37])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iABHRn4O028840;
+	Thu, 11 Nov 2004 18:27:49 +0100
+Received: by yquem.inria.fr (Postfix, from userid 18180)
+	id 3D818BB81; Thu, 11 Nov 2004 18:27:49 +0100 (CET)
+Date: Thu, 11 Nov 2004 18:27:49 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Alex Baretta <alex@baretta.com>
+Cc: Ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Native executable symtable
+Message-ID: <20041111172749.GA12790@yquem.inria.fr>
+References: <41933C5E.2010008@baretta.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <41933C5E.2010008@baretta.com>
+User-Agent: Mutt/1.3.28i
+X-Miltered: at concorde with ID 4193A118.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 4193A115.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 symtable:01 binary:01 type-safety:01 symtable:01 toplevel:01 bytecode:01 binary:01 dynlink:01 toplevel:01 bytecode:01 computed:01 compile-time:01 run-time:01 preprocess:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+> We are writing a library implementing binary client-server protocol 
+> based on the Marshal module. In order to guarantee some degree of 
+> type-safety, during the handshaking phase of the communication we need 
+> the client to send the server the MD5 checksums of all relevant modules. 
+> [...]
+
+> We have found that the md5sum can be fetced directly from the executable 
+> file associated to the process. This technique is documented nowhere, as 
+> far as I can see, but the source code of Symtable.init_toplevel is very 
+> informative as to how to do this for bytecode executables. What I would 
+> like to know is how to implement this technique for native code 
+> executables. Essentially, how am I supposed to parse the binary 
+> executable to extract the symtable information.
+
+You cannot, because the checksums you mention (the digests of the
+interfaces of the modules) are not included in ocamlopt-generated
+executables.  They are included only in ocamlc-generated executables (in
+the CRCS section) for use with Dynlink and the toplevel.
+
+At any rate, I think you're on the wrong tracks: the checksums you'll
+find in the CRCS section of bytecode executable are those of module
+interfaces, not of module implementations.  To establish type
+agreement between two processes communicating via
+output_value/input_value, you really want the latter, not the former.
+(Think of an abstract type implemented differently in the two
+processes.  For more details, see e.g. the ICFP'03 paper by Leifer,
+Peskine, Sewell and Wansbrough.)
+
+So, you're looking for convenient ways to collect checksums for module
+implementations.  An insight that might simplify your build process is
+that while these checksums must be computed at compile-time (e.g. by
+running md5sum on the source .ml files), they can be collected
+together at run-time.  For instance, you could preprocess the .ml
+sources of interest so as to insert at the beginning
+
+        let _ = Registry.record_module "Modulename" "checksum"
+
+where "Modulename" is the module name and "checksum" the outcome of
+md5sum on the source file.  The Registry.record_module function just
+accumulates its arguments in a hashtable or association list, which
+can then be consulted during the agreement phase of your protocol.
+
+There are probably many other ways to do it.  But I think your initial
+idea (compute checksums of source files at compile-time) is the
+correct one, it's just a question of implementing it in a way that
+doesn't complicate your build process too much.
+
+- Xavier Leroy
+

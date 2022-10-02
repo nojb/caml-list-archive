@@ -1,0 +1,144 @@
+Return-Path: <tews@os.inf.tu-dresden.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 5366ABC57
+	for <caml-list@yquem.inria.fr>; Mon,  6 Sep 2010 11:12:55 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am8EAHtNhEyNTDBjgWdsb2JhbAChExUBARYiIrtmhT0Eihg
+X-IronPort-AV: E=Sophos;i="4.56,324,1280700000"; 
+   d="scan'208";a="56720644"
+Received: from os.inf.tu-dresden.de ([141.76.48.99])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 06 Sep 2010 11:12:54 +0200
+Received: from [2002:8d4c:3001:48:222:68ff:fe19:71d] (helo=blau.inf.tu-dresden.de)
+	by os.inf.tu-dresden.de with esmtpsa (TLSv1:AES256-SHA:256) (Exim 4.72)
+	id 1OsXkz-0005L5-NN
+	for caml-list@inria.fr; Mon, 06 Sep 2010 11:12:53 +0200
+Received: from tews by blau.inf.tu-dresden.de with local (Exim 4.72)
+	(envelope-from <tews@blau.inf.tu-dresden.de>)
+	id 1OsXkz-0000sJ-BU
+	for caml-list@inria.fr; Mon, 06 Sep 2010 11:12:53 +0200
+From: Hendrik Tews <tews@os.inf.tu-dresden.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <19588.45205.199003.965321@blau.inf.tu-dresden.de>
+Date: Mon, 6 Sep 2010 11:12:53 +0200
+To: caml-list@inria.fr
+Subject: functor substitution gives error
+X-Mailer: VM 8.1.0 under 23.2.1 (i486-pc-linux-gnu)
+X-Spam: no; 0.00; hendrik:01 tews:01 tews:01 functor:01 compilation:01 compiler:01 bug:01 functor:01 sig:01 camlp:01 syntax:01 camlp:01 syntax:01 struct:01 sig:01 
+
+Hi,
+
+I have a strange compilation problem, which I suspect to be a
+compiler bug. Consider the following nested functor application
+
+
+module A(FreshGram : functor(Unit : sig end) -> Camlp4Syntax) : Camlp4Syntax =
+  FreshGram(struct end)
+
+module B(FreshGram : functor(Unit : sig end) -> Camlp4Syntax) : Camlp4Syntax =
+  Printers_Ocaml_Make(A(FreshGram))
+
+
+This compiles fine, however, when I manually inline functor A:
+
+
+module C(FreshGram : functor(Unit : sig end) -> Camlp4Syntax) : Camlp4Syntax =
+  Printers_Ocaml_Make(FreshGram(struct end))
+
+
+I get a signature mismatch error in both 3.11.2 and 3.12. I would
+appreciate any explanation for this behaviour.
+
+As the names suggest the problem came up with in some Camlp4
+code. Here is a striped down version, which reproduces the
+problem:
+
+==============================================================================
+module type Loc = sig               (* simplified version of Camlp4.Sig.Loc *)
+  type t
+end
+
+module type Camlp4Ast = sig              (* simplified Camlp4.Sig.Camlp4Ast *)
+  module Loc : Loc
+end
+
+module type Camlp4Syntax = sig        (* simplified Camlp4.Sig.Camlp4Syntax *)
+  module Loc : Loc
+  module Ast : Camlp4Ast with module Loc = Loc
+end
+
+module type Printers_Ocaml_Make_Sig =      (* .mli of Camlp4/Printers/OCaml *)
+  functor(Syntax : Camlp4Syntax) -> 
+sig
+  include Camlp4Syntax
+    with module Loc = Syntax.Loc
+    and module Ast = Syntax.Ast
+end
+
+module Printers_Ocaml_Make :                (* .ml of Camlp4/Printers/OCaml *)
+  Printers_Ocaml_Make_Sig = functor(Syntax : Camlp4Syntax) ->
+struct
+  include Syntax
+end
+
+
+module A(FreshGram : functor(Unit : sig end) -> Camlp4Syntax) : Camlp4Syntax =
+  FreshGram(struct end)
+
+module B(FreshGram : functor(Unit : sig end) -> Camlp4Syntax) : Camlp4Syntax =
+  Printers_Ocaml_Make(A(FreshGram))
+
+module C(FreshGram : functor(Unit : sig end) -> Camlp4Syntax) : Camlp4Syntax =
+  Printers_Ocaml_Make(FreshGram(struct end))
+===============================================================================
+
+The error occurs in the last line and says
+
+Error: Signature mismatch:
+       Modules do not match:
+         sig
+           module Loc : sig type t end
+           module Ast : sig module Loc : sig type t end end
+         end
+       is not included in
+         Camlp4Syntax
+       Modules do not match:
+         sig module Loc : sig type t = Ast.Loc.t end end
+       is not included in
+         sig module Loc : sig type t = Loc.t end end
+       Modules do not match:
+         sig type t = Ast.Loc.t end
+       is not included in
+         sig type t = Loc.t end
+       Type declarations do not match:
+         type t = Ast.Loc.t
+       is not included in
+         type t = Loc.t
+
+The error goes away with the following version of Printers_Ocaml_Make_Sig:
+
+module type Printers_Ocaml_Make_Sig = functor(Syntax : Camlp4Syntax) -> 
+sig
+  module Loc : Loc 
+    with type t = Syntax.Loc.t
+
+  module Ast : Camlp4Ast 
+    with type Loc.t = Syntax.Ast.Loc.t
+    and type Loc.t = Loc.t
+end
+
+IMHO both Printers_Ocaml_Make_Sig versions should be equivalent:
+in the second version the include is spelled out and the module
+constraints are expanded into type constraints. 
+
+The error comes back if one changes the order of the type
+constaints for module Ast.
+
+
+Bye,
+
+Hendrik
+

@@ -1,0 +1,141 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.8 required=5.0 tests=AWL,NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id BB8A0BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 17 Sep 2008 10:09:59 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiECALRY0EjAXQImiGdsb2JhbACRfIEPAQEBDyClV4Fn
+X-IronPort-AV: E=Sophos;i="4.32,414,1217800800"; 
+   d="scan'208";a="17380433"
+Received: from discorde.inria.fr ([192.93.2.38])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 17 Sep 2008 10:09:59 +0200
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id m8H89s73029048
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Wed, 17 Sep 2008 10:09:59 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvwAAHNY0EjAEKcgmmdsb2JhbACRfIEPAQEBAQEIBQgHEQWlUIFn
+X-IronPort-AV: E=Sophos;i="4.32,414,1217800800"; 
+   d="scan'208";a="17033906"
+Received: from selenite.metnet.navy.mil ([192.16.167.32])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 17 Sep 2008 10:09:25 +0200
+Received: (qmail 14338 invoked by uid 107); 17 Sep 2008 08:09:23 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 17 Sep 2008 08:09:23 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id 6625AAE54; Wed, 17 Sep 2008 01:07:50 -0700 (PDT)
+From: oleg@okmij.org
+To: David.Teller@ens-lyon.org
+Cc: caml-list@inria.fr
+In-reply-to: <1221583622.6350.178.camel@Blefuscu>
+Subject: Re: Keeping local types local?
+Message-Id: <20080917080750.6625AAE54@Adric.metnet.fnmoc.navy.mil>
+Date: Wed, 17 Sep 2008 01:07:50 -0700 (PDT)
+X-Miltered: at discorde with ID 48D0BB52.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; oleg:01 summarize:01 mutable:01 struct:01 endline:01 endline:01 checker:01 escapes:01 val:01 mutable:01 foo:01 foo:01 arrays:01 monads:01 type-based:01 
+
+
+> So I'm looking for another way out. As far as both your examples and my
+> experiments seem to indicate, the only way of escaping scope is to
+> return a continuation which calls one of the protected functions and
+> ignores the result.
+
+I'm afraid this is worse than it seems. Returning any closure (not
+necessarily a continuation) can defeat the security. To summarize, the
+security of the framework is defeated if
+
+	-- one returns a closure that calls a protected function
+	-- one returns an object whose method calls a protected function
+	-- one returns a polymorphic record that `abstracts'
+	over the abstract type guarding the protected function
+
+	-- one assigns to the mutable variable: a closure, an object,
+or a polymorphic record
+
+	-- one throws or returns an exception that contains a closure,
+an object, or a polymorphic record
+
+Here is the illustrating code. We start with the baseline
+let f0 () =
+  let result =
+    let module A =
+        struct
+          type 'a t = Guard of 'a (*Used only to prevent scope escape.*)
+                  (** Local primitives, usage guarded by [Guard] *)
+          let set v =
+            print_endline "set has been called"; Guard ()
+          let return x = Guard x
+          let result =
+	    print_endline "Initialization";
+            match
+	      (* Good client *)
+	      set 1
+            with Guard x -> print_endline "Clean-up"; x
+        end in A.result
+  in result
+;;
+let test1 = f0 ();;
+
+We see that set has been called after initialization and _before_ the
+clean-up. In the code below, we replace the client line (which above
+was just `set 1') with something else. The stupid bad client
+
+let f1 () = ...
+	return (fun () -> set 1)
+	...
+
+is easily caught. The type checker rejects the code with the message
+  This `let module' expression has type unit -> unit A.t
+  In this type, the locally bound module name A escapes its scope
+
+Alas, a bit more cunning client, as you have observed,
+
+let f2 () = ...
+	      return (fun () -> ignore (set 1); ())
+	...
+let test2 = f2 () ();;
+
+manages to call the setter _after_ the clean-up. But that is not the
+only cunning client. Here is another one
+
+let f3 () = ...
+	      return (object val mutable guarded = return ()
+		            method call_setter = guarded <- set ()
+		     end)
+	...
+let test3 = (f3 ())#call_setter;;
+
+and another one
+
+exception Foo of (unit -> unit);;
+let f4 () = ...
+	      return (Foo (fun () -> ignore (set 1); ()))
+let test4 = try raise (f4 ()) with Foo e -> e ();;
+
+and another one
+
+let cunning_ref = ref (fun () -> ())
+let f5 () = ...
+	      cunning_ref := (fun () -> ignore (set 1); ()); return ()
+	...
+let test5 = f5 (); !cunning_ref ();;
+
+
+To ensure security, one should prohibit returning, assigning or
+throwing any values other than the values of simple types: numbers,
+strings, pairs, arrays and lists of those. In short, only easily
+serializable values may be returned, assigned and thrown.
+
+I fully agree with your assessment of monads. I should remark that
+type-based assurances work well for data dependencies, but not so for
+control dependencies (that's why we need a so-called type-state).
+Monads convert control dependency into data dependency.
+
+You do know of FlowCaml, right? It doesn't seem to be actively
+maintained though...
+

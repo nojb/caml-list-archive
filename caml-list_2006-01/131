@@ -1,0 +1,92 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 78CEABB9C
+	for <caml-list@yquem.inria.fr>; Thu, 19 Jan 2006 18:01:57 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k0JH1vFj017717
+	for <caml-list@yquem.inria.fr>; Thu, 19 Jan 2006 18:01:57 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA09689 for <caml-list@pauillac.inria.fr>; Thu, 19 Jan 2006 18:01:56 +0100 (MET)
+Received: from mail.physik.uni-muenchen.de (mail.physik.uni-muenchen.de [192.54.42.129])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k0JH1tl8021022
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Thu, 19 Jan 2006 18:01:56 +0100
+Received: from localhost (unknown [127.0.0.1])
+	by mail.physik.uni-muenchen.de (Postfix) with ESMTP id 8B09A20016
+	for <caml-list@inria.fr>; Thu, 19 Jan 2006 18:01:55 +0100 (CET)
+Received: from mail.physik.uni-muenchen.de ([127.0.0.1])
+ by localhost (mail.physik.uni-muenchen.de [127.0.0.1]) (amavisd-new, port 10024)
+ with LMTP id 22074-01-55 for <caml-list@inria.fr>;
+ Thu, 19 Jan 2006 18:01:55 +0100 (CET)
+Received: from mailhost.cip.physik.uni-muenchen.de (kaiser.cip.physik.uni-muenchen.de [141.84.136.1])
+	by mail.physik.uni-muenchen.de (Postfix) with ESMTP id 735CA20008
+	for <caml-list@inria.fr>; Thu, 19 Jan 2006 18:01:55 +0100 (CET)
+Received: from aso.cip.physik.uni-muenchen.de (guffert.cip.physik.uni-muenchen.de [141.84.136.24])
+	by mailhost.cip.physik.uni-muenchen.de (Postfix) with ESMTP id 841F026E87
+	for <caml-list@inria.fr>; Thu, 19 Jan 2006 18:01:54 +0100 (CET)
+Received: by aso.cip.physik.uni-muenchen.de (Postfix, from userid 3092)
+	id 2DE29783F3; Thu, 19 Jan 2006 18:01:55 +0100 (CET)
+Received: from localhost (localhost [127.0.0.1])
+	by aso.cip.physik.uni-muenchen.de (Postfix) with ESMTP id 279B780432
+	for <caml-list@inria.fr>; Thu, 19 Jan 2006 18:01:55 +0100 (CET)
+Date: Thu, 19 Jan 2006 18:01:55 +0100 (CET)
+From: Thomas Fischbacher <Thomas.Fischbacher@Physik.Uni-Muenchen.DE>
+To: caml-list@inria.fr
+Subject: On the C interface, callbacks, and global roots
+Message-ID: <Pine.LNX.4.63.0601191742370.20175@guffert.cip.physik.uni-muenchen.de>
+X-BOFH: Daemons did it
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: amavisd-new at physik.uni-muenchen.de
+X-Miltered: at concorde with ID 43CFC605.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 43CFC603.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; pointer:01 finalizer:01 pointer:01 malloc:01 evidently:01 finalizer:01 garbage:01 cleanest:98 cip:98 cip:98 lambda:01 lambda:01 callbacks:01 opaque:01 argument:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+
+Suppose I have an opaque C object obj, for which there is a function that 
+allows me to register a C callback function f_cb (and a void* closure data 
+pointer, let's call it f_cb_data). 
+
+In principle, it is possible to lift the callback-registering up to the ML 
+level, so that we can register a ML function as a callback for the 
+ML-wrapped object. I suppose that the proper way to do this is to 
+internally represent obj as a ML custom block with a special finalizer 
+which will hold (1) a C pointer to obj, and (2) a C pointer to malloc()'d 
+space holding a global GC root pointing to the ML callback function. The 
+static-in-memory address of malloc'd space will then hold the ML callback 
+function. So far, so good.
+
+But - how should one proceed if f_cb's signature is such that it will 
+receive obj as its first argument? Evidently, if we store the ML 
+variant of f_cb (which will be contained somewhere in f_cb_data, and f_cb 
+will be a wrapper executing the ML callback stored in f_cb_data) in a 
+global root, this will make obj non-collectable.
+
+The problem is that we should not place something under a global root 
+which contains a reference back to the object responsible for 
+un-registering the global root in its finalizer.
+
+As far as I can see, the cleanest solution to this dilemma would be to 
+introduce yet another type of ML block with a special meaning to the 
+garbage collector: one that holds a pointer to nonmoving non-heap memory 
+that can hold ML values, plus additional information on the number of 
+such ML values, and a pointer to a de-allocation function (with its own 
+closure arg, I'd say).
+
+Seen in a different way, the problem of creating non-reclaimable values 
+even exists if the ML callback function happens to be a closure containing 
+the ML-wrapped obj. Somehow, the whole idea of using global roots like 
+this feels a bit wrong to me. Did I miss something essential? How should 
+one rather proceed instead?
+
+-- 
+regards,               tf@cip.physik.uni-muenchen.de              (o_
+ Thomas Fischbacher -  http://www.cip.physik.uni-muenchen.de/~tf  //\
+(lambda (n) ((lambda (p q r) (p p q r)) (lambda (g x y)           V_/_
+(if (= x 0) y (g g (- x 1) (* x y)))) n 1))                  (Debian GNU)
+

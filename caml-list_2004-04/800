@@ -1,0 +1,106 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA20446; Thu, 29 Apr 2004 07:47:29 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA20433 for <caml-list@pauillac.inria.fr>; Thu, 29 Apr 2004 07:47:28 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from wetware.com (wetware.wetware.com [199.108.16.1])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i3T5lQYM009437
+	for <caml-list@inria.fr>; Thu, 29 Apr 2004 07:47:27 +0200
+Received: from [208.177.152.17] (helo=[10.0.1.5])
+	by wetware.com with esmtp (Exim 4.20)
+	id 1BJ4OM-0004jU-2A
+	for caml-list@inria.fr; Wed, 28 Apr 2004 22:47:26 -0700
+Mime-Version: 1.0 (Apple Message framework v613)
+In-Reply-To: <1083200626.9537.1199.camel@pelican.wigram>
+References: <Pine.LNX.4.44.0404272326450.9460-100000@localhost.localdomain> <20040428151818.GC1310@excelhustler.com> <1083169714.9537.1102.camel@pelican.wigram> <200404281942.05371.jdh30@cam.ac.uk> <1083200626.9537.1199.camel@pelican.wigram>
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+Message-Id: <B0854000-99A0-11D8-B697-000A958FF2FE@wetware.com>
+Content-Transfer-Encoding: 7bit
+From: james woodyatt <jhw@wetware.com>
+Subject: Re: [Caml-list] [ANN] The Missing Library
+Date: Wed, 28 Apr 2004 22:47:24 -0700
+To: caml-list Trade <caml-list@inria.fr>
+X-Mailer: Apple Mail (2.613)
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; woodyatt:01 jhw:01 wetware:01 caml-list:01 monadic:01 flows:01 monadic:01 elided:01 monad:01 monad:01 val:01 memoize:01 memoize:01 val:01 seq:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On 28 Apr 2004, at 18:03, skaller wrote:
+>
+> Sure like to see a monadic/lazy solution to
+> the example using streams ..
+
+Let's see... a contrived example... you have a sequence of strings, and 
+you'd like to process it into a sequence of different strings with a 
+state machine.  What would that look like using my Cf library?
+
+Consider this demonstration:
+
+     (*---
+       This is a trivial demonstration of sequences, flows and monadic 
+programming
+       with the Pagoda Cf library.  It shows how to write a flow that 
+reads a
+       sequence of strings and writes the sequence of strings with 
+duplicates elided,
+       using a state-continuation monad, parameterized with the state of 
+the set of
+       strings already seen in the input.  The flow resulting from 
+evaluating the monad
+       is then used in a function that operates on lists of strings.
+      ---*)
+     open Cf_scmonad.Op
+
+     module String_set = Cf_rbtree.Create(String)
+
+     (* val memoize: (string, string) Cf_flow.t *)
+     let memoize =
+         let rec loop () =
+             Cf_flow.readSC >>= fun s ->
+             Cf_scmonad.load >>= fun u ->
+             if String_set.member s u then
+                 loop ()
+             else
+                 Cf_flow.writeSC s >>= fun () ->
+                 let u = String_set.put s u in
+                 Cf_scmonad.store u >>= fun () ->
+                 loop ()
+         in
+         Cf_flow.evalSC (loop ()) String_set.null
+
+     (* val uniq: string list -> string list *)
+     let uniq s =
+         let z = Cf_seq.of_list s in
+         let z = Cf_flow.commute memoize z in
+         Cf_seq.to_list z
+
+     let test () =
+         let s1 = [ "Hello"; "World!"; "Hello"; "AGAIN!" ] in
+         let s2 = [ "Hello"; "World!"; "AGAIN!" ] in
+         let s2' = uniq s1 in
+         if s2 <> s2' then failwith "Error in uniq!"
+
+     ;;test ()
+     (*--- End of demonstration ---*)
+
+This is a toy, and it will obviously not produce the most efficient 
+program in the world.  To solve this particular problem, in actuality, 
+I probably wouldn't use the monad.  I'd just write a quick loop on the 
+sequence, and I'd use a mutable hash table for state.
+
+However, the code above begins to illustrate how to build much more 
+complicated state machines.  In a real case study, e.g. my 
+implementation of RFC 3080, the "loop" function will often be a 
+collection of recursive state-event handling functions.
+
+
+-- 
+j h woodyatt <jhw@wetware.com>
+markets are only free to the people who own them.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

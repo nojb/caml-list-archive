@@ -1,0 +1,140 @@
+Return-Path: <bpelzer@uni-koblenz.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 41DFABC37
+	for <caml-list@yquem.inria.fr>; Tue,  4 Aug 2009 15:39:32 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtEAAFvWd0qNGkAPkWdsb2JhbACaKwEBAQEJCwoHEwWqXAmPKwKCSYFNBQ
+X-IronPort-AV: E=Sophos;i="4.43,321,1246831200"; 
+   d="scan'208";a="30773235"
+Received: from deliver.uni-koblenz.de ([141.26.64.15])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 04 Aug 2009 15:39:32 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by deliver.uni-koblenz.de (Postfix) with ESMTP id 8C10878A12BF
+	for <caml-list@yquem.inria.fr>; Tue,  4 Aug 2009 15:39:31 +0200 (CEST)
+Received: from deliver.uni-koblenz.de ([127.0.0.1])
+ by localhost (deliver.uni-koblenz.de [127.0.0.1]) (amavisd-new, port 10024)
+ with ESMTP id 23112-01 for <caml-list@yquem.inria.fr>;
+ Tue,  4 Aug 2009 15:39:30 +0200 (CEST)
+Received: from [141.26.71.237] (dhcp237.uni-koblenz.de [141.26.71.237])
+	(using TLSv1 with cipher DHE-RSA-AES256-SHA (256/256 bits))
+	(No client certificate requested)
+	by deliver.uni-koblenz.de (Postfix) with ESMTP id 49E1E789C2BF
+	for <caml-list@yquem.inria.fr>; Tue,  4 Aug 2009 15:39:30 +0200 (CEST)
+Message-ID: <4A783A0D.5080906@uni-koblenz.de>
+Date: Tue, 04 Aug 2009 15:39:25 +0200
+From: =?ISO-8859-1?Q?Bj=F6rn_Pelzer?= <bpelzer@uni-koblenz.de>
+User-Agent: Thunderbird 2.0.0.22 (Windows/20090605)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Understanding GC and Alarms
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+X-Virus-Scanned: amavisd-new at uni-koblenz.de
+X-Spam: no; 0.00; ocaml:01 beginner's:01 stdin:01 verbose:01 endline:01 iteration:01 endline:01 interrupts:98 garbage:01 unix:01 exception:01 exception:01 functions:01 functions:01 exceptions:01 
+
+Hello,
+
+I'm new to this list and fairly new to OCaml. First I posted this on the 
+beginner's list, but I was recommended to try it here, so here we go. :-)
+
+Right now I'm having some problems with the garbage collector and the 
+Gc.alarm - this combination shows some (to me) odd behaviours which are 
+not detailed in the reference manual. Maybe someone could shed some 
+light on this?
+
+Basically, at the end of a major GC cycle the GC calls the user 
+functions defined for any alarms. This I understand, and for the most 
+part it works as I expect it.
+
+The first oddity is that I can define an alarm function which starts
+another GC cycle (by calling Gc.full_major). This results, quite
+understandably, in an infinite loop - GC calls alarm calls GC calls 
+alarm....
+However, it seems that the GC no longer works quite the same when called 
+from within an alarm, as it no longer calls any finalisation functions. 
+Normally (outside alarms) the GC will print "Calling finalisation 
+functions. Done calling finalisation functions." if I do a Gc.full_major 
+and the verbosity is set appropriately. With the alarm loop, the GC will 
+only print the first part ("Calling finalisation functions.") once at 
+the start of the loop and then begin looping, starting new cycles but no 
+new finalisations. If I limit the looping with a counter, the GC will 
+behave normally again in future GC cycles outside the alarm. So it seems 
+the alarm or the finalising put the GC into a special mode where it no 
+longer does everything in a cycle that it would usually do.(?)
+
+The other (and to me more severe) oddity is that if the alarm function 
+raises an exception, then the GC seems to remain in its "special mode" 
+where it starts no finalisation calling - but now it will also refuse to 
+do any alarms.
+The latter is a bit of a problem for me right now, as I was using a 
+Gc.alarm to implement a check for a memory limit: if the alarm function 
+at the end of a GC cycle finds the memory usage to be above the limit, 
+an exception is raised which interrupts the normal operation of the 
+program, and the program waits for instructions from stdin.
+
+As the first such exception-from-an-alarm effectively breaks future 
+alarm handling, this only works once. This was not noticeable in earlier 
+versions of the program which were single-use only - the alarm exception 
+would halt the program and say sorry, out of memory. The new program 
+version is supposed to be user-interactive, though, so it must be able 
+to catch multiple memory excesses. Worse, it also uses Unix.ITIMER_REAL 
+induced timer exceptions to limit processing time. Potentially such a 
+timer exception could also interrupt an alarm check, again breaking the 
+alarm handling.
+
+Is there a way to get the GC back to normal after an exception during 
+the alarm? Right now it seems I have to drop alarm usage entirely, and 
+instead put explicit memory checks into all sorts of strategic places 
+throughout the program, which is not all that elegant.
+
+Here is a short program which shows what I mean. I'm probably just 
+making some stupid mistake?
+
+exception Ex
+
+let main () =
+    let cnt = ref 0
+    in
+    (Gc.set {(Gc.get()) with Gc.verbose = 0x081});
+    let alarm_function () =
+       (print_endline "Alarm!";
+       cnt := !cnt + 1;
+(* do 3 loop iterations *)
+       if !cnt < 3 then
+          (Gc.full_major ())
+(* after the 3rd iteration, exit loop with an exception *)
+       else
+          (raise Ex))
+       in
+          ignore (Gc.create_alarm alarm_function);
+          try
+(* this will call the alarm and start the loop *)
+             (Gc.full_major ())
+          with
+             | Ex ->
+                (print_endline "Exception raised!";
+(* new GC cycle calls no alarm after the exception :-( *)
+                Gc.full_major ())
+
+let () = main ();;
+
+
+Thank you for your time,
+Björn
+
+
+-- 
+Björn Pelzer
+AGKI - Artificial Intelligence Research Group
+University Koblenz-Landau, B 225
+http://www.uni-koblenz.de/~bpelzer
+
+Tel.(office): (+49) 261 287 2776
+Tel.(home): (+49) 261 942 3908
+

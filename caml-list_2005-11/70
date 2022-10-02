@@ -1,0 +1,772 @@
+Return-Path: <sebastian.egner@philips.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 7CB6AD45F
+	for <caml-list@yquem.inria.fr>; Wed,  2 Nov 2005 18:12:14 +0100 (CET)
+Received: from gw-eur4.philips.com (gw-eur4.philips.com [161.85.125.10])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jA2HCCxh011900
+	for <caml-list@yquem.inria.fr>; Wed, 2 Nov 2005 18:12:12 +0100
+Received: from smtpscan-eur5.philips.com (smtpscan-eur5.mail.philips.com [130.144.57.168])
+	by gw-eur4.philips.com (Postfix) with ESMTP id 71E2B4970B
+	for <caml-list@yquem.inria.fr>; Wed,  2 Nov 2005 17:12:12 +0000 (UTC)
+Received: from smtpscan-eur5.philips.com (localhost [127.0.0.1])
+	by localhost.philips.com (Postfix) with ESMTP id EF8063098
+	for <caml-list@yquem.inria.fr>; Wed,  2 Nov 2005 17:12:11 +0000 (GMT)
+Received: from smtprelay-eur2.philips.com (smtprelay-eur2.philips.com [130.144.57.171])
+	by smtpscan-eur5.philips.com (Postfix) with ESMTP id 0E8BFBAF66
+	for <caml-list@yquem.inria.fr>; Wed,  2 Nov 2005 17:12:11 +0000 (GMT)
+Received: from ehvrmh02.diamond.philips.com (ehvrmh02-srv.diamond.philips.com [130.139.27.125])
+	by smtprelay-eur2.philips.com (Postfix) with ESMTP id 6DE02576
+	for <caml-list@yquem.inria.fr>; Wed,  2 Nov 2005 17:12:10 +0000 (GMT)
+To: caml-list@yquem.inria.fr
+Subject: internal representation of recursive data types
+MIME-Version: 1.0
+X-Mailer: Lotus Notes Release 6.0.3 September 26, 2003
+Message-ID: <OF1C0FE90D.FCC05574-ONC12570AD.00572FF5-C12570AD.005C239A@philips.com>
+From: Sebastian Egner <sebastian.egner@philips.com>
+Date: Wed, 2 Nov 2005 17:44:37 +0100
+X-MIMETrack: Serialize by Router on ehvrmh02/H/SERVER/PHILIPS(Release 6.5.3FP1HF291 | September
+ 19, 2005) at 02/11/2005 18:10:22
+Content-Type: multipart/mixed; boundary="=_mixed 005C2397C12570AD_="
+X-Miltered: at concorde with ID 4368F36C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; recursive:01 recursive:01 suitability:01 ocaml:01 caching:01 locality:01 ocaml:01 compiler:01 nodes:01 compiler:01 eindhoven:01 mutable:01 mutable:01 invariants:01 arrays:01 
+X-Attachments: type="application/octet-stream" name="lookup.eps" name="lookup.eps" 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=HTML_50_60,HTML_MESSAGE 
+	autolearn=disabled version=3.0.3
+
+--=_mixed 005C2397C12570AD_=
+Content-Type: multipart/alternative; boundary="=_alternative 005C2397C12570AD_="
+
+
+--=_alternative 005C2397C12570AD_=
+Content-Type: text/plain; charset="US-ASCII"
+
+I have a few questions related to the internal representation of
+recursive data types, having implications on the suitability of Ocaml
+for highly efficient data structures.
+
+One of the most efficient comparison-based search data structures in
+the presence of memory hierachies (caching/paging) are (a,b)-trees.
+In an (a,b)-tree, the number d of children of a non-root node is in {a..b}
+and all leaves (search items) are at the same height of the tree. In case
+the keys can be stored in the node itself (e.g. int or float), and 
+suitable
+values for (a, b), the child to follow from a node can be determined 
+without
+additional cache faults. In other words, by adapting parameters a and b
+a favorable cache-aware data structure can be constructed.
+
+After measuring performance and analyzing reasons, I found that the
+favorable cache locality of the data structure is for a large part 
+destroyed
+by the way the Ocaml (native code) compiler (on i386) chooses the internal 
+
+representation of the nodes and trees. To find out about this 
+quantitatively,
+I then implemented (a,b)-trees again---this time working around the type
+system (i.e. using Obj) in order to choose a more compact internal
+representation of the trees. I will detail the layouts below.
+
+It turns out that this made the program about 30% faster (and this also
+means the result is only about a factor 3 slower than an optimized C++
+implementation). This potential for optimization is a little too much to
+ignore, but letting go of the type system is also not an attractive 
+option.
+
+Now my question is
+a) Is this effect known?
+b) Is it considered relevant?
+c) What were the design considerations that have lead to the design
+of the current compiler in this regard?
+
+Any ideas? I can provide the measurements and also the programs
+(provided my employer, Philips Research Eindhoven, agrees to that)
+for anyone to have a look for him- or herself in case there is any 
+interest.
+
+Sebastian.
+
+
+
+----------
+
+1. Here is a piece of the 'good' Ocaml program defining the trees:
+
+-- snip --
+(* --- (a,b)-trees --- *)
+
+assert ((!a >= 2) && (!b >= 2 * !a - 1));;
+
+type ('key, 'value) item =
+       {         k: 'key;
+         mutable v: 'value
+         (* <<more fiels, e.g. linking>> *)
+       };;
+
+type ('key, 'value) node =
+       { mutable d: int;                      (* degree d in {2..b}  *)
+                 s: 'key array;               (* splitters s[0..d-2] *)
+                 c: ('key, 'value) tree array (* children  c[0..d-1] *)
+       }
+
+and  ('key, 'value) tree =
+       | Empty                               (* the empty (a,b)-tree *)
+       | Item of ('key, 'value) item         (* an item as leaf      *)
+       | Node of ('key, 'value) node         (* a splitting node     *)
+       ;;
+
+type ('key, 'value) t =
+       { mutable root: ('key, 'value) tree
+         (* <<more fields, e.g. size, parameters>> *)
+       };;
+ 
+(* Invariants of the representation:
+   (1) The key of an Item reachable through child c[i], i in {0..d-1},
+       of a Node of degree d with splitters s[0..d-2] satisfies
+
+         s[i-1] < key <= s[i].
+ 
+       It is understood that s[-1] = -inf and s[d-1] = +inf,
+       but neither of these sentinel values is ever stored in s.
+   (2) All Items have the same depth (distance from the root).
+   (3) The degree d of a a non-root Node is in {a..b}, where
+       (a,b) are constant parameters with a >= 2, b >= 2 a - 1.
+       The degree of the root Node is in {2..b}.
+   (4) The arrays s and c of a Node have length b-1 and b.
+   (5) If the tree contains Empty then it is equal to Empty.
+*)
+-- snip --
+
+If I analyzed it correctly, then these definitions result in the following
+internal representation for trees and nodes
+
+('key, 'value) tree = 
+        Empty = (unboxed) int 0
+        Item of i = pointer to (heap-allocated) block with tag 0 and 
+single field i: .. item
+        Node of n = point to block with tag 1 and single field n: ('key, 
+'value) node
+
+('key, 'value) node =
+        pointer to block with tag 0 and 3 fields for d, s, and c.
+        d = unboxed int
+        s, c = pointers to arrays of length b
+
+------------
+
+2. Here is a piece of the 'bad' Ocaml program defining the trees:
+
+-- snip --
+(* --- (a,b)-trees --- *)
+
+assert ((!a >= 2) && (!b >= 2 * !a - 1));;
+
+(* The internal representation of an (a,b)-tree is
+
+     empty: the unboxed integer 0,
+     item:  an array [-1, key, value], or
+     node:  an array [d, s[0..d-2], 0..0, c[0..d-1], 0..0]
+            where c[0] is located at position b.
+
+   Here 
+     d         : degree, unboxed integer in {2..b}
+     s[0..d-2] : splitters of type key
+     c[0..d-1] : children of type tree
+
+   Invariants of the representation:
+   (1) The key of an item reachable through child c[i], i in {0..d-1},
+       of a node of degree d with splitters s[0..d-2] satisfies
+
+         s[i-1] < key <= s[i].
+ 
+       It is understood that s[-1] = -inf and s[d-1] = +inf,
+       but neither of these sentinel values is ever stored in s.
+   (2) All items have the same depth (distance from the root).
+   (3) The degree d of a a non-root node is in {a..b}, where
+       (a,b) are constant parameters with a >= 2, b >= 2 a - 1.
+       The degree of the root node is in {2..b}.
+   (4) The arrays s and c of a node have length b-1 and b.
+   (5) If the tree contains empty then it is equal to empty.
+
+   Remark:
+   * The internal representation escapes the type system. This
+     is necessary in order to avoid intermediate pointers, e.g.
+     from a node record to the array of splitters, which would
+     otherwise produce lots of cache misses.
+   * We do not use the tag bits of heap-allocated blocks to 
+     distinguish between items and nodes in order to avoid the
+     overhead of calling the C-function caml_obj_tag(). Instead
+     we store our own tag into field 0.
+   * We use only Obj.field and Obj.set_field to access the objects.
+*)
+
+type ('key, 'value) tree = Obj.t;;
+
+type ('key, 'value) t =
+       { mutable root: ('key, 'value) tree
+         (* <<more fields, e.g. size, parameters>> *)
+       };;
+-- snip --
+
+The internal representation of trees and nodes is like this:
+
+('key, 'value) tree =
+        Empty = unboxed int 0
+        Item = pointer to block with first field the unboxed int -1
+        Node = pointer to node, i.e. block with first field unboxed int 
+>=0
+
+node =
+        array of length 2 b consisting of degree d, d-1 splitters and
+        d pointers to child-trees, where  d in {2..b}.
+
+Remark: I chose not to use the tag bits of a block to distinguish items
+and nodes because Obj.tag results in a C-call whereas getting the
+degree-field results in a single machine instruction. 
+
+----
+Dr. Sebastian Egner
+Senior Scientist
+Philips Research Laboratories
+Prof. Holstlaan 4 (WDC 1-051, 1st floor, room 51)
+5656 AA Eindhoven
+The Netherlands
+tel:       +31 40 27-43166
+fax:      +31 40 27-44004
+email: sebastian.egner@philips.com
+--=_alternative 005C2397C12570AD_=
+Content-Type: text/html; charset="US-ASCII"
+
+
+<br><font size=2 face="sans-serif">I have a few questions related to the
+internal representation of</font>
+<br><font size=2 face="sans-serif">recursive data types, having implications
+on the suitability of Ocaml</font>
+<br><font size=2 face="sans-serif">for highly efficient data structures.</font>
+<br>
+<br><font size=2 face="sans-serif">One of the most efficient comparison-based
+search data structures in</font>
+<br><font size=2 face="sans-serif">the presence of memory hierachies (caching/paging)
+are (a,b)-trees.</font>
+<br><font size=2 face="sans-serif">In an (a,b)-tree, the number d of children
+of a non-root node is in {a..b}</font>
+<br><font size=2 face="sans-serif">and all leaves (search items) are at
+the same height of the tree. In case</font>
+<br><font size=2 face="sans-serif">the keys can be stored in the node itself
+(e.g. int or float), and suitable</font>
+<br><font size=2 face="sans-serif">values for (a, b), the child to follow
+from a node can be determined without</font>
+<br><font size=2 face="sans-serif">additional cache faults. In other words,
+by adapting parameters a and b</font>
+<br><font size=2 face="sans-serif">a favorable cache-aware data structure
+can be constructed.</font>
+<br>
+<br><font size=2 face="sans-serif">After measuring performance and analyzing
+reasons, I found that the</font>
+<br><font size=2 face="sans-serif">favorable cache locality of the data
+structure is for a large part destroyed</font>
+<br><font size=2 face="sans-serif">by the way the Ocaml (native code) compiler
+(on i386) chooses the internal </font>
+<br><font size=2 face="sans-serif">representation of the nodes and trees.
+To find out about this quantitatively,</font>
+<br><font size=2 face="sans-serif">I then implemented (a,b)-trees again---this
+time working around the type</font>
+<br><font size=2 face="sans-serif">system (i.e. using Obj) in order to
+choose a more compact internal</font>
+<br><font size=2 face="sans-serif">representation of the trees. I will
+detail the layouts below.</font>
+<br>
+<br><font size=2 face="sans-serif">It turns out that this made the program
+about 30% faster (and this also</font>
+<br><font size=2 face="sans-serif">means the result is only about a factor
+3 slower than an optimized C++</font>
+<br><font size=2 face="sans-serif">implementation). This potential for
+optimization is a little too much to</font>
+<br><font size=2 face="sans-serif">ignore, but letting go of the type system
+is also not an attractive option.</font>
+<br>
+<br><font size=2 face="sans-serif">Now my question is</font>
+<br><font size=2 face="sans-serif">a) Is this effect known?</font>
+<br><font size=2 face="sans-serif">b) Is it considered relevant?</font>
+<br><font size=2 face="sans-serif">c) What were the design considerations
+that have lead to the design</font>
+<br><font size=2 face="sans-serif">of the current compiler in this regard?</font>
+<br>
+<br><font size=2 face="sans-serif">Any ideas? I can provide the measurements
+and also the programs</font>
+<br><font size=2 face="sans-serif">(provided my employer, Philips Research
+Eindhoven, agrees to that)</font>
+<br><font size=2 face="sans-serif">for anyone to have a look for him- or
+herself in case there is any interest.</font>
+<br>
+<br><font size=2 face="sans-serif">Sebastian.</font>
+<br>
+<br>
+<br>
+<br><font size=2 face="sans-serif">----------</font>
+<br>
+<br><font size=2 face="sans-serif">1. Here is a piece of the 'good' Ocaml
+program defining the trees:</font>
+<br>
+<br><font size=2 face="sans-serif">-- snip --</font>
+<br><font size=1><tt>(* --- (a,b)-trees --- *)</tt></font>
+<br>
+<br><font size=1><tt>assert ((!a &gt;= 2) &amp;&amp; (!b &gt;= 2 * !a -
+1));;</tt></font>
+<br>
+<br><font size=1><tt>type ('key, 'value) item =</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;{ &nbsp; &nbsp; &nbsp;
+&nbsp; k: 'key;</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;mutable v: 'value</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(* &lt;&lt;more
+fiels, e.g. linking&gt;&gt; *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;};;</tt></font>
+<br>
+<br><font size=1><tt>type ('key, 'value) node =</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;{ mutable d: int; &nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(*
+degree d in {2..b} &nbsp;*)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+&nbsp;s: 'key array; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (*
+splitters s[0..d-2] *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+&nbsp;c: ('key, 'value) tree array (* children &nbsp;c[0..d-1] *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;}</tt></font>
+<br>
+<br><font size=1><tt>and &nbsp;('key, 'value) tree =</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;| Empty &nbsp; &nbsp; &nbsp;
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;
+&nbsp; (* the empty (a,b)-tree *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;| Item of ('key, 'value)
+item &nbsp; &nbsp; &nbsp; &nbsp; (* an item as leaf &nbsp; &nbsp; &nbsp;*)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;| Node of ('key, 'value)
+node &nbsp; &nbsp; &nbsp; &nbsp; (* a splitting node &nbsp; &nbsp; *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;;;</tt></font>
+<br>
+<br><font size=1><tt>type ('key, 'value) t =</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;{ mutable root: ('key,
+'value) tree</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(* &lt;&lt;more
+fields, e.g. size, parameters&gt;&gt; *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;};;</tt></font>
+<br><font size=1><tt>&nbsp;</tt></font>
+<br><font size=1><tt>(* Invariants of the representation:</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(1) The key of an Item reachable through
+child c[i], i in {0..d-1},</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;of a Node of degree d with
+splitters s[0..d-2] satisfies</tt></font>
+<br>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;s[i-1] &lt; key
+&lt;= s[i].</tt></font>
+<br><font size=1><tt>&nbsp;</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;It is understood that s[-1]
+= -inf and s[d-1] = +inf,</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;but neither of these sentinel
+values is ever stored in s.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(2) All Items have the same depth (distance
+from the root).</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(3) The degree d of a a non-root Node
+is in {a..b}, where</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;(a,b) are constant parameters
+with a &gt;= 2, b &gt;= 2 a - 1.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;The degree of the root
+Node is in {2..b}.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(4) The arrays s and c of a Node have
+length b-1 and b.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(5) If the tree contains Empty then it
+is equal to Empty.</tt></font>
+<br><font size=1><tt>*)</tt></font>
+<br><font size=2 face="sans-serif">-- snip --</font>
+<br>
+<br><font size=2 face="sans-serif">If I analyzed it correctly, then these
+definitions result in the following</font>
+<br><font size=2 face="sans-serif">internal representation for trees and
+nodes</font>
+<br>
+<br><font size=2 face="sans-serif">('key, 'value) tree = </font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; Empty
+= (unboxed) int 0</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; Item
+of i = pointer to (heap-allocated) block with tag 0 and single field i:
+.. item</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; Node
+of n = point to block with tag 1 and single field n: ('key, 'value) node</font>
+<br>
+<br><font size=2 face="sans-serif">('key, 'value) node =</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; pointer
+to block with tag 0 and 3 fields for d, s, and c.</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; d
+= unboxed int</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; s,
+c = pointers to arrays of length b</font>
+<br>
+<br><font size=2 face="sans-serif">------------</font>
+<br>
+<br><font size=2 face="sans-serif">2. Here is a piece of the 'bad' Ocaml
+program defining the trees:</font>
+<br>
+<br><font size=2 face="sans-serif">-- snip --</font>
+<br><font size=1><tt>(* --- (a,b)-trees --- *)</tt></font>
+<br>
+<br><font size=1><tt>assert ((!a &gt;= 2) &amp;&amp; (!b &gt;= 2 * !a -
+1));;</tt></font>
+<br>
+<br><font size=1><tt>(* The internal representation of an (a,b)-tree is</tt></font>
+<br>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;empty: the unboxed integer 0,</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;item: &nbsp;an array [-1, key,
+value], or</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;node: &nbsp;an array [d, s[0..d-2],
+0..0, c[0..d-1], 0..0]</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; where c[0]
+is located at position b.</tt></font>
+<br>
+<br><font size=1><tt>&nbsp; &nbsp;Here </tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;d &nbsp; &nbsp; &nbsp; &nbsp;
+: degree, unboxed integer in {2..b}</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;s[0..d-2] : splitters of type
+key</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;c[0..d-1] : children of type tree</tt></font>
+<br>
+<br><font size=1><tt>&nbsp; &nbsp;Invariants of the representation:</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(1) The key of an item reachable through
+child c[i], i in {0..d-1},</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;of a node of degree d with
+splitters s[0..d-2] satisfies</tt></font>
+<br>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;s[i-1] &lt; key
+&lt;= s[i].</tt></font>
+<br><font size=1><tt>&nbsp;</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;It is understood that s[-1]
+= -inf and s[d-1] = +inf,</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;but neither of these sentinel
+values is ever stored in s.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(2) All items have the same depth (distance
+from the root).</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(3) The degree d of a a non-root node
+is in {a..b}, where</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;(a,b) are constant parameters
+with a &gt;= 2, b &gt;= 2 a - 1.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;The degree of the root
+node is in {2..b}.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(4) The arrays s and c of a node have
+length b-1 and b.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;(5) If the tree contains empty then it
+is equal to empty.</tt></font>
+<br>
+<br><font size=1><tt>&nbsp; &nbsp;Remark:</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;* The internal representation escapes
+the type system. This</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;is necessary in order to avoid
+intermediate pointers, e.g.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;from a node record to the array
+of splitters, which would</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;otherwise produce lots of cache
+misses.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;* We do not use the tag bits of heap-allocated
+blocks to </tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;distinguish between items and
+nodes in order to avoid the</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;overhead of calling the C-function
+caml_obj_tag(). Instead</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp;we store our own tag into field
+0.</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp;* We use only Obj.field and Obj.set_field
+to access the objects.</tt></font>
+<br><font size=1><tt>*)</tt></font>
+<br>
+<br><font size=1><tt>type ('key, 'value) tree = Obj.t;;</tt></font>
+<br>
+<br><font size=1><tt>type ('key, 'value) t =</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;{ mutable root: ('key,
+'value) tree</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(* &lt;&lt;more
+fields, e.g. size, parameters&gt;&gt; *)</tt></font>
+<br><font size=1><tt>&nbsp; &nbsp; &nbsp; &nbsp;};;</tt></font>
+<br><font size=2 face="sans-serif">-- snip --</font>
+<br>
+<br><font size=2 face="sans-serif">The internal representation of trees
+and nodes is like this:</font>
+<br>
+<br><font size=2 face="sans-serif">('key, 'value) tree =</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; Empty
+= unboxed int 0</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; Item
+= pointer to block with first field the unboxed int -1</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; Node
+= pointer to node, i.e. block with first field unboxed int &gt;=0</font>
+<br>
+<br><font size=2 face="sans-serif">node =</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; array
+of length 2 b consisting of degree d, d-1 splitters and</font>
+<br><font size=2 face="sans-serif">&nbsp; &nbsp; &nbsp; &nbsp; d
+pointers to child-trees, where &nbsp;d in {2..b}.</font>
+<br>
+<br><font size=2 face="sans-serif">Remark: I chose not to use the tag bits
+of a block to distinguish items</font>
+<br><font size=2 face="sans-serif">and nodes because Obj.tag results in
+a C-call whereas getting the</font>
+<br><font size=2 face="sans-serif">degree-field results in a single machine
+instruction. &nbsp; &nbsp; &nbsp; &nbsp;</font>
+<br><font size=2 face="sans-serif"><br>
+----<br>
+Dr. Sebastian Egner<br>
+Senior Scientist<br>
+Philips Research Laboratories<br>
+Prof. Holstlaan 4 (WDC 1-051, 1st floor, room 51)<br>
+5656 AA Eindhoven<br>
+The Netherlands<br>
+tel: &nbsp; &nbsp; &nbsp; +31 40 27-43166<br>
+fax: &nbsp; &nbsp; &nbsp;+31 40 27-44004<br>
+email: sebastian.egner@philips.com</font>
+--=_alternative 005C2397C12570AD_=--
+--=_mixed 005C2397C12570AD_=
+Content-Type: application/octet-stream; name="lookup.eps"
+Content-Disposition: attachment; filename="lookup.eps"
+Content-Transfer-Encoding: base64
+
+JSFQUy1BZG9iZS0yLjAKJSVUaXRsZTogbG9va3VwLmVwcwolJUNyZWF0b3I6IGdudXBsb3QgMy43
+IHBhdGNobGV2ZWwgMQolJUNyZWF0aW9uRGF0ZTogV2VkIE5vdiAgMiAxNDo1OToyMCAyMDA1CiUl
+RG9jdW1lbnRGb250czogKGF0ZW5kKQolJUJvdW5kaW5nQm94OiA1MCA1MCA1NTQgNzcwCiUlT3Jp
+ZW50YXRpb246IExhbmRzY2FwZQolJVBhZ2VzOiAoYXRlbmQpCiUlRW5kQ29tbWVudHMKL2dudWRp
+Y3QgMjU2IGRpY3QgZGVmCmdudWRpY3QgYmVnaW4KL0NvbG9yIGZhbHNlIGRlZgovU29saWQgZmFs
+c2UgZGVmCi9nbnVsaW5ld2lkdGggNS4wMDAgZGVmCi91c2VybGluZXdpZHRoIGdudWxpbmV3aWR0
+aCBkZWYKL3ZzaGlmdCAtNDYgZGVmCi9kbCB7MTAgbXVsfSBkZWYKL2hwdF8gMzEuNSBkZWYKL3Zw
+dF8gMzEuNSBkZWYKL2hwdCBocHRfIGRlZgovdnB0IHZwdF8gZGVmCi9NIHttb3ZldG99IGJpbmQg
+ZGVmCi9MIHtsaW5ldG99IGJpbmQgZGVmCi9SIHtybW92ZXRvfSBiaW5kIGRlZgovViB7cmxpbmV0
+b30gYmluZCBkZWYKL3ZwdDIgdnB0IDIgbXVsIGRlZgovaHB0MiBocHQgMiBtdWwgZGVmCi9Mc2hv
+dyB7IGN1cnJlbnRwb2ludCBzdHJva2UgTQogIDAgdnNoaWZ0IFIgc2hvdyB9IGRlZgovUnNob3cg
+eyBjdXJyZW50cG9pbnQgc3Ryb2tlIE0KICBkdXAgc3RyaW5nd2lkdGggcG9wIG5lZyB2c2hpZnQg
+UiBzaG93IH0gZGVmCi9Dc2hvdyB7IGN1cnJlbnRwb2ludCBzdHJva2UgTQogIGR1cCBzdHJpbmd3
+aWR0aCBwb3AgLTIgZGl2IHZzaGlmdCBSIHNob3cgfSBkZWYKL1VQIHsgZHVwIHZwdF8gbXVsIC92
+cHQgZXhjaCBkZWYgaHB0XyBtdWwgL2hwdCBleGNoIGRlZgogIC9ocHQyIGhwdCAyIG11bCBkZWYg
+L3ZwdDIgdnB0IDIgbXVsIGRlZiB9IGRlZgovREwgeyBDb2xvciB7c2V0cmdiY29sb3IgU29saWQg
+e3BvcCBbXX0gaWYgMCBzZXRkYXNoIH0KIHtwb3AgcG9wIHBvcCBTb2xpZCB7cG9wIFtdfSBpZiAw
+IHNldGRhc2h9IGlmZWxzZSB9IGRlZgovQkwgeyBzdHJva2UgdXNlcmxpbmV3aWR0aCAyIG11bCBz
+ZXRsaW5ld2lkdGggfSBkZWYKL0FMIHsgc3Ryb2tlIHVzZXJsaW5ld2lkdGggMiBkaXYgc2V0bGlu
+ZXdpZHRoIH0gZGVmCi9VTCB7IGR1cCBnbnVsaW5ld2lkdGggbXVsIC91c2VybGluZXdpZHRoIGV4
+Y2ggZGVmCiAgICAgIDEwIG11bCAvdWRsIGV4Y2ggZGVmIH0gZGVmCi9QTCB7IHN0cm9rZSB1c2Vy
+bGluZXdpZHRoIHNldGxpbmV3aWR0aCB9IGRlZgovTFRiIHsgQkwgW10gMCAwIDAgREwgfSBkZWYK
+L0xUYSB7IEFMIFsxIHVkbCBtdWwgMiB1ZGwgbXVsXSAwIHNldGRhc2ggMCAwIDAgc2V0cmdiY29s
+b3IgfSBkZWYKL0xUMCB7IFBMIFtdIDEgMCAwIERMIH0gZGVmCi9MVDEgeyBQTCBbNCBkbCAyIGRs
+XSAwIDEgMCBETCB9IGRlZgovTFQyIHsgUEwgWzIgZGwgMyBkbF0gMCAwIDEgREwgfSBkZWYKL0xU
+MyB7IFBMIFsxIGRsIDEuNSBkbF0gMSAwIDEgREwgfSBkZWYKL0xUNCB7IFBMIFs1IGRsIDIgZGwg
+MSBkbCAyIGRsXSAwIDEgMSBETCB9IGRlZgovTFQ1IHsgUEwgWzQgZGwgMyBkbCAxIGRsIDMgZGxd
+IDEgMSAwIERMIH0gZGVmCi9MVDYgeyBQTCBbMiBkbCAyIGRsIDIgZGwgNCBkbF0gMCAwIDAgREwg
+fSBkZWYKL0xUNyB7IFBMIFsyIGRsIDIgZGwgMiBkbCAyIGRsIDIgZGwgNCBkbF0gMSAwLjMgMCBE
+TCB9IGRlZgovTFQ4IHsgUEwgWzIgZGwgMiBkbCAyIGRsIDIgZGwgMiBkbCAyIGRsIDIgZGwgNCBk
+bF0gMC41IDAuNSAwLjUgREwgfSBkZWYKL1BudCB7IHN0cm9rZSBbXSAwIHNldGRhc2gKICAgZ3Nh
+dmUgMSBzZXRsaW5lY2FwIE0gMCAwIFYgc3Ryb2tlIGdyZXN0b3JlIH0gZGVmCi9EaWEgeyBzdHJv
+a2UgW10gMCBzZXRkYXNoIDIgY29weSB2cHQgYWRkIE0KICBocHQgbmVnIHZwdCBuZWcgViBocHQg
+dnB0IG5lZyBWCiAgaHB0IHZwdCBWIGhwdCBuZWcgdnB0IFYgY2xvc2VwYXRoIHN0cm9rZQogIFBu
+dCB9IGRlZgovUGxzIHsgc3Ryb2tlIFtdIDAgc2V0ZGFzaCB2cHQgc3ViIE0gMCB2cHQyIFYKICBj
+dXJyZW50cG9pbnQgc3Ryb2tlIE0KICBocHQgbmVnIHZwdCBuZWcgUiBocHQyIDAgViBzdHJva2UK
+ICB9IGRlZgovQm94IHsgc3Ryb2tlIFtdIDAgc2V0ZGFzaCAyIGNvcHkgZXhjaCBocHQgc3ViIGV4
+Y2ggdnB0IGFkZCBNCiAgMCB2cHQyIG5lZyBWIGhwdDIgMCBWIDAgdnB0MiBWCiAgaHB0MiBuZWcg
+MCBWIGNsb3NlcGF0aCBzdHJva2UKICBQbnQgfSBkZWYKL0NycyB7IHN0cm9rZSBbXSAwIHNldGRh
+c2ggZXhjaCBocHQgc3ViIGV4Y2ggdnB0IGFkZCBNCiAgaHB0MiB2cHQyIG5lZyBWIGN1cnJlbnRw
+b2ludCBzdHJva2UgTQogIGhwdDIgbmVnIDAgUiBocHQyIHZwdDIgViBzdHJva2UgfSBkZWYKL1Ry
+aVUgeyBzdHJva2UgW10gMCBzZXRkYXNoIDIgY29weSB2cHQgMS4xMiBtdWwgYWRkIE0KICBocHQg
+bmVnIHZwdCAtMS42MiBtdWwgVgogIGhwdCAyIG11bCAwIFYKICBocHQgbmVnIHZwdCAxLjYyIG11
+bCBWIGNsb3NlcGF0aCBzdHJva2UKICBQbnQgIH0gZGVmCi9TdGFyIHsgMiBjb3B5IFBscyBDcnMg
+fSBkZWYKL0JveEYgeyBzdHJva2UgW10gMCBzZXRkYXNoIGV4Y2ggaHB0IHN1YiBleGNoIHZwdCBh
+ZGQgTQogIDAgdnB0MiBuZWcgViAgaHB0MiAwIFYgIDAgdnB0MiBWCiAgaHB0MiBuZWcgMCBWICBj
+bG9zZXBhdGggZmlsbCB9IGRlZgovVHJpVUYgeyBzdHJva2UgW10gMCBzZXRkYXNoIHZwdCAxLjEy
+IG11bCBhZGQgTQogIGhwdCBuZWcgdnB0IC0xLjYyIG11bCBWCiAgaHB0IDIgbXVsIDAgVgogIGhw
+dCBuZWcgdnB0IDEuNjIgbXVsIFYgY2xvc2VwYXRoIGZpbGwgfSBkZWYKL1RyaUQgeyBzdHJva2Ug
+W10gMCBzZXRkYXNoIDIgY29weSB2cHQgMS4xMiBtdWwgc3ViIE0KICBocHQgbmVnIHZwdCAxLjYy
+IG11bCBWCiAgaHB0IDIgbXVsIDAgVgogIGhwdCBuZWcgdnB0IC0xLjYyIG11bCBWIGNsb3NlcGF0
+aCBzdHJva2UKICBQbnQgIH0gZGVmCi9UcmlERiB7IHN0cm9rZSBbXSAwIHNldGRhc2ggdnB0IDEu
+MTIgbXVsIHN1YiBNCiAgaHB0IG5lZyB2cHQgMS42MiBtdWwgVgogIGhwdCAyIG11bCAwIFYKICBo
+cHQgbmVnIHZwdCAtMS42MiBtdWwgViBjbG9zZXBhdGggZmlsbH0gZGVmCi9EaWFGIHsgc3Ryb2tl
+IFtdIDAgc2V0ZGFzaCB2cHQgYWRkIE0KICBocHQgbmVnIHZwdCBuZWcgViBocHQgdnB0IG5lZyBW
+CiAgaHB0IHZwdCBWIGhwdCBuZWcgdnB0IFYgY2xvc2VwYXRoIGZpbGwgfSBkZWYKL1BlbnQgeyBz
+dHJva2UgW10gMCBzZXRkYXNoIDIgY29weSBnc2F2ZQogIHRyYW5zbGF0ZSAwIGhwdCBNIDQgezcy
+IHJvdGF0ZSAwIGhwdCBMfSByZXBlYXQKICBjbG9zZXBhdGggc3Ryb2tlIGdyZXN0b3JlIFBudCB9
+IGRlZgovUGVudEYgeyBzdHJva2UgW10gMCBzZXRkYXNoIGdzYXZlCiAgdHJhbnNsYXRlIDAgaHB0
+IE0gNCB7NzIgcm90YXRlIDAgaHB0IEx9IHJlcGVhdAogIGNsb3NlcGF0aCBmaWxsIGdyZXN0b3Jl
+IH0gZGVmCi9DaXJjbGUgeyBzdHJva2UgW10gMCBzZXRkYXNoIDIgY29weQogIGhwdCAwIDM2MCBh
+cmMgc3Ryb2tlIFBudCB9IGRlZgovQ2lyY2xlRiB7IHN0cm9rZSBbXSAwIHNldGRhc2ggaHB0IDAg
+MzYwIGFyYyBmaWxsIH0gZGVmCi9DMCB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgbW92ZXRvIHZw
+dCA5MCA0NTAgIGFyYyB9IGJpbmQgZGVmCi9DMSB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgICAg
+ICAgIG1vdmV0bwogICAgICAgMiBjb3B5ICB2cHQgMCA5MCBhcmMgY2xvc2VwYXRoIGZpbGwKICAg
+ICAgICAgICAgICAgdnB0IDAgMzYwIGFyYyBjbG9zZXBhdGggfSBiaW5kIGRlZgovQzIgeyBCTCBb
+XSAwIHNldGRhc2ggMiBjb3B5IG1vdmV0bwogICAgICAgMiBjb3B5ICB2cHQgOTAgMTgwIGFyYyBj
+bG9zZXBhdGggZmlsbAogICAgICAgICAgICAgICB2cHQgMCAzNjAgYXJjIGNsb3NlcGF0aCB9IGJp
+bmQgZGVmCi9DMyB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgbW92ZXRvCiAgICAgICAyIGNvcHkg
+IHZwdCAwIDE4MCBhcmMgY2xvc2VwYXRoIGZpbGwKICAgICAgICAgICAgICAgdnB0IDAgMzYwIGFy
+YyBjbG9zZXBhdGggfSBiaW5kIGRlZgovQzQgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IG1vdmV0
+bwogICAgICAgMiBjb3B5ICB2cHQgMTgwIDI3MCBhcmMgY2xvc2VwYXRoIGZpbGwKICAgICAgICAg
+ICAgICAgdnB0IDAgMzYwIGFyYyBjbG9zZXBhdGggfSBiaW5kIGRlZgovQzUgeyBCTCBbXSAwIHNl
+dGRhc2ggMiBjb3B5IG1vdmV0bwogICAgICAgMiBjb3B5ICB2cHQgMCA5MCBhcmMKICAgICAgIDIg
+Y29weSBtb3ZldG8KICAgICAgIDIgY29weSAgdnB0IDE4MCAyNzAgYXJjIGNsb3NlcGF0aCBmaWxs
+CiAgICAgICAgICAgICAgIHZwdCAwIDM2MCBhcmMgfSBiaW5kIGRlZgovQzYgeyBCTCBbXSAwIHNl
+dGRhc2ggMiBjb3B5IG1vdmV0bwogICAgICAyIGNvcHkgIHZwdCA5MCAyNzAgYXJjIGNsb3NlcGF0
+aCBmaWxsCiAgICAgICAgICAgICAgdnB0IDAgMzYwIGFyYyBjbG9zZXBhdGggfSBiaW5kIGRlZgov
+QzcgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IG1vdmV0bwogICAgICAyIGNvcHkgIHZwdCAwIDI3
+MCBhcmMgY2xvc2VwYXRoIGZpbGwKICAgICAgICAgICAgICB2cHQgMCAzNjAgYXJjIGNsb3NlcGF0
+aCB9IGJpbmQgZGVmCi9DOCB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgbW92ZXRvCiAgICAgIDIg
+Y29weSB2cHQgMjcwIDM2MCBhcmMgY2xvc2VwYXRoIGZpbGwKICAgICAgICAgICAgICB2cHQgMCAz
+NjAgYXJjIGNsb3NlcGF0aCB9IGJpbmQgZGVmCi9DOSB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkg
+bW92ZXRvCiAgICAgIDIgY29weSAgdnB0IDI3MCA0NTAgYXJjIGNsb3NlcGF0aCBmaWxsCiAgICAg
+ICAgICAgICAgdnB0IDAgMzYwIGFyYyBjbG9zZXBhdGggfSBiaW5kIGRlZgovQzEwIHsgQkwgW10g
+MCBzZXRkYXNoIDIgY29weSAyIGNvcHkgbW92ZXRvIHZwdCAyNzAgMzYwIGFyYyBjbG9zZXBhdGgg
+ZmlsbAogICAgICAgMiBjb3B5IG1vdmV0bwogICAgICAgMiBjb3B5IHZwdCA5MCAxODAgYXJjIGNs
+b3NlcGF0aCBmaWxsCiAgICAgICAgICAgICAgIHZwdCAwIDM2MCBhcmMgY2xvc2VwYXRoIH0gYmlu
+ZCBkZWYKL0MxMSB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgbW92ZXRvCiAgICAgICAyIGNvcHkg
+IHZwdCAwIDE4MCBhcmMgY2xvc2VwYXRoIGZpbGwKICAgICAgIDIgY29weSBtb3ZldG8KICAgICAg
+IDIgY29weSAgdnB0IDI3MCAzNjAgYXJjIGNsb3NlcGF0aCBmaWxsCiAgICAgICAgICAgICAgIHZw
+dCAwIDM2MCBhcmMgY2xvc2VwYXRoIH0gYmluZCBkZWYKL0MxMiB7IEJMIFtdIDAgc2V0ZGFzaCAy
+IGNvcHkgbW92ZXRvCiAgICAgICAyIGNvcHkgIHZwdCAxODAgMzYwIGFyYyBjbG9zZXBhdGggZmls
+bAogICAgICAgICAgICAgICB2cHQgMCAzNjAgYXJjIGNsb3NlcGF0aCB9IGJpbmQgZGVmCi9DMTMg
+eyBCTCBbXSAwIHNldGRhc2ggIDIgY29weSBtb3ZldG8KICAgICAgIDIgY29weSAgdnB0IDAgOTAg
+YXJjIGNsb3NlcGF0aCBmaWxsCiAgICAgICAyIGNvcHkgbW92ZXRvCiAgICAgICAyIGNvcHkgIHZw
+dCAxODAgMzYwIGFyYyBjbG9zZXBhdGggZmlsbAogICAgICAgICAgICAgICB2cHQgMCAzNjAgYXJj
+IGNsb3NlcGF0aCB9IGJpbmQgZGVmCi9DMTQgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IG1vdmV0
+bwogICAgICAgMiBjb3B5ICB2cHQgOTAgMzYwIGFyYyBjbG9zZXBhdGggZmlsbAogICAgICAgICAg
+ICAgICB2cHQgMCAzNjAgYXJjIH0gYmluZCBkZWYKL0MxNSB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNv
+cHkgdnB0IDAgMzYwIGFyYyBjbG9zZXBhdGggZmlsbAogICAgICAgICAgICAgICB2cHQgMCAzNjAg
+YXJjIGNsb3NlcGF0aCB9IGJpbmQgZGVmCi9SZWMgICB7IG5ld3BhdGggNCAyIHJvbGwgbW92ZXRv
+IDEgaW5kZXggMCBybGluZXRvIDAgZXhjaCBybGluZXRvCiAgICAgICBuZWcgMCBybGluZXRvIGNs
+b3NlcGF0aCB9IGJpbmQgZGVmCi9TcXVhcmUgeyBkdXAgUmVjIH0gYmluZCBkZWYKL0JzcXVhcmUg
+eyB2cHQgc3ViIGV4Y2ggdnB0IHN1YiBleGNoIHZwdDIgU3F1YXJlIH0gYmluZCBkZWYKL1MwIHsg
+QkwgW10gMCBzZXRkYXNoIDIgY29weSBtb3ZldG8gMCB2cHQgcmxpbmV0byBCTCBCc3F1YXJlIH0g
+YmluZCBkZWYKL1MxIHsgQkwgW10gMCBzZXRkYXNoIDIgY29weSB2cHQgU3F1YXJlIGZpbGwgQnNx
+dWFyZSB9IGJpbmQgZGVmCi9TMiB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgZXhjaCB2cHQgc3Vi
+IGV4Y2ggdnB0IFNxdWFyZSBmaWxsIEJzcXVhcmUgfSBiaW5kIGRlZgovUzMgeyBCTCBbXSAwIHNl
+dGRhc2ggMiBjb3B5IGV4Y2ggdnB0IHN1YiBleGNoIHZwdDIgdnB0IFJlYyBmaWxsIEJzcXVhcmUg
+fSBiaW5kIGRlZgovUzQgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IGV4Y2ggdnB0IHN1YiBleGNo
+IHZwdCBzdWIgdnB0IFNxdWFyZSBmaWxsIEJzcXVhcmUgfSBiaW5kIGRlZgovUzUgeyBCTCBbXSAw
+IHNldGRhc2ggMiBjb3B5IDIgY29weSB2cHQgU3F1YXJlIGZpbGwKICAgICAgIGV4Y2ggdnB0IHN1
+YiBleGNoIHZwdCBzdWIgdnB0IFNxdWFyZSBmaWxsIEJzcXVhcmUgfSBiaW5kIGRlZgovUzYgeyBC
+TCBbXSAwIHNldGRhc2ggMiBjb3B5IGV4Y2ggdnB0IHN1YiBleGNoIHZwdCBzdWIgdnB0IHZwdDIg
+UmVjIGZpbGwgQnNxdWFyZSB9IGJpbmQgZGVmCi9TNyB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkg
+ZXhjaCB2cHQgc3ViIGV4Y2ggdnB0IHN1YiB2cHQgdnB0MiBSZWMgZmlsbAogICAgICAgMiBjb3B5
+IHZwdCBTcXVhcmUgZmlsbAogICAgICAgQnNxdWFyZSB9IGJpbmQgZGVmCi9TOCB7IEJMIFtdIDAg
+c2V0ZGFzaCAyIGNvcHkgdnB0IHN1YiB2cHQgU3F1YXJlIGZpbGwgQnNxdWFyZSB9IGJpbmQgZGVm
+Ci9TOSB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgdnB0IHN1YiB2cHQgdnB0MiBSZWMgZmlsbCBC
+c3F1YXJlIH0gYmluZCBkZWYKL1MxMCB7IEJMIFtdIDAgc2V0ZGFzaCAyIGNvcHkgdnB0IHN1YiB2
+cHQgU3F1YXJlIGZpbGwgMiBjb3B5IGV4Y2ggdnB0IHN1YiBleGNoIHZwdCBTcXVhcmUgZmlsbAog
+ICAgICAgQnNxdWFyZSB9IGJpbmQgZGVmCi9TMTEgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IHZw
+dCBzdWIgdnB0IFNxdWFyZSBmaWxsIDIgY29weSBleGNoIHZwdCBzdWIgZXhjaCB2cHQyIHZwdCBS
+ZWMgZmlsbAogICAgICAgQnNxdWFyZSB9IGJpbmQgZGVmCi9TMTIgeyBCTCBbXSAwIHNldGRhc2gg
+MiBjb3B5IGV4Y2ggdnB0IHN1YiBleGNoIHZwdCBzdWIgdnB0MiB2cHQgUmVjIGZpbGwgQnNxdWFy
+ZSB9IGJpbmQgZGVmCi9TMTMgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IGV4Y2ggdnB0IHN1YiBl
+eGNoIHZwdCBzdWIgdnB0MiB2cHQgUmVjIGZpbGwKICAgICAgIDIgY29weSB2cHQgU3F1YXJlIGZp
+bGwgQnNxdWFyZSB9IGJpbmQgZGVmCi9TMTQgeyBCTCBbXSAwIHNldGRhc2ggMiBjb3B5IGV4Y2gg
+dnB0IHN1YiBleGNoIHZwdCBzdWIgdnB0MiB2cHQgUmVjIGZpbGwKICAgICAgIDIgY29weSBleGNo
+IHZwdCBzdWIgZXhjaCB2cHQgU3F1YXJlIGZpbGwgQnNxdWFyZSB9IGJpbmQgZGVmCi9TMTUgeyBC
+TCBbXSAwIHNldGRhc2ggMiBjb3B5IEJzcXVhcmUgZmlsbCBCc3F1YXJlIH0gYmluZCBkZWYKL0Qw
+IHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzAgc3Ryb2tlIGdyZXN0b3JlIH0gYmlu
+ZCBkZWYKL0QxIHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzEgc3Ryb2tlIGdyZXN0
+b3JlIH0gYmluZCBkZWYKL0QyIHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzIgc3Ry
+b2tlIGdyZXN0b3JlIH0gYmluZCBkZWYKL0QzIHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAw
+IDAgUzMgc3Ryb2tlIGdyZXN0b3JlIH0gYmluZCBkZWYKL0Q0IHsgZ3NhdmUgdHJhbnNsYXRlIDQ1
+IHJvdGF0ZSAwIDAgUzQgc3Ryb2tlIGdyZXN0b3JlIH0gYmluZCBkZWYKL0Q1IHsgZ3NhdmUgdHJh
+bnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzUgc3Ryb2tlIGdyZXN0b3JlIH0gYmluZCBkZWYKL0Q2IHsg
+Z3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzYgc3Ryb2tlIGdyZXN0b3JlIH0gYmluZCBk
+ZWYKL0Q3IHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzcgc3Ryb2tlIGdyZXN0b3Jl
+IH0gYmluZCBkZWYKL0Q4IHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzggc3Ryb2tl
+IGdyZXN0b3JlIH0gYmluZCBkZWYKL0Q5IHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAg
+Uzkgc3Ryb2tlIGdyZXN0b3JlIH0gYmluZCBkZWYKL0QxMCB7IGdzYXZlIHRyYW5zbGF0ZSA0NSBy
+b3RhdGUgMCAwIFMxMCBzdHJva2UgZ3Jlc3RvcmUgfSBiaW5kIGRlZgovRDExIHsgZ3NhdmUgdHJh
+bnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzExIHN0cm9rZSBncmVzdG9yZSB9IGJpbmQgZGVmCi9EMTIg
+eyBnc2F2ZSB0cmFuc2xhdGUgNDUgcm90YXRlIDAgMCBTMTIgc3Ryb2tlIGdyZXN0b3JlIH0gYmlu
+ZCBkZWYKL0QxMyB7IGdzYXZlIHRyYW5zbGF0ZSA0NSByb3RhdGUgMCAwIFMxMyBzdHJva2UgZ3Jl
+c3RvcmUgfSBiaW5kIGRlZgovRDE0IHsgZ3NhdmUgdHJhbnNsYXRlIDQ1IHJvdGF0ZSAwIDAgUzE0
+IHN0cm9rZSBncmVzdG9yZSB9IGJpbmQgZGVmCi9EMTUgeyBnc2F2ZSB0cmFuc2xhdGUgNDUgcm90
+YXRlIDAgMCBTMTUgc3Ryb2tlIGdyZXN0b3JlIH0gYmluZCBkZWYKL0RpYUUgeyBzdHJva2UgW10g
+MCBzZXRkYXNoIHZwdCBhZGQgTQogIGhwdCBuZWcgdnB0IG5lZyBWIGhwdCB2cHQgbmVnIFYKICBo
+cHQgdnB0IFYgaHB0IG5lZyB2cHQgViBjbG9zZXBhdGggc3Ryb2tlIH0gZGVmCi9Cb3hFIHsgc3Ry
+b2tlIFtdIDAgc2V0ZGFzaCBleGNoIGhwdCBzdWIgZXhjaCB2cHQgYWRkIE0KICAwIHZwdDIgbmVn
+IFYgaHB0MiAwIFYgMCB2cHQyIFYKICBocHQyIG5lZyAwIFYgY2xvc2VwYXRoIHN0cm9rZSB9IGRl
+ZgovVHJpVUUgeyBzdHJva2UgW10gMCBzZXRkYXNoIHZwdCAxLjEyIG11bCBhZGQgTQogIGhwdCBu
+ZWcgdnB0IC0xLjYyIG11bCBWCiAgaHB0IDIgbXVsIDAgVgogIGhwdCBuZWcgdnB0IDEuNjIgbXVs
+IFYgY2xvc2VwYXRoIHN0cm9rZSB9IGRlZgovVHJpREUgeyBzdHJva2UgW10gMCBzZXRkYXNoIHZw
+dCAxLjEyIG11bCBzdWIgTQogIGhwdCBuZWcgdnB0IDEuNjIgbXVsIFYKICBocHQgMiBtdWwgMCBW
+CiAgaHB0IG5lZyB2cHQgLTEuNjIgbXVsIFYgY2xvc2VwYXRoIHN0cm9rZSB9IGRlZgovUGVudEUg
+eyBzdHJva2UgW10gMCBzZXRkYXNoIGdzYXZlCiAgdHJhbnNsYXRlIDAgaHB0IE0gNCB7NzIgcm90
+YXRlIDAgaHB0IEx9IHJlcGVhdAogIGNsb3NlcGF0aCBzdHJva2UgZ3Jlc3RvcmUgfSBkZWYKL0Np
+cmNFIHsgc3Ryb2tlIFtdIDAgc2V0ZGFzaCAKICBocHQgMCAzNjAgYXJjIHN0cm9rZSB9IGRlZgov
+T3BhcXVlIHsgZ3NhdmUgY2xvc2VwYXRoIDEgc2V0Z3JheSBmaWxsIGdyZXN0b3JlIDAgc2V0Z3Jh
+eSBjbG9zZXBhdGggfSBkZWYKL0RpYVcgeyBzdHJva2UgW10gMCBzZXRkYXNoIHZwdCBhZGQgTQog
+IGhwdCBuZWcgdnB0IG5lZyBWIGhwdCB2cHQgbmVnIFYKICBocHQgdnB0IFYgaHB0IG5lZyB2cHQg
+ViBPcGFxdWUgc3Ryb2tlIH0gZGVmCi9Cb3hXIHsgc3Ryb2tlIFtdIDAgc2V0ZGFzaCBleGNoIGhw
+dCBzdWIgZXhjaCB2cHQgYWRkIE0KICAwIHZwdDIgbmVnIFYgaHB0MiAwIFYgMCB2cHQyIFYKICBo
+cHQyIG5lZyAwIFYgT3BhcXVlIHN0cm9rZSB9IGRlZgovVHJpVVcgeyBzdHJva2UgW10gMCBzZXRk
+YXNoIHZwdCAxLjEyIG11bCBhZGQgTQogIGhwdCBuZWcgdnB0IC0xLjYyIG11bCBWCiAgaHB0IDIg
+bXVsIDAgVgogIGhwdCBuZWcgdnB0IDEuNjIgbXVsIFYgT3BhcXVlIHN0cm9rZSB9IGRlZgovVHJp
+RFcgeyBzdHJva2UgW10gMCBzZXRkYXNoIHZwdCAxLjEyIG11bCBzdWIgTQogIGhwdCBuZWcgdnB0
+IDEuNjIgbXVsIFYKICBocHQgMiBtdWwgMCBWCiAgaHB0IG5lZyB2cHQgLTEuNjIgbXVsIFYgT3Bh
+cXVlIHN0cm9rZSB9IGRlZgovUGVudFcgeyBzdHJva2UgW10gMCBzZXRkYXNoIGdzYXZlCiAgdHJh
+bnNsYXRlIDAgaHB0IE0gNCB7NzIgcm90YXRlIDAgaHB0IEx9IHJlcGVhdAogIE9wYXF1ZSBzdHJv
+a2UgZ3Jlc3RvcmUgfSBkZWYKL0NpcmNXIHsgc3Ryb2tlIFtdIDAgc2V0ZGFzaCAKICBocHQgMCAz
+NjAgYXJjIE9wYXF1ZSBzdHJva2UgfSBkZWYKL0JveEZpbGwgeyBnc2F2ZSBSZWMgMSBzZXRncmF5
+IGZpbGwgZ3Jlc3RvcmUgfSBkZWYKZW5kCiUlRW5kUHJvbG9nCiUlUGFnZTogMSAxCmdudWRpY3Qg
+YmVnaW4KZ3NhdmUKNTAgNTAgdHJhbnNsYXRlCjAuMTAwIDAuMTAwIHNjYWxlCjkwIHJvdGF0ZQow
+IC01MDQwIHRyYW5zbGF0ZQowIHNldGdyYXkKbmV3cGF0aAooSGVsdmV0aWNhKSBmaW5kZm9udCAx
+NDAgc2NhbGVmb250IHNldGZvbnQKMS4wMDAgVUwKTFRiCjc5OCA0MjAgTQo2MyAwIFYKNjEwMSAw
+IFIKLTYzIDAgVgo3MTQgNDIwIE0KKDEwMCkgUnNob3cKNzk4IDEwNTIgTQozMSAwIFYKNjEzMyAw
+IFIKLTMxIDAgVgo3OTggMTQyMiBNCjMxIDAgVgo2MTMzIDAgUgotMzEgMCBWCjc5OCAxNjg0IE0K
+MzEgMCBWCjYxMzMgMCBSCi0zMSAwIFYKNzk4IDE4ODggTQozMSAwIFYKNjEzMyAwIFIKLTMxIDAg
+Vgo3OTggMjA1NCBNCjMxIDAgVgo2MTMzIDAgUgotMzEgMCBWCjc5OCAyMTk1IE0KMzEgMCBWCjYx
+MzMgMCBSCi0zMSAwIFYKNzk4IDIzMTYgTQozMSAwIFYKNjEzMyAwIFIKLTMxIDAgVgo3OTggMjQy
+NCBNCjMxIDAgVgo2MTMzIDAgUgotMzEgMCBWCjc5OCAyNTIwIE0KNjMgMCBWCjYxMDEgMCBSCi02
+MyAwIFYKLTYxODUgMCBSCigxMDAwKSBSc2hvdwo3OTggMzE1MiBNCjMxIDAgVgo2MTMzIDAgUgot
+MzEgMCBWCjc5OCAzNTIyIE0KMzEgMCBWCjYxMzMgMCBSCi0zMSAwIFYKNzk4IDM3ODQgTQozMSAw
+IFYKNjEzMyAwIFIKLTMxIDAgVgo3OTggMzk4OCBNCjMxIDAgVgo2MTMzIDAgUgotMzEgMCBWCjc5
+OCA0MTU0IE0KMzEgMCBWCjYxMzMgMCBSCi0zMSAwIFYKNzk4IDQyOTUgTQozMSAwIFYKNjEzMyAw
+IFIKLTMxIDAgVgo3OTggNDQxNiBNCjMxIDAgVgo2MTMzIDAgUgotMzEgMCBWCjc5OCA0NTI0IE0K
+MzEgMCBWCjYxMzMgMCBSCi0zMSAwIFYKNzk4IDQ2MjAgTQo2MyAwIFYKNjEwMSAwIFIKLTYzIDAg
+VgotNjE4NSAwIFIKKDEwMDAwKSBSc2hvdwo3OTggNDIwIE0KMCA2MyBWCjAgNDEzNyBSCjAgLTYz
+IFYKNzk4IDI4MCBNCigxMCkgQ3Nob3cKMTA2MyA0MjAgTQowIDMxIFYKMCA0MTY5IFIKMCAtMzEg
+VgoxNDEzIDQyMCBNCjAgMzEgVgowIDQxNjkgUgowIC0zMSBWCjE1OTMgNDIwIE0KMCAzMSBWCjAg
+NDE2OSBSCjAgLTMxIFYKMTY3OSA0MjAgTQowIDYzIFYKMCA0MTM3IFIKMCAtNjMgVgowIC00Mjc3
+IFIKKDEwMCkgQ3Nob3cKMTk0NCA0MjAgTQowIDMxIFYKMCA0MTY5IFIKMCAtMzEgVgoyMjk0IDQy
+MCBNCjAgMzEgVgowIDQxNjkgUgowIC0zMSBWCjI0NzQgNDIwIE0KMCAzMSBWCjAgNDE2OSBSCjAg
+LTMxIFYKMjU1OSA0MjAgTQowIDYzIFYKMCA0MTM3IFIKMCAtNjMgVgowIC00Mjc3IFIKKDEwMDAp
+IENzaG93CjI4MjQgNDIwIE0KMCAzMSBWCjAgNDE2OSBSCjAgLTMxIFYKMzE3NSA0MjAgTQowIDMx
+IFYKMCA0MTY5IFIKMCAtMzEgVgozMzU0IDQyMCBNCjAgMzEgVgowIDQxNjkgUgowIC0zMSBWCjM0
+NDAgNDIwIE0KMCA2MyBWCjAgNDEzNyBSCjAgLTYzIFYKMCAtNDI3NyBSCigxMDAwMCkgQ3Nob3cK
+MzcwNSA0MjAgTQowIDMxIFYKMCA0MTY5IFIKMCAtMzEgVgo0MDU1IDQyMCBNCjAgMzEgVgowIDQx
+NjkgUgowIC0zMSBWCjQyMzUgNDIwIE0KMCAzMSBWCjAgNDE2OSBSCjAgLTMxIFYKNDMyMCA0MjAg
+TQowIDYzIFYKMCA0MTM3IFIKMCAtNjMgVgowIC00Mjc3IFIKKDEwMDAwMCkgQ3Nob3cKNDU4NSA0
+MjAgTQowIDMxIFYKMCA0MTY5IFIKMCAtMzEgVgo0OTM2IDQyMCBNCjAgMzEgVgowIDQxNjkgUgow
+IC0zMSBWCjUxMTYgNDIwIE0KMCAzMSBWCjAgNDE2OSBSCjAgLTMxIFYKNTIwMSA0MjAgTQowIDYz
+IFYKMCA0MTM3IFIKMCAtNjMgVgowIC00Mjc3IFIKKDFlKzA2KSBDc2hvdwo1NDY2IDQyMCBNCjAg
+MzEgVgowIDQxNjkgUgowIC0zMSBWCjU4MTYgNDIwIE0KMCAzMSBWCjAgNDE2OSBSCjAgLTMxIFYK
+NTk5NiA0MjAgTQowIDMxIFYKMCA0MTY5IFIKMCAtMzEgVgo2MDgxIDQyMCBNCjAgNjMgVgowIDQx
+MzcgUgowIC02MyBWCjAgLTQyNzcgUgooMWUrMDcpIENzaG93CjYzNDcgNDIwIE0KMCAzMSBWCjAg
+NDE2OSBSCjAgLTMxIFYKNjY5NyA0MjAgTQowIDMxIFYKMCA0MTY5IFIKMCAtMzEgVgo2ODc3IDQy
+MCBNCjAgMzEgVgowIDQxNjkgUgowIC0zMSBWCjY5NjIgNDIwIE0KMCA2MyBWCjAgNDEzNyBSCjAg
+LTYzIFYKMCAtNDI3NyBSCigxZSswOCkgQ3Nob3cKMS4wMDAgVUwKTFRiCjc5OCA0MjAgTQo2MTY0
+IDAgVgowIDQyMDAgVgotNjE2NCAwIFYKNzk4IDQyMCBMCjE0MCAyNTIwIE0KY3VycmVudHBvaW50
+IGdzYXZlIHRyYW5zbGF0ZSA5MCByb3RhdGUgMCAwIE0KKG5zL2xvb2t1cCBcKGNwdSB0aW1lXCkp
+IENzaG93CmdyZXN0b3JlCjM4ODAgNzAgTQoobikgQ3Nob3cKMzg4MCA0ODMwIE0KKGxvb2t1cCBv
+ZiByYW5kb21cKDEwXjlcKSBpbiBkaWN0IG9mIHNpemUgbikgQ3Nob3cKMS4wMDAgVUwKTFQwCjYz
+MTEgNDQ4NyBNCihBYl90cmVlMSkgUnNob3cKNjM5NSA0NDg3IE0KMzk5IDAgVgoxMjQzIDkwNCBN
+CjI2NSA5IFYKMjY1IDc0IFYKMjY1IDM5IFYKMjY1IDEwOSBWCjI2NSA5NiBWCjI2NSAxMTQgVgoy
+NjUgNzIgVgoyNjUgMTA5IFYKMjY2IDMzNyBWCjI2NSAyODIgVgoyNjUgMjIwIFYKMjY1IDE1NSBW
+CjI2NSAxNDggVgoyNjUgOTggVgoyNjUgOTQgVgoyNjUgMTE5IFYKMjY1IDEyMiBWCjI2NSAxMDYg
+VgoyNjUgOTQgVgoyNjUgMzk3IFYKMS4wMDAgVUwKTFQxCjYzMTEgNDM0NyBNCihBYl90cmVlMikg
+UnNob3cKNjM5NSA0MzQ3IE0KMzk5IDAgVgoxMjQzIDg3MiBNCjI2NSAzMCBWCjI2NSA5OSBWCjI2
+NSA1NCBWCjI2NSAzMiBWCjI2NSAxMDMgVgoyNjUgMzEgVgoyNjUgNjcgVgoyNjUgMTEwIFYKMjY2
+IDE4NiBWCjI2NSAzMTYgVgoyNjUgMjQxIFYKMjY1IDE2MCBWCjI2NSAxMzggVgoyNjUgMTExIFYK
+MjY1IDk3IFYKMjY1IDEwNCBWCjI2NSAxNTcgVgoyNjUgODQgVgoyNjUgOTkgVgoyNjUgNDIzIFYK
+MS4wMDAgVUwKTFQyCjYzMTEgNDIwNyBNCihIYXNodGJsKSBSc2hvdwo2Mzk1IDQyMDcgTQozOTkg
+MCBWCjEyNDMgMTA0OSBNCjI2NSAtMTEgVgoyNjUgNiBWCjI2NSAtMiBWCjI2NSA3IFYKMjY1IC0y
+IFYKMjY1IDUgVgoyNjUgMSBWCjI2NSAzIFYKMjY2IDQ5IFYKMjY1IDIzNyBWCjI2NSAyMDUgVgoy
+NjUgMzYwIFYKMjY1IDg2IFYKMjY1IDM4IFYKMjY1IDE4IFYKMjY1IDE5IFYKMjY1IDE2IFYKMjY1
+IDQ2IFYKMjY1IDQ2NiBWCjI2NSA4MTMgVgoxLjAwMCBVTApMVDMKNjMxMSA0MDY3IE0KKE1hcCkg
+UnNob3cKNjM5NSA0MDY3IE0KMzk5IDAgVgoxMjQzIDE0MDkgTQoyNjUgODQgVgoyNjUgNjAgVgoy
+NjUgNjggVgoyNjUgNzYgVgoyNjUgNzUgVgoyNjUgNDQgVgoyNjUgNDggVgoyNjUgNDQgVgoyNjYg
+MTI4IFYKMjY1IDI0MyBWCjI2NSAyMjEgVgoyNjUgMTUxIFYKMjY1IDExMyBWCjI2NSAxMDcgVgoy
+NjUgMTE0IFYKMjY1IDEwMSBWCjI2NSA5OCBWCjI2NSAxMjIgVgoyNjUgODEgVgoyNjUgMzk0IFYK
+c3Ryb2tlCmdyZXN0b3JlCmVuZApzaG93cGFnZQolJVRyYWlsZXIKJSVEb2N1bWVudEZvbnRzOiBI
+ZWx2ZXRpY2EKJSVQYWdlczogMQo=
+
+--=_mixed 005C2397C12570AD_=--
+

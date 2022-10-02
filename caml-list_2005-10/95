@@ -1,0 +1,117 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 88A89BB81
+	for <caml-list@yquem.inria.fr>; Sun,  9 Oct 2005 17:02:13 +0200 (CEST)
+Received: from ptb-relay04.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j99F2CtL013585
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sun, 9 Oct 2005 17:02:13 +0200
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay04.plus.net with esmtp (Exim) id 1EOcgn-00046S-5b
+	for caml-list@yquem.inria.fr; Sun, 09 Oct 2005 16:02:13 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Ray tracer language comparison
+Date: Sun, 9 Oct 2005 15:58:16 +0100
+User-Agent: KMail/1.7.2
+References: <200510040018.24932.jon@ffconsultancy.com> <Pine.LNX.4.61.0510090715350.26547@eiger.cip.physik.uni-muenchen.de>
+In-Reply-To: <Pine.LNX.4.61.0510090715350.26547@eiger.cip.physik.uni-muenchen.de>
+MIME-Version: 1.0
+Content-Disposition: inline
+Message-Id: <200510091558.16826.jon@ffconsultancy.com>
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 434930F4.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 tuareg:01 columns:01 bug:01 printf:01 parentheses:01 rewrote:01 hofs:01 sqrt:01 sqrt:01 rec:01 rec:01 argv:01 printf:01 downto:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Sunday 09 October 2005 06:26, you wrote:
+> http://www.cip.physik.uni-muenchen.de/~tf/raytracer/
+
+I reformatted your code with tuareg indentation and 80-char columns to conform 
+with the other implementations for fair comparison, corrected the bug in a 
+call to printf and removed the superfluous parentheses. Your code is then 1 
+line shorter and 8x slower than the previous implementation on my site. I 
+then rewrote it to be both shorter and faster.
+
+For anyone who is interested, the main performance degradation introduced by 
+Thomas came from the use of polymorphic HOFs (particularly Array.init) to 
+perform vector arithmetic that appears in the inner loops of the ray tracer.
+
+Here is my implementation that is both 17% shorter in LOC (and shorter in both 
+words and bytes) and 4.7x faster than Thomas':
+
+let ( *| ) s (x, y, z) = s *. x, s *. y, s *. z
+let ( +| ) (x1, y1, z1) (x2, y2, z2) = x1 +. x2, y1 +. y2, z1 +. z2
+let ( -| ) (x1, y1, z1) (x2, y2, z2) = x1 -. x2, y1 -. y2, z1 -. z2
+let dot (x1, y1, z1) (x2, y2, z2) = x1 *. x2 +. y1 *. y2 +. z1 *. z2
+let unitise r = (1. /. sqrt (dot r r)) *| r
+
+let ray_sphere orig dir center radius =
+  let v = center -| orig in
+  let b = dot v dir in
+  let disc = sqrt(b *. b -. dot v v +. radius *. radius) in
+  if disc <> disc || b +. disc < 0. then infinity else
+    if b -. disc > 0. then b -. disc else b +. disc
+
+let rec intersect orig dir ((lambda, _) as hit) (center, radius, children) =
+  let lambda' = ray_sphere orig dir center radius in
+  if lambda' >= lambda then hit else match children with
+    | `List [] -> lambda', unitise (orig +| lambda' *| dir -| center)
+    | `List children -> List.fold_left (intersect orig dir) hit children
+
+let intersect orig dir = intersect orig dir (infinity, (0., 0., 0.))
+
+let neg_light = unitise (1., 3., -2.) and ss = 4
+
+let rec ray_trace orig dir scene =
+  let lambda, normal = intersect orig dir scene in
+  if lambda = infinity then 0. else
+    let g = max 0. (dot normal neg_light) in
+    let p = orig +| lambda *| dir +| sqrt epsilon_float *| normal in
+    if g = 0. || fst (intersect p neg_light scene) < infinity then 0. else g
+
+let rec create level c r =
+  let obj = c, r, `List [] and a = 3. *. r /. sqrt 12. in
+  if level = 1 then obj else
+    let f x' z' = create (level-1) (c +| (x', a, z')) (0.5 *. r) in
+    c, 3. *. r, `List [obj; f (-.a) (-.a); f a (-.a); f (-.a) a; f a a]
+
+let n, scene = match Sys.argv with
+    [| _; l; n|] -> int_of_string n, create (int_of_string l) (0., -1., 4.) 1.
+  | _ -> 512, create 9 (0., -1., 4.) 1.;;
+
+Printf.printf "P5\n%d %d\n255\n" n n;;
+for y = n - 1 downto 0 do
+  for x = 0 to n - 1 do
+    let g = ref 0. in
+    for dx = 0 to ss - 1 do
+      for dy = 0 to ss - 1 do
+	let aux x d = float x -. float n /. 2. +. float d /. float ss in
+	let dir = unitise (aux x dx, aux y dy, float n) in
+	g := !g +. ray_trace (0., 0., 0.) dir scene
+      done
+    done;
+    let g = 0.5 +. 255. *. !g /. float (ss*ss) in
+    Printf.printf "%c" (char_of_int (int_of_float g))
+  done
+done
+
+The main source of performance degradation in this implementation is probably 
+the use of tuples to represent vectors rather than records. With ocamlopt, 
+the floats in records of floats are unboxed but the floats in tuples of 
+floats are not. Thus, this implementations places extra burden on the 
+allocator and GC.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+Objective CAML for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists
+

@@ -1,0 +1,115 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA03874; Tue, 2 Dec 2003 23:25:32 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA03670 for <caml-list@pauillac.inria.fr>; Tue, 2 Dec 2003 23:25:31 +0100 (MET)
+Received: from manzanita ([128.120.141.214])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hB2MPT122383
+	for <caml-list@inria.fr>; Tue, 2 Dec 2003 23:25:30 +0100 (MET)
+Received: from ijtrotts by manzanita with local (Exim 3.36 #1 (Debian))
+	id 1ARIyS-0000W6-00
+	for <caml-list@inria.fr>; Tue, 02 Dec 2003 14:26:28 -0800
+Date: Tue, 2 Dec 2003 14:26:28 -0800
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] getting stack traces in running code
+Message-ID: <20031202222628.GA1640@localhost>
+References: <1070398239.15748.57.camel@flapdragon.homeip.net>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <1070398239.15748.57.camel@flapdragon.homeip.net>
+User-Agent: Mutt/1.5.4i
+From: Issac Trotts <ijtrotts@nez-perce.inria.fr>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 issac:01 trotts:01 ijtrotts:01 yaron:01 minsky:01 openpgp:01 sks:99 unexpected:01 debugging:01 ijtrotts:01 backtrace:01 backtrace:01 prerr:01 endline:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, Dec 02, 2003 at 03:50:40PM -0500, Yaron M. Minsky wrote:
+> Is there a reason why stack traces are available only on a crash?  I
+> have a project (a distributed OpenPGP keyserver system,
+> http://www.nongnu.org/sks/) that is a long-running daemon.  Unexpected
+> errors are caught and logged, but unfortunately, there's no way of
+> getting a stack-trace, since I don't let the exceptions kill the
+> program.  This makes debugging much more difficult, and is one of the
+> single largest difficulties I have with ocaml.  Is there a technical
+> reason that a bytecode-compiled executable couldn't have access to the
+> stack trace during execution?
+
+I have a partial solution:
+
+ijtrotts@manzanita:~/tmp/backtrace$ cat backtrace.ml
+ 
+external internal_print : exn -> unit
+        = "camlidl_bt_print_exception_backtrace"
+ 
+let print exc =
+  prerr_endline (Printexc.to_string exc);
+  internal_print exc;
+ 
+ijtrotts@manzanita:~/tmp/backtrace$ cat backtrace.mli
+val print : exn -> unit
+ 
+ijtrotts@manzanita:~/tmp/backtrace$ cat bt_stubs.c
+/* File generated from bt.idl */
+ 
+#include <stddef.h>
+#include <string.h>
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+#include <caml/alloc.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+#ifdef Custom_tag
+#include <caml/custom.h>
+#include <caml/bigarray.h>
+#endif
+ 
+#include <stdio.h>
+ 
+void print_exception_backtrace(void);
+ 
+value camlidl_bt_print_exception_backtrace(value exn)
+{
+  print_exception_backtrace();
+  return Val_unit;
+}
+ 
+ijtrotts@manzanita:~/tmp/backtrace$ cat test_bt.ml
+let quux() = raise (Failure "quux has failed")
+ 
+let baz() = quux()
+ 
+let bar() = baz()
+ 
+let foo() = bar()
+ 
+let () =
+  let rec loop = function
+      0 -> ()
+    | k ->
+      begin try foo() with Failure _ as e -> Backtrace.print e end;
+      print_newline();
+      loop(k-1) in
+  loop 3
+ 
+ijtrotts@manzanita:~/tmp/backtrace$ cat Makefile
+test_bt: test_bt.ml backtrace.mli backtrace.ml bt_stubs.o
+        ocamlc -custom -g -o test_bt bt_stubs.o backtrace.mli backtrace.ml \
+          test_bt.ml
+ 
+bt_stubs.o: bt_stubs.c
+        ocamlc -c $<
+ 
+It's not quite right yet because it only prints out the 
+place where the exception was raised (which will be in 
+Pervasives if you use failwith), and the place where it 
+was caught and printed.  Does someone know how to make it
+print the whole stack?
+
+-- 
+Issac Trotts
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

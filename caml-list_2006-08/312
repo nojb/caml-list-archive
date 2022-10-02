@@ -1,0 +1,327 @@
+Return-Path: <gregoire.henry@pps.jussieu.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 04311BC99
+	for <caml-list@yquem.inria.fr>; Thu, 31 Aug 2006 12:01:33 +0200 (CEST)
+Received: from smtp3-g19.free.fr (smtp3-g19.free.fr [212.27.42.29])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k7VA1Woo031401
+	for <caml-list@inria.fr>; Thu, 31 Aug 2006 12:01:32 +0200
+Received: from max.letcc.net (max.letcc.net [81.56.26.190])
+	by smtp3-g19.free.fr (Postfix) with ESMTP id 5A89C11260;
+	Thu, 31 Aug 2006 12:01:30 +0200 (CEST)
+Received: from [192.168.54.6] (jenkins.local [192.168.54.6])
+	by max.letcc.net (8.13.4/8.13.4) with ESMTP id k7VA1Psk020289;
+	Thu, 31 Aug 2006 12:01:25 +0200 (CEST)
+In-Reply-To: <17652.53276.522158.649480@tandem.cs.ru.nl>
+References: <17652.53276.522158.649480@tandem.cs.ru.nl>
+Mime-Version: 1.0 (Apple Message framework v752.2)
+Content-Type: multipart/mixed; boundary=Apple-Mail-5-470136581
+Message-Id: <DC78C5F1-121B-4E73-82FA-D5FCAA074D6F@pps.jussieu.fr>
+Cc: caml-list@inria.fr, michel@mauny.net
+From: =?ISO-8859-1?Q?Gr=E9goire_Henry?= <gregoire.henry@pps.jussieu.fr>
+Subject: Re: [Caml-list] SafeUnmarshal: questions/problems/timings
+Date: Thu, 31 Aug 2006 12:01:19 +0200
+To: Hendrik Tews <tews@cs.ru.nl>
+X-Mailer: Apple Mail (2.752.2)
+X-Miltered: at nez-perce with ID 44F6B37C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; gregoire:01 gregoire:01 timings:01 tews:01 tews:01 marshaled:01 compaction:01 nativeint:01 translated:01 mli:01 type-safe:01 ocaml:01 val:01 bool:01 val:01 
+X-Attachments: type="application/octet-stream" name="ty.mli" name="ty.mli" 
+
+
+--Apple-Mail-5-470136581
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain;
+	charset=ISO-8859-1;
+	delsp=yes;
+	format=flowed
+
+Hello,
+
+> 1. I made some measurements that suggest that the
+>    unmarshal has quadratic complexity in the data size, see
+>
+>    http://www.cs.ru.nl/~tews/marshal-plot.eps
+>    http://www.cs.ru.nl/~tews/marshal-plot-detail.eps
+>
+>    If my (simple-minded) estimations are correct it would take
+>    more than 2 hours to check 4 MB of marshaled data (which I
+>    generate in less than 3 seconds).
+>
+>    Is there any hope that the time complexity will improve?
+
+If your value contains no sharing (hence no cycle), the type checking
+of safe-unmarshalling should be linear in the size of the data.
+
+If there is some sharing (but still no cycle), and if we assume that
+looking for shared type information takes constant time, then type
+checking should still be linear.
+
+With cycles, things are a bit worse because of the computation of
+strongly connected components.
+
+Therefore, if your data contains shared parts but no cycle, then it
+should be close to linear. Currently, mapping shared blocks to their
+type is represented by an association list: accessing such type
+information could explain this quadratic behaviour.
+
+If you are in this situation, this could be the reason and the
+implementation needs a more clever way of retrieving types of shared
+blocks. Note that a simple workaround such as using the Map module is
+incorrect because a memory compaction may occur and break the order
+used for storing blocks.
+
+With cycles, the `height' of cycles (cycles inside cycles) comes as an
+extra complexity factor. But in order to produce a quadratic
+behaviour, you need data with a very particular shape.
+
+Could you please send us more information about the shape of your data
+(sharing or not, cycles or not, and wether sharing increase linearly
+or not with the size)?
+
+> 2.	    Objective Caml version 3.09.3+dev0+ty1
+>
+>     # SafeUnmarshal.copy [^nativeint^] 4;;
+>     Segmentation fault
+
+See your fifth question :)
+
+> 3. Would it be possible to put an english version of
+>    http://www.pps.jussieu.fr/~henry/marshal/docTy/Ty.html online?
+
+Certainly. I'm joining a translated ty.mli, I will put it online too.
+
+> 4. Instead of type-safe unmarshal functions, I am more interested
+>    in checking if some value that has been constructed outside
+>    ocaml is type correct. Therefore I would suggest to make
+>    Check.check available in come way. I am using now
+>
+>      let check obj ty =3D Check.check (Obj.repr obj) (Ty.dump ty)
+>
+>    with type
+>
+>      val check : 'a -> 'a tyrepr -> bool
+>
+>    Am I right that the type parameter of tyrepr is a kind of
+>    phantom type that is mainly used to restrict the type of
+>    SafeUnmarshal.from_channel? Then I could also use
+>
+>      val check : 'a -> 'b tyrepr -> bool  ?
+
+Yes and yes.
+
+>    It would be great if (as a debugging feature) this check could
+>    produce some sort of trace that helps to locate those parts
+>    that violate the given type.
+
+My hope for reducing the complexity is to make some "pre-processing"
+on the value when the unmarshaller reallocates it in the memory.
+In this case, the Check.check function can't operate on "standard"
+values, and should not be exported.
+
+Yet I don't know if the "preprocessor" would be tightly bound to the
+unmarshaller or have a chance to be exported too.
+
+We can keep exporting a quadratic check for "standard" values.
+
+> 5. nativeint, int32, and int64 are not supported yet (I would
+>    suggest to make the documentation a bit more precise in that
+>    point). As fix I use (in Check.check_block):
+>
+>     | Tnativeint ->
+> 	tag =3D Obj.custom_tag && size =3D 2 &&
+> 	((Obj.field obj 0) =3D=3D (Obj.field (Obj.repr Nativeint.zero) =
+0))
+>     | Tint32 ->
+> 	tag =3D Obj.custom_tag && size =3D 2 &&
+> 	((Obj.field obj 0) =3D=3D (Obj.field (Obj.repr Int32.zero) 0))
+>     | Tint64 ->
+> 	tag =3D Obj.custom_tag && size =3D 3 &&
+> 	((Obj.field obj 0) =3D=3D (Obj.field (Obj.repr Int64.zero) 0))
+>
+>    Any comments? On a 64 bit architecture the int64 size should be
+>    required to be 2.
+
+let custom_int64_size =3D 1 + 64 / Sys.word_size;;
+
+I will add those cases.
+
+>    I would strongly suggest to replace the catch all cases
+>
+>     | _ -> false
+>
+>    in check.ml with some more precise code (it took me several
+>    hours of bug hunting until I found out that the above line
+>    made my unmarshal fail without even looking at the
+>    nativeints).
+
+Something like printing the type clash (looking for ty_xx, found ty_yy)?
+
+Or pretty-printing part of the value that have been checked before =20
+failure?
+
+> 6. Thanks for SafeUnmarshal, it helped me a lot when checking the
+>    data created inside C++!
+
+This is quite an original use for unmarshalling functions :-)
+
+Many thanks for your reports and suggestions !
+
+-- Gr=E9goire Henry
+
+
+--Apple-Mail-5-470136581
+Content-Transfer-Encoding: 7bit
+Content-Type: application/octet-stream;
+	x-unix-mode=0644;
+	name=ty.mli
+Content-Disposition: attachment;
+	filename=ty.mli
+
+(*
+ *
+ * A run-time representation for OCaml types
+ *
+ *)
+
+(** Functions for de-constructing values of type ['a tyrepr]. *)
+
+(** {6 Type declaration} *)
+
+(** A value of type [declaration] is produced by the compiler for each
+    type declaration in a module. This allows at runtime to ``break
+    the abstraction barriers'' imposed by the type-checker... *)
+type declaration  
+
+(** [name decl] returns the name of the type constructor defined by [decl]. *)
+val name: declaration -> string
+
+(** [fullname decl] returns the name of the type constructor defined by [decl],
+    as well as the line and file name of this decleration. *)
+val fullname: declaration -> string
+
+(** [arity decl] returns the arity of the type constructor defined by [decl]. *)
+val arity: declaration -> int
+
+(** [is_alias decl] returns [true] if [decl] is an alias type declaration.
+    When [decl] is abstract both on the structure and the signature, it
+    returns [false]. *)
+val is_alias: declaration -> bool
+
+(** [is_datatype decl] returns [true] if [decl] is a record or sum type 
+    declaration. When [decl] is abstract both on the structure and the 
+    signature, it returns [false]. *)
+val is_datatype: declaration -> bool
+
+(** {6 Type expression} *)
+
+(** This is the ``untyped'' equivalent of the predefined type ['a tyrepr]. *)
+type expression
+
+(** The [dump] function allows to project a type expression  [([^ ty ^] :
+    ty tyrepr)] to the type [expression]. *)
+val dump: 'a tyrepr -> expression
+
+(** [body decl] returns a type expression describing the body of the 
+    type declaration [decl]. *)
+val body: declaration -> expression
+
+(** [canonical ty] resolves type aliases and returns a type expression
+    that corresponds to a datatype declaration.
+
+    Therefore,  [desc (canonical ty)]
+    - is a predefined type ;
+    - or is an abstract type ;
+    - or has shape [Tconstr(decl,_)] such that  [is_datatype(decl)] is true.
+*)
+val canonical: expression -> expression
+
+(** Type equality modulo aliases. (It is  useless to call [canonical] on
+    [equal] arguments.) *)
+val equal: expression -> expression -> bool
+
+(** Pretty-printing, FIXME ... *)
+val print: Format.formatter -> expression -> unit
+
+(** {6 Description of type expression } *)
+
+(** Description of type expressions. *)
+type description = 
+  | Tunit
+  | Tbool
+  | Tint
+  | Tnativeint
+  | Tint32
+  | Tint64
+  | Tchar
+  | Tstring
+  | Tfloat
+  | Texn
+  | Tarray of expression
+  | Tlist of expression
+  | Toption of expression
+  | Tlazy of expression
+  | Ttyrepr of expression
+  | Tformat4 of expression * expression * expression * expression
+  | Tconstr of declaration * expression array 
+  | Ttuple of expression array
+  | Tarrow of string * expression * expression
+  | Tvariant of bool * (string * int * expression option) array
+
+  | Tabstract 
+  | Tsum of string array * (string * expression array) array
+  | Tdoublerecord of (string * bool) array
+  | Trecord of (string * bool * expression) array
+  | Targ of int
+  
+  | Tpoly of int * expression
+  | Tvar of int 
+
+(** [desc ty] returns a description of the type expression [ty].
+
+    It corresponds to the type expression that we can write using
+    OCaml concrete syntax. It therefore excludes constructors such as
+    [Tabstract], [Tsum], [Tdoublerecord] or [Trecord]. See [repr]. *)
+val desc: expression -> description
+
+(** [repr ty] returns the description of possible memory
+    representations for the type expression [ty].
+
+    By contrast with [desc ty], it can be [Tabstract], [Tsum],
+    [Tdoublerecord] ou [Trecord], but not [Tconstr]. *)
+val repr: expression -> description
+
+(** {6 Safe unmarshalling} *)
+
+(** The following functions are specific to safe unmarshalling. They
+    operate on implicitly universally quantified type expression. The
+    constant [Tvar i] represents the constant {i Top} of the
+    (currently only in French) formalization. *)
+
+(** [cut_head_quantification ty] removes hypothetical headings
+    [Tpoly _] from [ty]. *)
+val cut_head_quantification: expression -> expression
+
+(** [instance ty1 ty2] returns true when [ty1] is a polymorphic
+    instance [ty2]. *) 
+val instance: expression -> expression -> bool
+
+(** Memoryless anti-unification (also sometimes called weak anti-unification).
+
+    We use [Tvar (-1)] for resolving conflicts. *)
+val antiunif: expression -> expression -> expression
+
+(** [is_monomorphic ty] returns [true] when [ty] contains no
+    occurrence of [Tvar (-1)]. *)
+val is_monomorphic: expression -> bool
+
+--Apple-Mail-5-470136581
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain;
+	charset=US-ASCII;
+	format=flowed
+
+
+
+--Apple-Mail-5-470136581--
+

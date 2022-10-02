@@ -1,0 +1,157 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id AECAF81792
+	for <caml-list@sympa.inria.fr>; Fri,  5 Jul 2013 12:21:40 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgECAKad1lFCJwNzemdsb2JhbABaxDSBFQ4BAQsHDQk8gionUhs0aRQgh3S4d446gTEHg20Dk3eDUQGUVjw
+X-IPAS-Result: AgECAKad1lFCJwNzemdsb2JhbABaxDSBFQ4BAQsHDQk8gionUhs0aRQgh3S4d446gTEHg20Dk3eDUQGUVjw
+X-IronPort-AV: E=Sophos;i="4.87,1001,1363129200"; 
+   d="scan'208";a="24724407"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 05 Jul 2013 12:21:39 +0200
+Received: (qmail 98517 invoked by uid 9370); 5 Jul 2013 10:21:38 -0000
+Date: 5 Jul 2013 10:21:38 -0000
+Message-ID: <20130705102138.98516.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: dra-news@metastack.com
+CC: caml-list@inria.fr
+In-reply-to: <001e01ce77f5$96fd0420$c4f70c60$@metastack.com>
+Subject: Re: [Caml-list] GADTs + Phantom types
+
+
+First of all, I'd like to re-iterate that there are no phantom types
+in the declaration below:
+
+type (_, _) t = A : (bool, [< `Before | `After ]) t
+              | B : (int, [> `After ]) t
+              | C : (string, [> `Before ]) t
+
+
+By definition, a type (variable) is phantom if it appears on the
+left-hand side of the declaration but not on the right-hand side. For
+example, in
+
+        type 'a foo = I of int | B of bool
+'a is phantom because it does not appear on the right-hand side.
+
+Your original GADT (_,_) t can be [not quite, see below]
+rewritten as a regular ADT of the form
+
+type ('a,'b) t =
+   | A of ('a,bool) eq   * ('b,[< `Before | `After ]) eq
+   | B of ('a,int) eq    * ('b,[> `After ]) eq
+   | C of ('a,string) eq * ('b,[> `Before]) eq
+
+All type parameters on the left-hand side appear on the right-hand
+side. There are no phantom types therefore.
+
+I have used
+type (_,_) eq = Refl : ('a,'a) eq
+;;
+
+which is the equality GADT. In fact, any GADT can be re-written as a regular
+ADT and the eq GADT. One may say that the eq GADT is the only necessary
+GADT; all others are syntactic sugar. Well, the sugar is very useful
+because it greatly helps in the exhaustiveness check, eliminating false
+negatives. 
+
+If you actually try passing the rewritten definition of t to OCaml,
+you see a type error about some extra parameter c. That was the row
+variable that was lurking in the type [> `After ]. That's the source
+of many troubles; that's why Jacques used the 'private' type.
+
+Here is one solution that works for a shallow lattice, like the
+lattice of simple permissions: No permission, only Read, only Write,
+or anything goes. That is, Bottom, Top, and one layer in between.
+
+Or in our example, only Before, only After, or either way.
+
+type after
+type before
+;;
+
+type (_, _) t = A : (bool, 'a) t
+              | B : (int, after) t
+              | C : (string, before) t
+;;
+
+(* Function f1 doesn't care about before or after, that's why
+it is polymorphic in the second type parameter of attr. Polymorphism
+means TOP *)
+
+let f1 : type s any . (s, any) t -> s -> unit = fun attr value ->
+  match attr with
+    A -> Printf.printf "Bool given: %b\n" value
+  | B -> Printf.printf "Int given: %d\n" value
+  | C -> Printf.printf "String given: %S\n" value
+;;
+
+(* Function f2 cares: only before. Therefore, attr cannot have the
+case B *)
+
+let f2 : type s . (s, before) t -> s -> unit = fun attr value ->
+  f1 attr value
+;;
+
+f2 A;; (* - : bool -> unit = <fun> *)
+f2 B;; (* type error, as expected *)
+f2 C;; (* - : string -> unit = <fun> *)
+
+
+That code type checks.
+
+What about the general case? Let's consider permissions again:
+        None, only Read, only Write, only Delete, ReadWrite (but not
+delete), and Everything.
+
+We should recall from Math the correspondence between lattices and
+partial orders and the power-set partial order.  Given three elements
+read, write, delete, we can build 8 subsets, which can be ordered by
+inclusion. Here is the implementation of the idea.
+
+type read
+type write
+type delete
+;;
+
+type (_, _) p = A   : (bool,   (_ * _ * _)) p
+              | R   : (int,    (read * _ * _)) p
+              | W   : (string, (_ * write * _)) p
+              | D   : (string, (_ * _ * delete)) p
+              | RW  : (string, (read * write * _)) p
+              | RWD : (bool,   (read * write * delete)) p
+;;
+
+let f1 : type s .  (s, unit * write * 'a) p -> unit = function
+        | A -> ()
+        (* | R -> () cannot be read *)
+        | W -> ()
+        | D -> ()
+;;
+
+f1 R;; (* type error *)
+f1 D;; (* () *)
+
+

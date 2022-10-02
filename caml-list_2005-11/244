@@ -1,0 +1,219 @@
+Return-Path: <fw@deneb.enyo.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 6BB4BBB81
+	for <caml-list@yquem.inria.fr>; Sat, 12 Nov 2005 19:22:24 +0100 (CET)
+Received: from mail.enyo.de (mail.enyo.de [212.9.189.167])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jACIMNLb009540
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sat, 12 Nov 2005 19:22:23 +0100
+Received: from deneb.vpn.enyo.de ([212.9.189.177] helo=deneb.enyo.de)
+	by albireo.enyo.de with esmtp id 1Eb019-0006cs-9v; Sat, 12 Nov 2005 19:22:23 +0100
+Received: from fw by deneb.enyo.de with local (Exim 4.54)
+	id 1Eb011-0004cF-9J; Sat, 12 Nov 2005 19:22:15 +0100
+From: Florian Weimer <fw@deneb.enyo.de>
+To: Damien Doligez <damien.doligez@inria.fr>
+Cc: caml-list <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] Finalization and object dependencies
+References: <878xvv1c2n.fsf@mid.deneb.enyo.de>
+	<7F807F11-D671-41F1-9EAE-C05BC6AE8406@inria.fr>
+Date: Sat, 12 Nov 2005 19:22:15 +0100
+In-Reply-To: <7F807F11-D671-41F1-9EAE-C05BC6AE8406@inria.fr> (Damien Doligez's
+	message of "Fri, 11 Nov 2005 19:00:15 +0100")
+Message-ID: <87y83tk9pk.fsf@mid.deneb.enyo.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Miltered: at concorde with ID 437632DF.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 dependencies:01 damien:01 unhandled:01 handler:01 arrays:01 pointers:01 pointer:01 sig:01 val:01 val:01 finalizer:01 sig:01 finalizer:01 struct:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+* Damien Doligez:
+
+> This will be hard to do if you really want to be complete.  Some run- 
+> time
+> errors (most notably, "out of memory") are not exceptions, they stop the
+> program immediately.  Moreover, under Unix there are signals that cannot
+> be caught or ignored.
+
+Crashes in a C library are yet another problem.
+
+I just want to avoid that I have to initiate complicate recovery
+procedures just because some unhandled exception has occurred.
+
+>>   (2) Use Gc.finalise for handler objects which contain an index into
+>>       (plain) arrays of tables and cursors.  Use reference counting
+>>       (or back pointers) to prevent premature finalization of table
+>>       objects while there are still cursors around.
+>
+> A simple pointer from the cursor to the table should be enough.
+
+Reading the description of Gc.finalise, this seems to be the case.
+
+> I can't see how (1) would work.  
+
+Something like this:
+
+module type Finalizable = sig
+  type t
+  val none : t
+  val finalize : t -> unit
+end
+
+module type Finalizer = sig
+  type data
+    (** The underlying data objects. *)
+
+  type handle
+    (** A handle for some registered data object. *)
+
+  val value : handle -> data
+    (** Returns the data object for the handle.  May raise Failure if
+        the object has been finalized.  This can happen if [delete] is
+        called while there are still handle objects in the program, or
+        [value] is from some finalization routine, and the handle has
+        already been deleted during the same finalization run. *)
+
+  val none : handle
+    (** A handle that refers to the object [Finalizable.none]. *)
+
+  type t
+    (** A finalization table. *)
+
+  val create : int -> t
+    (** [create size] returns a new finalization of size [size].
+	The table will grow as needed. *)
+
+  val register : t -> data -> handle
+    (** Registers an object in the finalization table and returns a
+	handle for the same object.  These objects are finalized using
+	[Finalizable.finalize], either when they become unreachable or
+	when [delete] is invoked. *)
+    
+  val delete : t -> unit
+    (** Finalize all objects currently registered.  Further calls to
+	[register] are not allowed after [delete] has been called. *)
+
+  val compact : t -> int
+    (** Run finalization and return the number of active objects.
+	Note that some implementations may opt to run finalization
+	spontaneously as well. *)
+end
+
+module Make (F : Finalizable) : (Finalizer with type data = F.t) = struct
+  type data = F.t
+  type handle = data ref
+
+  let value h = !h
+  let none = ref F.none
+
+  type t = 
+      { mutable weak_array : handle Weak.t;
+	mutable real_array : F.t array;
+	mutable allocated : int; 
+	mutable no_register : bool;
+	mutable alarm : Gc.alarm option }
+
+  let compact t =
+    t.no_register <- true;
+    let pos = ref 0 in
+      for i = 0 to t.allocated - 1 do
+	match Weak.get t.weak_array i with
+	    None -> 
+	      F.finalize t.real_array.(i);
+	      t.real_array.(i) <- F.none
+	  | Some v as v' ->
+	      Weak.set t.weak_array !pos v';
+	      t.real_array.(!pos) <- t.real_array.(i);
+	      pos := !pos + 1;
+      done;
+      t.allocated <- !pos;
+      t.no_register <- false;
+      !pos
+
+  let create size = 
+    let t = { weak_array = Weak.create size; 
+	      real_array = Array.create size F.none;
+	      allocated = 0;
+	      no_register = false;
+	      alarm = None }
+    in
+      t.alarm <- Some (Gc.create_alarm 
+			 (function () -> let _ = compact t in ()));
+      t
+
+  let delete t =
+    if t.no_register then
+      raise (Failure "finalize_all");
+    match t.alarm with
+	None -> raise (Failure "finalize_all")
+      | Some alarm ->
+	  t.no_register <- true;
+	  for i = 0 to t.allocated - 1 do
+	    match Weak.get t.weak_array i with
+		None -> ()
+	      | Some v -> 
+		  F.finalize (!v);
+		  v := F.none;
+		  Weak.set t.weak_array i None;
+		  t.real_array.(i) <- F.none;
+	  done;
+	  t.allocated <- 0;
+	  t.no_register <- false;
+	  Gc.delete_alarm alarm;
+	  t.alarm <- None
+
+  let realloc t =
+    (* The call to Gc.major_cycle triggers finalization and may free
+       some of the entries.  Further GCs at this point only mark more
+       entries as weak, but we won't lose any of them. *)
+    t.no_register <- true;
+    Gc.major ();
+    let mostly_filled = 4 * t.allocated > 3 * Weak.length t.weak_array in
+      if mostly_filled then
+	let old_size = Weak.length t.weak_array in
+	let new_size = 2 * old_size in
+	let new_w = Weak.create new_size in
+	let new_r = Array.create new_size F.none in
+	  Weak.blit t.weak_array 0 new_w 0 t.allocated;
+	  Array.blit t.real_array 0 new_r 0 t.allocated;
+	  t.weak_array <- new_w;
+	  t.real_array <- new_r;
+	  t.no_register <- false
+
+  let rec register t d =
+    if t.no_register then
+      raise (Failure "register");
+    let pos = t.allocated in
+    let size = Weak.length t.weak_array in
+      if pos  < size then
+	let h = ref d in
+	  (Weak.set t.weak_array pos (Some h);
+	   t.real_array.(pos) <- d;
+	   t.allocated <- pos + 1;
+	   h)
+      else
+	(realloc t;
+	 register t d)
+end
+
+(Only lightly tested.)  This is similar to what the run-time library
+does to implement Gc.finalise.
+
+The interface needs some more polish; currently, it doesn't compose
+when applied to different object types (tables and cursors in my
+example).  But this should be fixable, by not registering a GC alarm
+automatically and have the user call compact explicitly, in the
+correct order.
+
+> (2) is normal if your objects are implemented as OCaml data
+> structures.
+
+Unfortunately, I still seem to need a weak data structure or simple,
+custom memory allocator.  Using weak hash tables turned out to be
+quite slow, and it seems to be difficult to limit the number of
+uncollected objects (which might cause the performance problems).
+

@@ -1,0 +1,154 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id AEC9EBC0B
+	for <caml-list@yquem.inria.fr>; Thu, 18 Jan 2007 03:12:49 +0100 (CET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l0I2Cl2F000934
+	for <caml-list@yquem.inria.fr>; Thu, 18 Jan 2007 03:12:48 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.7/8.13.7) with ESMTP id l0I2CKGI008779;
+	Thu, 18 Jan 2007 11:12:24 +0900 (JST)
+Date: Thu, 18 Jan 2007 11:12:19 +0900 (JST)
+Message-Id: <20070118.111219.71083947.garrigue@math.nagoya-u.ac.jp>
+To: Christophe.Troestler+ocaml@umh.ac.be
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Polymorphic Variants
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <20070117.042430.17384639.Christophe.Troestler@umh.ac.be>
+References: <c1490a380701161232u7b60e286l163a4a5837d3083c@mail.gmail.com>
+	<20070117.111927.2004173151.garrigue@math.nagoya-u.ac.jp>
+	<20070117.042430.17384639.Christophe.Troestler@umh.ac.be>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 45AED79F.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; variants:01 christophe:01 troestler:01 christophe:01 troestler:01 ocaml:01 umh:01 recursive:01 trivial:01 recursive:01 variants:01 reuse:01 polymorphism:01 val:01 val:01 
+
+From: Christophe TROESTLER <Christophe.Troestler+ocaml@umh.ac.be>
+> > [...] I have some code using objects (visitor pattern), recursive
+> > modules, lazyness, and private row types, in an utterly non trivial
+> > way, just to do what can be done by standard recursive function
+> > definitions using polymorphic variants...
+> 
+> Sounds like a good case to see & learn the power of polymorphic
+> variants in action.  Are the two codes available somewhere (if
+> possible with some explanations ?) or are you simply referring to your
+> paper "Code reuse through polymorphic variants" ?
+
+Well, I am. Other examples end up being much longer, even using
+polymorphic variants :-)
+
+But still, I include at the end of this mail the code to obtain a
+fully extensible purely functional polymorphic visitor pattern.
+(This is the polymorphic part that is particularly hard, even more
+if you want to stay purely functional.)
+
+For comparison, here is the equivalent complete code using polymorphic
+variants. Note that there is no explicit visitor pattern: the match
+construct provides it, with all the polymorphism needed.
+
+type 'a eadd = [ `Num of int | `Add of 'a * 'a ]
+let eval_add eval_rec : 'a eadd -> int = function
+  | `Num i -> i
+  | `Add (e1, e2) -> eval_rec e1 + eval_rec e2
+let rec eval_add' e = eval_add eval_add' e
+(* val eval_add' : ('a eadd as 'a) -> int *)
+type 'a eaddneg = ['a eadd | `Neg of 'a]
+let eval_add_neg eval_rec : 'a eaddneg -> int = function
+  | #eadd as e -> eval_add eval_rec e
+  | `Neg e -> - eval_rec e
+let rec eval_add_neg' e = eval_add_neg eval_add_neg' e
+(* val eval_add_neg' : ('a eaddneg as 'a) -> int *)
+let n = eval_add_neg' (`Add (`Neg(`Add(`Num 3, `Num 2)), `Num 7))
+(* val n : int = 2 *)
+
+This also means that providing a method returning a polymorphic
+variant describing the contents of an object is probably a simpler
+approach to implementing the visitor pattern, even for objects. Here
+is the code needed if you still want to use objects.
+
+class type ['a] expr = object method repr : 'a end
+let rec eval_add_expr (e : _ expr) = eval_add eval_add_expr e#repr
+(* val eval_add_expr : ('a eadd expr as 'a) -> int *)
+let rec eval_add_neg_expr (e : _ expr) = eval_add_neg eval_add_neg_expr e#repr
+(* val eval_add_neg_expr : ('a eaddneg expr as 'a) -> int *)
+
+Regards,
+
+Jacques Garrigue
+
+(* A fully extensible polymorphic visitor pattern.
+   Code written with Keiko Nakata *)
+
+class type ['a,'exp] visit_add = object
+  method visitNum : int -> 'a
+  method visitAdd : 'exp -> 'exp -> 'a
+end
+
+module type AddTE = sig
+  type ('a,'exp) t
+  type exp = < accept : 'a. ('a, exp) t -> 'a >
+  val num : int -> exp
+  val add : exp -> exp -> exp
+end
+
+module type AddT = sig
+  include AddTE
+  val eval : (int, exp) t Lazy.t
+end
+
+module AddF(X : AddT with type ('a,'exp) t = private ('a,'exp) #visit_add) =
+struct
+  type ('a, 'exp) t = ('a, 'exp) X.t
+  class type exp = object ('e) method accept : 'a. ('a, 'e) t -> 'a end
+  class num x = object (_ : #exp) method accept v = v#visitNum x end
+  let num x = new num x
+  class add a b = object (_ : #exp) method accept v = v#visitAdd a b end
+  let add x = new add x
+  class eval = object (eval)
+    method private visit (e : exp) = e#accept (Lazy.force X.eval)
+    method visitNum (i : int) = i
+    method visitAdd r l = eval#visit r + eval#visit l
+  end
+  let eval = lazy (new eval)
+end
+
+module rec Add : AddT with type('a,'exp) t = ('a,'exp) visit_add = AddF(Add)
+
+class type ['a,'exp] visit_add_neg = object
+  inherit ['a,'exp] visit_add
+  method visitNeg : 'exp -> 'a
+end
+
+module type AddNegT = sig
+  include AddT
+  val neg : exp -> exp
+end
+
+module AddNegF(X : AddNegT with
+               type ('a,'exp) t = private ('a,'exp) #visit_add_neg) =
+struct
+  module Add = AddF(X)
+  include (Add : AddTE with type ('a,'e) t = ('a,'e) X.t)
+  class neg x = object (_ : #Add.exp) method accept v = v#visitNeg x end
+  let neg x = new neg x
+  class eval = object (eval)
+    inherit Add.eval
+    method visitNeg e = - eval#visit e
+  end
+  let eval = lazy (new eval)
+end
+
+module rec AddNeg : AddNegT with type ('a,'exp) t = ('a,'exp) visit_add_neg =
+  AddNegF(AddNeg)
+
+open AddNeg
+let n = (add (neg (add (num 3) (num 2))) (num 7))#accept (Lazy.force eval)
+

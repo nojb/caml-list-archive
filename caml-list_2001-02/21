@@ -1,0 +1,77 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA31294 for caml-red; Fri, 2 Feb 2001 16:24:43 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA03013 for <caml-list@pauillac.inria.fr>; Thu, 1 Feb 2001 15:42:03 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f11Efvn09555;
+	Thu, 1 Feb 2001 15:41:57 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA07185; Thu, 1 Feb 2001 15:41:57 +0100 (MET)
+Date: Thu, 1 Feb 2001 15:41:56 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Christian Lindig <lindig@pauillac.inria.fr>,
+        Caml Mailing List <caml-list@inria.fr>,
+        George Russell <ger@informatik.uni-bremen.de>,
+        Archisman Rudra <archi@mosaic.mrl.nyu.edu>
+Subject: Re: NaN Test in OCaml
+Message-ID: <20010201154156.B30653@pauillac.inria.fr>
+References: <20010131140503.D2418@lakeland.eecs.harvard.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20010131140503.D2418@lakeland.eecs.harvard.edu>; from lindig@eecs.harvard.edu on Wed, Jan 31, 2001 at 02:05:03PM -0500
+Sender: weis@pauillac.inria.fr
+
+> George Russell <ger@informatik.uni-bremen.de> has suggested on
+> comp.lang.ml the following test to find out whether a float is NaN:
+>         x is not a NaN <=> (x = x)
+> Doing this leads to interesting results with OCaml 3.0:
+>     # let nan x = not (x = x);;
+>     val nan : 'a -> bool = <fun>
+>     # nan (1.0 /. 0.0);;
+>     - : bool = false            (* correct *)
+>     # nan (0.0 /. 0.0);;
+>     - : bool = false            (* should be true *)
+> The following definition of nan uses a type annotation and has a
+> different result:
+>     # let nan (x:float) = not (x = x);;
+>     val nan : float -> bool = <fun>
+>     # nan (0.0 /. 0.0);;
+>     - : bool = true             (* correct *)
+>     # nan (1.0 /. 0.0);;
+>     - : bool = false            (* correct *)
+> Is this a bug or a feature?
+
+It is a bug, more exactly a design error in generic comparisons.
+
+The difference between the two examples is that in the second case
+(with the type constraint), the compiler performs type-specialization
+on the "=" predicate, turning it into the equality predicate over
+floating-point numbers.  This predicate works as specified in IEEE,
+in particular NaN is not equal to NaN.
+
+In the first case, no type information is available, so generic
+equality is called.  Generic equality is defined in terms of the
+"compare" polymorphic comparison function:
+
+        let (=) a b = (compare a b = 0)
+
+and "compare" implements a total ordering relation: either its
+arguments a and b are equal, or a is smaller than b, or a is bigger
+than b.
+
+But of course IEEE floats are not totally ordered, due to NaN...  
+So, rather arbitrarily, "compare NaN NaN" returns 0 -- but any other
+return value would be equally wrong!
+
+What is needed is to revamp the polymorphic comparison function so
+that it has four possible outcomes: equal, less than, greater than,
+and unordered.  "compare" would raise an exception in the "unordered"
+case, but generic comparisons (=, <=, <, >=, >) would return "false".
+I haven't looked at how to implement this behavior yet, though.
+
+To come back to Archisman's initial question, I'm considering adding an
+"fpclassify" function similar to that of ISO C9X, to determine whether
+a float is NaN, infinite, zero, exact or denormal.  That should avoid
+the confusing "x <> x" test.
+
+- Xavier Leroy
+
+

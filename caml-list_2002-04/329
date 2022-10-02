@@ -1,0 +1,102 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA15279; Wed, 24 Apr 2002 12:46:00 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA15284 for caml-list@pauillac.inria.fr; Wed, 24 Apr 2002 12:45:59 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA08062 for <caml-list@pauillac.inria.fr>; Wed, 24 Apr 2002 06:06:04 +0200 (MET DST)
+Received: from laurelin.dementia.org ([208.167.88.73])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g3O462H23684
+	for <caml-list@inria.fr>; Wed, 24 Apr 2002 06:06:03 +0200 (MET DST)
+Received: (from jprevost@localhost)
+	by laurelin.dementia.org (8.11.6/8.11.6) id g3O4Arf50684;
+	Wed, 24 Apr 2002 00:10:53 -0400 (EDT)
+	(envelope-from visigoth@cs.cmu.edu)
+X-Authentication-Warning: laurelin.dementia.org: jprevost set sender to visigoth@cs.cmu.edu using -f
+To: Oliver Bandel <oliver@first.in-berlin.de>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Stack Overflow... (recursion in try-statement)
+References: <Pine.LNX.3.95.1020423233831.10014A-100000@first.in-berlin.de>
+From: John Prevost <visigoth@cs.cmu.edu>
+Date: 24 Apr 2002 00:10:47 -0400
+In-Reply-To: <Pine.LNX.3.95.1020423233831.10014A-100000@first.in-berlin.de>
+Message-ID: <86adrtvirc.fsf@laurelin.dementia.org>
+Lines: 71
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>>>>> "ob" == Oliver Bandel <oliver@first.in-berlin.de> writes:
+
+    ob> Hello, why does an stack overflow-error occur here?
+
+let rec traversedir dir =
+          try ( [Unix.readdir dir] @ traversedir dir ) with
+          End_of_file -> [];;
+
+    ob> I have not tried it with very deep directories, so I did not
+    ob> expect such an error...
+
+    ob> What is the problem here?
+
+The problem is that when you write:
+
+[Unix.readdir dir] @ traversedir dir
+
+the recursive call happens first.  Say you have a directory with only
+one entry in it:
+
+traversedir dir
+=>
+try ( [Unix.readdir dir] @ traversedir dir ) with
+End_of_file -> []
+=>
+try ( [Unix.readdir dir] @
+  (try [Unix.readdir dir] ...) ) with
+End_of_file -> []
+
+and so on.  Hence, readdir is never actually called.
+
+Note that it is *not* safe to turn this around in order to fix things,
+since the order of evaluation is not guaranteed.  In fact, unless it
+has changed, the above will fail in bytecode but not native code, and
+the reverse will work in bytecode but fail on native.  The appropriate
+way to do it is:
+
+let rec traversedir dir =
+  try
+    let entry = Unix.readdir dir in
+    [entry] @ traversedir dir
+  with End_of_file -> []
+
+This has its own problems, since it's not tail recursive, but it will
+not go into an endless loop.  A better formulation is:
+
+let traversedir dir =
+  let rec loop l =
+    match (try Some (Unix.readdir dir) with End_of_file -> None) with
+      | Some ent -> loop (ent :: l)
+      | None     -> l
+  in loop []
+
+Whether to go this far and be tail recursive is up to you, of course.
+Note that if you are going to go for tail recursion, it's important to
+make sure the try is not around the tail call, since exception
+handling blocks tail calls.
+
+Finally, the following could be useful to you:
+
+let mapdir f accum dir =
+  let rec loop accum =
+    match (try Some (Unix.readdir dir) with End_of_file -> None) with
+      | Some ent -> f ent accum
+      | None     -> accum
+  in loop accum
+
+let cons x y = x :: y
+let traversedir = mapdir cons []
+
+John.
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

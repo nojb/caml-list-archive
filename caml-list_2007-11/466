@@ -1,0 +1,122 @@
+Return-Path: <jake.donham@skydeck.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id C7C44BC6B
+	for <caml-list@yquem.inria.fr>; Mon, 26 Nov 2007 19:33:55 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAALefSkcmYrqmn2dsb2JhbACPQQEBAQEHBAYJCBg
+X-IronPort-AV: E=Sophos;i="4.23,215,1194217200"; 
+   d="scan'208,217";a="4626999"
+Received: from smtp.01.com ([38.98.186.166])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 26 Nov 2007 19:33:55 +0100
+Received: from asav-1.01.com (localhost.localdomain [127.0.0.1])
+	by asav-1.01.com (8.13.1/8.13.1) with SMTP id lAQIXvqQ027555
+	for <caml-list@yquem.inria.fr>; Mon, 26 Nov 2007 12:33:57 -0600
+Received: from smtp-1.01.com (smtp-1.01.com [38.98.186.157])
+	by asav-1.01.com (asav-1.01.com [10.25.1.11])
+	id jAPCXv0205526125Ie ret-id none; Mon, 26 Nov 2007 12:33:57 -0600
+Received: from [192.168.1.12] (h-74-2-112-11.snfccasy.covad.net [74.2.112.11])
+	by smtp-1.01.com (Postfix) with ESMTP id 3E5FC22013F
+	for <caml-list@yquem.inria.fr>; Mon, 26 Nov 2007 12:33:50 -0600 (CST)
+Message-ID: <474B118D.3010608@skydeck.com>
+Date: Mon, 26 Nov 2007 10:33:49 -0800
+From: Jake Donham <jake.donham@skydeck.com>
+User-Agent: Thunderbird 2.0.0.4 (X11/20070604)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Re: Simple ocamljs example
+References: <474889C0.2080900@cis.strath.ac.uk>
+In-Reply-To: <474889C0.2080900@cis.strath.ac.uk>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-FSL-MailScanner-Information: Please contact postmaster@01.com for more information
+X-FSL-MailScanner: Found to be clean
+X-FSL-MailScanner-SpamCheck: 
+X-FSL-MailScanner-From: jake.donham@skydeck.com
+X-Spam: no; 0.02; ocaml:01 arrays:01 struct:01 struct:01 javascript:98 javascript:98 myid:98 myid:98 onclick:98 wrote:01 interfaces:01 font:97 font:97 tuple:02 modules:02 
+
+Peter Gregory wrote:
+> I've been trying to work through a very simple example just to try out 
+> ocamljs.  Simply, I want to provide a function that changes the colour 
+> of some text.
+
+OK, there is no reason in principle that this shouldn't work but I 
+should warn you that so far I have only used OCamljs for a Firefox 
+extension, not for web pages.
+
+> I expected that if I had function named f in the ocaml side then I would 
+> be able to call it with f() in the JS side.
+
+Not quite; names are mangled, values are wrapped up in modules, and the 
+calling convention is different (to account for currying), so you should 
+use the same mechanism you'd use for calling C code: on the ML side, 
+register a value with Callback.register; and on the Javascript side, use 
+caml_named_value to look up a registered value and caml_callback{,2,3,N} 
+to call through the value. Sorry, I forgot to write this up in the docs.
+
+> I also assumed that Mozilla.Document.d was the document.
+> [...] Document.d  [... becomes ...] (oc$Mozilla$[29][0])
+
+If you look back to the definitions of oc$Mozilla (and Document$553 or 
+whatever it is called for you) you'll see that this boils down to 
+"document" as you wanted. Modules are compiled as Javascript arrays 
+containing their values.
+
+There is one more problem: the Mozilla module tries to get references to 
+a bunch of XPCOM interfaces and classes when it starts up, and this 
+fails in an ordinary browser environment. Here is a version of your 
+example that works for me (in Linux Firefox), not using the Mozilla module:
+
+------ ocajs.ml
+
+module Element =
+struct
+   type t
+   external setAttribute : t -> string -> string -> unit = "#setAttribute"
+end
+
+module Document =
+struct
+   type t
+   let (d : t) = Ocamljs.var "document"
+   external getElementById : t -> string -> Element.t = "#getElementById"
+end
+
+
+let changecolour () =
+   let e = Document.getElementById Document.d "myid" in
+   Element.setAttribute e "color" "red"
+
+;;
+
+Callback.register "changecolour" changecolour;
+
+------ index.html
+
+<html>
+<script type="text/javascript" src="ocajs.js"></script>
+<body>
+
+<p><font id="myid" color="blue"> HELLO WORLD </font></p>
+
+<form>
+<input type="button" value="Change Colour" 
+onclick='caml_callback(caml_named_value("changecolour"), 0)'>
+</form>
+
+</body>
+</html>
+
+------
+
+The 0 argument in caml_callback is the Javascript representation of the 
+empty tuple (but for unit arguments it doesn't matter what you pass 
+since they are never looked at).
+
+Jake
+

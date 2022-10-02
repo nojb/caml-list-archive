@@ -1,0 +1,92 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q478AmXd027180
+	for <caml-list@sympa-roc.inria.fr>; Mon, 7 May 2012 10:10:48 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuQEAMSCp0+FBoIF/2dsb2JhbAA7CYMesFmCDQEFJxMGAwE1AQEOC0ZXBi6HcqcQhDeFLokCAQaLD4UtY4hmjRyFdopMgng
+X-IronPort-AV: E=Sophos;i="4.75,543,1330902000"; 
+   d="scan'208";a="157008581"
+Received: from rabbit.math.nagoya-u.ac.jp (HELO mailhost.math.nagoya-u.ac.jp) ([133.6.130.5])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 07 May 2012 10:10:42 +0200
+Received: from mailhost.math.nagoya-u.ac.jp (localhost [127.0.0.1])
+	by mailhost.math.nagoya-u.ac.jp (Postfix) with ESMTP id ED259624F;
+	Mon,  7 May 2012 17:10:39 +0900 (JST)
+Received: from mailhost.math.nagoya-u.ac.jp (camel-172.math.nagoya-u.ac.jp [172.16.254.4])
+	by mailhost.math.nagoya-u.ac.jp (Postfix) with ESMTP id B5E6A3A13;
+	Mon,  7 May 2012 17:10:39 +0900 (JST)
+DKIM-Signature: v=1; a=rsa-sha1; c=relaxed; d=math.nagoya-u.ac.jp; h=
+	subject:mime-version:content-type:from:in-reply-to:date:cc
+	:content-transfer-encoding:message-id:references:to; s=alpha;
+	 bh=x0fkLjVrTf1NTtWKiFp5z78grKI=; b=mMfJ7005fD0eVZtJ5iZlWr+1dDb4
+	Qk8IbUjEq4mbNTJF04wCg5zG+HFmde2HEpD3tNUc4FMcwczDZdq6vBQLuXDoS5Ty
+	Un73IbIaBcx4A8D0WWurk6yFzuQ+OUpZYTTjnE7xyug8Q1iQJbRHh68nHqwlG9h2
+	skxbA/PNanErPgc=
+DomainKey-Signature: a=rsa-sha1; h=Received:Subject:Mime-Version:Content-Type:From:In-Reply-To:Date:Cc:Content-Transfer-Encoding:Message-Id:References:To:X-Mailer; b=P7fyRoq9yAitEtcjWcyO9ChKdn02mAGCaKNK93wJW8FlSx0VZQ2B81ut0jJexDHS4bGMJ0w/qQMZkpxG+IhXMFAZ1lr/VRBaaqL788t4JZ5skxpUIEIsq/60uH1znX/rPg00mm8uBHf6pisnozPGOtjfihoLNh6DogUiQ1jVR4c=; c=nofws; d=math.nagoya-u.ac.jp; q=dns; s=alpha
+Received: from [192.168.1.212] (bsdserver10-alias1.math.nagoya-u.ac.jp [172.16.62.1])
+	by mailhost.math.nagoya-u.ac.jp (Postfix) with ESMTPSA id 98ECB39A3;
+	Mon,  7 May 2012 17:10:39 +0900 (JST)
+Mime-Version: 1.0 (Apple Message framework v1084)
+Content-Type: text/plain; charset=us-ascii
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <4A169BB4-3316-437A-9E73-FABEAEDB9D2F@math.nagoya-u.ac.jp>
+Date: Mon, 7 May 2012 17:11:04 +0900
+Cc: OCaML List Mailing <caml-list@inria.fr>
+Message-Id: <D350BA18-9214-47C7-8921-4D4AFD4DE356@math.nagoya-u.ac.jp>
+References: <87r4uykb09.fsf@frosties.localnet> <415387F7-557D-40C7-8F9E-E8CDC5603E3C@math.nagoya-u.ac.jp> <87aa1lcohv.fsf@frosties.localnet> <4A169BB4-3316-437A-9E73-FABEAEDB9D2F@math.nagoya-u.ac.jp>
+To: Goswin von Brederlow <goswin-v-b@web.de>
+X-Mailer: Apple Mail (2.1084)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q478AmXd027180
+Subject: Re: [Caml-list] A shallow option type
+
+Sorry for all these mails.
+Looks like I don't think well when I'm sleepy...
+
+Anyway, I think that at last I have a reasonable (much simpler) solution.
+This still uses sopt_tag (i.e. lazy_tag-1), but this time the argument is
+the number of "some" constructors, so there is no extra cost for marshaling.
+The only values on which Sopt.some is not the identity are those with a
+single argument, which is additionally represented by an integer between 0 and last.
+Moreover, even if for some reason you build such a value using a real sum
+type, you still have Sopt.arg (Sopt.some v) = v, the only change being a loss
+of sharing (which is anyway not guaranteed by the ocaml specification).
+
+Jacques
+
+module Sopt : sig
+ type +'a t
+ val none : 'a t
+ val some : 'a -> 'a t
+ val is_none : 'a t -> bool
+ val arg  : 'a t -> 'a
+ val depth : 'a t -> int
+end = struct
+ type 'a t = Obj.t
+ let sopt_tag = Obj.lazy_tag - 1
+ let none = Obj.new_block sopt_tag 1
+ let last = 255
+ let area = Array.create (last+1) none
+ let () =
+   Obj.set_field none 0 (Obj.repr 0);
+   for i = 1 to last do
+     let stub = Obj.new_block sopt_tag 1 in
+     Obj.set_field stub 0 (Obj.repr i);
+     area.(i) <- stub
+   done
+ let is_none x = (x = none)
+ let is_sopt x =
+   Obj.is_block x && Obj.tag x = sopt_tag && Obj.size x = 1 &&
+   let i = Obj.obj (Obj.field x 0) in i >= 0 && i <= last
+ let depth x =
+   let x = Obj.repr x in
+   if is_sopt x then Obj.obj (Obj.field x 0) else -1
+ let some (x : 'a) : 'a t =
+   let i = depth x in
+   if i < 0 then Obj.magic x else
+   if i = last then invalid_arg "Sopt.some" else Obj.obj area.(i+1)
+ let arg (x : 'a t) : 'a =
+   let i = depth x in
+   if i < 0 then Obj.magic x else
+   if i = 0 then invalid_arg "Sopt.arg" else Obj.obj area.(i-1)
+end
+
+

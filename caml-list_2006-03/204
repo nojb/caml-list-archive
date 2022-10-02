@@ -1,0 +1,77 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 651A5BB81
+	for <caml-list@yquem.inria.fr>; Mon, 20 Mar 2006 16:56:48 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2KFul1b008608
+	for <caml-list@yquem.inria.fr>; Mon, 20 Mar 2006 16:56:48 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA10314 for <caml-list@pauillac.inria.fr>; Mon, 20 Mar 2006 16:56:47 +0100 (MET)
+Received: from [128.93.11.95] (estephe.inria.fr [128.93.11.95])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2KFskXp008353
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Mon, 20 Mar 2006 16:54:47 +0100
+Message-ID: <441ED046.1060709@inria.fr>
+Date: Mon, 20 Mar 2006 16:54:46 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050322)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Gerd Stolpmann <info@gerd-stolpmann.de>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Severe loss of performance due to new signal handling
+References: <f8560b80603171039o2a49a4du561a5726e34016bf@mail.gmail.com>	<441E760D.6010801@inria.fr> <20060320103919.GA1167@first.in-berlin.de> <1142858260.31624.24.camel@localhost.localdomain>
+In-Reply-To: <1142858260.31624.24.camel@localhost.localdomain>
+X-Enigmail-Version: 0.90.0.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 441ED0C0.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 441ED046.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; handler:01 3.08:01 pseudocode:01 handler:01 posix:01 posix:01 3.08:01 caml-list:01 behaviour:01 behaviour:01 realtime:01 occurrences:02 occurrence:03 fix:04 shared:04 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+ > The problem is the following: [...] In 3.08, you have basically
+ >
+ > if "flag is set" then (
+ >   (*)
+ >   "clear flag";
+ >   "call the signal handler function"
+ > )
+ >
+ > If another signal happens at (*) it will be lost.
+
+Actually, the problematic code in 3.08 is:
+
+   tmp <- flag;
+   (*)
+   flag <- 0;
+   if (tmp) { process the signal; }
+
+and indeed a signal can be lost (never processed) if it occurs at (*).
+
+The solution I have in mind is to implement exactly the pseudocode you
+give above.  If a signal occurs at (*), it is not lost (the signal
+handler function will be called just afterwards!), just conflated with
+a previous occurrence of that signal, but this is fair game: POSIX
+signals have the same behaviour.  (Yes, I'm ignoring the queueing
+behaviour of realtime POSIX signals.)
+
+Note however that in 3.09 and in my proposed fix, there is one flag
+per signal, which still improves over 3.08 (which had only one shared
+flag) and ensures that two occurrences of different signals are not
+conflated, again as per POSIX.
+
+ > I don't know what Xavier has in mind to solve the problem, but I would
+ > think about reducing the frequency of the atomic check.
+
+That would be plan C, plan B being making the check even more efficient.
+I'd rather not introduce timer signals if at all possible, though,
+since these mess up many function calls.
+
+- Xavier Leroy
+

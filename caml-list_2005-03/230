@@ -1,0 +1,115 @@
+Return-Path: <jon@ffconsultancy.com>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id F059FBC32
+	for <caml-list@yquem.inria.fr>; Wed, 16 Mar 2005 20:50:50 +0100 (CET)
+Received: from ptb-relay01.plus.net (ptb-relay01.plus.net [212.159.14.212])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j2GJooWo001038
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Wed, 16 Mar 2005 20:50:50 +0100
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay01.plus.net with esmtp (Exim) id 1DBeXX-0001E1-O5
+	for caml-list@yquem.inria.fr; Wed, 16 Mar 2005 19:50:47 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] OCaml troll on Slashdot
+Date: Wed, 16 Mar 2005 19:51:48 +0000
+User-Agent: KMail/1.7.1
+References: <20050316001819.GB347@first.in-berlin.de> <20050316.224108.35690658.garrigue@math.nagoya-u.ac.jp> <Pine.LNX.4.58.0503160931190.30293@shell2.speakeasy.net>
+In-Reply-To: <Pine.LNX.4.58.0503160931190.30293@shell2.speakeasy.net>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200503161951.48923.jon@ffconsultancy.com>
+X-Miltered: at nez-perce with ID 42388E1A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 recursive:01 recursive:01 integers:01 rec:01 val:01 rec:01 val:01 recursion:01 transforming:01 transformed:01 gettimeofday:01 printf:01 printf:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+On Wednesday 16 March 2005 17:43, brogoff wrote:
+> On Wed, 16 Mar 2005, Jacques Garrigue wrote:
+> > Because tail-recursive versions do some extra work to ensure
+> > tail-recursiveness. For instance building a list in reverse order, and
+> > converting it back with List.rev at the end. This only pays off for
+> > huge lists.
+>
+> No doubt the implementors will want me guillotined for bringing this up
+> again, but using the (still functional!) set_cdr! tail recursive functions,
+> which do *not* reverse the list, are always faster than the non tail
+> recursive list functions, even for small lists, at least in my experience.
+> So I suspect that your "for instance" is in fact the only reason for the
+> disparity. I'd welcome a counterexample.
+
+Here is one of the counterexamples given in my book, two implementations of a 
+fold_right function over an implicit semi-inclusive range of integers [l..u):
+
+# let rec fold_right1 f accu l u =
+    if l < u then f (fold_right1 f accu (l + 1) u) l else accu;;
+val fold_right1 : ('a -> int -> 'a) -> 'a -> int -> int -> 'a = <fun>
+# let rec fold_right2 f accu l u =
+    if l < u then let u = u - 1 in fold_right2 f (f accu u) l u else accu;;
+val fold_right2 : ('a -> int -> 'a) -> 'a -> int -> int -> unit = <fun>
+
+(A program for timing is at the end of this e-mail).
+
+Here, the non-tail-recursive fold_left function is significantly faster on 
+smaller lists and the tail-recursive fold_right functions is much faster in 
+larger lists.
+
+I believe there are many other counterexamples. Indeed, I would even say that 
+most functions are counterexamples. Perhaps the reason is that non-tail 
+recursion is used when it is natural for a given task, and transforming into 
+tail-recursive form is then necessarily more complicating the function.
+
+> Those Obj based List functions are what ExtLib provides, I think, and there
+> are even ways to get this optimization neatly into ML style languages.
+> Maybe in ML 20XY this will be addressed.
+
+I don't know what the performance of such transformed code would be. Perhaps 
+the transformation would slow code down. Consequently, it may be early days 
+to call it an "optimisation".
+
+Here's the timing program:
+
+let rec fold_right1 f accu l u =
+  if l < u then f (fold_right1 f accu (l + 1) u) l else accu
+let rec fold_right2 f accu l u =
+  if l < u then let u = u - 1 in fold_right2 f (f accu u) l u else accu
+
+let rec test f n = if n>0 then (f (); test f (n-1))
+
+let _ =
+  let t = Unix.gettimeofday () in
+  test (fun () -> ignore (fold_right1 ( + ) 0 1 5000)) 10000;
+  Printf.printf "Non-tail-recursive took: %fs\n"
+    (Unix.gettimeofday () -. t);
+  let t = Unix.gettimeofday () in
+  test (fun () -> ignore (fold_right2 ( + ) 0 1 5000)) 10000;
+  Printf.printf "Tail-recursive took: %fs\n\n"
+    (Unix.gettimeofday () -. t);
+  let t = Unix.gettimeofday () in
+  test (fun () -> ignore (fold_right1 ( + ) 0 1 50000)) 1000;
+  Printf.printf "Non-tail-recursive took: %fs\n"
+    (Unix.gettimeofday () -. t);
+  let t = Unix.gettimeofday () in
+  test (fun () -> ignore (fold_right2 ( + ) 0 1 50000)) 1000;
+  Printf.printf "Tail-recursive took: %fs\n"
+    (Unix.gettimeofday () -. t)
+
+$ ./test
+Non-tail-recursive took: 0.513307s
+Tail-recursive took: 0.582472s
+
+Non-tail-recursive took: 1.950229s
+Tail-recursive took: 0.590756s
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+Objective CAML for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists
+

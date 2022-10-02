@@ -1,0 +1,125 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 7AAD07EE51
+	for <caml-list@sympa.inria.fr>; Thu,  4 Apr 2013 09:32:52 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.210;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.210;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.210;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjMDAEMsXVHB/BfScmdsb2JhbABDgz2+IIJkgRkOAQwIDAkUAyWCHwEBBScRQAEQCxgJFg8JAwIBAgFFBgEMAQcBAYgUwC6OZjMHg0ADlmuGAY4X
+X-IPAS-Result: AjMDAEMsXVHB/BfScmdsb2JhbABDgz2+IIJkgRkOAQwIDAkUAyWCHwEBBScRQAEQCxgJFg8JAwIBAgFFBgEMAQcBAYgUwC6OZjMHg0ADlmuGAY4X
+X-IronPort-AV: E=Sophos;i="4.87,405,1363129200"; 
+   d="scan'208";a="11725477"
+Received: from msa01.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.210])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 04 Apr 2013 09:32:52 +0200
+Received: from [192.168.1.109] ([92.151.37.47])
+	by mwinf5d54 with ME
+	id KjYr1l00G1120CC03jYrA6; Thu, 04 Apr 2013 09:32:51 +0200
+Message-ID: <515D2CA3.2070709@frisch.fr>
+Date: Thu, 04 Apr 2013 09:32:51 +0200
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:20.0) Gecko/20100101 Thunderbird/20.0
+MIME-Version: 1.0
+To: Martin Jambon <martin.jambon@ens-lyon.org>, 
+ Anthony Tavener <anthony.tavener@gmail.com>
+CC: "caml-list@inria.fr" <caml-list@inria.fr>
+References: <CAN=ouMQ599Pu-ay+Hr=-KSV7xgdUsNB4GXiMWfjhaJfdZ-2Jeg@mail.gmail.com> <515D1B65.3070603@ens-lyon.org>
+In-Reply-To: <515D1B65.3070603@ens-lyon.org>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Heterogeneous dictionary
+
+On 04/04/2013 08:19 AM, Martin Jambon wrote:
+> type 'a t = ('a, (unit -> unit)) Hashtbl.t
+>
+> let create n = Hashtbl.create n
+>
+> let access () =
+>    let r = ref None in
+>    let get tbl k =
+>      try
+>        (Hashtbl.find tbl k) ();
+>        let result = !r in
+>        r := None;
+>        result
+>      with Not_found -> None
+>    in
+>    let set tbl k v =
+>      let v_opt = Some v in
+>      Hashtbl.replace tbl k (fun () -> r := v_opt)
+>    in
+>    get, set
+
+Careful, this is buggy!  If you apply the "get" on an existing value 
+with the "wrong" type, it will set the slot corresponding to that wrong 
+type, which can result in a fake "get" later on that type.
+
+# let h = create 10;;
+val h : '_a X.t = <abstr>
+# let (get1, set1) = access ();;
+val get1 : '_a X.t -> '_a -> '_b option = <fun>
+val set1 : '_a X.t -> '_a -> '_b -> unit = <fun>
+# let (get2, set2) = access ();;
+val get2 : '_a X.t -> '_a -> '_b option = <fun>
+val set2 : '_a X.t -> '_a -> '_b -> unit = <fun>
+# set1 h "a" true;;
+- : unit = ()
+# set2 h "b" "X";;
+- : unit = ()
+# get1 h "b";;
+- : bool option = None
+(*  ====> the slot for get2/set2 has been filled! *)
+
+# get2 h "a";;
+- : string option = Some "X"
+
+(* WRONG! *)
+
+
+Here is an implementation of the same interface based on local 
+exceptions.  It avoids the bug above and it is also more efficient and 
+thread-safe:
+
+
+type 'a t = ('a, exn) Hashtbl.t
+
+let create n = Hashtbl.create n
+
+let access (type t) () =
+   let module M = struct exception E of t end in
+   let r = ref None in
+   let get tbl k =
+     try
+       match Hashtbl.find tbl k with
+       | M.E x -> Some x
+       | _ -> None
+     with Not_found -> None
+   in
+   let set tbl k v =
+     Hashtbl.replace tbl k (M.E v)
+   in
+   get, set
+
+(If [get] is more frequent than [set], it is worth storing a "t option" 
+in the exception directly.)
+
+-- Alain

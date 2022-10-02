@@ -1,0 +1,146 @@
+Return-Path: <maxence.guesdon@inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id AAF7FBC58
+	for <caml-list@yquem.inria.fr>; Fri, 17 Sep 2010 09:29:32 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqwDAF+1kkxQDPIvZmdsb2JhbACUMI1jFQ0LCAgSAx/BcYVBBJAO
+X-IronPort-AV: E=Sophos;i="4.56,381,1280700000"; 
+   d="scan'208";a="67738192"
+Received: from smtp21.orange.fr ([80.12.242.47])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 17 Sep 2010 09:29:32 +0200
+Received: from me-wanadoo.net (localhost [127.0.0.1])
+	by mwinf2112.orange.fr (SMTP Server) with ESMTP id EE21C1C00383;
+	Fri, 17 Sep 2010 09:29:31 +0200 (CEST)
+Received: from me-wanadoo.net (localhost [127.0.0.1])
+	by mwinf2112.orange.fr (SMTP Server) with ESMTP id DCC1A1C005FF;
+	Fri, 17 Sep 2010 09:29:31 +0200 (CEST)
+Received: from alcazar.inria.fr (ADijon-153-1-27-83.w83-203.abo.wanadoo.fr [83.203.146.83])
+	by mwinf2112.orange.fr (SMTP Server) with ESMTP id 49CD21C00383;
+	Fri, 17 Sep 2010 09:29:31 +0200 (CEST)
+X-ME-UUID: 20100917072931302.49CD21C00383@mwinf2112.orange.fr
+X-ME-User-Auth: maxence.guesdon
+Date: Fri, 17 Sep 2010 09:29:29 +0200
+From: Maxence Guesdon <maxence.guesdon@inria.fr>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Re: Create a constraint between variant type and
+ data list
+Message-ID: <20100917092929.43c39973@alcazar.inria.fr>
+In-Reply-To: <slrni82q3o.skq.sylvain@gallu.homelinux.org>
+References: <slrni82bc0.skq.sylvain@gallu.homelinux.org>
+	<AANLkTimqCdKkDrmyuoVH3Q2YJ_uGohQSs-6UcCDkebx0@mail.gmail.com>
+	<slrni82q3o.skq.sylvain@gallu.homelinux.org>
+X-Mailer: Claws Mail 3.7.6 (GTK+ 2.20.1; i486-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; maxence:01 guesdon:01 maxence:01 guesdon:01 le-gall:01 constructors:01 datatype:01 camlp:01 markus:01 mottl's:01 ocaml:01 ocaml:01 camlp:01 foo:01 foo:01 
+
+On Fri, 3 Sep 2010 21:28:24 +0000 (UTC)
+Sylvain Le Gall <sylvain@le-gall.net> wrote:
+
+> On 03-09-2010, bluestorm <bluestorm.dylc@gmail.com> wrote:
+> > Hi,
+> >
+> > Finally, I have a third solution based on code generation : given my
+> > first solution (turning the association list into a function), what
+> > you need is only a list of all the constructors (and you can build
+> > your assoc list with List.map (fun x -> x, assoc_function x)). This
+> > can easily be generated from the datatype declaration using direct
+> > camlp4, or Markus Mottl's type-conv (
+> > http://www.ocaml.info/home/ocaml_sources.html#toc11 ).
+> >
+> 
+> Your answer and the one from Martin/Ashish, makes me think that I need
+> to go back to camlp4/type-conv... I would have like to avoid this
+> solution, but I think it is the best one.
+
+Hello,
+
+Here is another solution, based on oug[1]. The idea is to:
+1. make oug analyse your source files and dump the result,
+2. write a program loading the dump and performing the checks you want.
+
+Here is an example, which performs 1. and 2., with only one source file "foo.ml".
+
+=== myoug.ml
+let (data, _) = Ouglib.Analyze.analyze ["foo.ml"];;
+
+let number_variants =
+  Ouglib.Lang.filter_elements data
+    (Ouglib.Lang.Name
+     {
+       Ouglib.Lang.sel_name = "Foo.number.*" ;
+       sel_kind = [ Ouglib.Data.Type_field ] ;
+     }
+    )
+;;
+
+let numbers_list_id =
+  match
+    Ouglib.Lang.filter_elements data
+      (Ouglib.Lang.Name
+       {
+         Ouglib.Lang.sel_name = "Foo.numbers" ;
+         sel_kind = [ Ouglib.Data.Value ] ;
+       }
+      )
+  with
+    [id] -> id
+  | _ -> assert false
+;;
+
+let graph = data.Ouglib.Data.graph ;;
+let created_by_numbers_list =
+  let l = Ouglib.Graph.succ graph numbers_list_id in
+  let f acc (id, k) =
+    match k with
+      Ouglib.Data.Create -> id :: acc
+    | _ -> acc
+  in
+  List.fold_left f [] l
+;;
+
+let (_,missing) =
+  List.partition (fun id -> List.mem id created_by_numbers_list) number_variants
+;;
+
+match missing with
+  [] -> exit 0
+| _ ->
+    let b = Buffer.create 256 in
+    Ouglib.Dump.print_element_list data b  missing;
+    prerr_endline
+      (Printf.sprintf "The following constructors are not present in Foo.numbers:\n%s"
+       (Buffer.contents b)
+      );
+    exit 1
+;;
+=== /myoug.ml ==
+
+=== foo.ml ===
+type number = One | Two | Three | Four;;
+
+let numbers = [ One, 1 ; Two, 2 ];;
+=== /foo.ml ==
+
+Compilation of myoug.ml to myoug.x:
+# ocamlc -I +oug str.cma toplevellib.cma oug.cma -o myoug.x myoug.ml 
+
+Launching myoug.x gives the following:
+The following constructors are not present in Foo.numbers:
+f Foo.number.Three
+f Foo.number.Four
+
+Of course, you can adapt the program to fit your needs: have a makefile
+target to create the oug dump and use this dump in various checking
+programs, or in one program performing various checks.
+
+Hope this helps,
+
+Maxence
+
+[1] http://home.gna.org/oug/index.fr.html
+
+

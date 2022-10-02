@@ -1,0 +1,77 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA16504 for caml-redistribution; Wed, 15 Dec 1999 10:49:18 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA17822 for <caml-list@pauillac.inria.fr>; Tue, 14 Dec 1999 20:53:22 +0100 (MET)
+Received: from labrador.eecs.harvard.edu (labrador.eecs.harvard.edu [140.247.60.247])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id UAA01772
+	for <caml-list@inria.fr>; Tue, 14 Dec 1999 20:53:20 +0100 (MET)
+Received: (from nr@localhost)
+	by labrador.eecs.harvard.edu (8.9.3/8.9.3) id OAA04635;
+	Tue, 14 Dec 1999 14:53:18 -0500
+Date: Tue, 14 Dec 1999 14:53:18 -0500
+From: Norman Ramsey <nr@eecs.harvard.edu>
+Message-Id: <199912141953.OAA04635@labrador.eecs.harvard.edu>
+To: caml-list@inria.fr
+Subject: my stupidity and non-tail calls
+Sender: weis
+
+OK, I apologize for bothering everyone.  My `tail calls' are actually
+sitting inside `try ... with' blocks, so I recognize that these cannot be
+optimized since they are in the scope of different handlers.  I will
+have to find a way to restructure my code.  A great pity, since
+I like it the way it is... suggestions are welcome.
+
+For those who wished to see the offending code, I append it, or you
+can visit http://www.eecs.harvard.edu/~nr/rsync.html.
+
+
+Norman
+
+
+  let compress {size=size; blocks=blocks} infile =
+    let blocktab = mkBlockTable blocks in
+    let roll = Checksum.roll size in
+    let rec compressLoop instr' b q csum infile =
+      try (* first case: hit in the block table *)
+        match BTab.find_all blocktab csum
+        with [] -> raise Not_found
+        | candidates ->
+            let contents = Buffer.create size in
+            let () = Queue.iter (Buffer.add_char contents) q in
+            let fp = Fingerprint.string (Buffer.contents contents) in
+            let (blockNum, _) = List.find (fun (_, fp') -> fp = fp') candidates in
+            let instr' =
+	      if Buffer.length b > 0 then STRING (Buffer.contents b) :: instr'
+              else instr' in
+            let instr' = BLOCK_NUMBERED blockNum :: instr' in
+              ( Buffer.reset b
+              ; Queue.clear q
+              ; startCompressing instr' b q infile
+              )
+      with Not_found ->
+        try
+          let next = input_char infile  in
+          let ()   = Queue.add next q  in
+          let prev = Queue.take q  in
+          let ()   = Buffer.add_char b prev  in
+          let csum = roll csum prev next  in
+            compressLoop instr' b q csum infile 
+            (*********** not really a tail call ******)
+        with End_of_file ->
+          finishCompressing instr' b q
+    and finishCompressing instr' b q = 
+      let () = Queue.iter (Buffer.add_char b) q in
+        List.rev (STRING (Buffer.contents b) :: instr')
+    and startCompressing instr' b q infile =
+      let rec fillAndSum csum k = 
+            if k = 0 then csum
+            else 
+              let c = input_char infile in
+                ( Queue.add c q
+                ; fillAndSum (Checksum.append csum c) (k-1)
+                ) in
+        try 
+          compressLoop instr' b q (fillAndSum (Checksum.string "") size) infile
+        with End_of_file -> 
+          finishCompressing instr' b q in
+
+
+

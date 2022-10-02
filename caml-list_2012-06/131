@@ -1,0 +1,144 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by sympa.inria.fr (Postfix) with ESMTPS id EC0F37ED26
+	for <caml-list@sympa.inria.fr>; Sun, 17 Jun 2012 01:11:49 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AukIAOkR3U/U4w8EY2dsb2JhbABFtVQYFwgMBxQpghgBAQQBJxM/BQsLISUPAQQoNBuHYQEJCQetRx+KBotTCYYXA5Y2hC+DY4k7
+X-IronPort-AV: E=Sophos;i="4.75,784,1330902000"; 
+   d="scan'208";a="163205026"
+Received: from mout.web.de ([212.227.15.4])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 17 Jun 2012 01:11:49 +0200
+Received: from frosties.localnet ([95.208.118.96]) by smtp.web.de (mrweb001)
+ with ESMTPSA (Nemesis) id 0LZeou-1SCWHb1Hcy-00m1Ax; Sun, 17 Jun 2012 01:11:43
+ +0200
+Received: from mrvn by frosties.localnet with local (Exim 4.77)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1Sg29e-00038B-Ms; Sun, 17 Jun 2012 01:11:42 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: rixed@happyleptic.org
+Cc: caml-list@inria.fr
+References: <20120606130646.GA23115@securactive.lan>
+Date: Sun, 17 Jun 2012 01:11:42 +0200
+In-Reply-To: <20120606130646.GA23115@securactive.lan> (rixed@happyleptic.org's
+	message of "Wed, 6 Jun 2012 15:06:46 +0200")
+Message-ID: <871ulekg29.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Provags-ID: V02:K0:r2wZnspbcOHYdc6aLqbYcWzygAWxhZB9RfDDwosB0pD
+ AjvYR3LEypzEs+b/PSrr6NFvOfOKPdFa8yLH+zJ37VHY9T6U01
+ DIA9lZuoUPgYYLijPG0ZcPamIhlHmQHfXtT7QQki9h2A1C6GCJ
+ yhRsbZNG84vKKxUfU6s3x3/v55ACmYkhuTqJXe1JQwNlXn1Trk
+ 6/bl1pCEUaKoz1vd+ggDQ==
+Subject: Re: [Caml-list] Unix.single_write, doc and atomicity
+
+rixed@happyleptic.org writes:
+
+> I was reading the code for unix_single_write recently, and noticed two strange
+> things that I prefer to discuss here before filling the bug tracker with
+> dubious tickets.
+>
+> First, the doc of Unix.single_write claims that this function "attemps to write
+> only once", although the underlying unix_single_write C function clearly loops
+> around a write if the buffer being written is larger than the internal buffer
+> (16K).  So if one large buffer is written and an error happens after the first
+> 16K then the written file is now corrupt. Looks like a bug. At the very least,
+> the documentation should state that single_write can write atomicaly only
+> buffer smaller than 16K. But I'd prefer a solution based on dynamic memory
+> allocation for the required iobuf.
+>
+> Then, while we are on atomicity, another annoying thing: as the giant lock is
+> released during the write some other thread may perform another single_write on
+> the same file handler and again if the written buffers are larger than 16K the
+> simultaneous write loop may interleave the written chunks. In other words, the
+> nice atomicity properties of unix files opened with O_APPEND flag no longer
+> holds. Although the doc does not pretend that the writes will be atomic in this
+> situation, this is quite sad.
+>
+> So this boils down to : unix_single_write really should perform a single write!
+> What do you think?
+
+As others have said you were reading the wrong function.
+
+
+But you do have a point with the copying of data in 16K chunkd and
+writing them out in bits and pices. This destroys the atomicity of write
+(as far as it is given at all, pipes garanty only 4k atomic writes under
+linux). Also the copying is a waste of cpu power.
+
+There is a nice solution to this: Bigarray. The data part of a Bigarray
+is allocated from outside the ocaml heap and is unmovable. That means
+that C code can look up the address and size of the data, release the
+runtime system and write the data in the background without having to
+copy it first. The extunix module (http://extunix.forge.ocamlcore.org/)
+has bindings for read, write, pread and pwrite functions with Bigarrays
+that retain all the atomicity the systemcalls provide.
+
+Extunix also provides read, write, pread and pwrite functions for
+strings with better defined behaviour on error:
+
+----------------------------------------------------------------------
+(** [all_write fd buf ofs len] writes up to [len] bytes from file
+    descriptor [fd] into the string [buf] at offset [ofs].
+
+    [all_write] repeats the write operation until all characters have
+    been written or an error occurs. Returns less than the number of
+    characters requested on EAGAIN, EWOULDBLOCK but never 0. Continues
+    the write operation on EINTR. Raises an Unix.Unix_error exception
+    in all other cases. *)
+external unsafe_all_write: Unix.file_descr -> string -> int -> int -> int = "caml_extunix_all_write"
+
+let all_write fd buf ofs len =
+  if ofs < 0 || len < 0 || ofs > String.length buf - len
+  then invalid_arg "ExtUnix.all_write"
+  else unsafe_all_write fd buf ofs len
+
+(** [single_write fd buf ofs len] writes up to [len] bytes from file
+    descriptor [fd] into the string [buf] at offset [ofs].
+
+    [single_write] attempts to write only once. Returns the number of
+    characters written or raises an Unix.Unix_error exception. *)
+external unsafe_single_write: Unix.file_descr -> string -> int -> int -> int = "caml_extunix_single_write"
+
+let single_write fd buf ofs len =
+  if ofs < 0 || len < 0 || ofs > String.length buf - len
+  then invalid_arg "ExtUnix.single_write"
+  else unsafe_single_write fd buf ofs len
+
+(** [write fd buf ofs len] writes up to [len] bytes from file
+    descriptor [fd] into the string [buf] at offset [ofs].
+
+    [write] repeats the write operation until all characters have
+    been written or an error occurs. Raises an Unix.Unix_error exception
+    if 0 characters could be written before an error occurs. Continues
+    the write operation on EINTR. Returns the number of characters
+    written in all other cases. *)
+external unsafe_write: Unix.file_descr -> string -> int -> int -> int = "caml_extunix_write"
+
+let write fd buf ofs len =
+  if ofs < 0 || len < 0 || ofs > String.length buf - len
+  then invalid_arg "ExtUnix.pwrite"
+  else unsafe_write fd buf ofs len
+
+(** [intr_write fd buf ofs len] writes up to [len] bytes from file
+    descriptor [fd] into the string [buf] at offset [ofs].
+
+    [intr_write] repeats the write operation until all characters have
+    been written or an error occurs. Raises an Unix.Unix_error exception
+    if 0 characters could be written before an error occurs. Does NOT
+    continue on EINTR. Returns the number of characters written in all
+    other cases. *)
+external unsafe_intr_write: Unix.file_descr -> string -> int -> int -> int = "caml_extunix_intr_write"
+
+let intr_write fd buf ofs len =
+  if ofs < 0 || len < 0 || ofs > String.length buf - len
+  then invalid_arg "ExtUnix.intr_write"
+  else unsafe_intr_write fd buf ofs len
+
+----------------------------------------------------------------------
+
+MfG
+        Goswin
+

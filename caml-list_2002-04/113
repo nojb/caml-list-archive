@@ -1,0 +1,139 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA15560; Mon, 15 Apr 2002 15:11:50 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA17646 for caml-list@pauillac.inria.fr; Mon, 15 Apr 2002 15:11:49 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA22694 for <caml-list@pauillac.inria.fr>; Sat, 13 Apr 2002 22:46:53 +0200 (MET DST)
+Received: from mail.speakeasy.net (mail13.speakeasy.net [216.254.0.213])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3DKkmr20086
+	for <caml-list@inria.fr>; Sat, 13 Apr 2002 22:46:48 +0200 (MET DST)
+Received: (qmail 900 invoked from network); 13 Apr 2002 20:46:47 -0000
+Received: from unknown (HELO harry) ([64.81.246.34]) (envelope-sender <harry@chomsky.net>)
+          by mail13.speakeasy.net (qmail-ldap-1.03) with SMTP
+          for <caml-list@inria.fr>; 13 Apr 2002 20:46:47 -0000
+Message-ID: <002d01c1e32c$56ebe190$0200a8c0@harry>
+From: "Harry Chomsky" <harry@chomsky.net>
+To: "Caml-list" <caml-list@inria.fr>
+Subject: [Caml-list] Threads + Win32 API = crash
+Date: Sat, 13 Apr 2002 13:46:36 -0700
+MIME-Version: 1.0
+Content-Type: multipart/mixed;
+	boundary="----=_NextPart_000_002A_01C1E2F1.A1A511B0"
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 5.50.4807.1700
+X-MimeOLE: Produced By Microsoft MimeOLE V5.50.4807.1700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This is a multi-part message in MIME format.
+
+------=_NextPart_000_002A_01C1E2F1.A1A511B0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+
+I'm having trouble incorporating multithreading support into my OCaml-Win32
+library.  Basically, any program that uses OCaml threading and also invokes
+a Win32 message loop will crash after a few seconds with an illegal attempt
+to access memory at "0x00000001".  This behavior is demonstrated by the
+enclosed sample program, which is very simple and does not require my
+OCaml-Win32 library.
+
+I tried following the suggestion from the mailing list of adding "if not
+(!Sys.interactive && signal=(-11))" to the preempt function, but it doesn't
+seem to help.
+
+I don't really know how to investigate this problem further.  I've
+determined that the problem goes away if I disable the tick thread, so
+presumably it has something to do with the interaction of the tick thread
+and the Windows message loop.  I've also noticed that if I call
+enter_blocking_section / leave_blocking_section in my C code, the behavior
+changes: the program exits abruptly with no error message.  By inserting
+printf's, I've concluded that the GPF and/or abrupt exit do not occur during
+execution of any of my C code.  Beyond that, I don't know what to try.
+
+Does anybody have any idea why OCaml's threads might be incompatible with a
+Windows message loop, or how I can work on debugging this?
+
+------=_NextPart_000_002A_01C1E2F1.A1A511B0
+Content-Type: application/octet-stream;
+	name="thr_c.c"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment;
+	filename="thr_c.c"
+
+#include <windows.h>
+#include <caml/alloc.h>
+#include <caml/callback.h>
+#include <caml/custom.h>
+#include <caml/fail.h>
+#include <caml/memory.h>
+#include <caml/mlvalues.h>
+
+CAMLprim value make_window(value unit)
+{
+    HWND hWnd;
+
+    hWnd = CreateWindow("EDIT",
+        "Generic Application",
+        WS_OVERLAPPEDWINDOW|WS_HSCROLL|WS_VSCROLL,
+        0,
+        0,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        NULL,
+        NULL,
+        GetModuleHandle(NULL),
+        NULL);
+
+    ShowWindow(hWnd, SW_SHOWDEFAULT);
+
+    return Val_unit;
+}
+
+CAMLprim value msg(value unit)
+{
+    MSG msg;
+
+    if (GetMessage(&msg, NULL, 0, 0)) {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
+    }
+
+    return Val_unit;
+}
+
+------=_NextPart_000_002A_01C1E2F1.A1A511B0
+Content-Type: application/octet-stream;
+	name="thr.ml"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment;
+	filename="thr.ml"
+
+let _ = Thread.create
+
+external make_window : unit -> unit = "make_window"
+
+external msg : unit -> unit = "msg"
+
+let rec msg_loop () =
+    msg ();
+    msg_loop ()
+
+let _ = make_window(); msg_loop ()
+
+------=_NextPart_000_002A_01C1E2F1.A1A511B0
+Content-Type: application/octet-stream;
+	name="build.bat"
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: attachment;
+	filename="build.bat"
+
+ocamlc -custom -thread -o thr.exe unix.cma threads.cma thr.ml thr_c.c =
+user32.lib
+
+------=_NextPart_000_002A_01C1E2F1.A1A511B0--
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

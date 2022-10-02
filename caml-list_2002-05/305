@@ -1,0 +1,140 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA30096; Thu, 23 May 2002 11:52:57 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA30185 for <caml-list@pauillac.inria.fr>; Thu, 23 May 2002 11:52:56 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g4N9qsD21681
+	for <caml-list@inria.fr>; Thu, 23 May 2002 11:52:54 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id SAA27895;
+	Thu, 23 May 2002 18:52:48 +0900 (JST)
+To: Frederic.Tronel@inrialpes.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] A question about classes and multiple inheritance
+In-Reply-To: <3CECAD94.69976221@inrialpes.fr>
+References: <3CECAD94.69976221@inrialpes.fr>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020523185248D.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 23 May 2002 18:52:48 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 109
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Frederic Tronel <Frederic.Tronel@inrialpes.fr>
+
+> I have the following problem.
+> If I define two classes like this:
+> 
+> class virtual behaviorSpecElement = object (this) 
+> 
+>     /* To be refined by subclasses */
+>     method virtual localPreBehavior : (string,string) Hashtbl.t  ->
+> specBehavior
+>     /* Defined by  specElement */	
+>     method virtual preBehavior  : (string,string) Hashtbl.t stack ->
+> specBehavior
+> end
+> and
+> virtual ['a] specElement =
+> 
+>   inherit behaviorSpecElement as super
+>  
+>   fun (synchroAccounting : 'a) ->
+>   object (this)  
+> 	<snip> ....
+> 	method preBehavior bindings =
+>       		let binding = bindings#top in
+>       		let myPre = this#localPreBehavior binding in
+>       		bindings#popSP ;
+>       		let superPre = super#preBehavior bindings in
+>       		bindings#pushSP ;
+> 	<snip> ...
+>   end
+
+You cannot inherit outside an object, so something is wrong in the
+above code. I suppose you just meant inherit inside the object.
+
+> Is there a way to solve this problem ?
+> "super" must be dynamically resolved at run-time, is it compatible with
+> multiple inheritance ?
+
+By definition super is statically resolved, and self is dynamically
+resolved. This is actually the point. In ocaml you don't get two
+independent hierarchies of methods with multiple inheritance: methods
+with same name are merged, taking implementation from last one.
+The only way to get dynamic resolution is to go through self ("this").
+
+But this seems to be what you are doing anyway, calling
+this#localPreBehaviour. So what's the point in calling
+super#preBehaviour? You certainly don't want to call yourself.
+There's certainly some way to do what you are trying to do, but we
+have to know what you want.
+
+If what you want is to call a localPreBehaviour for each superclass,
+then it's difficult, because there's no real support for mixins, and
+there's no keyword to say that a method should not appear in
+subclasses.
+
+A way to do it is:
+
+class virtual specRecursor =
+  object (this)  
+        method private virtual localPreBehaviour : ...
+        method private virtual superPreBehaviour : ...
+	method preBehavior bindings =
+      		let binding = bindings#top in
+      		let myPre = this#localPreBehavior binding in
+      		bindings#popSP ;
+      		let superPre = this#superPreBehavior bindings in
+      		bindings#pushSP ;
+  end
+
+And use it:
+
+class child :
+  object
+    <declare all methods except localPreBehaviour and superPreBehaviour>
+  end =
+  object (this)
+    inherit parent as super
+    method private localPreBehaviour bindings = ...
+    method private superPreBehaviour = super#preBehaviour
+    inherit specRecursor
+  end
+
+The idea is to use localPreBehaviour and superPreBehaviour as
+parameters to specElement, making them local to the class, and hide
+them from descendants, so that they cannot be modified.
+
+I think that some extension to the current object system might help in
+such cases. Like a second abbreviation for self, so that we can bind
+statically to its methods, and don't need all this hiding.
+
+Currently it is simpler to redefine explicitly preBehaviour every time.
+
+let preBehavior ~local ~super bindings =
+  let binding = bindings#top in
+  let myPre = local binding in
+  bindings#popSP ;
+  let superPre = super bindings in
+  bindings#pushSP
+
+class child =
+  object (this)
+    inherit parent as super
+    method private localPreBehaviour bindings = ...
+    method preBehavior =
+      preBehaviour ~super:super#preBehaviour ~local:this#localPreBehaviour
+  end
+
+
+Jacques Garrigue
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

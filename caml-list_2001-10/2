@@ -1,0 +1,135 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA23808; Mon, 1 Oct 2001 09:14:11 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA23307 for caml-list@pauillac.inria.fr; Mon, 1 Oct 2001 09:14:11 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA21461 for <caml-list@pauillac.inria.fr>; Mon, 1 Oct 2001 02:52:41 +0200 (MET DST)
+Received: from kinsman.panasas.com (gw2.panasas.com [65.194.124.178])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f910qd527324
+	for <caml-list@inria.fr>; Mon, 1 Oct 2001 02:52:40 +0200 (MET DST)
+Received: (from jprevost@localhost)
+	by kinsman.panasas.com (8.9.3/8.9.3) id UAA11699;
+	Sun, 30 Sep 2001 20:52:31 -0400
+X-Authentication-Warning: kinsman.panasas.com: jprevost set sender to jprevost@panasas.com using -f
+To: "David McClain" <barabh@qwest.net>
+Cc: <caml-list@inria.fr>
+Subject: Re: [Caml-list] Error Reporting
+References: <004401c1483d$8d1bd160$210148bf@dylan>
+From: John Prevost <jprevost@panasas.com>
+Date: 30 Sep 2001 20:52:31 -0400
+In-Reply-To: <004401c1483d$8d1bd160$210148bf@dylan>
+Message-ID: <jkg0945ghc.fsf@kinsman.panasas.com>
+Lines: 107
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.0.103
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>>>>> "dm" == David McClain <barabh@qwest.net> writes:
+
+    dm> I must confess that I don't understand this statement...
+
+    dm> Let's take a trivial example of a sequence of 3 "primitive"
+    dm> operations -- a primitive operation being one which cannot
+    dm> make use of a continuation argument.
+
+    dm> Normal OCaml syntax for such a function would be:
+
+    dm> let seqFn () = aFn (); bFn (); cFn ()
+
+    dm> Now let's write what the compiler would translate this
+    dm> into....
+
+    dm> let cPart () kont = cFn (); kont ()
+
+    dm> let bPart () kont = bFn (); cPart () kont
+
+    dm> let aPart () kont = aFn (); bPart () kont
+
+This is a very specific for of tail calls where no continuation has
+any argument--and yet, your assertion that you don't know anything
+about history is incorrect.
+
+The continuation passed to each function is very similar to a stack
+frame.  Let's look at a more interesting example:
+
+let plus a b = a + b
+let mult a b = a * b
+let a = plus (mult 3 5) (plus 8 (mult 7 10))
+
+a CPS conversion of this would be:
+
+let plus a b k = k (a + b)
+let mult a b k = k (a * b)
+let a = mult 3 5
+       (fun x -> mult 7 10
+         (fun y -> plus 8 y
+          (fun z -> plus x z
+           (fun w -> w))))
+
+In this case, we see that the continuations are a bit more
+interesting.  For a start, they take non-unit arguments.  Then we can
+notice the dependencies between them.  Each application takes the code
+to be run when the call "returns".  Now imagine this version of your
+original code.  First, let's make aFn and friends be written in CPS
+instead of somehow being outside it (the other bothersome thing about
+your example):
+
+val aFn : (unit -> 'a) -> unit -> 'a
+val bFn : (unit -> 'a) -> unit -> 'a
+val bFn : (unit -> 'a) -> unit -> 'a
+
+(* example:
+    let aFn k () = Printf.printf "a\n"; k () *)
+
+let seqFn k = aFn (bFn (cFn k))
+
+let program = seqFn id
+
+program () results in:
+a
+b
+c
+
+
+This is a more realistic example of continuations in action.  Now, we
+can extend this in a useful way!
+
+
+let cont d f = (d,f)
+let app (_,f) = f
+let desc (d,_) = d
+
+let aFn k () = Printf.printf "a (will return to %s)\n" (desc k); app k ()
+let bFn k () = Printf.printf "b (will return to %s)\n" (desc k); app k ()
+let cFn k () = Printf.printf "c (will return to %s)\n" (desc k); app k ()
+
+
+let seqFn k =
+  let seqFn_cont lineno f =
+    cont ("seqFn (line " ^ string_of_int lineno ^ ")") f
+  in
+    aFn (seqFn_cont 2 (bFn (seqFn_cont 3 (cFn k))))
+
+let program = seqFn (cont "main program" id)
+
+program () results in:
+
+a (will return to seqFn (line 2))
+b (will return to seqFn (line 3))
+c (will return to main program)
+
+
+Again--these continuations are *just like stack frames*.  The only
+difference is that in CPS they are treated as explicit manipulable
+values.  In fact, SML/NJ uses continuations internally allocated on
+the heap, rather than using a normal stack.
+
+The right way to think about things is probably that a stack is, in
+fact, a very simple continuation system which does not allow
+continuations to be used in any way other than LIFO.
+
+
+John.
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

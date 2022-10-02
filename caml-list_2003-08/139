@@ -1,0 +1,173 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA07283; Mon, 11 Aug 2003 11:48:10 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA27979 for <caml-list@pauillac.inria.fr>; Mon, 11 Aug 2003 11:48:09 +0200 (MET DST)
+Received: from ep09.kernel.pl (ep09.kernel.pl [212.87.11.162])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h7B9m7f08716
+	for <caml-list@inria.fr>; Mon, 11 Aug 2003 11:48:08 +0200 (MET DST)
+Received: (qmail 4578 invoked by uid 566); 11 Aug 2003 09:48:05 -0000
+Date: Mon, 11 Aug 2003 11:46:04 +0200
+From: Michal Moskal <malekith@pld-linux.org>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Array.filter
+Message-ID: <20030811094604.GA6433@roke.freak>
+Mail-Followup-To: caml-list@inria.fr
+References: <005d01c35e51$7c927200$6628f9c1@zofo> <20030809165720.GE21525@swordfish> <20030809184851.GA946@localhost> <00c601c35f81$c2f59480$a45afac1@zofo>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <00c601c35f81$c2f59480$a45afac1@zofo>
+User-Agent: Mutt/1.4.1i
+X-PGP-Fingerprint: CF89 1B14 11BE 1CC9 2CA3  7497 5E32 69B4 BC71 B4C2
+X-AntiVirus: scanned for viruses by AMaViS 0.2.1 (http://amavis.org/)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; michal:01 moskal:01 malekith:01 pld-linux:01 caml-list:01 accu:01 elt:01 0.26:99 0.21:01 0.92:01 0.66:01 0.43:01 0.00:01 0.19:01 2.53:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, Aug 10, 2003 at 10:55:36PM +0200, Jean-Baptiste Rouquier wrote:
+> let filter test a =
+>   let result = (Array.fold_left
+>     (fun accu elt ->
+>       if test elt then elt :: accu else accu)
+>     [] a) in
+>   Array.of_list (List.rev result)
+
+I did some timing for several versions.
+
+1% elements selected:
+
+0    0.26s real     0.21s user     0.01s system
+1    0.46s real     0.37s user     0.01s system
+2    1.18s real     0.85s user     0.06s system
+3    0.92s real     0.66s user     0.10s system
+4    0.57s real     0.43s user     0.03s system
+5    0.52s real     0.44s user     0.00s system
+
+1/2 elements selected:
+
+0    0.29s real     0.19s user     0.03s system
+1    2.53s real     2.04s user     0.10s system
+2    1.49s real     1.05s user     0.11s system
+3    1.31s real     0.98s user     0.12s system
+4    8.55s real     6.87s user     0.10s system
+5    1.48s real     1.15s user     0.05s system
+
+0. just create random array, substract from subseqent results
+1. version posted by Qrczak, allocates space on the heap
+2. allocate bool array for predicate results
+3. allocate array, and then sub it
+4. your version
+5. allocate first 32 elemnts for results, when it's filled, store array
+   on list, allocate 64 and so on. At the end concat resulting arrays.
+
+5. version doesn't seem to have worst case (it's slower then fastest
+versions in given situation, but not by much).
+
+#v+
+let filter1 pred arr =
+  let sz = Array.length arr in
+  if sz == 0 then arr else
+  let rec loop i j =
+    if i >= sz then Array.make j arr.(0) else
+    let x = arr.(i) in
+    if pred x then begin
+       let result = loop (i + 1) (j + 1) in
+       result.(j) <- x;
+       result
+    end else loop (i + 1) j in
+  loop 0 0
+
+let filter2 f ar =
+  let sz = Array.length ar in
+  if sz == 0 then ar else
+  let tmp = Array.create sz false in
+  let rec loop len i =
+    if i >= sz then len
+    else
+      if f ar.(i) then
+        (tmp.(i) <- true; loop (len + 1) (i + 1))
+      else
+        loop len (i + 1)
+  in
+  let len = loop 0 0 in
+  let res = Array.create len ar.(0) in
+  let rec loop len i =
+    if i >= sz then res
+    else
+      if tmp.(i) then
+        (res.(len) <- ar.(i); loop (len + 1) (i + 1))
+      else
+        loop len (i + 1)
+  in loop 0 0
+
+let filter3 f ar =
+  let sz = Array.length ar in
+  if sz == 0 then ar else
+  let tmp = Array.create sz ar.(0) in
+  let rec loop len i =
+    if i >= sz then
+      Array.sub tmp 0 len
+    else
+      if f ar.(i) then
+        (tmp.(len) <- ar.(i); loop (len + 1) (i + 1))
+      else
+        loop len (i + 1)
+  in loop 0 0
+
+let filter4 test a =
+  let result = (Array.fold_left
+                  (fun accu elt -> 
+                     if test elt then elt :: accu else accu) 
+                  [] a) 
+  in Array.of_list (List.rev result)
+
+let filter5 f ar =
+  let sz = Array.length ar in
+  if sz == 0 then ar else
+  let rec loop acc cur i pos =
+    if i >= sz then
+      if pos == 0 then
+        Array.concat (List.rev acc)
+      else
+        let cut = Array.sub cur 0 pos in
+        Array.concat (List.rev (cut :: acc))
+    else
+      if pos >= Array.length cur then
+        loop (cur :: acc) (Array.make (Array.length cur * 2) ar.(0)) i 0
+      else
+        if f ar.(i) then
+          (cur.(pos) <- ar.(i); loop acc cur (i + 1) (pos + 1))
+        else
+          loop acc cur (i + 1) pos
+  in
+  loop [] (Array.make 32 ar.(0)) 0 0
+
+
+let main () =
+  let ar = Array.init 1000000 (fun _ -> Random.int 100) in
+  let test f =
+    for i = 1 to 10 do
+      Printf.printf "%d\n" (Array.length (f (fun x -> x > 50) ar))
+    done
+  in
+  match Sys.argv.(1) with
+  | "0" -> ()
+  | "1" -> test filter1
+  | "2" -> test filter2
+  | "3" -> test filter3
+  | "4" -> test filter4
+  | "5" -> test filter5
+  | _ -> assert false
+;;
+main ()
+#v-
+
+-- 
+: Michal Moskal :: http://www.kernel.pl/~malekith : GCS {C,UL}++++$ a? !tv
+: When in doubt, use brute force. -- Ken Thompson : {E-,w}-- {b++,e}>+++ h
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

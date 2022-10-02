@@ -1,0 +1,107 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA17351; Tue, 17 Jul 2001 18:19:16 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA17354 for <caml-list@pauillac.inria.fr>; Tue, 17 Jul 2001 18:19:15 +0200 (MET DST)
+Received: from localhost.localdomain (ppp50.dyn147.pacific.net.au [210.23.147.50])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f6HGJCb11225
+	for <caml-list@inria.fr>; Tue, 17 Jul 2001 18:19:12 +0200 (MET DST)
+Received: from maxtal.com.au (IDENT:root@localhost [127.0.0.1])
+	by localhost.localdomain (8.9.3/8.8.7) with ESMTP id CAA30945;
+	Wed, 18 Jul 2001 02:18:59 +1000
+Message-ID: <3B546572.FFE73964@maxtal.com.au>
+Date: Wed, 18 Jul 2001 02:18:58 +1000
+From: John Max Skaller <skaller@maxtal.com.au>
+X-Mailer: Mozilla 4.7 [en] (X11; I; Linux 2.2.12-20 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+CC: web-caml@quatramaran.ens.fr, caml-list@inria.fr
+Subject: Re: [Caml-list] Web Development with OCaml
+References: <Pine.GSO.4.04.10107131216450.9219-100000@clipper.ens.fr> <Pine.LNX.4.30.0107131510020.20122-100000@ontil.ihep.su> <20010713160428.A9419@pauillac.inria.fr> <20010715140351.B20044@andrew.cmu.edu>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Ari Heitner wrote:
+> > Second, you (and others) seem to take for granted that a "servlet
+> > container" must load servlets dynamically into its own memory image.
+> > That's the Java way, but again that's not the only way.  Using
+> > separate processes for the HTTP server/servlet container and for the
+> > servlets (but not starting a new servlet process on each request like
+> > CGI does) might very well work better: I'll bet the performance hit
+> > would be insignificant, and you get a clean, well-specified
+> > communication protocol between server and servlets.
+> 
+> Aha! the real point.
+> 
+> CGIs roll over when people keep hitting the system, and apache (not fast in
+> the first place) croaks as it spawns a new process for every request -- the
+> system rapidly has too many processes, and swaps itself to death.
+> 
+> The sane thing to do seems to be to have only a few more processes than
+> CPUs, and drive those processes has hard as possible with async io. There's
+> no strong reason to make either your httpd or your database process even
+> multithreaded...
+
+	Poor OS design is the problem. The correct way to service
+HTTP requests is to have a queue of pairs:
+
+	(user-id, request)
+
+and an object for each user. One then checks the user-id of the 
+oldest message in the queue, and calls the resume method 
+of the object for that user, passing the request.
+
+The key design issue here is how to map user ids onto objects.
+By considering how many connectsion you expect, and using
+a hash table, you can get near constant time context switching
+and support millions of connections, even on a small box.
+Distributing the connection service between CPUs is trivial.
+
+There are two big problems here. The first is that writing
+event driven code is very hard. Felix solves that problem.
+One writes a 'thread' which reads messages, and the compiler
+translates the code into event driven form. 
+Because Felix generates C++ which is compiled to a shared library, 
+the resulting 'service logic' executes very quickly, and the
+available 'servlets' can be dynamically extended 
+(and even upgraded) while the service process is running.
+
+The second problem is the design of operating
+system schedulers. It is necessary to do TCP/IP
+on a single channel. Most OS's cannot do this.
+They insist on spawning a separate socket for each connection.
+Then there is no fast way to find which socket is ready
+with a complete message. This is because the scheduling
+algorithms are general purpose.
+
+So, if there is anyone that knows enough TCP/IP to provide
+the required logic from a RAW (connectionless) socket,
+then there is a solution. I believe FreeBSD provides
+such sockets. The TCP layer must still be implemented.
+There may be a way to hack Linux to intercept the 
+construction of messages per socket (and steal the 
+message away, and put it into the message queue).
+
+It is possible that Felix can be modified/enhanced to
+generate Ocaml instead of C++: the key requirement
+is for classes with a resume method. [The biggest
+technical problem is that efficient implementation
+of control structures requires a goto which Caml
+doesn't have, but there is a slightly less efficient
+workaround already available]
+
+The main problem with an Ocaml solution is that it doesn't 
+support dynamic loading. It may be possible to circumvent
+that issue by either using a process per program
+(just ONE) or by using the bytecode interpreter.
+
+-- 
+John (Max) Skaller, mailto:skaller@maxtal.com.au 
+10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+New generation programming language Felix  http://felix.sourceforge.net
+Literate Programming tool Interscript     
+http://Interscript.sourceforge.net
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

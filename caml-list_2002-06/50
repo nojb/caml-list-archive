@@ -1,0 +1,123 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA05647; Thu, 6 Jun 2002 17:11:47 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA05693 for <caml-list@pauillac.inria.fr>; Thu, 6 Jun 2002 17:11:46 +0200 (MET DST)
+Received: from postfix2-2.free.fr (postfix2-2.free.fr [213.228.0.140])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g56FBk126378
+	for <caml-list@inria.fr>; Thu, 6 Jun 2002 17:11:46 +0200 (MET DST)
+Received: from gregoire.dijon.fr (grenoble-1-a7-62-147-72-113.dial.proxad.net [62.147.72.113])
+	by postfix2-2.free.fr (Postfix) with ESMTP
+	id 69C525FF61; Thu,  6 Jun 2002 17:11:44 +0200 (CEST)
+Received: from gregoire (localhost [127.0.0.1])
+	by gregoire.dijon.fr (8.11.2/8.11.2/SuSE Linux 8.11.1-0.5) with SMTP id g56F8hm18497;
+	Thu, 6 Jun 2002 17:08:43 +0200
+Date: Thu, 6 Jun 2002 17:08:42 +0200
+From: Michel Quercia <michel.quercia@prepas.org>
+To: Winfried Dreckmann <wd@lidingo.mail.telia.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] look operator
+Message-Id: <20020606170842.7ac394b7.michel.quercia@prepas.org>
+In-Reply-To: <B924FF7D.B917%wd@lidingo.mail.telia.com>
+References: <B924FF7D.B917%wd@lidingo.mail.telia.com>
+X-Mailer: Sylpheed version 0.7.2 (GTK+ 1.2.10; i686-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Le Thu, 06 Jun 2002 12:01:02 +0200
+Winfried Dreckmann <wd@lidingo.mail.telia.com> écrivit :
+
+> Dear everyone,
+> 
+> I can't resist to ask for people's opinion on a certain compromise between
+> imperative and functional programming which a found in the "numerix" library
+> of Michel Quercia. Of course, if you read this, Michel, I would be
+> particularly grateful for your own opinion.
+
+OK, here are some motivations for introducing trefs into Numerix and the strange-behaved look operation.
+
+If one writes :
+
+ r := add !r x
+
+where "r" is an ordinary Ocaml reference to some big integer and "x" is another big integer, then the addition of r.contents and x will be performed, some fresh memory will be allocated for holding
+the result, and the memory holding the previous content of "r" will be returned back to the memory pool (actually there is no memory return, the GC finds by itself which blocs of memory can be
+recycled). Very often, the size of the result is equal to the size of the former content of "r", therefore one ends up with asking the Ocaml memory manager for a memory block and returning a few
+microseconds later some other bloc of the same size. This is inefficient, and it is dramatically inefficient inside of inner loops. One can speed up things by using the memory already allocated to
+r.contents for storing the result if this memory bloc is large enough, and if the former content was only reachable through "r". Doing this way, Ocaml memory manager is not bothered at all, and I
+observed a global speedup factor of 2 when implementing this "recycle now" policy in the program I was developping at that time (Hamming numbers chase).
+
+> As the manual says, the result of "look r" is
+> volatile, it is only guaranteed to be valid until the next in-place
+> operation involving r.
+
+I think that I'll try and rewrite this sentence better for next Numerix release. One should read : "the result is always a valid big integer, but the value of this integer is granted to be constant
+only until the next in-place operation involving r. With the current implementation, after the instruction :
+
+let l = look r in xxx_in r <expression>
+
+the identifier "l" is bound either to the former value held by "r" or to the new one. The "look" operation should be restricted to local use only, and the "copy_out" operation should be used whenever
+it can not be proved that r will never be modified again."
+
+
+> In my own experience, mistakes occur faster than
+> expected.
+
+Right, and should such an operation become standard, then the compiler should check that the tref "r" becomes unreachable after the last "look" (this may be easier to say than to implement).
+
+> But this is a great and elegant trick.
+
+Thanks,
+
+> Using "look", every single
+> function with arguments of type t, say
+> 
+> val add_in : tref -> t -> t -> unit,
+> 
+> replaces two or more functions which would otherwise be necessary, in this
+> case
+> 
+> val add_in1 : tref -> t -> t -> unit
+> val add_in2 : tref -> tref -> t -> unit
+> val add_in3 : tref -> tref -> tref -> unit
+> 
+> at least. This would certainly blow up the library to impractical
+> dimensions.
+
+On my side it would not be a big burden, just a matter of adding some preprocessing step, but it is definitely unmanageable on the user side.
+
+> Of course, overloading would help, and "look" might become
+> obsolete in this way.
+
+I think overloading is absolutely necessary when dealing with numerical data. Writing some mathematical code invloving short integers, big integers, vectors and matrices for instance is a nightmare
+with the current Ocaml syntax. When such an overloading mechanism will be available, the "look" operation will disappear at the next Numerix release (but not the "trefs").
+
+
+> I could, for instance, also imagine an abstract assign operator
+> 
+> val set : tref -> t -> unit
+> 
+> where the contents of t is not copied but assigned to tref, and thus made
+> mutable, which could be useful in certain restricted ways.
+
+This is too dangerous :
+
+let e1 = ... and e2 = ... in
+set r (if ... then e1 else e2);
+xxx_in r ...;
+
+(* try and guess what will be e1 and e2 now *)
+
+Regards,
+-- 
+Michel Quercia
+57 rue abbé Grégoire, 38000 Grenoble
+http://michel.quercia.free.fr (maths)
+http://pauillac.inria.fr/~quercia (informatique)
+mailto:michel.quercia@prepas.org
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,120 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA27803; Wed, 19 Nov 2003 18:52:08 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA27797 for <caml-list@pauillac.inria.fr>; Wed, 19 Nov 2003 18:52:07 +0100 (MET)
+Received: from mail3.bluewin.ch (mail3.bluewin.ch [195.186.1.75])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hAJHq7127872
+	for <caml-list@inria.fr>; Wed, 19 Nov 2003 18:52:07 +0100 (MET)
+Received: from [10.0.1.2] (195.186.203.15) by mail3.bluewin.ch (Bluewin AG 7.0.020.2)
+        id 3FA9FE37001DB2B8 for caml-list@inria.fr; Wed, 19 Nov 2003 17:52:06 +0000
+Mime-Version: 1.0 (Apple Message framework v606)
+Content-Transfer-Encoding: 7bit
+Message-Id: <1970C334-1AB9-11D8-ADB3-000393DBC266@epfl.ch>
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+To: caml-list@inria.fr
+From: =?ISO-8859-1?Q?Daniel_B=FCnzli?= <daniel.buenzli@epfl.ch>
+Subject: [Caml-list] Accuracy of Gc.stat ()
+Date: Wed, 19 Nov 2003 18:52:10 +0100
+X-Mailer: Apple Mail (2.606)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; runtime:01 utime:01 utime:01 profile:98 profile:98 caml:01 bytecode:01 int:01 int:01 float:02 float:02 pro:97 pro:97 native:02 native:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Since my first attempt [1] didn't really get through, I try to 
+reformulate my post.
+
+To compare different implementations of a function I would like to 
+profile its execution in time and heap memory usage (at least orders of 
+magnitude). To do so, I use the code given at the end of this email. 
+Basically I do a full major collection, get the gc statistics via the 
+Gc.stat () function, run my function, call again Gc.stat (), and 
+substract the former statistics to the latters.
+
+My questions are :
+
+1) What is the accuracy of these results ?
+
+E.g. I read in the documentation of the Gc module that the field 
+minor_words is only an approximation in programs compiled to native 
+code. Is it also true for the other fields ? Would the figure 
+minor+major-promoted be accurate ? How much can I trust the figures I 
+get ?
+
+2) When I start profiling should I prefer a Gc.compact to a 
+Gc.full_major ?
+
+3) Is it possible to know at runtime whether we are running native code 
+or interpreted bytecode ?
+
+Regarding time profiling, a binding in the Unix module to the 
+getrusage() function would definitvely be nice.
+
+Thanks for your answers,
+
+Daniel
+
+[1] <http://caml.inria.fr/archives/200311/msg00217.html>
+
+-- profile.ml --
+
+type t = { minor_bytes : float;
+	   promoted_bytes : float;
+	   major_bytes : float;
+	   allocated_bytes : float;
+	
+	   minor_collections : float;
+	   major_collections : float;
+	
+	   user_time : float;
+	   system_time : float }
+
+(* Bytes per words *)
+let bpw = float_of_int (Sys.word_size / 8)
+
+(* Heap allocation overhead due to profiling *)
+let heap_overhead =
+   let s = Gc.stat() in
+   ignore(Unix.times());
+   ignore(Unix.times());
+   let s' = Gc.stat() in
+   ((s'.Gc.minor_words +. s'.Gc.major_words -. s'.Gc.promoted_words) -.
+   (s.Gc.minor_words +. s.Gc.major_words -. s.Gc.promoted_words)) *. bpw
+
+let execution_stats_n n f a =
+   Gc.full_major ();
+   let s = Gc.stat () in
+   let t = Unix.times () in
+   for i = 1 to n do
+     ignore(f a)
+   done;
+   let t' = Unix.times () in
+   let s' = Gc.stat () in
+   let mi, pro, ma =
+     ((s'.Gc.minor_words -. s.Gc.minor_words) *. bpw) -. heap_overhead,
+     (s'.Gc.promoted_words -. s.Gc.promoted_words) *. bpw,
+     (s'.Gc.major_words -. s.Gc.major_words) *. bpw in
+   let n' = float_of_int n in
+   { minor_bytes = mi /. n';
+     promoted_bytes = pro /. n';
+     major_bytes = ma /. n';
+     allocated_bytes = (mi +. ma -. pro) /. n';
+
+     minor_collections =
+       (float_of_int (s'.Gc.minor_collections - s.Gc.minor_collections)) 
+/. n';
+     major_collections =
+       (float_of_int (s'.Gc.major_collections - s.Gc.major_collections)) 
+/. n';
+
+     user_time = (t'.Unix.tms_utime -. t.Unix.tms_utime) /. n';
+     system_time = (t'.Unix.tms_stime -. t.Unix.tms_stime) /. n'
+   }
+
+let execution_stats f a = execution_stats_n 1000 f a
+let execution f a = execution_stats_n 1 f a
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

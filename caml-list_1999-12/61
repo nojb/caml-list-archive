@@ -1,0 +1,124 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA20505 for caml-redistribution; Mon, 13 Dec 1999 17:42:15 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA03446 for <caml-list@pauillac.inria.fr>; Mon, 13 Dec 1999 17:21:51 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id RAA14462;
+	Mon, 13 Dec 1999 17:21:42 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA23536; Mon, 13 Dec 1999 17:21:42 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199912131621.RAA23536@pauillac.inria.fr>
+Subject: Re: Ask for explanation -- possibly repeated
+To: Benoit.de-Boursetty@polytechnique.org
+Date: Mon, 13 Dec 1999 17:21:41 +0100 (MET)
+Cc: Pierre.Weis@inria.fr, caml-list@inria.fr
+In-Reply-To: <Pine.GSO.4.02.9912130055340.26575-100000@young.enst.fr> from "Benoit de Boursetty" at Dec 13, 99 01:25:14 am
+X-Mailer: ELM [version 2.4 PL24 ME8]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> > As usual: hide the side effect into the lazy side of the language that
+> > is usually considered as pure and applicative, add a bit of
+> > eta-expansion if your language does not know lazy evaluation properly,
+> > and you get a simple workaround:
+> > 
+> > let translate_tree t =
+> >     let rec aux father (Classical_node (data, sons)) =
+> >       let rec this_node = lazy (Node (father, data,
+> >                                 List.map
+> >                                   (aux (Some (Lazy.force this_node)))
+> >                                   sons))
+> >       in Lazy.force this_node
+> >     in aux None t;;
+> > val translate_tree : 'a classical_tree -> 'a tree = <fun>
+> 
+> Erm... "eta-expansion" is not that usual to me but... well, with all my
+> respect, your solution doesn't seem to work.
+> (unless it works with version 2.04, I'm still using O'CaML 2.02)
+> 
+> # let essai = Classical_node ("Father", [Classical_node ("Son", [])]);;
+> val essai : string classical_tree =
+>   Classical_node ("Father", [Classical_node ("Son", [])])
+> 
+> # translate_tree essai;;
+> Stack overflow during evaluation (looping recursion?).
+
+Oups! Never forget that this is the usual result with (uncautious)
+lazy evaluation :) (That's why it is so difficult).
+
+So, the evaluation was not lazy enough, since the ``this_node'' value
+was needed to compute the list of its sons.
+Let me have a second try with a true lazy father field:
+
+type 'a tree = Node of ('a tree Lazy.t) option * 'a * 'a tree list
+;;
+
+let translate_tree t =
+    let rec aux father (Classical_node (data, sons)) =
+      let rec this_node = lazy (Node (father, data,
+                                List.map
+                                  (aux (Some this_node))
+                                  sons))
+      in Lazy.force this_node
+    in aux None t;;
+
+Now we get:
+
+# translate_tree essai;;
+- : string tree = ...
+
+Evidently this is not completely satisfactory, since the list of sons
+are not computed in a lazy maner (this list should be a lazy
+list). Hence the program is still too eager (not lazy enough), since
+consider the following ``classical'' tree with recursive sharing:
+
+# let rec bug =
+ Classical_node
+  (1, [Classical_node (2,[bug]); Classical_node (3, [bug; bug])]);;
+val bug : int classical_tree =
+...
+
+# translate_tree bug;;
+Stack overflow during evaluation (looping recursion?).
+
+> Ah ha. So are mutable values a must even outside the Lazy module? Or does
+> your eta-expansion (I don't even know what it means) need a lift... :-)
+
+Here the eta-expansion is just a technical way to say that any
+functional value f is equal to the expression
+(function x -> f x).
+
+Eta-expansion is used in the example to get a fully polymorphic
+definition of the translate_tree function: we write
+function x -> body x, instead of body, to expose to the typechecker
+the fact that we are defining a function. Hence, we write the
+(polymorphic) definition
+
+let translate_tree t =
+    ...
+    in aux None t;;
+
+instead of the monomorphic equivalent version you originally proposed
+
+let translate_tree =
+    ...
+    in aux No
+
+(More information about this in the FAQ of the language
+http://pauillac.inria.fr/caml/FAQ/)
+
+> Ah ha. So are mutable values a must even outside the Lazy module? Or does
+
+Evidently. So is also lazy evaluation, the appropriateness of those
+features depends on the problem you're trying to solve! For instance, if
+you can figure out a way to solve the ``translate_tree bug'' example using
+lazy evaluation, you certainly will not try to make it with mutable
+values handled by hand: presumably you would say that lazy evaluation
+is a must, at least inside this kind of program!
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/    
+
+
+

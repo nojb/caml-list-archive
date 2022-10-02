@@ -1,0 +1,110 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA11996; Thu, 4 Oct 2001 10:17:24 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA11992 for <caml-list@pauillac.inria.fr>; Thu, 4 Oct 2001 10:17:23 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f948HHP20331
+	for <caml-list@inria.fr>; Thu, 4 Oct 2001 10:17:18 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id RAA29483;
+	Thu, 4 Oct 2001 17:17:07 +0900 (JST)
+To: jgm@cs.cornell.edu
+Cc: caml-list@inria.fr
+Subject: RE: [Caml-list] Pattern matcher no more supposed to warn on non 
+ exhaustive patterns ?
+In-Reply-To: <706871B20764CD449DB0E8E3D81C4D4301EE6C00@opus.cs.cornell.edu>
+References: <706871B20764CD449DB0E8E3D81C4D4301EE6C00@opus.cs.cornell.edu>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20011004171707E.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 04 Oct 2001 17:17:07 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 79
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> The issue with threads is a bit more troublesome.  Consider:
+> 
+>   let x : (int->int) option ref = ref (Some (fun x -> x));;
+> 
+>   let foo z =
+>       match z with
+>         {contents=None} -> 0
+>       | {contents=Some(f)} -> f(0);
+> 
+> Now suppose I fork two threads:
+> 
+> Thread 1:  foo x
+> Thread 2:  x := None
+
+Wouldn't the straightforward idea be to take a snapshot of the mutable
+parts in the pattern before starting the matching ?
+That is, convert the above to:
+  let foo z =
+    let z' = {contents=z.contents} in
+    match z' with
+      {contents=None} -> 0
+    | {contents=Some f} -> f 0
+
+The funny part is if you also have aliases in the pattern
+  let foo z =
+     match z with
+       {contents=None} as x -> x.contents <- Some 0; 0
+     | {contents=Some(f)} -> f(0);
+
+Then you would have to make sure you return a pointer to the original
+structure:
+  let foo z =
+    let x = z in
+    let z' = {contents=z.contents} in
+    match z' with
+      {contents=None} -> x.contents <- Some 0; 0
+    | {contents=Some f} -> f 0
+
+It's even more complex than that, if you think of
+  let foo z =
+     match z with
+       {contents=None} as x when (x.contents <- Some 1; false) -> 0
+     | {contents=Some ({contents=None} as y)}
+       when (y <- Some 1; false) -> 1
+     | {contents=Some {contents=Some f}} -> f 0
+     | _ -> 2
+
+The idea is that you have to take snapshots of the type as you visit
+it, so that every time you come back somewhere it has not changed.
+So you build a shodow structure with both actual and copied nodes
+(types are not correct):
+
+type 'a shadow_ref = {real = 'a ref; copy = 'a ref}
+
+let shadow_ref z = {real = z; copy = {contents = z.contents}}
+
+let foo z =
+  let zs = shadow_ref z in
+  match zs.copy with
+    {contents=None} ->
+      zs.real.contents <- Some 1; if false then 0 else continue
+  | {contents=Some z1} ->
+      let z1s = shadow_ref z1 in
+      zs.copy.contents <- Some z1s; (* update with a different type! *)
+      begin match z1s.copy with
+        {contents = None} ->
+          z1s.real.contents <- Some 1; if false then 1 else continue
+      | _ -> continue
+      end
+  | {contents=Some z1s} ->
+      begin match z1s.copy with
+        {contents = Some f} -> f 0
+      | _ -> continue
+      end
+  | _ ->  2
+
+Looks possible, but the algorithm might get heavy...
+
+Jacques Garrigue
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

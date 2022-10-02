@@ -1,0 +1,172 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA28107; Sun, 12 Oct 2003 19:37:17 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA07331 for <caml-list@pauillac.inria.fr>; Sun, 12 Oct 2003 19:37:16 +0200 (MET DST)
+Received: from aomori.annexia.org (annexia.force9.co.uk [212.56.101.183])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h9CHbE114567
+	for <caml-list@inria.fr>; Sun, 12 Oct 2003 19:37:14 +0200 (MET DST)
+Received: from rich by aomori.annexia.org with local (Exim 3.36 #1 (Debian))
+	id 1A8k9Y-0002qj-00
+	for <caml-list@inria.fr>; Sun, 12 Oct 2003 18:37:12 +0100
+Date: Sun, 12 Oct 2003 18:37:12 +0100
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] perl4caml (Call Perl code and functions from Objective Caml)
+Message-ID: <20031012173712.GB6558@redhat.com>
+References: <20031011183643.GB17818@redhat.com> <20031012121242.GA6558@redhat.com>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="Kj7319i9nmIyA2yE"
+Content-Disposition: inline
+In-Reply-To: <20031012121242.GA6558@redhat.com>
+User-Agent: Mutt/1.5.4i
+From: Richard Jones <rich@annexia.org>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 caml-:01 cpan:01 freshmeat:01 dbi:99 threads:01 lwp:01 useragent:99 printf:01 lwp:01 useragent:99 argv:01 argv:01 failwith:01 printf:01 
+X-Attachments: name="loadpage.ml" name="pl_HTTP_Response.ml" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--Kj7319i9nmIyA2yE
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+http://www.annexia.org/tmp/perl4caml-0.2.1.tar.gz
+
+This version doesn't actually work (dies with some sort of
+inexplicable Perl-ism), but demonstrates some points. Attached #1 is
+some sample code which calls Perl classes. Attached #2 is the code you
+need to write to wrap around a Perl class.
+
+Wrapping the classes isn't as straightforward as I hoped, but it's
+pretty simple and doesn't require too much thought. Considerably
+easier (I hope) than rewriting CPAN anyway ...
+
+Rich.
+
+-- 
+Richard Jones. http://www.annexia.org/ http://freshmeat.net/users/rwmj
+Merjis Ltd. http://www.merjis.com/ - all your business data are belong to you.
+PTHRLIB is a library for writing small, efficient and fast servers in C.
+HTTP, CGI, DBI, lightweight threads: http://www.annexia.org/freeware/pthrlib/
+--Kj7319i9nmIyA2yE
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="loadpage.ml"
+
+(* Example program which uses LWP::UserAgent and HTML::TreeBuilder to
+ * download an HTTP page and parse it.
+ * Copyright (C) 2003 Merjis Ltd.
+ * $Id: loadpage.ml,v 1.1 2003/10/12 17:33:14 rich Exp $
+ *)
+
+open Printf
+
+open Pl_LWP_UserAgent
+open Pl_HTTP_Request
+open Pl_HTML_TreeBuilder
+open Pl_HTML_Element
+
+let () =
+  (* This is a hack which shouldn't be needed in future. *)
+  Perl.eval "use LWP::UserAgent";
+  Perl.eval "use Net::HTTP";
+
+  let site =
+    if Array.length Sys.argv >= 2 then
+      Sys.argv.(1)
+    else
+      "http://www.merjis.com/" in
+
+  (* Create the UserAgent object. *)
+  let ua = Pl_LWP_UserAgent.new_ ~env_proxy:true () in
+
+  (* Fetch the page. *)
+  let req = Pl_HTTP_Request.new_ "GET" ~uri:site () in
+  let res = ua#request req in
+
+  if not res#is_success then
+    failwith ("Error while fetching " ^ site ^ ": " ^ res#status_line);
+
+  (* Extract the content of the page. *)
+  let content = res#content in
+
+  (* Parse it using HTML::TreeBuilder. *)
+  let tree = Pl_HTML_TreeBuilder.new_from_content content in
+
+  (* Turn the tree into an HTML::Element. *)
+  let tree = tree#elementify in
+
+  (* Print out the resulting tree. *)
+  let rec print root =
+    let tag = root#tag in
+    let attrs = root#all_external_attr in
+    let subnodes = root#content_list in
+
+    printf "Start tag: %s\n" tag;
+    List.iter (fun (name, value) ->
+		 printf "\tAttr: %s=\"%s\"\n" name value) attrs;
+
+    List.iter (fun node ->
+		 match node with
+		     Element node -> print node
+		   | String str ->
+		       printf "String: %s\n" str) subnodes;
+    printf "End tag: %s\n" tag
+  in
+  print tree;
+
+  (* Destroy the Perl interpreter. *)
+  Perl.destroy ()
+
+--Kj7319i9nmIyA2yE
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="pl_HTTP_Response.ml"
+
+(* Wrapper around Perl HTTP::Response class.
+ * Copyright (C) 2003 Merjis Ltd.
+ * $Id: pl_HTTP_Response.ml,v 1.1 2003/10/12 17:33:15 rich Exp $
+ *)
+
+open Perl
+
+open Pl_HTTP_Message
+
+class http_response sv =
+
+object (self)
+  inherit http_message sv
+
+  method code =
+    string_of_sv (call_method sv "code" [])
+  method set_code code =
+    call_method_void sv "code" [sv_of_string code]
+  method message =
+    string_of_sv (call_method sv "message" [])
+  method set_message message =
+    call_method_void sv "message" [sv_of_string message]
+  method status_line =
+    string_of_sv (call_method sv "status_line" [])
+  method base =
+    string_of_sv (call_method sv "base" [])
+  method as_string =
+    string_of_sv (call_method sv "as_string" [])
+  method is_info =
+    bool_of_sv (call_method sv "is_info" [])
+  method is_success =
+    bool_of_sv (call_method sv "is_success" [])
+  method is_redirect =
+    bool_of_sv (call_method sv "is_redirect" [])
+  method is_error =
+    bool_of_sv (call_method sv "is_error" [])
+  method error_as_HTML =
+    string_of_sv (call_method sv "error_as_HTML" [])
+
+end
+
+(* let new_ ... *)
+
+--Kj7319i9nmIyA2yE--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

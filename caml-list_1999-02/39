@@ -1,0 +1,165 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA16041 for caml-redistribution; Tue, 9 Feb 1999 09:45:44 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA15854 for <caml-list@pauillac.inria.fr>; Tue, 9 Feb 1999 08:03:49 +0100 (MET)
+Received: from kronstadt.transbay.net (ip55231.transbay.net [209.133.55.231])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id IAA24380
+	for <caml-list@inria.fr>; Tue, 9 Feb 1999 08:03:44 +0100 (MET)
+Received: (from itz@localhost)
+	by kronstadt.transbay.net (8.8.6/8.8.6) id XAA30063;
+	Mon, 8 Feb 1999 23:02:52 -0800
+Sender: weis
+To: caml-list@inria.fr
+Subject: Re: Catching Break?
+References: <199901281733.JAA05913@kronstadt.transbay.net>
+	<m2aeyslz2l.fsf@kronstadt.transbay.net>
+From: Ian T Zimmerman <itz@transbay.net>
+Date: 08 Feb 1999 23:02:52 -0800
+In-Reply-To: Ian T Zimmerman's message of 06 Feb 1999 00:24:18 -0800
+Message-ID: <m2socg2h5v.fsf@kronstadt.transbay.net>
+Lines: 142
+X-Mailer: Gnus v5.3/Emacs 19.34
+
+Ian T Zimmerman <itz@transbay.net> writes:
+
+> 
+> Ian T Zimmerman <itz@transbay.net> writes:
+> 
+> >  Ok, I see that I'll have to start posting my real code, because I
+> > still can't make it work despite (imperfect) analogy with the
+> > example.
+> >  let remove_pair prefix pid =
+> >   let spid = string_of_int pid in let iname = prefix ^ spid ^ ".i"
+> >   and oname = prefix ^ spid ^ ".o" in Sys.remove iname; Sys.remove
+> >   oname
+> >  let open_pair prefix pid respond =
+> >   let spid = string_of_int pid in let iname = prefix ^ spid ^ ".i"
+> >   and oname = prefix ^ spid ^ ".o" and iflags = [Unix.O_RDONLY ;
+> >   Unix.O_NONBLOCK] and oflags = [Unix.O_WRONLY] in let id x = x in
+> >   Sys.catch_break true; let (ind, outd) = try if respond then
+> >     let outd = Unix.openfile iname oflags 0 in let ind =
+> >     Unix.openfile oname iflags 0 in id (ind, outd)
+> >   else
+> >     let ind = Unix.openfile iname iflags 0 in let outd =
+> >     Unix.openfile oname oflags 0 in (* HERE! *) id (ind, outd)
+> >   with Sys.Break ->
+> >     if not respond then remove_pair prefix pid; Sys.catch_break
+> >     false; exit 0; assert false in
+> >   Sys.catch_break false; (ind, outd)
+> >
+> >  The files referred to by [io]name are named pipes; the write open
+> > hangs until the other side is opened, which may never happen.  So as
+> > to have a chance to clean up (namely remove the pipes), I must allow
+> > _and_ catch Control-C as I'm trying to.  But it doesn't work; if I
+> > hit Control-C while blocked in the open marked, I never get into the
+> > with handler.
+> >
+> 
+> I tried this:
+> 
+> let remove_pair prefix pid = 
+>   let spid = string_of_int pid in
+>   let iname = prefix ^ spid ^ ".i"
+>   and oname = prefix ^ spid ^ ".o" in
+>   Sys.remove iname; Sys.remove oname
+> 
+> let open_pair prefix pid respond =
+>   let spid = string_of_int pid in
+>   let iname = prefix ^ spid ^ ".i"
+>   and oname = prefix ^ spid ^ ".o" 
+>   and iflags = [Unix.O_RDONLY ; Unix.O_NONBLOCK]
+>   and oflags = [Unix.O_WRONLY] in
+>   Sys.catch_break true;
+>   let (ind, outd) = try if respond then
+>     let outd = Unix.openfile iname oflags 0 in
+>     let ind = Unix.openfile oname iflags 0 in
+>     for i = 0 to 1 do () done; (ind, outd)
+>   else
+>     let ind = Unix.openfile iname iflags 0 in
+>     let outd = Unix.openfile oname oflags 0 in
+>     for i = 0 to 1 do () done; (ind, outd)
+>   with Sys.Break ->
+>     if not respond then remove_pair prefix pid;
+>     Sys.catch_break false; exit 0;
+>     assert false in
+>   Sys.catch_break false; (ind, outd)
+> 
+> 
+> ... and it doesn't work, either :-(
+> I am really stumped, please help.
+> 
+
+I think I have figured this out, at last.  I _have_ overlooked
+something quite simple, so I'm a bit ashamed, but maybe it also
+qualifies as a minor bug in Ocaml and that's why I'm getting over my
+shame and posting this.
+
+The trouble is that there are _two_ exceptions involved here: one
+(Sys.Break) set up by the signal handler, and _another_
+(Unix.Unix_error) raised by the openfile primitive when the true
+open() fails with errno == EINTR.  There was no handler for Unix_error
+in my code and that's the reason for the "Uncaught exception"
+behaviour; OTOH, the runtime system doesn't seem to be prepared for
+this situation and raises Break regardless, at the next "safe point"
+which happens to be in the catch_all exception handler.
+
+The only solution I have found is to set up my own sigint handler:
+
+let remove_pair prefix pid = 
+  let spid = string_of_int pid in
+  let iname = prefix ^ spid ^ ".i"
+  and oname = prefix ^ spid ^ ".o" in
+  Sys.remove iname; Sys.remove oname
+
+let safe_open name flags mode =
+  let break_handler _ = () in
+  let old_handler = Sys.signal Sys.sigint (Sys.Signal_handle break_handler) in
+  let d = Unix.openfile name flags mode in
+  Sys.set_signal Sys.sigint old_handler; d
+
+let open_pair prefix pid respond =
+  let spid = string_of_int pid in
+  let iname = prefix ^ spid ^ ".i"
+  and oname = prefix ^ spid ^ ".o" 
+  and iflags = [Unix.O_RDONLY ; Unix.O_NONBLOCK]
+  and oflags = [Unix.O_WRONLY] in
+  let (ind, outd) = try if respond then
+    let outd = safe_open iname oflags 0 in
+    let ind = safe_open oname iflags 0 in
+    (ind, outd)
+  else
+    let ind = safe_open iname iflags 0 in
+    let outd = safe_open oname oflags 0 in
+    (ind, outd) 
+  with any ->
+    if not respond then remove_pair prefix pid;
+    raise any in (ind, outd)
+
+
+Now I receive _only_ the Unix_error exception, and I clean up as
+intended.
+
+
+IMO there are two possible changes to Ocaml that can fix this
+confusing situation:
+
+o	Do not run the delayed ML signal handlers while in a 
+        "with .." block.  This is like considering ML synchronous
+        exceptions as "highest priority" signals. I can see how this
+        could be difficult, though, with a global state flag needed,
+        interaction with threads etc.
+
+o       Within unix_error (in otherlibs/unix/unixsupport.c) check if
+        Sys.sigint is pending and Sys.catch_break has been set, and if
+        so, do nothing (rather than raise Unix_error).  I can see how
+        this could be difficult as well - is there any way for C
+        primitive code to access the runtime internals like this?
+
+Best,
+
+-- 
+Ian T Zimmerman                        <itz@transbay.net>
+I came to the conclusion that what was wrong about the guillotine
+was that the condemned man had no chance at all, absolutely none.
+Albert Camus, _The Outsider_
+
+
+

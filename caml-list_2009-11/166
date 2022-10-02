@@ -1,0 +1,126 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id E195CBBAF
+	for <caml-list@yquem.inria.fr>; Mon, 30 Nov 2009 01:38:12 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqYDAD6iEktV2gB4h2dsb2JhbACESJRlgmQBAQEKCwgHFadyjyKBL4IuVASJEw
+X-IronPort-AV: E=Sophos;i="4.47,309,1257116400"; 
+   d="scan'208";a="37670132"
+Received: from emailfrontal1.citycable.ch ([85.218.0.120])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 30 Nov 2009 01:38:12 +0100
+Received: from [192.168.0.12] (unknown [85.218.92.99])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal1.citycable.ch (Postfix) with ESMTPA id 0E07512C2FF;
+	Mon, 30 Nov 2009 01:38:10 +0100 (CET)
+Message-ID: <4B1313F7.8070501@citycable.ch>
+Date: Mon, 30 Nov 2009 01:38:15 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20090707)
+MIME-Version: 1.0
+To: OCaml List <caml-list@inria.fr>
+Subject: Wrapping sigsetjmps/siglongjmps in OCaml.
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; guillaume:01 guillaume:01 ocaml:01 ocaml:01 restrictive:01 reimplement:01 setjmp:01 sexp:01 val:01 val:01 setjmp:01 globals:01 sexp:01 ctxt:98 token:01 
+
+Hello.
+
+I'm having some problems wrapping up the API for the R interpreter, 
+namely because R seems to be using sigsetjmps and siglongjmps 
+everywhere: that's how looping is implemented, for instance. (At least 
+that's how I understand the source code).
+
+So I was wondering: what's the "best" way to wrap up such jumps in OCaml 
+code? It may be that the jumps would happen in one single C function. Or 
+it may be, due to a rather restrictive API for R, that I may have to 
+reimplement some C code entirely in OCaml. In which case, the jumps 
+would go over OCaml code.
+
+How would you deal with that?
+
+
+Here's the LONGJMP:
+
+SETJMP and LONGJMP are just macros to sigsetjmp and siglongjmp.
+
+> /* jumpfun - jump to the named context */
+> 
+> static void jumpfun(RCNTXT * cptr, int mask, SEXP val)
+> {
+>     Rboolean savevis = R_Visible;
+> 
+>     /* run onexit/cend code for all contexts down to but not including
+>        the jump target */
+>     PROTECT(val);
+>     R_run_onexits(cptr);
+>     UNPROTECT(1);
+>     R_Visible = savevis;
+> 
+>     R_ReturnedValue = val;
+>     R_GlobalContext = cptr; /* this used to be set to
+>                                cptr->nextcontext for non-toplevel
+>                                jumps (with the context set back at the
+>                                SETJMP for restarts).  Changing this to
+>                                always using cptr as the new global
+>                                context should simplify some code and
+>                                perhaps allow loops to be handled with
+>                                fewer SETJMP's.  LT */
+>     R_restore_globals(R_GlobalContext);
+> 
+>     LONGJMP(cptr->cjmpbuf, mask);
+> }
+
+Here's the SETJMP
+
+> SEXP applyClosure(SEXP call, SEXP op, SEXP arglist, SEXP rho, SEXP suppliedenv)
+> {
+>     SEXP body, formals, actuals, savedrho;
+>     volatile  SEXP newrho;
+>     SEXP f, a, tmp;
+>     RCNTXT cntxt;
+> 
+>     /* formals = list of formal parameters */
+>     /* actuals = values to be bound to formals */
+>     /* arglist = the tagged list of arguments */
+> 
+>     formals = FORMALS(op);
+>     body = BODY(op);
+>     savedrho = CLOENV(op);
+>
+> [...]
+>
+>     /*  Set a longjmp target which will catch any explicit returns
+>         from the function body.  */
+> 
+>     if ((SETJMP(cntxt.cjmpbuf))) {
+>         if (R_ReturnedValue == R_RestartToken) {
+>             cntxt.callflag = CTXT_RETURN;  /* turn restart off */
+>             R_ReturnedValue = R_NilValue;  /* remove restart token */
+>             PROTECT(tmp = eval(body, newrho));
+>         }
+>         else
+>             PROTECT(tmp = R_ReturnedValue);
+>     }
+>     else {
+>         PROTECT(tmp = eval(body, newrho));
+>     }
+> 
+>     endcontext(&cntxt);
+> 
+>     if (RDEBUG(op)) {
+>         Rprintf("exiting from: ");
+>         PrintValueRec(call, rho);
+>     }
+>     UNPROTECT(3);
+>     return (tmp);
+> }
+
+All the best,
+
+-- 
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

@@ -1,0 +1,155 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA18177; Wed, 9 Apr 2003 16:12:31 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA18012 for <caml-list@pauillac.inria.fr>; Wed, 9 Apr 2003 16:12:30 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from h00045a4799d6.ne.client2.attbi.com (h00045a4799d6.ne.client2.attbi.com [65.96.179.155])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h39ECT902723
+	for <caml-list@inria.fr>; Wed, 9 Apr 2003 16:12:29 +0200 (MET DST)
+Received: by h00045a4799d6.ne.client2.attbi.com (Postfix, from userid 500)
+	id 480612AC55; Wed,  9 Apr 2003 10:14:53 -0400 (EDT)
+From: Neel Krishnaswami <neelk@alum.mit.edu>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16020.10973.162317.709095@h00045a4799d6.ne.client2.attbi.com>
+Date: Wed, 9 Apr 2003 10:14:53 -0400
+To: caml-list@inria.fr
+Subject: CPS folds (was Re: [Caml-list] stack overflow)
+In-Reply-To: <200304091723.30890.yangsx@fltrp.com>
+References: <Pine.LNX.4.44.0304081914280.8801-100000@grace.speakeasy.net>
+	<200304091045.25094.yangsx@fltrp.com>
+	<20030409081451.GA18772@mail4.ai.univie.ac.at>
+	<200304091723.30890.yangsx@fltrp.com>
+X-Mailer: VM 7.04 under 21.4 (patch 8) "Honest Recruiter" XEmacs Lucid
+X-Spam: no; 0.00; neel:01 krishnaswami:01 neelk:01 caml-list:01 shouxun:01 passing:01 figuring:01 datatype:01 val:01 non-constant:01 tail-call:01 stupid:01 fold':01 closures:01 cps-convert:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Yang Shouxun writes:
+> On Wednesday 09 April 2003 16:14, Markus Mottl wrote:
+> >
+> > The trick is to use continuation passing style (CPS): you pass a
+> > function closure (continuation) containing everything that's
+> > needed in subsequent computations.  Instead of returning a result,
+> > the sub-function calls the continuation with the result, which
+> > makes the functions tail-recursive.
+> 
+> I've learned this style in Scheme. Yet I feel paralyzed when trying
+> to write in it to build trees. The problems are that unless the next
+> call returns, the tree is not complete yet and it may have several
+> calls on itself.
+
+You are 90% of the way to figuring out how to use CPS in this
+situation, actually! The trick is to use continuation functions to
+represent the computation yet to be done. I'll illustrate with
+an example -- let's take a tree type:
+
+type 'a tree =
+  | Leaf
+  | Node of 'a tree * 'a * 'a tree
+
+Now, let's write a regular, recursive fold for this datatype:
+
+let rec fold ~leaf ~node tree =
+  match tree with
+  | Leaf -> leaf
+  | Node(left, x, right) ->
+      let v1 = fold ~leaf ~node left in
+      let v2 = fold ~leaf ~node right in
+      node v1 x v2
+
+val fold : leaf:'a -> node:('a -> 'b -> 'a -> 'a) -> 'b tree -> 'a
+
+As you expect, this particular fold exhibits non-constant
+stack growth, because there are function calls that aren't in
+tail position:
+
+  | Node(left, x, right) ->
+      let v1 = fold ~leaf ~node left in   (* Not a tail-call *)
+      let v2 = fold ~leaf ~node right in  (* Not a tail-call *)
+      node v1 x v2
+
+What we want to do is to make all of the recursive calls to fold
+tail-recursive, so that they don't grow the stack. Let's be
+stupid simple for a second, and throw away all of things keeping that
+from happening:
+
+let rec tr_fold ~leaf ~node tree =
+  match tree with
+  | Leaf -> leaf
+  | Node(left, x, right) ->
+      tr_fold ~leaf ~node left 
+
+Now tr_fold is tail-recursive, at the cost of forgetting how to
+call itself on the right subtree and applying the node function.
+Let's fix that by adding a new parameter to tr_fold that will
+keep track of that -- and the value that tracks "stuff to execute"
+is a function:
+
+let rec tr_fold' ~leaf ~node tree k =
+  match tree with
+  | Leaf -> k leaf  (* Call leaf to "stuff to execute" *)
+  | Node(left, x, right) ->
+      tr_fold' ~leaf ~node left  (* Now a tail-call! *)
+	(fun v1 ->
+	  let v2 = tr_fold' ~leaf ~node right k in (* Not a tail-call *)
+	  node v1 x v2)
+
+tr_fold' :
+  leaf:'a -> node:('a -> 'b -> 'c -> 'c) -> 'b tree -> ('a -> 'c) -> 'c
+
+Now we just need to repeat the exercise on the second let body,
+and we get:
+
+let rec kfold ~leaf ~node tree k =
+  match tree with
+  | Leaf -> k leaf
+  | Node(left, x, right) ->
+      kfold ~leaf ~node left 
+	(fun v1 ->
+	  kfold ~leaf ~node right
+	    (fun v2 -> k (node v1 x v2)))
+
+val kfold :
+  leaf:'a -> node:('a -> 'b -> 'a -> 'a) -> 'b tree -> ('a -> 'c) -> 'c
+
+At this point, kfold has no stack growth in it, because every
+self-call it makes is a tail call. All of the control context is
+stored in the closures -- the continuations -- we have build during
+its execution. You can see the close correspondence between the
+original and the CPS version by playing a few games with formatting:
+
+  | Node(left, x, right) ->
+      let v1 = fold ~leaf ~node left in   
+      let v2 = fold ~leaf ~node right in  
+      node v1 x v2
+
+vs:
+
+  | Node(left, x, right) ->
+      kfold ~leaf ~node left  (fun v1 ->
+      kfold ~leaf ~node right (fun v2 -> 
+        k (node v1 x v2)))
+
+You can see that what we do in each case is "compute the left/right
+subtree and then bind the result to v1/v2". Finally, you can get back
+the original fold by passing in the identity function as the "starter"
+continuation:
+
+let fold ~leaf ~node tree = kfold ~leaf ~node tree (fun x -> x)
+
+val fold : leaf:'a -> node:('a -> 'b -> 'a -> 'a) -> 'b tree -> 'a
+
+
+(As an aside: Yes, I didn't completely CPS-convert the program -- the
+node function is not in CPS-form in kfold.)
+
+-- 
+Neel Krishnaswami
+neelk@alum.mit.edu
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

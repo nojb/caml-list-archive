@@ -1,0 +1,178 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA15026; Mon, 17 May 2004 07:28:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA16175 for <caml-list@pauillac.inria.fr>; Mon, 17 May 2004 07:28:42 +0200 (MET DST)
+Received: from plover.csun.edu (plover.csun.edu [130.166.1.24])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i4H5SfEV005080
+	for <caml-list@inria.fr>; Mon, 17 May 2004 07:28:41 +0200
+Received: from puffin.csun.edu (puffin.csun.edu [130.166.1.21])
+	by plover.csun.edu (MOS 3.4.6-GR)
+	with ESMTP id BDQ97893;
+	Sun, 16 May 2004 22:28:37 -0700 (PDT)
+Received: from [10.0.0.220] (cpe-24-31-48-47.socal.rr.com [24.31.48.47])
+	by puffin.csun.edu (MOS 3.4.4-GR)
+	with ESMTP id BTF32688 (AUTH eric);
+	Sun, 16 May 2004 22:28:35 -0700 (PDT)
+In-Reply-To: <Pine.LNX.4.44.0405010847480.9460-100000@localhost.localdomain>
+References: <Pine.LNX.4.44.0405010847480.9460-100000@localhost.localdomain>
+Mime-Version: 1.0 (Apple Message framework v613)
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Message-Id: <0604BD51-A7C3-11D8-B8C2-000A95A1E69A@csun.edu>
+Content-Transfer-Encoding: quoted-printable
+Cc: caml-list@inria.fr
+From: Eric Stokes <eric.stokes@csun.edu>
+Subject: Re: [Caml-list] Reading a large text file
+Date: Sun, 16 May 2004 22:28:26 -0700
+To: =?ISO-8859-1?Q?Andr=E9_Luiz_Moura?= <aluizmoura@yahoo.com.br>
+X-Mailer: Apple Mail (2.613)
+X-Miltered: at nez-perce with ID 40A84D89.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 buffer:01 slower:01 digging:01 appending:01 appending:01 caml-list:01 implemented:01 seus:99 amigos:99 bug:01 faq:01 faq:01 beginner's:01 beginners:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+If you don't care about line breaks you might try Buffer.add_channel.=20
+This should perform
+close to O(1) for the append operations, and it will bypass the call to=20=
+
+input_line, which I have
+found to be an order of magnitude slower than the read system call. You=20=
+
+can always break
+the lines up later.
+
+On May 1, 2004, at 7:03 AM, Brian Hurt wrote:
+
+>
+> I'm still digging through a serious backlog of email, so your question=20=
+
+> may
+> have already been answered.  If so, ignore this.
+>
+> But what I'm guessing is happening is that you are appending (adding =
+to
+> the end of) your list, and that this is what is killing you.  To add =
+an
+> element to the *end* of a list, Ocaml has to completely reallocate the
+> entire list- turning what you might think is an O(1) operation into an
+> O(n) operation.
+>
+> The solution to this is to build the list backwards- instead of adding
+> things to the end of the list, add them to the begining.  Then, when
+> you're done, just reverse the list using List.rev.
+>
+> Lets look at the example of just reading the lines from a file and=20
+> making
+> a list of them.  This code is bad:
+>
+> let readfile chan =3D
+>     let rec loop lst =3D
+>         try
+>             loop (lst @ [ (input_line chan) ])
+>         with
+>             | End_of_file -> lst
+>     in
+>     loop []
+> ;;
+>
+> It works, but to read n lines requires O(n^2) work, because the @ has=20=
+
+> to
+> reallocate the entire list every iteration.  Worse yet it isn't tail
+> recursive (a recursive call inside a try/catch isn't a tail call).
+>
+> A better implementation of this would be:
+> let readfile chan =3D
+>     let rec loop rlst =3D
+>        let line, eof =3D
+>            try
+>                (input_line chan), false
+>            with
+>                | End_of_file -> "", true
+>        in
+>        if not eof then
+>            loop (line :: rlst)
+>        else
+>            List.rev rlst
+>    in
+>    loop []
+> ;;
+>
+> Now, the first thing to notice is that we're using the :: operator=20
+> (which
+> is O(1)), not the @ operator (which is O(n))- we're prepending things=20=
+
+> onto
+> the list, not appending them.  We're building up the list backwards,=20=
+
+> and
+> then, when we hit the end of the file, reversing the entire list. =20
+> This is
+> a standard pattern in Ocaml.
+>
+> The second thing to notice is that the recursive call has been hoisted=20=
+
+> up
+> out of the try/catch block.  We've introduced a new boolean flag to=20
+> note
+> when we've hit the end of the file- catching the exception simply sets=20=
+
+> the
+> flag to true.  So now our function is tail recursive, and operates in
+> constant stack space.
+>
+> Brian
+>
+> On Wed, 28 Apr 2004, Andr=E9 Luiz Moura wrote:
+>
+>> Hi List,
+>>
+>> I wrote an OCaml function to read a text file with a million of lines=20=
+
+>> with  five separate columns for spaces. I based myself on previous=20
+>> messages of Caml-list, but however the work is taking time frightful=20=
+
+>> (many minutes).
+>> This function written in C, for example, does not take more than 4=20
+>> seconds.
+>>
+>> I am executing the program in a PC Pentium III of 128 MB of RAM under=20=
+
+>> Windows platform. How would be implemented the function to decide=20
+>> this problem?
+>>
+>> File format:
+>> <vertex #> <x> <y> [attributes] [boundary marker]
+>>
+>> Thanks,
+>>
+>> Andr=E9
+>>
+>>
+>>
+>>
+>>
+>>
+>> ---------------------------------
+>> Yahoo! Messenger - Fale com seus amigos online. Instale agora!
+>
+> --=20
+> "Usenet is like a herd of performing elephants with diarrhea --=20
+> massive,
+> difficult to redirect, awe-inspiring, entertaining, and a source of
+> mind-boggling amounts of excrement when you least expect it."
+>                                 - Gene Spafford
+> Brian
+>
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives:=20
+> http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ:=20
+> http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

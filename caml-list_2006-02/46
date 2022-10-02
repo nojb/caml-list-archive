@@ -1,0 +1,182 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 742B0BBA7
+	for <caml-list@yquem.inria.fr>; Mon,  6 Feb 2006 04:39:46 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k163djwh011907
+	for <caml-list@yquem.inria.fr>; Mon, 6 Feb 2006 04:39:45 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA22432 for <caml-list@pauillac.inria.fr>; Mon, 6 Feb 2006 04:39:45 +0100 (MET)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k163dg6Q011894
+	for <caml-list@inria.fr>; Mon, 6 Feb 2006 04:39:44 +0100
+Received: from rosella (ppp21-250.lns2.syd7.internode.on.net [59.167.21.250])
+	by smtp1.adl2.internode.on.net (8.13.5/8.13.5) with ESMTP id k163dXox028577;
+	Mon, 6 Feb 2006 14:09:33 +1030 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] From a recursive circuit to a functional/recursive
+	OCaml-code...
+From: skaller <skaller@users.sourceforge.net>
+To: Oliver Bandel <oliver@first.in-berlin.de>
+Cc: caml-list@inria.fr
+In-Reply-To: <20060205232355.GB2271@first.in-berlin.de>
+References: <20060204211943.GA590@first.in-berlin.de>
+	 <1139106546.8453.87.camel@rosella>
+	 <20060205041600.GA5936@first.in-berlin.de>
+	 <1139134445.28935.14.camel@localhost>
+	 <20060205175014.GA1969@first.in-berlin.de>
+	 <1139178136.463.37.camel@localhost>
+	 <20060205232355.GB2271@first.in-berlin.de>
+Content-Type: text/plain
+Date: Mon, 06 Feb 2006 14:39:33 +1100
+Message-Id: <1139197173.3075.115.camel@rosella>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 43E6C501.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 43E6C4FF.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 recursive:01 recursive:01 ocaml-code:01 oliver:01 bandel:01 trivial:01 trivial:01 clocked:01 bool:01 unit-:01 bool:01 rec:01 rec:01 clocked:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Mon, 2006-02-06 at 00:23 +0100, Oliver Bandel wrote:
+> Hello Bill,
+
+> I thought about what HvF meant, and then I got it:
+> When he speaks about the function F (formerly A)
+> this is the function that makes the calculation
+> form intput-value to output-value, but it's NOT ONE
+> trivial machine... the internal state switches between
+> some trivial machines, and the function that does
+> the switches is the Z (formerly B).
+
+That's right. My original code showed how to wrap a clocked
+machine into a pure, unclocked functional unit, and you can
+do this in the abstract as follows:
+
+Given a state transformer 
+
+	step: S * I -> S * O
+
+where S is internal state, I is input, and O is output,
+and an equality comparison function:
+
+	eq: S -> S -> bool
+
+and a initialisation function S for internal state
+
+	reset: unit -> S
+
+You do this:
+
+let run 
+  (step:'state * 'input -> 'state * 'output) 
+  (reset:unit->'state)
+  (eq:'state->'state->bool)
+  (i:'input) 
+: 'output =
+	let rec clock s =
+		let s',o = step (s, i) in
+		if eq s s' then o
+		else clock s' (* TAIL REC SELF CALL *)
+	in clock (reset ())
+
+This algorithm is fully polymorphic. In particular
+
+let f i = run step_f reset_f eq_f i
+
+leaves f as an ordinary old function
+
+	f: 'input -> 'output
+
+by currying .. you can then use it as a functional unit 
+in another clocked circuit. 
+
+BTW: you might want to package
+up the machine specification into a single record and use
+that as an argument:
+
+type ('state,'input,'output) machine = {
+  step:'state * 'input -> 'state * 'output;
+  reset:unit->'state;
+  eq:'state->'state->bool
+}
+
+With some modification you can then write the nice
+function:
+
+let make_function_from_machine machine i =
+	run machine.step machine.reset machine.eq i
+
+and then you can just say
+
+	let f i = make_function_from_machine m i
+	(* value restriction? *)
+
+Use 
+
+	let j = f i in ...
+
+to use it (same as an ordinary function). This is just
+packaging but it emphasises the transformation
+
+	make_unclocked_function_from_machine:
+		('state, 'input, 'output) machine 
+		->
+		('input -> output)
+
+converts a machine into a function.
+
+OH .. you may think this is not imperative .. 
+
+Felix (and I think GHC) will convert that machine simulation into an 
+imperative loop and use mutable variables as an optimisation.
+
+It can (and will, unless there is a bug) do that because of 
+the tail rec self call of the function clock.
+
+Ocaml might choose not to since write barrier is more
+expensive that spawning variables on the heap (not sure).
+
+So in the end .. the code is equivalent to a loop with
+a mutator, and some FPL's may even implement it as such.
+
+The IMPORTANT (IMHO) difference is referential transparency:
+in the function
+
+  (step:'state * 'input -> 'state * 'output) 
+
+there is no chance of modifying an input and accidentally
+using the modified value instead of the original one,
+just because you happened to run that part of the calculation
+too early. Referential transparency says that, apart from issues
+of termination and dependency, it doesn't matter WHEN you
+execute a subcalculation.
+
+So its better! Right! ? Nope!! There is an equivalent bug
+in FPLs which is just as disastrous and easy to do:
+you can accidentally HIDE a variable with a same named
+temporary, and have the right variable name bind to the
+wrong variable. So where you place you bindings is just
+as important in an FPL as how you sequence your mutations
+in a procedural language.
+
+Functional code IS NOT better than procedural code -- IMHO.
+A judicious mix is best, and a way to control it.
+Ocaml provides very poor** control of the mix. Haskell has
+things like State Monads that provide a more structured
+way to mix functional and procedural code. But no one
+really knows how to do this 'The Right Way (tm)' yet.
+
+[But it is miles better than C or C++ in general because it provides
+a fairly balanced set of both functional and procedural
+constructions, which C and C++ do not -- apart from other
+issues like garbage collectors, type systems, etc :]
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

@@ -1,0 +1,100 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id A347FBC6B
+	for <caml-list@yquem.inria.fr>; Sun, 20 May 2007 19:48:46 +0200 (CEST)
+Received: from ptb-relay02.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4KHmkUl025248
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sun, 20 May 2007 19:48:46 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1HppWP-0003mJ-HK
+	for caml-list@yquem.inria.fr; Sun, 20 May 2007 18:48:45 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: try .. finally ..
+Date: Sun, 20 May 2007 18:42:59 +0100
+User-Agent: KMail/1.9.6
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200705201842.59978.jon@ffconsultancy.com>
+X-Miltered: at discorde with ID 465089FE.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 camlp:01 syntax:01 ocaml:01 expr:01 node:01 syntax:01 expr:01 exn:01 exn:01 camlp:01 pcaml:01 pcaml:01 elegantly:01 fsharp:01 
+
+
+This is a very useful construct found in many other languages including F#. 
+This construct can be implemented in OCaml as a macro. Martin Jambon gives an 
+example on his camlp4 tutorial:
+
+(* The function that returns unique identifiers *)
+let new_id = 
+  let counter = ref 0 in
+  fun () ->
+    incr counter;
+    "__finally" ^ string_of_int !counter
+
+(* The function that converts our syntax into a single OCaml expression,
+   i.e. an "expr" node of the syntax tree *)
+let expand loc e1 e2 =
+  let id = new_id () in
+  let id_patt = <:patt< $lid:id$ >> in
+  let id_expr = <:expr< $lid:id$ >> in
+  <:expr<
+  let $id_patt$ =
+    try do { $e1$; None } 
+    with [ exn -> Some exn ] in
+  do { $e2$;
+       match $id_expr$ with
+           [ None -> ()
+           | Some exn -> raise exn ] }
+  >>
+
+(* The statement that extends the default grammar, 
+   i.e. the regular syntax of OCaml if we use camlp4o 
+   or the revised syntax if we use camlp4r *)
+EXTEND
+  Pcaml.expr: LEVEL "expr1" [
+    [ "try"; e1 = Pcaml.expr; "finally"; e2 = Pcaml.expr -> expand loc e1 e2 ]
+  ];
+END;;
+
+Just looking at this code, the creation of new identifiers with obfuscated 
+names in an attempt to avoid conflicts is rather ugly.
+
+Can this functionality be implemented more elegantly in terms of an 
+unwind_protect function, moving the new identifiers into their own scope:
+
+  let unwind_protect f g =
+    let fin = ref false in
+    try
+      let x = f () in
+      fin := true;
+      g();
+      x
+    with exn when !fin ->
+      g();
+      raise exn
+
+  EXTEND
+    Pcaml.expr: LEVEL "expr1" [
+      [ "try"; e1 = Pcaml.expr; "finally"; e2 = Pcaml.expr ->
+         <:expr< unwind_protect (fun () -> $e1$) (fun () -> $e2$) >> ]
+    ];
+  END
+
+Is this a general observation about macros?
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+The F#.NET Journal
+http://www.ffconsultancy.com/products/fsharp_journal/?e
+

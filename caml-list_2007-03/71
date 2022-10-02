@@ -1,0 +1,134 @@
+Return-Path: <wneumann@cs.unm.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 7A906BC69
+	for <caml-list@yquem.inria.fr>; Wed,  7 Mar 2007 23:03:27 +0100 (CET)
+Received: from mail.cs.unm.edu (mail.cs.unm.edu [64.106.20.33])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l27M3QP4007063
+	for <caml-list@inria.fr>; Wed, 7 Mar 2007 23:03:26 +0100
+Received: from localhost (localhost.localdomain [127.0.0.1])
+	by mail.cs.unm.edu (Postfix) with ESMTP id 7C114E4114;
+	Wed,  7 Mar 2007 15:03:25 -0700 (MST)
+Received: from mail.cs.unm.edu ([127.0.0.1])
+	by localhost (mail [127.0.0.1]) (amavisd-new, port 10024) with ESMTP
+	id 26407-05; Wed, 7 Mar 2007 15:03:25 -0700 (MST)
+Received: from io.cs.unm.edu (io.cs.unm.edu [64.106.21.21])
+	by mail.cs.unm.edu (Postfix) with ESMTP id 0E667E40F9;
+	Wed,  7 Mar 2007 15:03:24 -0700 (MST)
+Date: Wed, 7 Mar 2007 15:03:23 -0700 (MST)
+From: "William D. Neumann" <wneumann@cs.unm.edu>
+To: Shivkumar Chandrasekaran <shiv@ece.ucsb.edu>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] ocamlbuild and C stubs
+In-Reply-To: <C0EA3AF9-8F12-4182-99E8-856488E931AA@ece.ucsb.edu>
+Message-ID: <Pine.LNX.4.62.0703071445510.23302@io.cs.unm.edu>
+References: <C0EA3AF9-8F12-4182-99E8-856488E931AA@ece.ucsb.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Virus-Scanned: by amavisd-new-20030616-p10 (Debian) at cs.unm.edu
+X-Miltered: at concorde with ID 45EF36AE.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; stubs:01 shivkumar:01 stub:01 zlib:01 -dhave:01 zlib:01 lib:01 libdir:01 usr:01 lib:01 libdir:01 usr:01 libname:01 arcfour:01 objs:01 
+
+On Wed, 7 Mar 2007, Shivkumar Chandrasekaran wrote:
+
+> Is there any (easy) way to use ocamlbuild to handle the automatic 
+> (re)-compilation of the C stub files to external libraries? Thanks,
+
+Well, I don't know if it's the best way (I wait for Nicolas to chime in), 
+but while playing around with it I tried to get cryptokit to build with 
+ocamlbuild.  What I ended up with that worked was a myocamlbuild.ml that 
+looks like:
+
+open Ocamlbuild_plugin
+open Command
+open Arch
+
+let static = false
+
+let zlib = "-DHAVE_ZLIB"
+let zlib_lib="-lz"
+let zlib_libdir="/usr/lib"
+(* let zlib_libdir=/usr/lib64  (* for x86-64 Linux *) *)
+let zlib_include="/usr/include"
+
+let libname = "cryptokit"
+
+let cc_map lst = List.fold_right (fun v b -> A"-ccopt"::(A v)::b) lst []
+let l_ x = "-L"^x
+
+let _a = "%.a"
+
+let c_files =
+   [ "rijndael-alg-fst";  "stubs-aes"
+   ; "d3des"; "stubs-des"
+   ; "arcfour"; "stubs-arcfour"
+   ; "sha1"; "stubs-sha1"
+   ; "sha2"; "stubs-sha2"
+   ; "sha256"; "stubs-sha256"
+   ; "ripemd160"; "stubs-ripemd160"
+   ; "pool"; "stubs-pool"
+   ; "stubs-md5" ; "stubs-zlib"; "stubs-misc"; "stubs-rng"
+   ]
+
+let c_objs = List.map (fun f -> f-.-"o") c_files
+
+let _ = dispatch begin function
+| Before_rules ->
+
+     rule  "create C library rule"
+         ~prod:_a
+         ~deps:c_objs
+         begin fun env build ->
+           let a = env _a in
+           let tags = tags_of_pathname a++"library"++"object"++"archive" in
+           Cmd(S([ !Options.ocamlmklib; A"-o"; A libname ]
+                 @ (List.map (fun o -> A o) c_objs) @
+                 [  A(l_ zlib_libdir); A zlib_lib; T tags ]
+                )
+              )
+         end;
+     flag  [ "c"; "compile"; ] (S(A"-I"::P".."::(cc_map [("-I"^zlib_include); zlib])));
+     flag  [ "library"; "ocaml" ] (S[A"-ccopt"; A(l_ zlib_libdir); A"-cclib"; A zlib_lib]);
+     flag  [ "ocaml"; "program" ] (S[A"-ccopt"; A"-L."]);
+     if static then flag  [ "byte"; "link" ] (A"-custom");
+     flag  [ "byte"; "library"; "link" ]  (S[A"-dllib"; A"-lcryptokit"; A"-cclib"; A"-lcryptokit"]);
+     flag  [ "native"; "library"; "link" ]  (S[A"-cclib"; A"-lcryptokit"]);
+| _ -> ()
+end
+
+The main thing here being the rule to build the C library.  I then use an 
+itarget file to build the library.  This contains
+
+libcryptokit.a
+cryptokit.cma
+cryptokit.cmxa
+
+Now, to build the library, I just issue the command
+ocamlbuild libcryptokit.otarget
+
+And then to build, for example, the test program I use something like
+ocamlbuild test.native -libs nums,unix,cryptokit
+
+I'm sure there's a bunch of cruft in there that could be better handled, 
+but it seems to work well for now.
+
+William D. Neumann
+
+---
+
+"There's just so many extra children, we could just feed the
+children to these tigers.  We don't need them, we're not doing 
+anything with them.
+
+Tigers are noble and sleek; children are loud and messy."
+
+         -- Neko Case
+
+Life is unfair.  Kill yourself or get over it.
+ 	-- Black Box Recorder
+

@@ -1,0 +1,103 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p7K3QUuG017111
+	for <caml-list@sympa-roc.inria.fr>; Sat, 20 Aug 2011 05:26:30 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqoBADApT07RVdIpkGdsb2JhbABChEuYA4s4CBQBAQEBCQkNBxQEIYFAAQEBAQIBEgIPBBkBOAEDAQsBBQUaAhgOAgI0AQUBHAY1h0+bEwqLeYMVhGWJKAIDBoEmhAwxXwSHXos2hjSGJTyBP4Iw
+X-IronPort-AV: E=Sophos;i="4.68,253,1312149600"; 
+   d="scan'208";a="105897373"
+Received: from mail-pz0-f41.google.com ([209.85.210.41])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 20 Aug 2011 05:26:23 +0200
+Received: by pzk4 with SMTP id 4so6812576pzk.14
+        for <caml-list@inria.fr>; Fri, 19 Aug 2011 20:26:21 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=sender:subject:mime-version:content-type:from:in-reply-to:date:cc
+         :content-transfer-encoding:message-id:references:to:x-mailer;
+        bh=gVGyEG06ENP7u3d4eFihxcCrHq1sYMR098Xj+U4gHmw=;
+        b=hE/TfcNTHr6EOkwiPJ0gW1JS99HuOGPcX3zaXUcSQ3N3PP/kwC2CGxk1ptzOeahjXi
+         U39bcFvh86KrUEjn8bTVxVpjHZpKRydIhwmsctBWoZ0SO657Z2eqdpW2NZ5n5bpuktpz
+         I8siAhwo9aWTy7W3k3uVl2MKKSz3UXHruW08I=
+Received: by 10.142.208.21 with SMTP id f21mr65069wfg.301.1313810781240;
+        Fri, 19 Aug 2011 20:26:21 -0700 (PDT)
+Received: from tet.garrigue.jp (58x158x128x157.ap58.ftth.ucom.ne.jp [58.158.128.157])
+        by mx.google.com with ESMTPS id s8sm1803678wff.5.2011.08.19.20.26.18
+        (version=TLSv1/SSLv3 cipher=OTHER);
+        Fri, 19 Aug 2011 20:26:19 -0700 (PDT)
+Sender: Jacques Garrigue <jacques.garrigue@gmail.com>
+Mime-Version: 1.0 (Apple Message framework v1084)
+Content-Type: text/plain; charset=utf-8
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <CAMoPVjfHn+pShaidefY7pjDYWcwciffiPQh16OkB4zHCQMVczw@mail.gmail.com>
+Date: Sat, 20 Aug 2011 12:26:16 +0900
+Cc: caml-list@inria.fr
+Message-Id: <15C8C097-A8E2-4D96-AEEC-982DBEB65DD8@math.nagoya-u.ac.jp>
+References: <CAMoPVjfHn+pShaidefY7pjDYWcwciffiPQh16OkB4zHCQMVczw@mail.gmail.com>
+To: Arnaud Spiwack <Arnaud.Spiwack@lix.polytechnique.fr>
+X-Mailer: Apple Mail (2.1084)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p7K3QUuG017111
+Subject: Re: [Caml-list] First-class module and higher-order types
+
+On 2011/08/20, at 0:38, Arnaud Spiwack wrote:
+
+> Dear all,
+> 
+> One way to use first-class module is to "extend" a functor without resorting to a new functor. Like, for instance:
+> 
+> type ('a,'t) set = (module Set.S with type elt = 'a and type t = 't)
+> 
+> let add2 (type a) (type t) (m:(a,t) set) x y s =
+>    let module S = (val m:Set.S with type elt = a and type t = t) in
+>    S.add x (S.add y s);;
+> 
+> But if that works pretty with Set, it won't work with Map for two reasons. One is that syntax won't allow us to write something like
+> 
+> with 'a t = …
+> 
+> in the type constraints. Another, probably more serious, is that there is no equivalent to (type t), for type families ( (type 'a t) ?).
+> 
+> 
+> Now that would be a pretty useful thing to do, in some case. Hence I have a twofold question:
+> 
+> 	• On the practical side, does anyone knows a workaround ? Could I find a way to extend Map without a functor if I'm tricky?
+
+Basically, you need to monomorphize the map module.
+You can either do it by hand, rewriting the signature completely, or use some conversion functions:
+
+module type MapT = sig
+  include Map.S
+  type data
+  type map
+  val of_t : data t -> map
+  val to_t : map -> data t
+end
+
+type ('k,'d,'m) map =
+    (module MapT with type key = 'k and type data = 'd and type map = 'm)
+
+let add (type k) (type d) (type m) (m:(k,d,m) map) x y s =
+   let module M =
+     (val m:MapT with type key = k and type data = d and type map = m) in
+   M.of_t (M.add x y (M.to_t s))
+
+module SSMap = struct
+  include Map.Make(String)
+  type data = string
+  type map = data t
+  let of_t x = x
+  let to_t x = x
+end
+
+let ssmap =
+  (module SSMap:
+   MapT with type key = string and type data = string and type map = SSMap.map)
+;;
+
+add ssmap;;
+
+> 	• On the theoretical side, how hard is it to design a variant of Hindley-Milner's typing algorithm with type-family quantification? (I understand that Ocaml's typing machinery is pretty hard to change, and that it will most likely not be happening any time soon in practice)
+
+Well, Haskell has higher-order type constructors, but its type system is much less structural.
+In particular, I have no idea how this would interact with recursive types.
+
+Jacques Garrigue

@@ -1,0 +1,158 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 4D7B8BB83
+	for <caml-list@yquem.inria.fr>; Sat, 13 May 2006 00:42:56 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4CMgtMR022824
+	for <caml-list@yquem.inria.fr>; Sat, 13 May 2006 00:42:55 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA31793 for <caml-list@pauillac.inria.fr>; Sat, 13 May 2006 00:42:55 +0200 (MET DST)
+Received: from mail.tcs.inf.tu-dresden.de (tcs01.inf.tu-dresden.de [141.76.75.1])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k4CMgsMA031762
+	for <caml-list@inria.fr>; Sat, 13 May 2006 00:42:55 +0200
+Received: from localhost (localhost [127.0.0.1]) by mail.tcs.inf.tu-dresden.de
+ (Sun Java System Messaging Server 6.1 HotFix 0.06 (built Nov 11 2004))
+ with ESMTP id <0IZ600I5GCFI0V00@mail.tcs.inf.tu-dresden.de> for
+ caml-list@inria.fr; Sat, 13 May 2006 00:42:54 +0200 (MEST)
+Received: from tcs01.inf.tu-dresden.de ([127.0.0.1])
+ by localhost (mail.tcs.inf.tu-dresden.de [127.0.0.1])
+ (amavisd-new, port 10024) with ESMTP id 11714-02 for <caml-list@inria.fr>;
+ Sat, 13 May 2006 00:42:54 +0200 (MEST)
+Received: from ithif59.inf.tu-dresden.de
+ (ithif59.inf.tu-dresden.de [141.76.75.59]) by mail.tcs.inf.tu-dresden.de
+ (Sun Java System Messaging Server 6.1 HotFix 0.06 (built Nov 11 2004))
+ with ESMTPS id <0IZ600H2ICFITW10@mail.tcs.inf.tu-dresden.de> for
+ caml-list@inria.fr; Sat, 13 May 2006 00:42:54 +0200 (MEST)
+Received: from tews by ithif59.inf.tu-dresden.de with local (Exim 4.50)
+	id 1FegLW-0006Yd-9i	for caml-list@inria.fr; Sat, 13 May 2006 00:42:54 +0200
+Date: Sat, 13 May 2006 00:42:53 +0200
+From: Hendrik Tews <tews@tcs.inf.tu-dresden.de>
+Subject: catch / reraise exceptions in C, representation of exceptions
+To: caml-list@inria.fr
+Message-id: <17509.3949.971571.93976@ithif59.inf.tu-dresden.de>
+MIME-version: 1.0
+X-Mailer: VM 7.19 under Emacs 21.4.1
+Content-type: text/plain; charset=us-ascii
+Content-transfer-encoding: 7BIT
+X-Virus-Scanned: amavisd-new at tcs.inf.tu-dresden.de
+X-Miltered: at concorde with ID 44650F6F.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 44650F6E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; hendrik:01 tews:01 tews:01 callbacks:01 ocaml:01 callbacks:01 exn:01 garbage:01 exn:01 allocations:01 segfaults:01 camlreturn:01 ocaml:01 runtime:01 camlparam:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Dear all,
+
+I just finished some (C++) code that uses callbacks into ocaml
+and catches and reraises some exceptions (raised in the
+callbacks). For these matters the documentation ... aehm ... has
+some space for improvements. Here are the things that I learned
+the hard way (please correct if something is wrong), point 4
+contains speculations and point 5 a question:
+
+1. Users of caml_callback_exn must obey an additional garbage
+   collector harmony rule:
+
+     An exceptional value obtained from one of the
+     caml_callback_exn functions (that is one for which
+     Is_exception_result returns true) _must_ _not_ be contained in
+     a local or global root when calling one of the allocation
+     functions. 
+
+   Because every value must be registered, it follows that you
+   either have to clear the exceptional value or replace it with
+   something else before the next allocation. Use the following
+   pattern, if you are unsure which code may perform allocations:
+
+     result = caml_callback_exn(...);
+     is_exception = Is_exception_result(result);
+     result = Extract_exception(result);
+
+   Extract_exception returns a non-exceptional value (not to be
+   confused with a value that represents an exception). 
+
+   If you look at 
+
+      #define Make_exception_result(v) ((v) | 2)
+      #define Is_exception_result(v) (((v) & 3) == 2)
+      #define Extract_exception(v) ((v) & ~3)
+
+   in caml/callback.h it is easy to understand why you get
+   segfaults sooner or later, if you don't obey the rule obove.
+
+
+2. Exceptions (ie. results of Extract_exception) are represented
+   as blocks of size 1 plus the number of arguments of the
+   exception (ie, End_of_file has size 1, exception A of int *
+   int * string has size 4, and Match_failure has size 2 because
+   it is defined as exception Match_failore of (string * int *
+   int)).
+
+   The contents of the first field is the exception id, it
+   uniquely identifies the exception. Use the following pattern
+   to check if some specific exception occured:
+
+      result = caml_callback_exn(...);
+      if(Is_exception_result(result)){
+	result = Extract_exception(result);          /* see rule above */
+	if(Field(result,0) == *caml_named_value("my_exception_id")){
+	  /* exception registered under "my_exception" occured */
+	} else {
+	  /* some other exception occured */
+	}
+      }
+
+
+3. To reraise an unknown exception use caml_raise (with a
+   non-exceptional argument). For instance
+
+      result = caml_callback_exn(...);
+      if(Is_exception_result(result)){
+	result = Extract_exception(result);          /* see rule above */
+	if(Field(result,0) == *caml_named_value("Not_found_id")){
+	  /* catch Not_found */
+          ....
+	} 
+	else 
+          caml_raise(result);               /* reraise other exceptions */
+	
+      }
+
+   To raise an exception with more than one argument, allocate a
+   block of the right size (see point 2), fill the exception id
+   in field 0 and the arguments in the remaining fields and use
+   caml_raise on this so created value.
+
+
+4. It seems that an exception id is always a block of size one,
+   which contains (the value of) the string of the exception
+   name. 
+
+   Is this true? Can one access the exception name that way or
+   are programs using this doomed to be broken in the future?
+
+
+5. Question: Rule 1 says I should CAMLreturn at the end of my
+   function. But what if I raise an exception? Can I rely on the
+   ocaml runtime to unchain all my local roots, that is, is the
+   following safe:
+
+
+      void f(...){
+        CAMLparam(...);
+        CAMLlocal(...);
+        ....
+        caml_raise_with_arg(...);
+      }
+
+   There is a CAMLnoreturn, but IMHO it doesn't make sense to put
+   it after caml_raise_with_arg.
+
+
+Bye,
+
+Hendrik
+

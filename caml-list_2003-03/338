@@ -1,0 +1,114 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA02954; Tue, 25 Mar 2003 11:31:07 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA00473 for <caml-list@pauillac.inria.fr>; Tue, 25 Mar 2003 11:31:05 +0100 (MET)
+Received: from mx03.uni-tuebingen.de (mx03.uni-tuebingen.de [134.2.3.13])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h2PAV5X01046
+	for <caml-list@inria.fr>; Tue, 25 Mar 2003 11:31:05 +0100 (MET)
+Received: from linux17.zdv.uni-tuebingen.de (linux17.zdv.uni-tuebingen.de [134.2.18.17])
+	by mx03.uni-tuebingen.de (8.12.3/8.12.3) with ESMTP id h2PAV4H6010995
+	for <caml-list@inria.fr>; Tue, 25 Mar 2003 11:31:04 +0100
+Date: Tue, 25 Mar 2003 11:31:02 +0100 (CET)
+From: Falk Hueffner <falk.hueffner@student.uni-tuebingen.de>
+X-Sender:  <zxmjz18@linux17.zdv.uni-tuebingen.de>
+To: <caml-list@inria.fr>
+Subject: [Caml-list] Problem with GC and custom blocks
+Message-ID: <Pine.LNX.4.30.0303251124100.29167-100000@linux17.zdv.uni-tuebingen.de>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-AntiVirus: checked by AntiVir Milter 1.0.0.8; AVE 6.18.0.3; VDF 6.18.0.19
+X-Spam: no; 0.00; falk:01 hueffner:01 alloc:01 struct:01 bug:01 val:01 32,:01 clone:01 const:01 char:01 fprintf:01 stderr:01 camlparam:01 camllocal:01 camlreturn:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+I'm having trouble with the GC destroying my custom blocks, although
+it looks like I have properly protected them. Unfortunately, I cannot
+reproduce it with a small testcase. Here's part of the source and its
+output:
+
+static inline value alloc_graph(unsigned n,
+				unsigned vertex_bits, unsigned edge_bits)
+{
+    value r = alloc_custom((struct custom_operations *) &graph_ops,
+			   1 << 16, // huge value to trigger bug earlier
+			   0, 1);
+    long *l = Data_custom_val(r);
+    for (int i = 0; i < 32/4; ++i)
+	l[i] = 0xefbeadde;
+    dumpbytes(r, 32, __PRETTY_FUNCTION__);
+    return r;
+}
+static inline value clone_graph(const struct graph *g)  {
+    dumpbytes(((char*) g)  - 4, 32, __PRETTY_FUNCTION__ " in");
+
+    value gv = alloc_graph(g->n, g->vertex_bits, g->edge_bits);
+    dumpbytes(((char*) g)  - 4, 32, __PRETTY_FUNCTION__ " post");
+
+    make_copy(Data_custom_val(gv), g);
+    dumpbytes(gv, 32, __PRETTY_FUNCTION__ " out");
+    return gv;
+}
+
+// set_connected: graph -> int -> int -> graph
+value set_connected_c(value gv, value iv, value jv) {
+    fprintf(stderr, "protecting %p\n", gv);
+    CAMLparam3(gv, iv, jv);
+    dumpbytes(gv, 32, __PRETTY_FUNCTION__);
+
+    const struct graph *gin = Data_custom_val(gv);
+    ulong i = Long_val(iv);
+    ulong j = Long_val(jv);
+    CAMLlocal1(goutv);
+    goutv = clone_graph(gin);
+    struct graph *gout = Data_custom_val(goutv);
+
+    set_connected(gout, i, j);
+    dumpbytes(goutv, 32, __PRETTY_FUNCTION__ " out");
+
+    CAMLreturn(goutv);
+}
+
+[...]
+protecting 0x400c8fec
+0x400c8fec      set_connected_c 80 e9 07 08 08 00 01 01 00 00 00 00 00 00
+00 00
+0x400c8fec       clone_graph in 80 e9 07 08 08 00 01 01 00 00 00 00 00 00
+00 00
+<>allocated_words = 32790
+extra_heap_memory = 0u
+amount of work to do = 134084u
+ordered work = 0 words
+computed work = 221332 words
+Sweeping 221332 words
+$FL size at phase change = 168445
+Estimated overhead = 1000000%
+Automatic compaction triggered.
+Starting new major GC cycle
+Marking 2147483647 words
+Sweeping 2147483647 words
+Measured overhead: 137%
+Compacting heap...
+Shrinking heap to 2976k bytes
+Shrinking heap to 2728k bytes
+Shrinking heap to 2480k bytes
+done.
+0x400ed004          alloc_graph 80 e9 07 08 de ad be ef de ad be ef de ad
+be ef
+0x400c8fec     clone_graph post 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+00 00
+
+So 0x400c8fec gets mangled, although I protected it. Did I do
+something obvious wrong? Or are there any known bugs in the GC? Any
+other suggestions how to track this down? I'd be really grateful even for
+a workaround...
+
+I'm using ocamlopt 3.06 on i386 Linux, with gcc 3.2.
+
+	Falk
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

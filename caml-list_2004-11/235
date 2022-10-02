@@ -1,0 +1,125 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 3BC93BC2F
+	for <caml-list@yquem.inria.fr>; Fri, 26 Nov 2004 14:32:37 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iAQDWabB017000
+	for <caml-list@yquem.inria.fr>; Fri, 26 Nov 2004 14:32:36 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA02037 for <caml-list@pauillac.inria.fr>; Fri, 26 Nov 2004 14:32:36 +0100 (MET)
+Received: from will.iki.fi (will.iki.fi [217.169.64.20])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id iAQDWZw5011419
+	for <caml-list@inria.fr>; Fri, 26 Nov 2004 14:32:36 +0100
+Received: from [10.0.20.56] (fa-3-0-0.fw.exomi.com [217.169.64.99])
+	by will.iki.fi (Postfix) with ESMTP id 5D25314;
+	Fri, 26 Nov 2004 15:32:33 +0200 (EET)
+Message-ID: <41A7306A.2020103@exomi.com>
+Date: Fri, 26 Nov 2004 15:32:26 +0200
+From: Ville-Pertti Keinonen <will@exomi.com>
+User-Agent: Mozilla Thunderbird 0.8 (X11/20041016)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Richard Jones <rich@annexia.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Why doesn't ocamlopt detect a missing ; after failwith
+ statement?
+References: <20041125204628.GA24215@annexia.org> <005701c4d333$c3bc31e0$19b0e152@warp> <20041126090120.GA19749@annexia.org>
+In-Reply-To: <20041126090120.GA19749@annexia.org>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 41A73074.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 41A73073.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocamlopt:01 failwith:01 wrote:01 ocaml:01 exn:01 silently:01 ocaml:01 semicolon:01 semicolon:01 exn:01 failwith:01 intuitively:01 inference:01 inference:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+Richard Jones wrote:
+
+>I'd just like to add that this error bit me in a real program, and it
+>would be nice if OCaml detected this common case and warned about it:
+>
+>  if cond then (
+>    ...
+>    raise Exn
+>  )
+>  next_stmt       <-- catastrophic failure, because this statement
+>                      is silently ignored
+>  
+>
+It may help to realize that as a (mostly) functional language, OCaml 
+doesn't have statements, only expressions (although expressions of the 
+type 'unit' could be considered equivalent of statements).
+
+The question to ask isn't "why isn't the missing semicolon detected?"  
+Instead, you should think about what the entire expression looks like in 
+the absence of the semicolon - it looks like a function application 
+(i.e. that you're applying the result of "raise Exn" to whatever follows).
+
+There is no reasonable way to detect such "special cases" (in this case, 
+functions that don't return) without a way for the type system to 
+express them (you don't e.g. want to special-case "raise" explicitly by 
+making it a keyword, as it wouldn't help in the case of "failwith" in 
+your original example).
+
+Currently, the type of functions that don't return is expressed as a 
+type variable (e.g. 'a) that is not present in the function arguments, 
+meaning that it's compatible with any type.  This ensures that when you 
+write e.g. "if x then raise Exn else y", the types of "raise Exn" and 
+"y" are compatible and can be unified.  It's also compatible with a 
+function taking as an argument any expression that may follow it.
+
+Such functions could, instead, return a special type in order to avoid 
+cases such as this.  I haven't thought about it in detail, nor have I 
+tried to fully understand the suggestions of others, but intuitively, 
+I'd think it would have to be unifiable with other types but not capable 
+of being used as a value (only valid as a return type of a function) 
+until it was unified with (in effect, changed to) some other type on a 
+different branch of control flow.  As type inference doesn't have a 
+concept of control flow, this could be pretty messy, but it might be 
+possible to make it work.
+
+BTW: Hindley-Milner type inference is extremely straightforward, and 
+understanding it helps better understand OCaml and other similar languages.
+
+The rules for type inference should pretty much be self-evident if you 
+just think about it, but it may help to know the actual basic algorithm, 
+described informally as:
+
+We have two namespaces; one binding variables to types (globals to 
+actual types, lexically bound variables to type variables), which I'll 
+express using '::', and another linking type variables to types (which 
+can be other type variables), which I'll express using '=>'.
+
+To infer the type of an expression:
+
+ - Variable x: If there exists x :: t, the type is t (otherwise the 
+variable is not visible at this point, which is an error)
+
+ - Literal: The type is immediately known
+
+ - Function abstraction (fun x -> e): Create a new type variable 'a. 
+Infer the type of e (call it E) with x :: 'a. The type of the expression 
+is 'a -> E
+
+ - Function application (f x): Infer the types of f (F) and x (X).  
+Create a new type variable 'a.  Unify (X -> 'a) and F.  The type of the 
+expression is 'a
+
+(Most other things can basically be expressed equivalently to functions)
+
+Unification of t1 and t2:
+
+With t1 and t2 normalized, do one of:
+ - If t1 and t2 are equal, do nothing
+ - If t1 is a type variable, link t1 => t2
+ - If t2 is a type variable, link t2 => t1
+ - If t1 and t2 are both functions (a1 -> b1, a2 -> b2), unify a1 and 
+a2, unify b1 and b2
+ - Otherwise fail with a type mismatch
+
+To normalize t:
+ - If there exists t => t', repeat with t'
+ - Otherwise just return t
+

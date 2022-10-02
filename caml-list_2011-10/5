@@ -1,0 +1,182 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p92BpBkr017417
+	for <caml-list@sympa-roc.inria.fr>; Sun, 2 Oct 2011 13:51:14 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AoUBAJRPiE5KfVI0kGdsb2JhbABBp0RhCCIBAQEBCQkNBxQEIYFsAhMZARseAxIQXQERAQUBIhsaoFmCWQqLTYJcg1Y9iG4CBAaHGwSTYI0UPYNv
+X-IronPort-AV: E=Sophos;i="4.68,476,1312149600"; 
+   d="scan'208";a="122461184"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 02 Oct 2011 13:51:14 +0200
+Received: by wwj40 with SMTP id 40so5192633wwj.9
+        for <caml-list@inria.fr>; Sun, 02 Oct 2011 04:51:13 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:date:message-id:subject:from:to:content-type;
+        bh=iRwhNjjmo41TBkMzHB65JD7yRMnWKVKTP9RdsSeKgxs=;
+        b=WRGXcC40DWNzErgUA9nHwHiFcYXuu5lJVQvjWTseM5KLdgTzqUhfh0eRqM6U3vqJdw
+         PdZQq+eppvJKcWIVAMnTXOFOZzMUo0l3/X62jDNIwvulOv68g1EATnCBwhJI3VOIkKlB
+         hDRDvnScS5d+dvAEz89McZK8+eu2GUYCFbLNk=
+MIME-Version: 1.0
+Received: by 10.216.4.168 with SMTP id 40mr5732540wej.9.1317556273703; Sun, 02
+ Oct 2011 04:51:13 -0700 (PDT)
+Received: by 10.216.13.67 with HTTP; Sun, 2 Oct 2011 04:51:13 -0700 (PDT)
+Date: Sun, 2 Oct 2011 13:51:13 +0200
+Message-ID: <CAHqiZ-K9dVQL2QNuQEXHedqZgeWgPRTmt4XKmCUJW7eUtgpy1A@mail.gmail.com>
+From: Diego Olivier Fernandez Pons <dofp.ocaml@gmail.com>
+To: caml-list <caml-list@inria.fr>
+Content-Type: multipart/alternative; boundary=0016364d30d5aa6b1104ae4f7904
+Subject: [Caml-list] How to simplify an arithmetic expression ?
+
+
+--0016364d30d5aa6b1104ae4f7904
+Content-Type: text/plain; charset=ISO-8859-1
+
+    OCaml list,
+
+It's easy to encapsulate a couple of arithmetic simplifications into a
+function that applies them bottom up to an expression represented as a tree
+
+let rec simplify = function
+    | Plus (e1, e2) ->
+        match (simplify e1, simplify e2) with
+             | (Constant 0, _) -> e2
+
+With a couple well known tricks like pushing constants to the left side and
+so on...
+
+How can I however guarantee that
+    1. My final expression reaches a kind of minimal normal form
+    2. My set of simplifications is optimal in the sense it doesn't traverse
+subtrees without need
+
+Here is my current simplifier and I have no way of telling if it really
+simplifies the expressions as much as possible and if it does useless passes
+or not
+
+type expr =
+    | Constant of float
+    | Plus of expr * expr
+    | Minus of expr * expr
+    | Times of expr * expr
+    | Variable of string
+
+let rec normalForm = function
+    | Minus (e1, e2) -> normalForm (Plus (normalForm e1, Times (Constant
+(-1.0), normalForm e2)))
+    | Plus (e1, e2) ->
+        begin
+        match (normalForm e1, normalForm e2) with
+            | (Constant a, Constant b) -> Constant (a +. b)
+            | (Constant 0.0, e) -> normalForm e
+            | (e, Constant b) -> normalForm (Plus (Constant b, normalForm
+e))
+            | (Constant a, Plus (Constant b, e)) -> Plus (Constant (a +. b),
+normalForm e)
+            | (Plus (Constant a, e1), Plus (Constant b, e2)) -> Plus
+(Constant (a +. b), normalForm (Plus (normalForm e1, normalForm e2)))
+            | (Variable a, Variable b) when a = b -> Times (Constant 2.0,
+Variable a)
+            | (Times (Constant n, Variable b), Variable a) when a = b ->
+Times (Constant (n +. 1.0), Variable a)
+            | (Variable a, Times (Constant n, Variable b)) when a = b ->
+Times (Constant (n +. 1.0), Variable a)
+            | (Times (Constant n, Variable a), Times (Constant m, Variable
+b)) when a = b -> Times (Constant (n +. m), Variable a)
+            | other -> Plus (e1, e2)
+        end
+    | Times (e1, e2) ->
+        begin
+        match (normalForm e1, normalForm e2) with
+            | (Constant a, Constant b) -> Constant (a *. b)
+            | (Constant 0.0, e) -> Constant 0.0
+            | (Constant 1.0, e) -> e
+            | (e, Constant b) -> normalForm (Times (Constant b, normalForm
+e))
+            | (Constant a, Times (Constant b, e)) -> Times (Constant (a *.
+b), e)
+            | other -> Times (e1, e2)
+         end
+    | x -> x
+
+let (++) = fun x y -> Plus (x, y)
+let ( ** ) = fun x y -> Times (x, y)
+let ( --) = fun x y -> Minus (x, y)
+let f = function fl -> Constant fl
+
+let x = Variable "x"
+let h = fun i -> f i ** x -- f i ** f i ** x ++ (f 3.0 ++ f i)
+let e = List.fold_left (fun t i -> Plus (t, h i)) (f 0.0) [1.0; 2.0; 3.0;
+4.0; 5.0]
+
+normalForm e
+
+
+        Diego Olivier
+
+--0016364d30d5aa6b1104ae4f7904
+Content-Type: text/html; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+=A0 =A0 OCaml list,<div><br></div><div>It&#39;s easy to encapsulate a coupl=
+e of arithmetic simplifications into a function that applies them bottom up=
+ to an expression represented as a tree</div><div><br></div><div>let rec si=
+mplify =3D function</div>
+<div>=A0 =A0 | Plus (e1, e2) -&gt;</div><div>=A0 =A0 =A0 =A0 match (simplif=
+y e1, simplify e2) with</div><div>=A0 =A0 =A0 =A0 =A0 =A0 =A0| (Constant 0,=
+ _) -&gt; e2=A0</div><div><br></div><div>With a couple well known tricks li=
+ke pushing constants to the left side and so on...</div>
+<div><br></div><div>How can I however guarantee that</div><div>=A0 =A0 1. M=
+y final expression reaches a kind of minimal normal form</div><div>=A0 =A0 =
+2. My set of simplifications is optimal in the sense it doesn&#39;t travers=
+e subtrees without need</div>
+<div><br></div><div>Here is my current simplifier and I have no way of tell=
+ing if it really simplifies the expressions as much as possible and if it d=
+oes useless passes or not</div><div><br></div><div><div>type expr =3D</div>
+<div>=A0 =A0 | Constant of float</div><div>=A0 =A0 | Plus of expr * expr</d=
+iv><div>=A0 =A0 | Minus of expr * expr</div><div>=A0 =A0 | Times of expr * =
+expr</div><div>=A0 =A0 | Variable of string</div></div><div><br></div><div>=
+<div>let rec normalForm =3D function</div>
+<div>=A0 =A0 | Minus (e1, e2) -&gt; normalForm (Plus (normalForm e1, Times =
+(Constant (-1.0), normalForm e2)))</div><div>=A0 =A0 | Plus (e1, e2) -&gt;<=
+/div><div>=A0 =A0 =A0 =A0 begin</div><div>=A0 =A0 =A0 =A0 match (normalForm=
+ e1, normalForm e2) with</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant a, Constant b) -&gt; Constant (a +=
+. b)</div><div>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant 0.0, e) -&gt; normalForm=
+ e</div><div>=A0 =A0 =A0 =A0 =A0 =A0 | (e, Constant b) -&gt; normalForm (Pl=
+us (Constant b, normalForm e))</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant a, Plus (Constant b, e)) -&gt; Plu=
+s (Constant (a +. b), normalForm e)</div><div>=A0 =A0 =A0 =A0 =A0 =A0 | (Pl=
+us (Constant a, e1), Plus (Constant b, e2)) -&gt; Plus (Constant (a +. b), =
+normalForm (Plus (normalForm e1, normalForm e2)))</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | (Variable a, Variable b) when a =3D b -&gt; =
+Times (Constant 2.0, Variable a)</div><div>=A0 =A0 =A0 =A0 =A0 =A0 | (Times=
+ (Constant n, Variable b), Variable a) when a =3D b -&gt; Times (Constant (=
+n +. 1.0), Variable a)</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | (Variable a, Times (Constant n, Variable b))=
+ when a =3D b -&gt; Times (Constant (n +. 1.0), Variable a)</div><div>=A0 =
+=A0 =A0 =A0 =A0 =A0 | (Times (Constant n, Variable a), Times (Constant m, V=
+ariable b)) when a =3D b -&gt; Times (Constant (n +. m), Variable a)</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | other -&gt; Plus (e1, e2)</div><div>=A0 =A0 =
+=A0 =A0 end</div><div>=A0 =A0 | Times (e1, e2) -&gt;</div><div>=A0 =A0 =A0 =
+=A0 begin</div><div>=A0 =A0 =A0 =A0 match (normalForm e1, normalForm e2) wi=
+th</div><div>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant a, Constant b) -&gt; Const=
+ant (a *. b)</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant 0.0, e) -&gt; Constant 0.0</div><d=
+iv>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant 1.0, e) -&gt; e</div><div>=A0 =A0 =
+=A0 =A0 =A0 =A0 | (e, Constant b) -&gt; normalForm (Times (Constant b, norm=
+alForm e))</div><div>=A0 =A0 =A0 =A0 =A0 =A0 | (Constant a, Times (Constant=
+ b, e)) -&gt; Times (Constant (a *. b), e)</div>
+<div>=A0 =A0 =A0 =A0 =A0 =A0 | other -&gt; Times (e1, e2)</div><div>=A0 =A0=
+ =A0 =A0 =A0end</div><div>=A0 =A0 | x -&gt; x</div></div><div><br></div><di=
+v><div>let (++) =3D fun x y -&gt; Plus (x, y)</div><div>let ( ** ) =3D fun =
+x y -&gt; Times (x, y)</div>
+<div>let ( --) =3D fun x y -&gt; Minus (x, y)</div><div>let f =3D function =
+fl -&gt; Constant fl</div><div><br></div><div>let x =3D Variable &quot;x&qu=
+ot;</div><div>let h =3D fun i -&gt; f i ** x -- f i ** f i ** x ++ (f 3.0 +=
++ f i)</div>
+<div>let e =3D List.fold_left (fun t i -&gt; Plus (t, h i)) (f 0.0) [1.0; 2=
+.0; 3.0; 4.0; 5.0]</div></div><div><br></div><div>normalForm e</div><div><b=
+r></div><div><br></div><div>=A0 =A0 =A0 =A0 Diego Olivier</div><div><br></d=
+iv>
+
+--0016364d30d5aa6b1104ae4f7904--

@@ -1,0 +1,103 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA24132; Sun, 11 Jul 2004 16:30:57 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA25145 for <caml-list@pauillac.inria.fr>; Sun, 11 Jul 2004 16:30:55 +0200 (MET DST)
+Received: from main.gmane.org (main.gmane.org [80.91.224.249])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i6BEUsSH007891
+	for <caml-list@inria.fr>; Sun, 11 Jul 2004 16:30:54 +0200
+Received: from root by main.gmane.org with local (Exim 3.35 #1 (Debian))
+	id 1BjfLv-0005dn-00
+	for <caml-list@inria.fr>; Sun, 11 Jul 2004 16:30:51 +0200
+Received: from 203-173-16-172.dyn.iinet.net.au ([203.173.16.172])
+        by main.gmane.org with esmtp (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Sun, 11 Jul 2004 16:30:51 +0200
+Received: from rj-cole by 203-173-16-172.dyn.iinet.net.au with local (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Sun, 11 Jul 2004 16:30:51 +0200
+X-Injected-Via-Gmane: http://gmane.org/
+To: caml-list@inria.fr
+From: Richard Cole <rj-cole@iinet.net.au>
+Subject: [Caml-list] Re: Exceptions considered harmful
+Date: Sun, 11 Jul 2004 23:12:34 +1000
+Lines: 58
+Message-ID: <ccree9$l6$1@sea.gmane.org>
+References: <20040628143917.GA21847@fichte.ai.univie.ac.at>	 <Pine.LNX.4.44.0406290056580.1229-100000@localhost>	 <20040628173400.GB26193@fichte.ai.univie.ac.at> <1088470968.18587.123.camel@pelican.wigram>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Complaints-To: usenet@sea.gmane.org
+X-Gmane-NNTP-Posting-Host: 203-173-16-172.dyn.iinet.net.au
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7) Gecko/20040704 Debian/1.7-4
+X-Accept-Language: en
+In-Reply-To: <1088470968.18587.123.camel@pelican.wigram>
+Cc: ocaml-lib-devel@lists.sourceforge.net
+X-Miltered: at concorde with ID 40F14F1E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; cole:99 iinet:99 descriptor:01 leaking:01 clipboard:01 clipboard:01 seq:01 func:01 ocaml:01 command:98 command:98 commands:97 commands:97 objects:02 unit:03 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+When I read your examples I wondered how often this situation arises. Is 
+it just a symptom of the file interface or is it more general? It occurs 
+whenever resources, such as a file descriptor, need to be relinquished, 
+which generally is pretty often.
+
+In one programming task that I worked on for some time most of the code 
+followed the following pattern.
+
+   1. allocate resources
+   2. manipulate resources
+   3. free resources
+
+In each step you have to be ready for something to go wrong. Since it 
+was in a distributed environment steps 1 2 and 3 were composed of 
+concurrent parts, i.e. all resources were allocated concurrently.
+
+In other programming tasks it has not been important to catch errors 
+because the effect of the programming stopping or leaking a few 
+resources is not serious.
+
+But if you have to catch the errors it is tedious and error prone to 
+write massive try catch blocks to catch every error. Our solution was to 
+use the command pattern.
+
+type success_or_failure = Success | Failure
+class type command =
+   method do: clipboard -> success_or_failure
+   method undo: clipboard -> unit
+   method final: clipboard -> unit
+end ;;
+
+Then programs became the construction of object like the following:
+
+let copy_file_cmd_name_args src dst =
+   let src_cmd = open_file_cmd src in
+   let dst_cmd = open_file_cmd dst in
+     seq_execute_cmd [
+        par_execute_cmd [src_cmd, dst_cmd],
+        copy_file_cmd_fd_func_args src_cmd#file dst_cmd#file
+     ];
+
+Here serial_execute runs through the commands executing them one by one 
+until either it finishes or an error is generated in which case it backs 
+out by calling undo. Finally objects are given a chance to release 
+resources when final is called.
+
+This way we were sure that resources would be properly accounted for. Of 
+course hardware faults or mis-behaving clients can still cause you 
+trouble. Particularly tracing which operation first caused a failure and 
+what conditions lead to that failure.
+
+It seems to me that if you have to catch errors then you have to 
+construct some similar framework in Ocaml. There's no language support 
+for writing commands.
+
+regards,
+
+Richard.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

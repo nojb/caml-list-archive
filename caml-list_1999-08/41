@@ -1,0 +1,87 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA10732 for caml-redistribution; Sun, 22 Aug 1999 20:17:33 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA11647 for <caml-list@pauillac.inria.fr>; Sun, 15 Aug 1999 15:25:19 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id PAA04459;
+	Sun, 15 Aug 1999 15:25:17 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA15738; Sun, 15 Aug 1999 15:25:17 +0200 (MET DST)
+Message-ID: <19990815152517.17910@pauillac.inria.fr>
+Date: Sun, 15 Aug 1999 15:25:17 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Patrick Goldbronn - SYSCO <patrick.goldbronn@cea.fr>,
+        caml Inria <caml-list@inria.fr>
+Subject: Re: information sur camlidl (passage des tableaux)
+References: <37A6B960.3AFB0560@cea.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <37A6B960.3AFB0560@cea.fr>; from Patrick Goldbronn - SYSCO on Tue, Aug 03, 1999 at 09:41:52AM +0000
+Sender: weis
+
+> Le problème avec camlidl, c'est qu'il transforme le tableau caml en
+> tableau C et qu'il alloue un nouveau tableau caml qu'il remplit avec le
+> tableau C retourné.
+> Peut-on spécifier à camlidl qu'il s'agit en fait du meme tableau et
+> qu'il n'a pas besoin d'en creer un nouveau.
+
+Actuellement, non.  Cela pourrait en effet être intéressant pour un
+tableau de "double" (voir ci-dessous).  Pour les autres types de
+tableau, une conversion de représentation Caml<->C des éléments du
+tableau est nécessaire de toute façon, et les possibilités de partage
+sont très réduites.
+
+> Pourquoi ne pas se servir du fait que les tableaux de double caml sont
+> les "memes" que les tableaux C et ne passer que le pointeur au lieu de
+> dupliquer (comme cela est fait pour les strings !).
+
+La principale raison est un problème d'alignement.  Les tableaux Caml
+de type "float array" sont (comme tous les blocs du tas Caml) alignés
+en mémoire sur des frontières de mots Caml (4 octets sur les machines
+32 bits, 8 octets sur les 64).  Le code machine produit par les
+compilateurs C et Fortran fait généralement l'hypothèse qu'un tableau
+de "double" est aligné à 8 octets.  Sur certains processeurs (Intel
+x86, PowerPC), les accès à un "double" aligné à 4 ne posent pas de
+problèmes (sauf une légère perte de vitesse); mais d'autres
+processeurs (Sparc, MIPS en mode "R4000") plantent sur tout accès non
+aligné à un "double".  Enfin, sur les machines 64 bits, le problème ne
+se pose pas car tout est aligné à 8 dans le tas Caml.
+
+J'envisage de produire des "#ifdef" dans le code généré par CamlIDL
+pour éviter la copie lorsque le processeur le permet.
+
+Aussi, nous sommes en train de travailler sur une bibliothèque qui
+fournira de "grands" tableaux numériques alloués hors du tas (afin de
+contourner les limitations de tailles des tableaux Caml).  Ces
+tableaux seront bien sûr alignés à 8 et pourront être passés entre
+Caml, C et Fortran sans aucune recopie.
+
+> Peut-on paramétrer camlidl pour qu'il fasse des actions spécifiques
+> selon le type de l'argument ? 
+
+Oui.  Il faut jouer finement sur "typedef" et ses options dans le
+source IDL.  Par exemple, voici comment passer des "float array" de
+Caml vers C sans les copier, en spécifiant sa propre fonction de
+conversion Caml->C:
+
+  typedef [ml2c(float_array_ml2c)]
+    struct { int len; [size_is(len)] double data[]; }
+    float_array;
+
+  quote(C, "
+    void float_array_c2ml(value input, float_array * output)
+    {
+      output->len = Wosize_val(input) / Double_wosize;
+      output->data = &(Double_field(input, 0));
+    }
+  ")
+
+> PS : Peut-on trouver quelque part des exemples ou des informations
+> supplémentaires sur l'utilisation de camlidl ?
+
+Je n'ai pour le moment à vous offrir que la doc et les exemples qui se
+trouvent dans la distribution (répertoire "tests").
+
+- Xavier Leroy
+
+
+

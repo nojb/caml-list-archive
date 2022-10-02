@@ -1,0 +1,97 @@
+Return-Path: <rich@annexia.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 60C41BBC1
+	for <caml-list@yquem.inria.fr>; Wed, 20 Feb 2008 13:48:43 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAIqwu0dQRFuwh2dsb2JhbACQUQEBAQgKKYEUnj4
+X-IronPort-AV: E=Sophos;i="4.25,381,1199660400"; 
+   d="scan'208";a="8320028"
+Received: from furbychan.cocan.org ([80.68.91.176])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 20 Feb 2008 13:48:43 +0100
+Received: from rich by furbychan.cocan.org with local (Exim 4.63)
+	(envelope-from <rich@annexia.org>)
+	id 1JRoNN-0006yq-Ao; Wed, 20 Feb 2008 12:48:41 +0000
+Date: Wed, 20 Feb 2008 12:48:41 +0000
+To: John Caml <camljohn42@gmail.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] large hash tables
+Message-ID: <20080220124841.GA25817@annexia.org>
+References: <33d2b3f70802191501v39346a56x4b1852b84d4067b4@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <33d2b3f70802191501v39346a56x4b1852b84d4067b4@mail.gmail.com>
+User-Agent: Mutt/1.5.13 (2006-08-11)
+From: Richard Jones <rich@annexia.org>
+X-Spam: no; 0.00; hash:01 hash:01 ocaml:01 runtime:01 struct:01 struct:01 ocaml:01 byte:01 pointer:01 byte:01 pointer:01 arrays:01 'int:01 unboxed:01 bigarray:01 
+
+On Tue, Feb 19, 2008 at 03:01:46PM -0800, John Caml wrote:
+> I need to load roughly 100 million items into a memory based hash table,
+> where each key is an integer and each value is an integer and a float. Under
+> C++ stdlib's map library, this requires 800 MB of memory.
+
+You can do as well as C++, but you need to understand how values are
+stored in the OCaml runtime.
+
+In C++ you're using an int and a (single-precision) float, and
+presumably you're storing them packed into an array.  Something like
+this?
+
+  struct item { int i; float f; };
+  struct item array[100000000];
+
+The storage requirements for this are 100 * 10^6 * 8 bytes = 800 MB,
+as you say.
+
+In OCaml things are a bit different.  Firstly you are using
+double-precision floats ("float" in OCaml is the same as double in C),
+so those are 8 bytes.  Secondly you're using OCaml ints, and since you
+must be on a 64 bit machine, those are 64 bits wide (although in OCaml
+you can only use 63 of those bits).  So the minimum for storing an int
+and a float in OCaml is 16 bytes.
+
+It gets worse though because you're using a (int * float) tuple.
+These are stored particularly inefficiently in OCaml.  There is an 8
+byte header, 8 bytes for the int, then the float is a boxed pointer
+[stored in a separate allocation] which means an 8 byte pointer,
+another 8 byte header plus 8 bytes for the double-precision float.  So
+if I've got the math right, the cost of storing each tuple would be:
+
+  8 +              8 +   8 +               8 +              8
+  header of tuple  int   pointer to float  header of float  float
+  = 40 bytes.
+
+Storing those in a simple array means another pointer per tuple
+(tuples aren't packed into the array, but pointed to), so that's a
+total of around:
+
+  100 * 10^6 * (8 + 40) = 4.8 GB.
+
+Luckily there are much better ways to store this data in OCaml.  If
+you want to keep it simple, use two arrays, a 'float array' to store
+double-precision floats and an 'int array' to store 63 bit ints.
+These are both unboxed in OCaml, so this works out as:
+
+  float array:   100 * 10^6 * 8
+  int array:   + 100 * 10^6 * 8 = 1.6 GB
+
+You can do better (the same as C++) by using Bigarray.  The basic
+saving of Bigarray is that you can store single-precision float and 32
+bit integers directly in them.  So either go for two Bigarrays, or use
+one Bigarray (of int32_elt type and length 200 million elements) and a
+module wrapping the details of inserting and getting the pairs (also
+the functions Int32.bits_of_float and Int32.float_of_bits will help
+you here).
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat
+

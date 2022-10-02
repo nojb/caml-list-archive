@@ -1,0 +1,114 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 4D06FBC37
+	for <caml-list@yquem.inria.fr>; Wed, 24 Feb 2010 22:00:21 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ag8DAB8ihUvZSMDdimdsb2JhbACbERUBAQEKCQwHEQUfvFqEcgQ
+X-IronPort-AV: E=Sophos;i="4.49,534,1262559600"; 
+   d="scan'208";a="45535709"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 24 Feb 2010 22:00:20 +0100
+Received: from smtp07.web.de (fmsmtp07.dlan.cinetic.de [172.20.5.215])
+	by fmmailgate01.web.de (Postfix) with ESMTP id 22A4E148F6240
+	for <caml-list@inria.fr>; Wed, 24 Feb 2010 22:00:18 +0100 (CET)
+Received: from [95.208.117.111] (helo=frosties.localdomain)
+	by smtp07.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #314)
+	id 1NkOLB-0006Xe-00
+	for caml-list@inria.fr; Wed, 24 Feb 2010 22:00:18 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.71)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1NkOL7-0001sx-1T
+	for caml-list@inria.fr; Wed, 24 Feb 2010 22:00:13 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list <caml-list@inria.fr>
+Subject: Question about ocaml threads and TLS (on linux)
+Date: Wed, 24 Feb 2010 22:00:12 +0100
+Message-ID: <87ocje2vtv.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1+X9tgGqnIBIRLFjXndTgRMM4923jp/DK6rENnI
+	KLVyQwe/AMb2RfdA53wv+p/VZ+5+rDgscr1qwRYqU6yCvs2GEI
+	fsu4PQ63s=
+X-Spam: no; 0.00; ocaml:01 bindings:01 ocaml:01 stubs:01 stub:01 buf:01 malloc:01 buf:01 alloc:01 dims:01 allocates:01 buffer:01 buffer:01 bigarray:01 bigarray:01 
+
+Hi,
+
+I'm having a little problem for my libfuse-ocaml bindings for the
+threaded interface. For those that don't want to read all of the mail my
+question is:
+
+Will every ocaml thread have its own thread-local-storage in the C stubs?
+
+
+I have the following calling sequence:
+
+User ocaml code   | Fuse C stub              | libfuse code
+------------------+--------------------------+-------------
+Fuse.process fs   > 'process stub'           |
+                  | enter_blocking_section() |
+                  | char *buf = malloc(size) |
+                  | fuse_session_process()   >
+                  |                          < ops->write(buf+off)
+                  | 'write stub'             |
+                  | leave_blocking_section() |
+                  | a = caml_ba_alloc_dims() |
+                  < caml_callback(...,a,...) |
+my_ref := a       >                          |
+                  | enter_blocking_section() >
+                  |                          < callback done
+                  | 'process stub'           |
+                  | free(buf)                |
+                  < leave_blocking_section() |
+Fuse.process done |
+
+
+The 'process stub' allocates a buffer and frees it at the end, which is
+usualy fine. Except in the case of a write callback where the buffer is
+passed back to ocaml as Bigarray. If the Bigarray is copied, like above,
+then the ocaml code still has a reference to the data at the point the
+'process stub' wants to free it.
+
+To solve that problem I need the write callback to signal that the
+buffer was passed to ocaml and is now under GC control. The buffer must
+not be free()ed by the 'process stub'. The libfuse API does not provide
+for this so I have to somehow communicate between 'process stub' and
+'write stub' around the libfuse code.
+
+
+Possible solution:
+------------------
+
+__thread char *buf = NULL;
+
+value ocaml_fuse_process(...) {
+  buf = malloc(size);
+  fuse_session_process()
+  if (buf != NULL) free(buf);
+}
+
+void write_callback(...) {
+  a = caml_ba_alloc_dims(...);
+  buf = NULL;
+}
+
+
+This way ocaml_fuse_process will allocate a new buffer whenever it
+doesn't have one and the write_callback will take over the buffer and
+give it to the GC.
+
+
+Now my question is: Does that work? Is it safe? Will every ocaml thread
+have its own thread-local-storage buf?
+
+Currently I'm only interested in supporting Linux. If it is safe there
+that is enough.
+
+MfG
+        Goswin
+

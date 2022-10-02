@@ -1,0 +1,107 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA20604; Tue, 21 Aug 2001 15:37:19 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA20884 for <caml-list@pauillac.inria.fr>; Tue, 21 Aug 2001 15:37:18 +0200 (MET DST)
+Received: from laposte.enst-bretagne.fr (laposte.enst-bretagne.fr [192.108.115.3])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f7LDbHX18435
+	for <caml-list@inria.fr>; Tue, 21 Aug 2001 15:37:17 +0200 (MET DST)
+Received: from rsm.rennes.enst-bretagne.fr (rsm.rennes.enst-bretagne.fr [192.44.77.1])
+	by laposte.enst-bretagne.fr (8.11.5/8.11.5) with ESMTP id f7LDbGn16756
+	for <caml-list@inria.fr>; Tue, 21 Aug 2001 15:37:16 +0200
+Received: from givry.rennes.enst-bretagne.fr (givry.rennes.enst-bretagne.fr [193.52.74.194])
+	by rsm.rennes.enst-bretagne.fr (8.8.8/8.8.8) with ESMTP id PAA16171
+	for <caml-list@inria.fr>; Tue, 21 Aug 2001 15:37:16 +0200 (MET DST)
+Received: from givry.rennes.enst-bretagne.fr (localhost.rennes.enst-bretagne.fr [127.0.0.1])
+	by givry.rennes.enst-bretagne.fr (8.11.3/8.11.3) with ESMTP id f7LDbGl36930
+	for <caml-list@inria.fr>; Tue, 21 Aug 2001 15:37:16 +0200 (CEST)
+	(envelope-from dupont@givry.rennes.enst-bretagne.fr)
+Message-Id: <200108211337.f7LDbGl36930@givry.rennes.enst-bretagne.fr>
+From: Francis Dupont <Francis.Dupont@enst-bretagne.fr>
+To: caml-list@inria.fr
+Subject: [Caml-list] real lazy?
+Date: Tue, 21 Aug 2001 15:37:16 +0200
+X-Virus-Scanned: by amavisd-milter (http://www.amavis.org/) at laposte.enst-bretagne.fr
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I've got Chris Okasaki's "Purely Functional Data Structures"
+(a very nice book). Of course, I've tried to program the examples
+(I needed some training with functors :-) and I've found some
+issues:
+ - no recursion in modules (1) but I don't complain because
+   this cannot (should not!) be done
+ - no polymorphic recusion (aka non-uniform recursion) (2)
+   but the trick given by Okasaki works well so I don't complain
+   (but Okasaki explains the limits of his trick so...)
+ - no views
+ - improper type for lazy constructs (3) because they are implemented
+   with references so the 'a stream (aka 'a lazy list) has some
+   functions on '_a streams. Of course the infamous '_a comes
+   from the reference, a good/built-in implementation should not
+   have this problem: I am *not* happy!
+
+Regards
+
+Francis.Dupont@enst-bretagne.fr
+
+PS: more:
+
+1- recursion in modules:
+ module A = struct type t = C of B.tt ... end
+ module B = Make(A)
+where Make is a functor. A uses B which is built from A.
+
+2- polymorphic recusion (aka non-uniform recursion):
+ type 'a seq = Nil | Cons of 'a * ('a * 'a) seq
+
+ example: Cons(1,Cons((2,3),Cons(((4,5),(6,7)),Nil)))
+ but Cons(1,Cons(2,Nil)) says that 2 should be of type int * int 
+
+ let rec size = function Nil -> 0 | Cons(_,r) -> 1 + size r
+         ^ 1                                         ^ 2
+
+size has both types 'a seq -> int (1) and ('a * 'a) seq -> int (2)
+
+The trick is to switch to:
+ type 'a ep = Elem of 'a | Pair of 'a ep * 'a ep
+ type 'a seq = Nil | Cons of 'a ep * 'a seq
+so all things will be of type 'a ep but Cons(Elem(1),Cons(Elem(2),Nil))
+becomes legal.
+
+3- streams (aka lazy lists)
+
+ open Lazy
+ (* to get type t and function force *)
+
+ type 'a cell = Nil | Cons of 'a * 'a stream
+ and 'a stream = 'a cell Lazy.t
+
+ but this type is not really polymorphic:
+
+ «lazy Nil» has type «'_a cell Lazy.status ref» i.e. «'_a stream»
+ not «'a stream» as it should be!
+
+ So in place of a module Stream I had to write a functor Stream
+ (with «sig type t end» as the argument signature) in order to
+ fix the type of elements of streams. Argh!!
+
+ The real purpose of streams is to write:
+
+ let map f =
+  let rec mapf s = 
+   lazy begin
+    match force s with
+     | Nil -> Nil
+     | Cons(x,r) -> Cons(f x,mapf r)
+   end
+  in mapf
+
+ let rec nat = lazy (Cons(0,map succ nat))
+ and so on...
+
+PPS: Michel, Pierre,
+si vous voulez que je vous prête le bouquin d'Okasaki
+n'hésitez pas à demander... Vous savez quoi faire en échange (:-).
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

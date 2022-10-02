@@ -1,0 +1,124 @@
+Return-Path: <rich@annexia.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id DF838BC69
+	for <caml-list@yquem.inria.fr>; Thu, 16 Aug 2007 18:17:23 +0200 (CEST)
+Received: from furbychan.cocan.org (furbychan.cocan.org [80.68.91.176])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l7GGHMiW010744
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Thu, 16 Aug 2007 18:17:23 +0200
+Received: from rich by furbychan.cocan.org with local (Exim 3.35 #1 (Debian))
+	id 1ILi2D-0000RD-00
+	for <caml-list@inria.fr>; Thu, 16 Aug 2007 17:17:21 +0100
+Date: Thu, 16 Aug 2007 17:17:21 +0100
+To: caml-list@inria.fr
+Subject: Some observations and measurements with using Weak Hashtable to annotate a tree (was: Re: [Caml-list] Weak hash table for attaching extra data to an object)
+Message-ID: <20070816161721.GA11440@furbychan.cocan.org>
+References: <20070814101535.GA14485@furbychan.cocan.org> <46C18D1B.2070303@functionality.de> <200708142144.15414.jon@ffconsultancy.com> <20070815190455.GA4568@furbychan.cocan.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20070815190455.GA4568@furbychan.cocan.org>
+User-Agent: Mutt/1.5.9i
+From: Richard Jones <rich@annexia.org>
+X-j-chkmail-Score: MSGID : 46C47892.001 on discorde : j-chkmail score : X : 0/20 1 0.000 -> 1
+X-Miltered: at discorde with ID 46C47892.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; hashtable:01 hash:01 0100,:01 nodes:01 nodes:01 mli:01 pitfalls:01 ocaml:01 node:01 hash:01 recursive:01 allocating:01 allocating:01 annotations:01 annotations:01 
+
+On Wed, Aug 15, 2007 at 08:04:55PM +0100, Richard Jones wrote:
+> I should have said :-) I'm trying to annotate the <img> & <applet>
+> nodes in a typical HTML document, so they are both sparse (compared to
+> all nodes), but there are many of them.
+
+I did some measurements using my WeakMetadata module to annotate a
+large random HTML document tree.  Here are some observations and
+results, in no particular order.
+
+Code:
+
+http://annexia.org/tmp/weakMetadata.ml
+http://annexia.org/tmp/weakMetadata.mli
+http://annexia.org/tmp/test_weakmetadata.ml
+
+Firstly, it works, but I found a few programming pitfalls.  In one
+case I was accidentally copying my tree nodes when annotating them, so
+I was annotating the copies rather than the nodes themselves.  The
+code was along these lines:
+
+    | Element (a,b,c,d) -> annotate (a,b,c,d)
+
+instead of:
+
+    | Element ((_,_,_,_) as e) -> annotate e
+
+Obviously experienced OCaml programmers wouldn't make this mistake,
+right?!
+
+Another programming problem was that I ended up having to assign a
+unique identifier to each node which was used to do the hash
+(otherwise the hash function would have to do a costly recursive
+descent to determine if two nodes are equal).  This is a peculiarity
+of the Weak hash table itself, namely that physical equality cannot be
+used.
+
+Another programming problem is that the choice of the initial size of
+the hash table determines performance factors in rather non-obvious
+ways.  Allocating the hash table with 'create 13' causes buckets to
+have long chains, but that creates much lower memory overhead.
+Allocating the hash table with 'create 100003' gives short chains and
+high memory overhead.  (Exact numbers below).
+
+I wrote a program to create a document (tree) with approximately
+560,000 elements and approximately 840,000 text nodes.
+
+I annotated every element in the document to get some idea of the
+overhead.  As mentioned before, choice of initial hash table size
+affects the length of the bucket chain:
+
+  Initial hash table size: 13
+  Median chain length per bucket: 33
+  Overhead per element annotated: 21 bytes  (on a 64 bit machine)
+
+  Initial hash table size: 100003
+  Median chain length per bucket: 6
+  Overhead per element annotated: 40 bytes  (on a 64 bit machine)
+
+Approximately 210,000 elements were <img> or <input> elements (15% of
+the total nodes) and I am particularly interested in just annotating
+these nodes.  The overhead for annotating sparse nodes like this is
+similar (again with chain length dependent a lot on initial choice of
+hash table size):
+
+  Initial hash table size: 13
+  Median chain length per bucket: 27
+  Overhead per element annotated: 26 bytes  (on a 64 bit machine)
+
+  Initial hash table size: 100003
+  Median chain length per bucket: 3
+  Overhead per element annotated: 70 bytes  (on a 64 bit machine)
+
+You have to manually compact the hash table in order to actually
+regain the memory used by your metadata annotations.  (Alternately,
+wait for the hash table as a whole to become unreachable, or reuse the
+hash table which causes old annotations to be overwritten).
+
+Internally, the Weak module stores a linked list of weak arrays
+(caml_weak_list_head).  The GC has a separate phase to deal with weak
+arrays, and as far as I can tell from the code the amount of work it
+will do in each slice is limited.  The GC also has special code to
+remove unreachable weak arrays, so this list does not just grow
+without bound.  However I'm still unclear on the exact O(..) for using
+huge numbers of weak arrays, which is what the weak hash table does
+once you start annotating large numbers of nodes.
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat
+

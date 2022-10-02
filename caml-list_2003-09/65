@@ -1,0 +1,156 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id FAA30470; Sat, 6 Sep 2003 05:36:58 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA02624 for <caml-list@pauillac.inria.fr>; Sat, 6 Sep 2003 05:36:57 +0200 (MET DST)
+Received: from mail1.tpgi.com.au (mail.tpgi.com.au [203.12.160.57])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h863atT21547
+	for <caml-list@inria.fr>; Sat, 6 Sep 2003 05:36:55 +0200 (MET DST)
+Received: from 203-219-16-22-syd-ts21-2600.tpgi.com.au (203-219-16-22-syd-ts21-2600.tpgi.com.au [203.219.16.22])
+	by mail1.tpgi.com.au (8.11.6/8.11.6) with ESMTP id h863aj427776;
+	Sat, 6 Sep 2003 13:36:48 +1000
+Subject: Re: [Caml-list] Calling ocamlyacc from ocamlyacc
+From: skaller <skaller@ozemail.com.au>
+Reply-To: skaller@ozemail.com.au
+To: katre <katre@henchmonkey.org>
+Cc: caml-list@inria.fr
+In-Reply-To: <20030902152340.GA32745@henchmonkey.org>
+References: <20030901172828.GA24208@henchmonkey.org>
+	 <20030902151922.GB4055@roke.freak> <20030902152340.GA32745@henchmonkey.org>
+Content-Type: text/plain
+Message-Id: <1062819385.17265.30.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 06 Sep 2003 13:36:26 +1000
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 ozemail:01 michal:01 moskal:01 pretend:01 recursively:01 regex:01 python:01 invokes:01 srcref:01 srcref:01 passing:01 python:01 indentation:01 regexp:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 2003-09-03 at 01:23, katre wrote:
+> Michal Moskal wrote:
+> > 
+> > You can define several start symbols in your grammar. Parsing functions
+> > are defined for each. You can also define several rule ... in your lexer
+> > (lexing functions are defined for each). Hope that helps, I can't help
+> > more, since I don't quite understand nature of your problem.
+> > 
+> 
+> Right, but is there a way, in a ocamlyacc action, to switch which lexer
+> rule you're using?  That seems to be the main part I am missing.  Or if
+> I could access the lexbuf directly, I could also use that.
+
+I think the answer is no, you can't do that.
+The reason is that yacc et al are LR(1) meaning
+1 token look ahead is needed before a reduction:
+in general, when a reduction occurs there is no
+guarrantee what other tokens haven't been fetched.
+
+Now yacc/lex are normally driven by the parser
+fetching tokens. So what you _can_ do is pretend
+that the 'deviant sublanguage' you need to use
+a different grammar for is a single *huge* token.
+
+The lexer, unlike the parser, can be invoked
+recursively, and in particular when a regex
+is matched, the code which returns a value can
+do anything.
+
+In particular, you can switch to another lexing rule.
+I do this all the time for handling comments
+and strings: the lexeme for open quote is
+recognised and it calls a string gathering
+rule which uses the same lexbuf.
+
+Lexbufs have a current position, which is the
+end of the lexeme .. even if the finite state
+automaton actually looked ahead further.
+
+So with lexbuf, you know *exactly* where you are,
+whenever the code associated with a regexp is matched.
+
+Here is the mainline lexer:
+....
+(* Python strings *)
+| quote  { fun state -> state#inbody; parse_qstring lexbuf state }
+| qqq    { fun state -> state#inbody; parse_qqqstring lexbuf state }
+
+
+which invokes the sublexer:
+
+rule parse_qstring = parse
+| qstring { 
+    fun state -> 
+      state#inbody;
+      [STRING (
+        state#get_srcref lexbuf, 
+        state#decode decode_qstring (lexeme lexbuf)
+      )] 
+  }
+| _ { 
+  fun state -> 
+    [ERRORTOKEN (
+      state#get_srcref lexbuf, 
+      "' string"
+    )] 
+  }
+
+and parse_qqqstring = parse
+| qqqstring { 
+    fun state -> 
+      state#inbody;
+      [STRING (
+        state#get_srcref lexbuf, 
+        state#decode decode_qqqstring (lexeme lexbuf)
+      )] 
+  }
+| _ { 
+  fun state -> 
+    state#inbody;
+    [ERRORTOKEN (
+      state#get_srcref lexbuf, 
+      "''' string"
+    )] 
+  }
+
+-------
+Now, I said you can do anything, and in the example I just
+call another lexer rule, but .. there is no reason you
+can't call a parser function, passing the same lexbuf.
+
+Note that you have to do this from the LEXER code,
+to ensure that the sub-parser is invoked on exactly
+the correct starting character.
+
+
+You may also note in the example my lexer codes
+have a 
+
+	fun state -> ...
+
+form (for every lexeme which is boring to write).
+This state is a mutable object which is passed
+to the lexer as an extra argument (just add it
+after the call to the rule as in the nested example:
+
+| quote  { fun state -> state#inbody; parse_qstring lexbuf state }
+--------------------------------------*************--------*****
+-                                     rule                extra arg
+
+
+Note: I am returning lists of tokens not tokens. My lexer code
+is NOT called by the parser. I call it myself and build a list
+of tokens, pre-process them, and pass the output of that to
+the parser via a dummy lexbuf.
+
+I have in fact constructed a PYTHON parser using Ocamlyacc,
+even though Python grammar is 'strongly not LR(1)' :-))
+I do this by something like 13 filterings of the token
+streams (to find the indentation etc) before it
+is in an LR(1) form.
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,135 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA15003; Tue, 17 Dec 2002 14:52:17 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA14999 for <caml-list@pauillac.inria.fr>; Tue, 17 Dec 2002 14:52:16 +0100 (MET)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id gBHDqFH00813
+	for <caml-list@inria.fr>; Tue, 17 Dec 2002 14:52:15 +0100 (MET)
+Received: from ibm3.cicrp.jussieu.fr (ibm3.cicrp.jussieu.fr [134.157.15.3])
+          by shiva.jussieu.fr (8.12.5/jtpda-5.4) with ESMTP id gBHDqDjC068197
+          for <caml-list@inria.fr>; Tue, 17 Dec 2002 14:52:14 +0100 (CET)
+Received: from ibm1.cicrp.jussieu.fr (ibm1.cicrp.jussieu.fr [134.157.15.1])
+          by ibm3.cicrp.jussieu.fr (8.8.8/jtpda/mob-V8) with ESMTP id OAA109360
+          for <caml-list@inria.fr>; Tue, 17 Dec 2002 14:50:51 +0100
+Received: from localhost (fernande@localhost)
+          by ibm1.cicrp.jussieu.fr (8.8.8/jtpda/mob-v8) with ESMTP id OAA5382342
+          for <caml-list@inria.fr>; Tue, 17 Dec 2002 14:50:50 +0100
+Date: Tue, 17 Dec 2002 14:50:50 +0100 (NFT)
+From: Diego Olivier Fernandez Pons <Diego-Olivier.FERNANDEZ-PONS@cicrp.jussieu.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Continuations
+In-Reply-To: <200212161053.37708.engstad@naughtydog.com>
+Message-ID: <Pine.A41.4.44.0212171326220.3145968-100000@ibm1.cicrp.jussieu.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+    Hi,
+
+Continuation simulation with an exception mechanism is a well known
+subject and what I said in my last french post and will explain again
+in english here is nothing new. Then you should find all this (and
+more) in english textbooks on the subject.
+
+Roughly, the idea of continuations is the ability to interrupt a
+computation, do other computations, and then get back to the
+first computation in the same point it was left.
+
+To achieve this goal one needs to save some kind of 'context' of the
+ongoing computation. This can be obtained in several ways, among which
+saving the stack (confer to Raffalli's recent posts on the
+subject), etc.
+
+Let us take a simple example :
+
+Consider a branch and bound distributed algorithm. There are many ways
+to parallelize a graph exploration (shared priority queue, graph
+partition, ...) we will use the graph partition for simplicity (that
+is every processor is given a subgraph to explore)
+
+Then, every time a given processor founds a solution which is better
+than the current best known solution, it has to send it to the other
+machines in order to be able to cut more branches of the graph.
+
+that is :
+  - search
+  - if a good solution is found then send it to the other machines
+  - continue the search at the same point it was left
+
+The problem is that when you raise an exception (or return a value by
+usual function returning mechanism), you escape of the current
+function and loose all intermediate computations, so you cannot get
+back to the same point you left.
+
+In many cases, this is not really a problem since you do not need to
+get back to 'exactly' the same point you left. All you need is to
+memorize enought information to go back to a state similar to the
+state you left.
+
+In my french post I gave two examples of reduced information handling
+in a interruption/recovery style
+
+- successor function (a boolean)
+- get function (an integer)
+
+One problem you may face is that the argument of an exception has a
+restricted type (it cannot be polymorphic). Then how could you do when
+you have to return a polymorphic value (as it would be the case if the
+branch and bound was polymorphic ?)
+
+In most of the cases, you can still manage
+
+In the branch and bound example, you can save the path of the current
+node
+
+type direction = Left | Right
+exception Found of direction list
+
+type 'a tree = Empty | Node of 'a tree * 'a * 'a tree
+
+let rec search x = function
+  | Empty -> raise Not_found
+  | Node (_, v, _) when v = x -> raise (Found [])
+  | Node (l, _, r) ->
+     try search x l with
+       | Not_found ->
+	  (try search x r with
+		Found path -> raise (Found (Right :: path)))
+       | Found path -> raise (Found (Left :: path))
+
+This function just searches x in a binary tree and raises
+  - Not_found if x is not in the tree
+  - Found path if x is in the tree
+
+You can then compose it with a function that locates a node from a
+given path, or finds a given node
+
+val locate : direction list -> 'a tree -> 'a tree
+val find : direction list -> 'a tree -> 'a
+
+
+In my french post I also spoke of continuation passing style. Just
+notice that with CPS you are not subjected to type limitations
+
+let rec min_list f = function
+  | [] -> failwith "the list is empty"
+  | [x] -> f x
+  | x :: tail -> min_list (fun m -> if x < m then f x else f m) tail
+
+val min_list : ('a -> 'b) -> 'a list -> 'b
+
+Min_list computes a function that applies a given function to the min
+element of a list
+
+# min_list (function x -> x = 0) [ 1;4;2;0;6;2;2;2 ];;
+-: bool = true
+
+
+        Diego Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

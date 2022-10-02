@@ -1,0 +1,138 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA28764; Wed, 8 Jan 2003 15:19:54 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA28869 for <caml-list@pauillac.inria.fr>; Wed, 8 Jan 2003 15:19:53 +0100 (MET)
+Received: from octavie.dagstuhl.de (octavie.dagstuhl.de [192.76.146.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h08EJq512630
+	for <caml-list@inria.fr>; Wed, 8 Jan 2003 15:19:52 +0100 (MET)
+Received: from inria.fr (dhcp21.dagstuhl.de [192.76.146.91])
+	by octavie.dagstuhl.de (8.9.2/8.9.2) with ESMTP id PAA21166;
+	Wed, 8 Jan 2003 15:19:33 +0100 (CET)
+Date: Wed, 8 Jan 2003 15:20:40 +0100
+Subject: Re: [Caml-list] Memory management dominates running time
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Mime-Version: 1.0 (Apple Message framework v551)
+Cc: <caml-list@inria.fr>
+To: =?ISO-8859-1?Q?J=F6rgen_Gustavsson?= <gustavss@cs.chalmers.se>
+From: Damien Doligez <damien.doligez@inria.fr>
+In-Reply-To: <Pine.SOL.4.30.0301032109550.17168-100000@muppet20.cs.chalmers.se>
+Message-Id: <5D91C652-2314-11D7-B138-0003930FCE12@inria.fr>
+Content-Transfer-Encoding: quoted-printable
+X-Mailer: Apple Mail (2.551)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Friday, January 3, 2003, at 10:58 PM, J=F6rgen Gustavsson wrote:
+
+> I profiled my program with gprof on a moderately sized input which =
+gave
+> the following top ten time consumers.
+>
+>    %  cumulative    self              self    total
+>  time   seconds   seconds    calls  ms/call  ms/call name
+>  55.5      63.29    63.29                            fl_allocate [1]
+>  11.0      75.79    12.50                            mark_slice [2]
+>   5.7      82.32     6.53                            sweep_slice [3]
+>   4.0      86.91     4.59                            _brk_unlocked [4]
+>   2.5      89.80     2.89                            oldify_one [5]
+>   2.3      92.42     2.62                            oldify_mopup [6]
+>   1.6      94.23     1.81                            modify [7]
+>   1.5      95.90     1.67                            alloc_shr [8]
+>   0.9      96.91     1.01                            allocate_block =
+[9]
+>   0.9      97.90     0.99                            compare_val [10]
+
+fl_allocate, alloc_shr, and allocate_block are O'Caml allocation=20
+functions
+   for the major heap.
+mark_slice and sweep_slice are the major collector.
+brk_unlocked is a C library function, I'm surprised to see it use
+   so much run time.
+oldify_one and oldify_mopup are the minor collector.
+modify is the write barrier that is called when an assignment is done.
+
+
+> Unfortunately it gets worse when we increase the input size.
+
+This behaviour is a bit unusual.
+
+
+> I am not an expert on garbage collection but the only explanation that
+> I can see for this behaviour is that the free list that fl_allocate
+> searches grows as the program runs. If there are lots of small blocks=20=
+
+> in
+> the begining of the free list then fl_allocate potentially has to=20
+> search
+> very far when it allocates somewhat larger blocks.
+>
+> This situation can occur, for example, if the program allocates many=20=
+
+> small
+> blocks in the begining which are then reclaimed by the garbage=20
+> collector
+> and then later the program allocates mostly larger blocks.
+
+This phenomenon is called "fragmentation" and O'Caml does a few things
+to prevent fragmentation-related problems:
+
+1. Whenever two free blocks are adjacent, they are merged into one
+    bigger block.
+2. The free list is not searched from the beginning every time, because
+    that would lead to an accumulation of small blocks at the beginning
+    of the list, even under normal conditions.  Instead, each search
+    starts where the previous one stopped, so that no block is examined
+    more often than any other.
+3. The heap compaction algorithm is designed to remove all fragmentation
+    from the free list by moving objects around to make sure that all
+    free blocks are adjacent.
+4. When fragmentation is too high, the typical behaviour is that the
+    allocation requests cannot be satisfied from the free list, and
+    the heap size has to be increased indefinitely.  The GC can detect
+    when this is the case, and automatically trigger a heap compaction.
+
+It seems that you have found a case where this strategy fails to detect
+a situation of heavy fragmentation.
+
+
+> One reason for why I doubt it, is that if it is correct then the ocaml
+> memory management can asymptoticly dominate the running time. Is it=20
+> really
+> so?
+
+It looks surprising, but we don't have an analysis of the run-time
+cost of memory management, and such an analysis would be quite hard
+to do precisely.
+
+
+> Finally, what can I do about this problem?
+
+You can have good control of the GC parameters through the Gc module
+of the standard library.  The things you should try are:
+1. Increase the minor heap size.  This will let the minor GC deallocate
+    more blocks, and thus reduce the load of the major GC.  For this
+    parameter, the point of diminishing returns depends quite a lot
+    on the allocation behaviour of your program.
+2. Increase the space overhead.  The major GC has a trade-off between
+    space and time.  If you increase the space overhead, your program
+    will need more memory, but the major GC load will decrease.
+    Reasonable values for this parameter are between 50 and 500.
+3. Decrease max_overhead.  This will trigger more automatic heap
+    compactions, thus reducing fragmentation.  Be aware, however,
+    that heap compaction is costly and not incremental, so it will
+    pause the execution of your program (for up to a few seconds).
+    This can be a problem if your program is real-time or interactive.
+4. Call Gc.compact from your program.  This is a good idea if you
+    can easily identify in your program the point where it switches
+    from allocating small blocks to allocating big blocks.
+
+If none of the above helps, I would be interested in getting a copy
+of your program, to see what is going on in more detail.  After all,
+the behaviour that you are observing might simply be caused by a bug.
+
+-- Damien
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

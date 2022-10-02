@@ -1,0 +1,165 @@
+Return-Path: <bhurt@spnz.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id CB943BB81
+	for <caml-list@yquem.inria.fr>; Mon, 10 Apr 2006 16:06:07 +0200 (CEST)
+Received: from conn.mc.mpls.visi.com (conn.mc.mpls.visi.com [208.42.156.2])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k3AE660A019276
+	for <caml-list@yquem.inria.fr>; Mon, 10 Apr 2006 16:06:07 +0200
+Received: from [192.168.42.2] (bhurt.dsl.visi.com [208.42.141.66])
+	by conn.mc.mpls.visi.com (Postfix) with ESMTP
+	id F34F4819B; Mon, 10 Apr 2006 09:06:05 -0500 (CDT)
+Date: Mon, 10 Apr 2006 09:06:08 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: =?ISO-8859-2?Q?Tom_Primo=BEi=E8?= <tom.primozic@gmail.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Type Inference and Overloading
+In-Reply-To: <c1490a380604100151s256d05y13cc8ffa11580770@mail.gmail.com>
+Message-ID: <Pine.LNX.4.63.0604100828560.9896@localhost.localdomain>
+References: <c1490a380604100151s256d05y13cc8ffa11580770@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: MULTIPART/MIXED; BOUNDARY="8323328-1753569478-1144677968=:9896"
+X-Miltered: at concorde with ID 443A664E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; inference:01 overloading:01 compiler:01 val:01 val:01 overloading:01 ocaml:01 functors:01 ocaml:01 subtraction:01 bool:01 struct:01 meth:01 rec:01 functor:01 
+X-Attachments: cset="X-UNKNOWN" 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+  This message is in MIME format.  The first part should be readable text,
+  while the remaining parts are likely unreadable without MIME-aware tools.
+
+--8323328-1753569478-1144677968=:9896
+Content-Type: TEXT/PLAIN; charset=X-UNKNOWN; format=flowed
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+
+
+
+On Mon, 10 Apr 2006, Tom Primo=BEi=E8 wrote:
+
+> Does anyone have any idea what kind of algorithm and structures would the
+> compiler need to deploy to correctly infer the types for these functions:
+>
+> a : int -> float -> int
+> a : float -> int -> int
+
+I'm not sure there is one- in fact, I don't think there is.  Consider if I=
+=20
+have the following case as above, and then I type:
+
+let g =3D a;;
+
+what's the type of g?  Is it int -> float -> int or float -> int -> int?
+
+What if I type:
+
+let g x y =3D a y x;;
+
+?  What happens if I define two functions:
+val c: int -> float -> int
+val c: int -> int -> int
+
+and then say:
+let h x =3D c 3 x;;
+
+What type does h have?
+
+As a more general rule, how I deal with overloading in Ocaml is to use=20
+modules and functors.  Say I want to implement Newton's method.  In other=
+=20
+languages, I'd depend upon overloading (possibly even operator=20
+overloading).  In Ocaml, I'd do something like:
+
+module type Req =3D
+ =09type t (* the type of the number system *)
+ =09val sub : t -> t -> t (* subtraction *)
+ =09val div: t -> t -> t (* division *)
+ =09val within_epsilon: t -> t -> bool
+end
+
+module Newtons(Alg: Req) =3D struct
+ =09let meth f df x =3D
+ =09=09let rec loop x =3D
+ =09=09=09let x' =3D Alg.sub x (Alg.div (f x) (df x)) in
+ =09=09=09if (Alg.within_epsilon x x') then
+ =09=09=09=09x'
+ =09=09=09else
+ =09=09=09=09loop x'
+ =09=09in
+ =09=09loop x
+end;;
+
+Of course, a real implementation would be more complicated than this, but=
+=20
+this gets the idea across.  I could then create "overloaded" versions of=20
+my Newtons method just by calling the functor with the right modules, for=
+=20
+example:
+
+module Float =3D struct
+ =09type t =3D float
+ =09let sub =3D ( -. );;
+ =09let div =3D ( /. );;
+ =09let within_epsilon x y =3D (abs_float (x -. y)) < 1e-14;;
+end;;
+
+module FloatNewtons =3D Newtons(Float);;
+
+Similiar code bits can give me Newton's method for integers (use an=20
+epsilon of 1), complexes, quaternions, even vectors/matricies.
+
+Note that the performance overhead of using a functor is not signifigantly=
+=20
+larger than the performance overhead of using virtual or overloaded=20
+functions- you're calling the sub, div, and within_epsilon functions via a=
+=20
+function pointer either way.  And if you were to use ocamldefun, you could=
+=20
+eliminate even that cost.
+
+Another advantage of Ocaml's funtors over overloaded functions/operators=20
+is in documentation.  You can see, right up front, in the .mli file, what=
+=20
+operations the algorithm needs.  And the compiler checks to make sure you=
+=20
+are providing them.
+
+The other important point to make here is that the operations provided to=
+=20
+a module are not implicitly "part of" the object itself.  This is=20
+especially important with comparison functions (such as within_epsilon=20
+above)- I have come to the conclusion that comparison can *NOT* be a=20
+member function:
+http://enfranchisedmind.com/blog/archive/2006/01/30/62
+http://enfranchisedmind.com/blog/archive/2006/03/28/123
+
+As an example of this problem in action (and how functors solve it),=20
+consider the above case except that sometimes I want to use a run-time=20
+defined value for epsilon, instead of the hardcoded 1e-14.  I could then=20
+do:
+
+module FloatE =3D struct
+ =09(* floating point with variable epsilon *)
+ =09type t =3D float
+ =09let sub =3D ( -. );;
+ =09let div =3D ( /. );;
+ =09let epsilon =3D ref 1e-14;;
+ =09let within_epsilon x y =3D (abs_float (x -. y)) < !epsilon;;
+end;;
+
+module FloatENewtons =3D Newtons(FloatE);;
+
+
+Now I have two different Newton's methods on floats: one that uses the=20
+fixed epsilon of 1e-14, and one that uses a variable epsilon.  Note that=20
+both FloatNewtons.meth and FloatENewtons.meth have the same type!  If the=
+=20
+comparison method was built in, I'd need two different "types" of floats.
+
+Brian
+
+--8323328-1753569478-1144677968=:9896--
+

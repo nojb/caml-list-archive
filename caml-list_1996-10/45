@@ -1,0 +1,73 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id OAA27024 for caml-redistribution; Wed, 30 Oct 1996 14:47:05 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id OAA26786 for <caml-list@pauillac.inria.fr>; Wed, 30 Oct 1996 14:40:51 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id OAA13355 for <caml-list@pauillac.inria.fr>; Wed, 30 Oct 1996 14:40:50 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.7.6/8.7.3) with ESMTP id OAA22661 for <caml-list@margaux.inria.fr>; Wed, 30 Oct 1996 14:40:50 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id OAA13351; Wed, 30 Oct 1996 14:40:44 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id OAA26778; Wed, 30 Oct 1996 14:40:39 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+Message-Id: <199610301340.OAA26778@pauillac.inria.fr>
+Subject: Re: Q: float arrays
+To: jserot@epcc.ed.ac.uk (Jocelyn Serot)
+Date: Wed, 30 Oct 1996 14:40:38 +0100 (MET)
+Cc: caml-list@margaux.inria.fr
+In-Reply-To: <20086.199610291112@tufa.epcc.ed.ac.uk> from "Jocelyn Serot" at Oct 29, 96 11:12:54 am
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+
+> Trying to quantify to cost of handling arrays of tuples instead of 
+> multiple "parallel" arrays, i recently came to some results, which at 
+> first sight, seems a little surprising.
+
+> What i cannot understand is that map2 seems to be slower than
+> map_pairs (in the range 1->2 in native compiled mode). The few i
+> know about the Caml compiler is that it doesnt boxe floats in
+> arrays.
+
+The bytecode compiler keeps floats boxed in arrays, so there is no
+essential difference between an array of pairs of floats and two float
+arrays. (The array of pairs entails one extra indirection and is less
+space efficient, but has better locality.)
+
+The native-code compiler unboxes floats in arrays. But unboxing is a
+double-edged sword. When the float array is accessed as a float
+(e.g. to perform arithmetic on it), unboxed arrays are a big win.
+When the float array is accessed as a Caml value (e.g. to pass to
+another function, or from a piece of polymorphic code), the unboxed
+float needs to be boxed first to convert it to a regular Caml value,
+and this is expensive.
+
+Your map2 function actually performs two boxing operations at each
+iteration, because the two float elements are passed to a function. It
+also has to test dynamically the kind of the array (float
+vs. non-float), because it's a polymorphic function.  This explains
+why it's slower than map on an array of pairs (which involves no
+boxing, just 3 indirections per iteration)
+
+If you inline the "*." operation in map2, all boxing will be
+eliminated (and all dynamic tests as well, since the function is now
+monomorphic), and you'll get much better performance than what can be
+obtained with an array of pairs:
+
+ let product f a a' =
+   let l = length a in
+   if ( length a' != l ) then invalid_arg "product" else
+   if l = 0 then [||] else begin
+     let r = create l (f(unsafe_get a 0)(unsafe_get a' 0)) in
+     for i = 1 to l - 1 do
+       unsafe_set r i (unsafe_get a i *. unsafe_get a' i)
+     done;
+     r
+   end
+
+Polymorphism and higher-order functions don't mix well with high
+performance. If you need Fortran-like performance, there are cases
+where you must write Fortran-style code.
+
+- Xavier Leroy
+
+
+
+

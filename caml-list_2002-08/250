@@ -1,0 +1,142 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA20328; Wed, 14 Aug 2002 21:00:34 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA20364; Wed, 14 Aug 2002 21:00:33 +0200 (MET DST)
+Received: from lobus.fungible.com (adsl-64-161-114-6.dsl.snfc21.pacbell.net [64.161.114.6])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g7EJ0UD15298;
+	Wed, 14 Aug 2002 21:00:31 +0200 (MET DST)
+Received: by lobus.fungible.com (Postfix, from userid 1000)
+	id AF87B7F66; Wed, 14 Aug 2002 12:00:27 -0700 (PDT)
+Date: Wed, 14 Aug 2002 11:46:44 -0700
+From-Tims-Fingers: true
+To: caml-list@inria.fr, caml-bugs@inria.fr
+Subject: [Caml-list] Segfault if you load threads.cma more than once
+Message-Id: <20020814190027.AF87B7F66@lobus.fungible.com>
+From: tim@fungible.com (Tim Freeman)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Here's some terminal dialogue ending in a segfault that happened
+because of bad options I passed in while linking.  I'm running ocaml
+from the cvs as of yesterday except for the change discussed below.
+The patch included below causes a meaningful error message to be
+produced instead of a segfault.  I originally observed this behavior
+in ocaml 3.0.4.
+
+   lobus:/tmp/aggravate> cat Makefile
+   OCAMLC = ocamlc
+   .PHONY: all
+   all: foo
+   	./foo
+   foo: foo1.ml foo1.mli foo3.ml foo3.mli foo2.ml Makefile
+   	$(OCAMLC) -thread -c foo1.mli
+   	$(OCAMLC) -thread -c foo1.ml
+   	$(OCAMLC) -a unix.cma threads.cma -thread -o foo1.cma foo1.cmo
+   	$(OCAMLC) -thread -c foo3.mli
+   	$(OCAMLC) -thread -c foo3.ml
+   	$(OCAMLC) -a unix.cma threads.cma -thread -o foo3.cma foo3.cmo
+   	$(OCAMLC) -thread -c foo2.ml 
+   	$(OCAMLC) unix.cma threads.cma -thread -custom -I . -g -o foo foo1.cma foo3.cma foo2.cmo
+
+   .PHONY: clean
+   clean:
+   	rm foo *.cmo *.cmi *.cma
+   lobus:/tmp/aggravate> cat foo1.mli
+   val mutexcreate: unit -> Mutex.t
+   lobus:/tmp/aggravate> cat foo1.ml
+   Format.printf "Hello, world from foo1!\n@?";;
+   let mutexcreate () = Mutex.create ();;
+   ignore (mutexcreate ());;
+   lobus:/tmp/aggravate> cat foo2.mli
+   cat: foo2.mli: No such file or directory
+   lobus:/tmp/aggravate> cat foo3.mli
+   val mutexcreate: unit -> Mutex.t
+   lobus:/tmp/aggravate> cat foo3.ml
+   Format.printf "Hello, world from foo3!\n@?";;
+   let mutexcreate () = Mutex.create ();;
+   ignore (mutexcreate ());;
+   lobus:/tmp/aggravate> cat foo2.ml
+   type foo = Foo of foo array;;
+
+   let rec wastespace (power: int): foo =
+     if power = 0 then
+       Foo [||]
+     else
+       let a: foo array = Array.make 10 (Foo [||])
+       in
+         for i = 0 to 9 do
+           a.(i) <- wastespace (power - 1)
+         done;
+         Foo a
+   in
+     ignore (Foo1.mutexcreate ()); (* Use Foo1 and Foo3 to make sure *)
+     ignore (Foo3.mutexcreate ()); (* they get linked in. *)
+     ignore (wastespace 6); (* Force a garbage collection. *)
+     ()
+
+   lobus:/tmp/aggravate> make
+   ocamlc -thread -c foo1.mli
+   ocamlc -thread -c foo1.ml
+   ocamlc -a unix.cma threads.cma -thread -o foo1.cma foo1.cmo
+   ocamlc -thread -c foo3.mli
+   ocamlc -thread -c foo3.ml
+   ocamlc -a unix.cma threads.cma -thread -o foo3.cma foo3.cmo
+   ocamlc -thread -c foo2.ml 
+   ocamlc unix.cma threads.cma -thread -custom -I . -g -o foo foo1.cma foo3.cma foo2.cmo
+   ./foo
+   Hello, world from foo1!
+   thread_initialize was called more than once.
+   If we don't stop now, we'll fail during the next garbage collection.
+   Hello, world from foo3!
+   make: *** [all] Segmentation fault
+
+You can get different outcomes depending on exactly what you do:
+
+1. If you run what's in CVS right now, you'll get the segmentation
+   fault without the "thread_initialize was called more than once..."
+   message.  This happened to me and it took a while for me to figure
+   out what was happening.
+2. If you apply the patch below, you'll get a clean failure with an
+   explanation of what went wrong.
+3. If you apply the patch below and change "failwith" to "printf", you
+   get exactly the behavior above.
+4. If you eliminate unix.cma and threads.cma when building the
+   libraries, the problem goes away as it should.
+
+-- 
+Tim Freeman       
+tim@fungible.com
+GPG public key fingerprint ECDF 46F8 3B80 BB9E 575D  7180 76DF FE00 34B1 5C78 
+
+--- scheduler.c	2001/12/07 13:40:22	1.54
++++ scheduler.c	2002/08/14 18:50:25
+@@ -153,11 +153,24 @@
+ static int stdin_initial_status, stdout_initial_status, stderr_initial_status;
+ static void thread_restore_std_descr(void);
+ 
++/* Garbage collection will fail if we've been initialized twice.  It's possible
++   to do this by passing bad linker options, so crash with a message instead of
++   failing. */
++static int initialized = 0;
++
+ /* Initialize the thread machinery */
+ 
+ value thread_initialize(value unit)       /* ML */
+ {
+   struct itimerval timer;
++  if (initialized) {
++    failwith
++      ("thread_initialize was called more than once.\n"
++       "If we don't stop now, we'll fail during the next garbage collection.\n"
++       "Did you link in threads.cma more than once?");
++  } else {
++    initialized = 1;
++  }
+   /* Create a descriptor for the current thread */
+   curr_thread =
+     (thread_t) alloc_shr(sizeof(struct thread_struct) / sizeof(value), 0);
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

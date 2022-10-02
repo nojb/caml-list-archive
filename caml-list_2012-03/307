@@ -1,0 +1,142 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q2OIQjli025585
+	for <caml-list@sympa-roc.inria.fr>; Sat, 24 Mar 2012 19:26:45 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuMCAFMRbk/ZSMD4k2dsb2JhbABEuCEiAQEBAQkJCwkUAySCNxN7NAEEKIZFgX2YMJ9UjgSDJASbPY04gVs
+X-IronPort-AV: E=Sophos;i="4.73,642,1325458800"; 
+   d="scan'208";a="151046882"
+Received: from fmmailgate07.web.de ([217.72.192.248])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 24 Mar 2012 19:26:39 +0100
+Received: from moweb002.kundenserver.de (moweb002.kundenserver.de [172.19.20.108])
+	by fmmailgate07.web.de (Postfix) with ESMTP id 2A842FA922A
+	for <caml-list@inria.fr>; Sat, 24 Mar 2012 19:26:39 +0100 (CET)
+Received: from frosties.localnet ([95.208.118.96]) by smtp.web.de (mrweb001)
+ with ESMTPA (Nemesis) id 0LnBTZ-1SmDKN3oKL-00hCEk; Sat, 24 Mar 2012 19:26:38
+ +0100
+Received: from mrvn by frosties.localnet with local (Exim 4.77)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1SBVfi-0006MW-9p
+	for caml-list@inria.fr; Sat, 24 Mar 2012 19:26:38 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Date: Sat, 24 Mar 2012 19:26:37 +0100
+Message-ID: <87fwcx6ejm.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Provags-ID:  V02:K0:mrNYRsfM4xLlJ5E7BT/H9n6RPfK9/3M8qgTS6/fPWGS
+ dMqAAwu9Oh1C373XqVA1ChjBKZ7ALcPgSx9qn3f1ekFPTmr6lc
+ P2l0cxuvFjgvtbyzNl5M014dVNUNVqDPXx3Iwf2CY7f99YAKfc
+ /4ToRWKInAdHgjghkT21qoPArZz8M3yKaM67SQy1srbNe43zQj
+ 1LciX9g7uia9JjOBAxFcQ==
+Subject: [Caml-list] Wish: mutable variant types, equivalence with records
+
+Hi,
+
+consider the code below that counts how often a value is printed.
+
+The reason why this code works is that the memory layout of a
+variant with arguments is identical to a record with the same
+types. The only difference is that a variant sets the tag of the memory
+block to reflect which constructor it is (here Bar = 0, Baz = 1).
+
+But the code is fragile. It requires the use of Obj.magic and duplicates
+the definitions of bar and baz (once as variant and once as record). If
+the type of foo is changed but not the records then bad things will
+happen.
+
+There are ways to do this without Obj.magic:
+
+type foo = Bar of bar_record | Baz of baz_record
+type foo = Bar of int * int ref | Baz of float * int ref
+
+The first adds an indirection for every access to foo and breaks
+matching. The second adds an indirection for every mutable value in the
+type. In both cases the extra indirections increase the memory footprint
+and runtime.
+
+
+So why not allow mutable in variant types and some equivalence with
+records? For example:
+
+type <name> = <Constructor> of [mutable] <type>[:label] [| ...]
+
+as in:
+
+type foo =
+  | Bar of int:i * mutable int:bar_used
+  | Baz of float:f * mutable int:baz_used
+
+let use x =
+  match x with
+    | Bar bar ->
+        bar.bar_used <- bar.bar_used + 1
+    | Baz baz ->
+        baz.baz_used <- baz.baz_used + 1
+
+let print x =
+  use x;
+  match x with
+  | Bar bar -> Printf.printf "%d\n" bar.i
+  | Baz baz -> Printf.printf "%f\n" baz.f
+
+The label is optional and any types in the constructor without label
+would be translated into anonymous fields in a record that are
+ineaccessible.
+
+  type foo = Foo of int * mutable int:used
+
+would be equivalent to { _ : int; mutable used : int; }
+
+Taking it one step wurther one could even allow:
+
+let bar = { i = 1; bar_used = 0; }
+let foo = Bar bar
+let foo = let Bar bar = foo in Bar { bar with i = 2; }
+
+
+What do you think?
+
+MfG
+        Goswin
+
+======================================================================
+module Foo : sig
+  type foo
+  val make_bar : int -> foo
+  val make_baz : float -> foo
+  val get_used : foo -> int
+  val print : foo -> unit
+end = struct
+  type foo = Bar of int * int | Baz of float * int
+  type bar_record = { i : int; mutable bar_used : int; }
+  type baz_record = { f : float; mutable baz_used : int; }
+
+  let make_bar i = Bar (i, 0)
+  let make_baz f = Baz (f, 0)
+
+  let use x =
+    match x with
+    | Bar _ ->
+        let (bar : bar_record) = Obj.magic x
+        in bar.bar_used <- bar.bar_used + 1
+    | Baz _ ->
+        let (baz : baz_record) = Obj.magic x
+        in baz.baz_used <- baz.baz_used + 1
+
+  let get_used = function Bar (_, used) | Baz (_, used) -> used
+
+  let print x =
+    use x;
+    match x with
+    | Bar (i, _) -> Printf.printf "%d\n" i
+    | Baz (f, _) -> Printf.printf "%f\n" f
+end;;
+
+let foo = Foo.make_bar 1
+let used_before = Foo.get_used foo
+let () = Foo.print foo
+let used_after = Foo.get_used foo
+
+
+

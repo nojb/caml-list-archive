@@ -1,0 +1,96 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA08118; Wed, 23 Jul 2003 00:06:49 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA09885 for <caml-list@pauillac.inria.fr>; Wed, 23 Jul 2003 00:06:47 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h6MM6iT02046
+	for <caml-list@inria.fr>; Wed, 23 Jul 2003 00:06:45 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2/3.7W) with ESMTP id HAA05538;
+	Wed, 23 Jul 2003 07:06:14 +0900 (JST)
+To: brian.hurt@qlogic.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Variant parameterized method?
+In-Reply-To: <Pine.LNX.4.33.0307221457320.2041-100000@eagle.ancor.com>
+References: <Pine.LNX.4.33.0307221457320.2041-100000@eagle.ancor.com>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20030723070614J.garrigue@kurims.kyoto-u.ac.jp>
+Date: Wed, 23 Jul 2003 07:06:14 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 62
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; jacques:01 caml-list:01 qlogic:01 foo:01 bug:01 failwith:01 struct:01 ocaml:01 caml:01 mutable:01 sig:01 garrigue:01 rec:01 polymorphic:01 simpler:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Brian Hurt <brian.hurt@qlogic.com>
+
+> What I want to do is write a class interface like:
+> 
+> class virtual ['a] foo :
+> object
+> 	method virtual doit : 'a
+> 	method map : 'b. ('a -> 'b) -> 'b foo
+> end
+> 
+> The map function returns a new foo (not necessarily a new member of 
+> whatever derived from foo class the function is actually being called on) 
+> parameterized on the variant type.
+
+This precise type is not admissible in the ocaml type system.
+In ocaml recursive types must be regular: only 'a foo may occur in the
+expansion of 'a foo.
+
+This problem is discussed in an answer to PR#1730 in the caml bug
+database.
+This can be solved by introducing an explicit wrapper.
+
+I give two versions of the code: with a polymorphic reference and with
+a recursive modules. They are strictly equivalent: one is not safer
+than the other (at least currently).
+
+(* polymorphic reference *)
+type 'a c0 = C of < map : 'b. ('a -> 'b) -> 'b c0 >
+
+type m = {mutable new_c : 'a. 'a -> 'a c0}
+let m = {new_c = fun _ -> failwith "new_c"}
+
+class ['a] c (x : 'a) = object
+  method map : 'b. ('a -> 'b) -> 'b c0 = fun f -> m.new_c (f x)
+end
+let () = m.new_c <- fun x -> C (new c x)
+
+(* recursive module *)
+module rec M : sig
+  class ['a] c : 'a -> object
+    method map : ('a -> 'b) -> 'b M.c_t
+  end
+  type 'a c_t = C of 'a c
+end = struct
+  class ['a] c (x : 'a) = object (_ : _ #M.c)
+    method map = fun f -> M.C (new M.c (f x))
+  end
+  type 'a c_t = C of 'a c
+end
+
+Not that the fact the result of #map is a ['b c_t] rather than a ['b
+c] is not a practical problem: you can just write
+  let C x' = x#map f
+If you prefer a [(x#map f).c] notation, use a one-field record rather
+than a one constructor sum.
+
+If you think (as I do) that all these examples are just too
+complicated in practice, there is a simpler way to go:
+only define a fold method in your class, and define map itself out of
+the class.
+
+Jacques Garrigue
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

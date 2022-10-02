@@ -1,0 +1,184 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA06348 for caml-redistribution; Wed, 15 Dec 1999 10:51:15 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA23585 for <caml-list@pauillac.inria.fr>; Wed, 15 Dec 1999 04:06:45 +0100 (MET)
+Received: from gs176.sp.cs.cmu.edu (GS176.SP.CS.CMU.EDU [128.2.198.136])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id EAA12736;
+	Wed, 15 Dec 1999 04:06:43 +0100 (MET)
+Received: from gs176.sp.cs.cmu.edu (localhost [127.0.0.1])
+	by gs176.sp.cs.cmu.edu (8.9.3/8.9.3) with ESMTP id WAA17480;
+	Tue, 14 Dec 1999 22:06:41 -0500
+Message-Id: <199912150306.WAA17480@gs176.sp.cs.cmu.edu>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>, caml-list@inria.fr,
+        "David McClain" <dmcclain@azstarnet.com>
+Subject: Re: ocaml limitations 
+In-Reply-To: Your message of "Tue, 14 Dec 1999 13:31:14 +0100."
+             <19991214133114.35181@pauillac.inria.fr> 
+Date: Tue, 14 Dec 1999 22:06:41 -0500
+From: John Carol Langford <jcl@gs176.sp.cs.cmu.edu>
+Sender: weis
+
+
+I grabbed David McClain's code, figured out how to use it, then
+stripped it down to the minimal set necessary for what I want to do.
+Here are the timings for a little benchmark I made:  (P-120, linux)
+
+Time when redirecting to a c short array: ~40 seconds
+
+Time when "arena"ing a c long array and playing masking games to get
+simulated shorts: 25.68 seconds
+
+Time to simulate the long array and play masking games in pure ocaml:
+54.90 seconds
+
+Time for native C: 7.13 seconds
+
+'arena' was a big win.  Without the need to play shift & mask games
+'arena' will get you down to 14 seconds or so.  The remaining
+factor of 2 is probably loop optimizations in the C compiler.
+
+-John
+
+The benchmark in ocaml with 'arena' and short simulation:
+let max = 1 lsl 23
+
+let big = General_array.foreign_unsafe_create max 
+
+let set arr loc valu = 
+  let real_loc = loc / 2 in
+  let mixed_val = Array.unsafe_get arr real_loc in
+  let final_val = 
+    if loc mod 2 = 1 then (mixed_val land 4294901760) lor valu
+    else (mixed_val land 65535) lor (valu lsl 16) in
+  Array.unsafe_set arr real_loc final_val
+
+let get arr loc = 
+  let ret = Array.unsafe_get arr (loc/2) in
+  let real_ret = 
+    if loc mod 2 = 1 then ret
+    else ret lsr 16 in
+  real_ret land 65535
+    
+let _ = 
+  let accum =ref 0 in
+  let ml_big = General_array.arena big in
+  for i = 0 to max -1 do
+    set ml_big i i
+  done;
+  for j = 0 to 9 do
+    for i = 0 to max -1 do
+      accum := get ml_big i
+    done;
+  done;
+  print_int !accum; print_newline()
+
+The benchmark in c:
+int main(void)
+{
+  int i,j;
+  int max = 1 << 23;
+  int accum = 0;
+  short int *big = (short int *)malloc(sizeof(short) *max);
+  
+  for(i=0;i<max-1;i++)
+    big[i] = (short)i;
+  for(j=0; j<10; j++)
+    for(i=0;i<max-1;i++)
+      accum = big[i];
+  printf("%i\n",accum);
+  return 0;
+}
+
+The support code:
+// foreign_array.c -- Implementation of foreign array objects
+// hacked to specialize by jcl@cs.cmu.edu
+// DM/MCFA  01/99
+// ---------------------------------------------------------------
+
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "mlvalues.h"
+#include "memory.h"
+#include "alloc.h"
+#include "fail.h"
+#include <assert.h>
+
+// ----------------------------------------------------------------------
+
+inline long int *pdata(value arr)
+{
+	return (long *)Field(arr,1);
+}
+
+inline void foreign_array_delete(value arr)
+{
+	free(pdata(arr));
+}
+
+inline value foreign_array_unsafe_get(value arr, value ix)
+{
+  //  printf("get %i = %i\n",Long_val(ix), pdata(arr)[Long_val(ix)]);
+	return pdata(arr)[Long_val(ix)];
+}
+
+inline value foreign_array_unsafe_set(value arr, value ix, value val)
+{
+  //  printf("set %i to %i\n",Long_val(ix), Long_val(val));
+	pdata(arr)[Long_val(ix)] = (long)val;
+	return Val_unit;
+}
+
+inline value foreign_arena(value arr)
+{
+  return pdata(arr);  
+}
+
+value foreign_array_unsafe_create(value vlen)
+{
+        CAMLparam1(vlen);
+	CAMLlocal1(res);
+
+	long int *p;
+
+	long len = Long_val(vlen);
+
+	res = alloc_final(2, foreign_array_delete,1,1);
+	p = (long int *)malloc(sizeof(long) *len);
+
+	Store_field(res,1,(value)p);
+	CAMLreturn res;
+}
+
+general_array.ml:
+(* general_array.ml -- Implementation of (essentially) unlimited size arrays *)
+(* hacked by jcl@cs.cmu.edu *)
+(* DM/MCFA  01/99 *)
+
+type foreign_array  (* opaque foreign array object pointer *)
+type raw_ptr        (* opaque raw pointer to foreign array data *)
+      
+external foreign_array_length :
+  foreign_array -> int
+  = "foreign_array_length"
+
+(* unsafe_get_double and unsafe_set_double are provided to allow *)
+(* an array to respond to OCAML without requiring that it be an *)
+(* array of doubles. *)      
+external foreign_unsafe_get :
+  foreign_array -> int -> int
+  = "foreign_array_unsafe_get"
+      
+external foreign_unsafe_set :
+  foreign_array -> int -> int -> unit
+  = "foreign_array_unsafe_set"
+      
+external foreign_unsafe_create :
+  int -> foreign_array
+  = "foreign_array_unsafe_create"
+
+external foreign_arena : 
+   foreign_array -> raw_ptr = "foreign_arena"      
+
+let arena f = ((Obj.magic (foreign_arena f)): int array)
+
+
+

@@ -1,0 +1,99 @@
+Return-Path: <markus.mottl@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 742B8BB83
+	for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 22:44:48 +0200 (CEST)
+Received: from wx-out-0102.google.com (wx-out-0102.google.com [66.249.82.194])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k4CKiloa022193
+	for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 22:44:48 +0200
+Received: by wx-out-0102.google.com with SMTP id s18so193184wxc
+        for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 13:44:47 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=Rta+eF4TrgiXNi9ptg8Yz7vVxhPBtUE97PW4nv6RUWtvDYiKv/hyx++im8W3sV4G4+bZWfTNHLO/kkBHIhM64PcXalEgbGxhD+5FTsqJoPNIdy2+fW+ATGEivqjYQtJM/JTtmuJpcYHkLhjIoRfrMzIkzLM7T4RkTsmGvWvNbec=
+Received: by 10.70.44.8 with SMTP id r8mr3384344wxr;
+        Fri, 12 May 2006 13:44:47 -0700 (PDT)
+Received: by 10.70.56.17 with HTTP; Fri, 12 May 2006 13:44:47 -0700 (PDT)
+Message-ID: <f8560b80605121344q73a2ccf7k1798e90e6c1b0d92@mail.gmail.com>
+Date: Fri, 12 May 2006 16:44:47 -0400
+From: "Markus Mottl" <markus.mottl@gmail.com>
+To: "Ted Kremenek" <kremenek@cs.stanford.edu>
+Subject: Re: [Caml-list] Co-existing with non OCaml threads
+Cc: "Gerd Stolpmann" <info@gerd-stolpmann.de>,
+	caml-list@yquem.inria.fr, francois@rouaix.org
+In-Reply-To: <25A4782F-1F23-4B18-8FB2-1627C3BF1C3D@cs.stanford.edu>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+References: <f2d6cc680605111729l4d35470ey7e45dcc73822a2b0@mail.gmail.com>
+	 <1147432929.19900.18.camel@localhost.localdomain>
+	 <25A4782F-1F23-4B18-8FB2-1627C3BF1C3D@cs.stanford.edu>
+X-j-chkmail-Score: MSGID : 4464F3BF.001 on nez-perce : j-chkmail score : X : 0/20 1
+X-Miltered: at nez-perce with ID 4464F3BF.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; markus:01 mottl:01 markus:01 mottl:01 ocaml:01 threads:01 run-time:01 threads:01 ocaml:01 run-time:01 thread-safe:01 implements:01 bigarrays:01 matrices:01 ocaml-heap:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.5 required=5.0 tests=INFO_TLD,RCVD_BY_IP 
+	autolearn=disabled version=3.0.3
+
+On 5/12/06, Ted Kremenek <kremenek@cs.stanford.edu> wrote:
+> Because of the run-time lock, should I gather that the threads are
+> still essentially cooperative threads?  For example, does it work
+> this way: if a thread holding the master lock is switched out and the
+> kernel schedules another thread, that other thread will start running
+> and try and acquire the lock.  It won't be able to, so it goes back
+> to sleep, and another thread will wake up, try and acquire the lock,
+> goes back to sleep, and so on, until the original thread holding the
+> lock is rescheduled.
+
+No.  The other threads will block in the master lock, which is a
+POSIX-mutex + condition variable.  Releasing the master lock will
+signal exactly one of the blocking threads that it may run.  The
+context switch, however, does not necessarily happen immediately.  It
+depends on the OS when this will happen, and the scheduling policy
+determines which thread is going to run.
+
+> If so, this would lend itself to extremely poor performance: if I had
+> 100 threads, 99 of them may have to wake up and go to sleep before
+> the original one is scheduled.  That is 99 useless context switches.
+
+That would be horrible, and that's not the way it works.
+
+> Or rather is the lock acquired and released (within the generated
+> native code for the OCaml part of a program, not C code) on calls to
+> the memory management functions and other run-time code that are not
+> thread-safe?  This is also seems slow, since the heap is actively
+> manipulated all the time, so locks will constantly be acquired and
+> released, and you will have the same wake-up, make little or no
+> progress and go back to sleep problem I mentioned before.
+
+A timer signal makes sure that the current thread yields once in a
+while.  Thus, it is not necessary to acquire/release locks at each
+allocation, which would make everything run dog slow.
+
+> Your last email said that only one thread is allowed to run OCaml
+> code at any time, so it seems to me that this mutual exclusion must
+> come from somewhere.  I'm very curious to know how this is
+> implemented.  I gather that most people want to use threads in OCaml
+> to have multiple threads running OCaml code, and not necessarily have
+> a bunch of threads executing called C code (allowing the master lock
+> to be released).  I'm just trying to understand how actual
+> performance would ever resemble anything desirable.
+
+Unless INRIA implements a GC that can handle multiple threads running
+in parallel, which would have its own performance tradeoffs, you'll
+essentially always share one processor only.  It depends on your
+application whether that's a problem.  I/O-heavy applications will do
+fine, because the system calls can all be performed in parallel.  You
+can also always call C or Fortran to run in parallel on bigarrays
+(matrices), because they don't mess with the OCaml-heap.
+
+Regards,
+Markus
+
+--=20
+Markus Mottl        http://www.ocaml.info        markus.mottl@gmail.com
+

@@ -1,0 +1,85 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 8A449BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 23 Dec 2009 13:37:19 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApIDAImdMUtV2gB4h2dsb2JhbACDbZUVgk0BAQEIDQgHFatuj32BL4IuVgSJJw
+X-IronPort-AV: E=Sophos;i="4.47,442,1257116400"; 
+   d="scan'208";a="52698358"
+Received: from emailfrontal1.citycable.ch ([85.218.0.120])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 23 Dec 2009 13:37:19 +0100
+Received: from [192.168.1.100] (unknown [92.102.140.132])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal1.citycable.ch (Postfix) with ESMTPA id 5D26E12C288;
+	Wed, 23 Dec 2009 13:37:16 +0100 (CET)
+Message-ID: <4B320EFA.9050609@citycable.ch>
+Date: Wed, 23 Dec 2009 13:37:14 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20090707)
+MIME-Version: 1.0
+To: OCaml List <caml-list@inria.fr>,
+	=?UTF-8?B?RGFuaWVsIELDvG56bGk=?= <daniel.buenzli@erratique.ch>
+Subject: React switch with newly created events.
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; guillaume:01 guillaume:01 mutexes:01 recursive:01 reschedule:98 reschedule:98 define:02 define:02 argument:02 let:03 let:03 concurrency:04 fix:05 fix:05 implement:06 
+
+Hello.
+
+I've recently been working again of React, and I have the following 
+question. Current code is below.
+
+I'm creating an event with React.E.switch, that creates a new event 
+through the schedule function, and this new events replaces the old 
+event. React.E.switch is used for this replacement.
+
+React.E.switch initial_event (React.E.map begin function () -> schedule 
+(rescheduler ()) end tick)
+
+However, it may happen (and it does happen) that as soon as this new 
+React.event is created, an event is fired before the React.E.switch has 
+been executed to replace the old event by the new event.
+
+This is due to Lwt concurrency.
+
+I therefore have two potential solutions:
+
+-1- clutter my code with mutexes to synchronise the whole stuff, with 
+the disadvantage that there is not, to my knowledge, to execute a 
+function just after the React.E.switch function has effectively switched 
+events.
+
+-2- look for a way in React to do it within React only. Which would mean 
+to somehow implement within React a way to switch to a newly created 
+event, without race conditions.
+
+What would you do in this context?
+
+Here's the code:
+
+> let reschedule ?attach:(f = begin fun x -> x end) start rescheduler =
+>   (* The let define tick in E.fix define is the proper way to
+>      implement recursive events. define has type React.event ->
+>      (React.event * React.event) and its argument is a placeholder
+>      for the event at time t-dt. *)
+>   let attach initial_event =
+>     let define tick =
+>       (* Here is something I worry about: It is possible that the event created
+>          with the schedule function is fired before it is attached to the switched
+>          event, hence losing an event, and stalling the whole regular event. *)
+>       let tick' = React.E.switch initial_event (React.E.map
+>         begin function () -> schedule (rescheduler ()) end tick) in
+>       tick', tick'
+>     in f (React.E.fix define) in
+>   schedule ~attach:attach start
+> 
+> let regular_schedule ?attach:(f = begin fun x -> x end) start period =
+>   reschedule ~attach:f start (fun () -> Calendar.add (Calendar.now ()) period)
+
+-- 
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

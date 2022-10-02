@@ -1,0 +1,153 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id AE190BBCA
+	for <caml-list@yquem.inria.fr>; Fri,  9 May 2008 14:40:00 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiQBAEviI0jU436zmmdsb2JhbACBU5AzAQEBAQEIBQgHEQOYdgE
+X-IronPort-AV: E=Sophos;i="4.27,460,1204498800"; 
+   d="scan'208";a="25999071"
+Received: from moutng.kundenserver.de ([212.227.126.179])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 09 May 2008 14:40:00 +0200
+Received: from gate.lan.gerd-stolpmann.de (dslb-084-059-099-212.pools.arcor-ip.net [84.59.99.212])
+	by mrelayeu.kundenserver.de (node=mrelayeu7) with ESMTP (Nemesis)
+	id 0ML2xA-1JuRtH12kC-0005k3; Fri, 09 May 2008 14:39:59 +0200
+Received: from [192.168.0.32] (fw.lan.gerd-stolpmann.de [192.168.1.1])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id C9135C074;
+	Fri,  9 May 2008 14:39:58 +0200 (CEST)
+Subject: Re: [Caml-list] Re: Why OCaml rocks
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Gabriel Kerneis <kerneis@enst.fr>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <20080509115809.GA5717@kerneis.info>
+References: <200805090139.54870.jon@ffconsultancy.com>
+	 <74cabd9e0805082145p120ce487h6c1194d87f3f8396@mail.gmail.com>
+	 <200805090609.36123.jon@ffconsultancy.com>
+	 <1210331526.17578.32.camel@flake.lan.gerd-stolpmann.de>
+	 <20080509115809.GA5717@kerneis.info>
+Content-Type: text/plain
+Date: Fri, 09 May 2008 14:41:12 +0200
+Message-Id: <1210336872.17578.53.camel@flake.lan.gerd-stolpmann.de>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.12.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V01U2FsdGVkX18wC2laYiu9ItRjAL5mfo6sP5i67kWsKcLbOKD
+ 3RJlWlBfzTULnRlPWYD2ErOic3Hehd+wNZq8eaN/lZHpVG0Neu
+ /zuC66f364A6Jrp7nlpwnJviEM8A4fY
+X-Spam: no; 0.00; ocaml:01 gerd:01 stolpmann:01 0200,:01 gerd:01 stolpmann:01 o'caml:01 pointer:01 ocamlnet-:01 low-level:01 ocamlnet-:01 snipped:01 gettimeofday:01 failwith:01 exn:01 
+
+
+Am Freitag, den 09.05.2008, 13:58 +0200 schrieb Gabriel Kerneis:
+> On Fri, May 09, 2008 at 01:12:06PM +0200, Gerd Stolpmann wrote:
+> > Of course, we did not use multithreading very much. We are relying on
+> > multi-processing (both "fork"ed style and separately started programs),
+> > and multiplexing (i.e. application-driven micro-threading). I especially
+> > like the latter: Doing multiplexing in O'Caml is fun, and a substitute
+> > for most applications of multithreading. For example, you want to query
+> > multiple remote servers in parallel: Very easy with multiplexing,
+> > whereas the multithreaded counterpart would quickly run into scalability
+> > problems (threads are heavy-weight, and need a lot of resources).
+> 
+> Do you have any pointer on multiplexing (or some piece of code you could
+> show)? This seems interesting but I can't figure out what it looks like.
+
+For some background information look here:
+
+- Asynchronous RPC:
+  http://projects.camlcity.org/projects/dl/ocamlnet-2.2.9/doc/html-main/Rpc_intro.html
+
+  Look for the asynchronous examples
+
+- The low-level side is enlightened here:
+  http://projects.camlcity.org/projects/dl/ocamlnet-2.2.9/doc/html-main/Equeue_intro.html
+
+Here is a code snipped from our production code. It is from a server
+that continuously monitors RPC ports:
+
+let check_port esys p =
+  (* Checks the port p continuously until mon_until - then the port is deleted
+     from the list
+   *)
+  let (ba,ua) = Lazy.force shmem in
+  let rec next_check() =
+    let now = Unix.gettimeofday() in
+    if now < Int64.to_float p.mon_until then (
+      let conn =
+        match p.mon_port with
+          | `local_port _ ->
+              failwith "Monitoring local ports is not supported"
+          | `inet4_port a ->
+              Rpc_client.Inet(a.inet4_host, a.inet4_port) in
+      let rpc_proto =
+        match p.mon_protocol with
+          | `tcp -> Rpc.Tcp
+          | `udp -> Rpc.Udp in
+      let client = 
+        Capi_clnt.Generic.V1.create_client2
+          ~esys
+          (`Socket(rpc_proto, conn, Rpc_client.default_socket_config)) in
+      Rpc_helpers.set_exn_handler "generic" client;
+      Rpc_client.configure client 0 5.0;  (* 5 secs timeout *)
+      Capi_clnt.Generic.V1.ping'async
+        client
+        ()
+        (fun get_reply ->
+           (* We are called back when the "ping" is replied or times out *)
+           let successful = try get_reply(); true with _ -> false in
+           Rpc_client.shut_down client;
+           p.mon_alive <- successful;
+           ba.{ p.mon_shmpos } <- (if successful then 1L else 0L);
+           let g = Unixqueue.new_group esys in
+           Unixqueue.once esys g 1.0 next_check
+        );
+    )
+    else
+      remove_port p
+  in
+  next_check()
+
+This (single-process) server can watch a high number of ports at the
+same time and consumes almost no resources. Note how the loop is
+programmed, essentially we have
+
+let rec next_check() =
+   ...
+   Capi_clnt.Generic.V1.ping'async
+     client
+     ()
+     (fun get_reply ->
+        ...
+        Unixqueue.once esys g 1.0 next_check
+     )
+
+("once" calls the passed functions once in the future, here after 1
+second). Basically, you have a closure with the action in the event
+queue, and when the action is done, a new closure is appended to this
+queue to schedule the next task. Using closures is important because
+this enforces that all stack values are copied to the heap (I view
+closures in this context as a means to "heapify" values), so the
+recursion is stackless.
+
+This server is also interesting because we actually use shared memory
+for speeding up the communication path between client and server (look
+at the "ba.{ p.mon_shmpos } <- ..." line). The client is here the
+program that wants to know whether a port is alive. This is an
+optimization for the most frequent case, but works only if client and
+server reside on the same node. (Actually, we run this server on every
+node, so this is always the case.) Effectively, it is no big problem to
+combine shared memory style and multi-processing.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+
+

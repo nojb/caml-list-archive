@@ -1,0 +1,103 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id C9601BBBC
+	for <caml-list@yquem.inria.fr>; Fri,  3 Mar 2006 10:03:01 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k23931Pn004985
+	for <caml-list@yquem.inria.fr>; Fri, 3 Mar 2006 10:03:01 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA07276 for <caml-list@pauillac.inria.fr>; Fri, 3 Mar 2006 10:03:00 +0100 (MET)
+Received: from Smtp.neuf.fr (sp604001mt.neufgp.fr [84.96.92.60])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k23930qv004979;
+	Fri, 3 Mar 2006 10:03:00 +0100
+Received: from bolet.myco.ath.cx ([84.4.19.186]) by sp604001mt.gpm.neuf.ld
+ (Sun Java System Messaging Server 6.2-4.03 (built Sep 22 2005))
+ with ESMTP id <0IVJ00049NT0TF13@sp604001mt.gpm.neuf.ld>; Fri,
+ 03 Mar 2006 10:03:00 +0100 (CET)
+Received: from localhost	([127.0.0.1] helo=myco.ath.cx ident=www-data)
+	by bolet.myco.ath.cx with smtp (Exim 4.50)	id 1FF6BY-0003TM-Of; Fri,
+ 03 Mar 2006 10:02:52 +0100
+Date: Fri, 03 Mar 2006 10:02:52 +0100
+From: Louis Gesbert <louis.gesbert@laposte.net>
+Subject: Re: [Caml-list] Bugs with pattern-matching and exceptions
+In-reply-to: <44069518.7030708@inria.fr>
+To: Alain Frisch <Alain.Frisch@inria.fr>
+Cc: caml-list@inria.fr
+Reply-To: louis.gesbert@laposte.net
+Message-id: <440a87aa58bf9f78027212d50801762d@myco.ath.cx>
+MIME-version: 1.0
+X-Mailer: Hastymail 1.4
+Content-type: text/plain; charset=us-ascii
+Content-transfer-encoding: 7BIT
+X-Priority: 3
+References: <fe1cef367e8237e03c68408703cdb61b@myco.ath.cx>
+ <44069518.7030708@inria.fr>
+X-j-chkmail-Score: MSGID : 44080644.000 on concorde : j-chkmail score : X : 0/20 1
+X-Miltered: at concorde with ID 44080645.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 44080644.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 o'caml:01 marshalling:01 semantics:01 afaik:01 semantics:01 exn:01 exn:01 redefined:01 pointer:01 struct:01 struct:01 marshalling:01 marshal:01 exception:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+> >  However, if you try to pattern-match against it, the process just hangs.
+>
+> Can you give an example to reproduce that?  The program above works fine.
+
+My mistake, O'Caml didn't hang: the complex situation where this
+problem occured just led to a deadlock, the states of the processes
+having become inconsistent (two of them could make different decisions
+out of the same data, depending on wether it was locally created or
+received from another).
+
+> More precisely, it doesn't distinguish an exception constructor from
+> a string reference. Marshalling and unmarshalling produce a shallow
+> copy.
+
+Thanks, that explains it.
+
+> I don't see a good semantics for such a program, except considering that
+> unmarshalled exceptions must always be different (w.r.t. pattern
+> matching) from exceptions defined in the current program, which AFAIK is
+> the current semantics.
+
+Right, that's an interesting problem. I wasn't aware exceptions were
+imperative to that extent, being registered dynamically whenever
+defined: they look much more like type definitions at first. The
+always-different semantics doesn't feel satisfying to me however,
+neither does the fact that an exception can escape the scope of the
+types it includes (thus becoming a black box). We fall back to the
+debate about local exceptions here.
+
+However, couldn't a semantics where exceptions defined in local
+modules are always different, but other kinds of exceptions are
+compared with an incremented global counter be consistent ? The main
+issue is that there is no unique id for an exception, it is shown as
+Mod.Exn but Mod as well as Exn can be redefined... hence the pointer
+comparison, as I understand it. Note that exceptions defined in local
+modules are already somewhat different from the others (unprefixed):
+
+# module M1 = struct exception E end
+  let module M2 = struct exception E end
+  in M1.E,M2.E
+  - : exn * exn = (M1.E, E)
+
+The point is, most often you won't redefine your exceptions and there is no
+ambiguity in Mod.Exn, so it would be very satisfactory for the exception
+exchange to work in that case. A semantics that allows that and handles
+more difficult cases probably exists.
+
+Some inconsistency remains anyway with always-different marshalled
+exceptions (although they might be imputed to the unsafe marshalling):
+an unmarshalled exception is of type exn, but you can't raise it (or
+you will get a Failure "input_value: bad object").
+
+Whatever the solution, I think we need a very clear semantics
+here. That exceptions shouldn't be marshalled should at least be
+mentioned in the Marshal documentation.
+
+Regards,
+Louis
+

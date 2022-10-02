@@ -1,0 +1,140 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA17191; Sat, 31 Jul 2004 18:31:46 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA17099 for <caml-list@pauillac.inria.fr>; Sat, 31 Jul 2004 18:31:45 +0200 (MET DST)
+Received: from fichte.ai.univie.ac.at (fichte.ai.univie.ac.at [131.130.174.156])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i6VGViSH032182
+	for <caml-list@inria.fr>; Sat, 31 Jul 2004 18:31:44 +0200
+Received: from fichte.ai.univie.ac.at (markus@localhost [127.0.0.1])
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) with ESMTP id i6VGVhDu016612;
+	Sat, 31 Jul 2004 18:31:44 +0200
+Received: (from markus@localhost)
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) id i6VGVhHu016611;
+	Sat, 31 Jul 2004 18:31:43 +0200
+Date: Sat, 31 Jul 2004 18:31:43 +0200
+From: Markus Mottl <markus@oefai.at>
+To: Jon Harrop <jon@jdh30.plus.com>
+Cc: caml-list@inria.fr
+Subject: [Caml-list] Phantom types
+Message-ID: <20040731163143.GB15775@fichte.ai.univie.ac.at>
+Mail-Followup-To: Jon Harrop <jon@jdh30.plus.com>, caml-list@inria.fr
+References: <410B5EBD.6060800@cgorski.org> <20040731103412.GA11964@fichte.ai.univie.ac.at> <200407311444.56864.jon@jdh30.plus.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <200407311444.56864.jon@jdh30.plus.com>
+User-Agent: Mutt/1.5.6i
+X-Miltered: at concorde with ID 410BC970.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; 2004:99 val:01 incr:01 val:01 decr:01 'rw:99 struct:01 failwith:01 failwith:01 struct:01 runtime:01 runtime:01 generics:01 invokes:01 constants:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sat, 31 Jul 2004, Jon Harrop wrote:
+> On Saturday 31 July 2004 11:34, Markus Mottl wrote:
+> > ...
+> >   val incr : (int, [> `W ]) t -> unit
+> >   val decr : (int, [> `W ]) t -> unit
+> 
+> Should these both be [`R|`W]?
+
+Well, in this case it doesn't really matter.  The upper version would
+also accept only writable references in addition to readable ones.
+But they must be at least writable.  Even other attributes would be
+accepted as long as `W is one of them.
+
+> > The phantom variable is 'rw.  When creating references, it can be any
+> > of `R (for reading) and `T (for writing).
+> 
+> Do you mean `W for writing?
+
+Sorry, yeah.
+
+> That's very interesting. So a phantom type is a type which you stick in
+> to dupe the type system into doing something for you? Is there a good
+> reference on those? I seem to remember a thread about their utility
+> in porting the STL to ocaml but that was before I had ever used OCaml...
+
+Indeed, phantom types are extremely neat.  Sometimes I think that every
+type, including basic ones, should actually have a polymorphic parameter,
+which can later be used for constraining it.
+
+E.g.:
+
+---------------------------------------------------------------------------
+module type PHANTOM_INT = sig
+  type 'p t
+
+  val add : 'p t -> 'p t -> 'p t
+
+  val add_even_even : [> `Even ] t -> [> `Even ] t -> [> `Even ] t
+  val add_even_odd : [> `Even ] t -> [> `Odd ] t -> [> `Odd ] t
+  val add_odd_even : [> `Odd ] t -> [> `Even ] t -> [> `Odd ] t
+  val add_odd_odd : [> `Odd ] t -> [> `Odd ] t -> [> `Even ] t
+  val make_even : 'a t -> [ `Even ] t
+  val make_odd : 'a t -> [ `Odd ] t
+end
+
+module PhantomInt : PHANTOM_INT = struct
+  type 'p t = int
+
+  let add = (+)
+  let add_even_even = add
+  let add_even_odd = add
+  let add_odd_even = add
+  let add_odd_odd = add
+  let make_even n = if n mod 2 = 0 then n else failwith "not even"
+  let make_odd n = if n mod 2 <> 0 then n else failwith "not odd"
+end
+
+module type PHANTOM_LIST = sig
+  type ('a, 'p) t
+
+  val rev : ('a, 'p) t -> ('a, 'p) t
+
+  val rev_sorted_up : ('a, [> `SortedUp ]) t -> ('a, [> `SortedDown ]) t
+  val rev_sorted_down : ('a, [> `SortedDown ]) t -> ('a, [> `SortedUp ]) t
+end
+
+module PhantomList : PHANTOM_LIST = struct
+  type ('a, 'p) t = 'a list
+
+  let rev = List.rev
+  let rev_sorted_up = rev
+  let rev_sorted_down = rev
+end
+---------------------------------------------------------------------------
+
+You get the idea.  Phantom types not only allow you to capture
+constraints, which are proved by the compiler, they are also perfectly
+cheap computationally, because you don't have to check things at runtime
+all the time.
+
+E.g. after having successfully applied "make_even" to an integer, the
+compiler guarantees that it won't be misused, i.e. other functions only
+need to require this constraint in their type signature, and need not
+check it at runtime anymore.
+
+I wonder in how far generics could make these type checking tricks even
+more powerful!
+
+> And this const-alternative is useful when dealing with large records which 
+> have mostly constant but some mutable entries because handling such records 
+> invokes a lot of copying? But, say, arrays are passed by reference so this 
+> wouldn't provide much of a performance advantage, is that right? 
+
+> Incidentally, does anyone have a functional array implementation (which 
+> doesn't suck ;-)?
+
+If you mean O(1) with constants as low as imperative arrays: no ;-)
+
+Regards,
+Markus
+
+-- 
+Markus Mottl          http://www.oefai.at/~markus          markus@oefai.at
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

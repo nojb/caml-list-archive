@@ -1,0 +1,115 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 1E38ABBD7
+	for <caml-list@yquem.inria.fr>; Tue,  2 Aug 2005 17:03:18 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j72F3HBk016791
+	for <caml-list@yquem.inria.fr>; Tue, 2 Aug 2005 17:03:17 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA18021 for <caml-list@pauillac.inria.fr>; Tue, 2 Aug 2005 17:03:17 +0200 (MET DST)
+Received: from biscayne-one-station.mit.edu (BISCAYNE-ONE-STATION.MIT.EDU [18.7.7.80])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j72F3FPX007366
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Tue, 2 Aug 2005 17:03:16 +0200
+Received: from outgoing.mit.edu (OUTGOING-AUTH.MIT.EDU [18.7.22.103])
+	by biscayne-one-station.mit.edu (8.12.4/8.9.2) with ESMTP id j72F3DIt015549;
+	Tue, 2 Aug 2005 11:03:13 -0400 (EDT)
+Received: from all-night-tool.mit.edu (ALL-NIGHT-TOOL.MIT.EDU [18.7.16.70])
+	(authenticated bits=56)
+        (User authenticated as jfc@ATHENA.MIT.EDU)
+	by outgoing.mit.edu (8.13.1/8.12.4) with ESMTP id j72F369M029073
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NOT);
+	Tue, 2 Aug 2005 11:03:06 -0400 (EDT)
+Received: (from jfc@localhost) by all-night-tool.mit.edu (8.12.9)
+	id j72F35hR011108; Tue, 2 Aug 2005 11:03:05 -0400 (EDT)
+Message-Id: <200508021503.j72F35hR011108@all-night-tool.mit.edu>
+To: Ville-Pertti Keinonen <will@exomi.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Function Inlining
+In-Reply-To: Your message of "Tue, 02 Aug 2005 09:44:29 +0300."
+             <42EF164D.1010201@exomi.com> 
+Date: Tue, 02 Aug 2005 11:03:05 -0400
+From: John Carr <jfc@MIT.EDU>
+X-Scanned-By: MIMEDefang 2.42
+X-Miltered: at concorde with ID 42EF8B35.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 42EF8B33.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 inlining:01 ocaml:01 inlining:01 rec:01 ocaml:01 transforming:01 compiler:01 computed:01 pointer:01 stack:01 stack:01 ocamlopt:01 runtime:01 pointers:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+
+> You're probably running into restrictions other than size that OCaml has 
+> on function inlining, such as function definitions inside the function, 
+> structured constants and let rec.
+> 
+> Getting rid of these restrictions could potentially improve OCaml code 
+> generation considerably, but as far as I can tell, that would require 
+> some additional features in the code generation such as sharing 
+> structured constants, explicitly transforming tail calls to loops etc.
+
+I have been working on part of this.
+
+My 64 bit SPARC code generator produces bad assembly code when
+compiling the TK library.  The failure is caused by poor code
+generation in the intermediate phase of the compiler.  There is a
+nested (not top level) module named Tkintf containing hundreds of
+values.  The code generated to initialize Tk.Tkintf looks like:
+
+	1. compute the hundreds of values to be stored in the Tkintf module
+	2. allocate a block to hold Tkintf
+	3. store the hundreds of values computed earlier into the Tkintf block
+	4. store a pointer to the Tkintf block into the appropriate field of Tk
+
+This sequence results in hundreds of live values.  Most have to be
+spilled to the stack between 1 and 3, but the stack can only hold
+about 256 values.  (Because ocamlopt does not use register windows
+it is limited to a 2 kilobyte stack frame.)  The assembler fails
+with address offset out of range errors.
+
+The ocaml developers were aware of this sort of problem and a
+different method is used to initialize top level modules, though
+there is a separate inefficiency there because it isn't necessary to
+compute at runtime the majority of module values which are constant,
+either integer constants or pointers to statically allocated blocks.
+
+I have been experimenting with making both constant closures and
+structured constants shareable and (for top level modules) compiling
+constant initializers into the data section.  So given a module like
+
+	let x = 1 let y = (1,2,3) let rec f x = ... and g x = ...
+
+the assembly code would look like (with tag values omitted for clarity):
+
+	.data
+L1:	# begin three value tuple
+	.word	3	# integer 1
+	.word	5	# integer 2
+	.word	7	# integer 3
+L2:	# begin block describing mutually recursive functions f and g
+	.word	1	# f arity
+	.word	f	# pointer to function f
+	.word	1	# g arity
+	.word	g	# pointer to function g
+module:
+	.word	3	# integer 1
+	.word	L1	# pointer to (1,2,3)
+	.word	L2	# pointer to closure for f
+	.word	L2+8	# pointer to closure for g
+
+Values not computable at compile time cause a .skip directive and the
+module entry code computes the initial value as in the current compiler.
+
+This solves the stack overflow problem.  I'm not convinced that
+the asmcomp phase of the compiler is the right place to do this
+optimization.  Perhaps it should be moved to the intermediate
+phase where the top level module optimization is done now.
+
+(This is more than just optimizing the performance of code that is
+executed once.  For TK a substantial fraction of the code size is
+the module entry point.  Also, a few jobs ago I cut the startup time
+of a product I worked on by several seconds by optimizing the dynamic
+loading process, which is similarly a one time act.)
+

@@ -1,0 +1,111 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id CD284820A1
+	for <caml-list@sympa.inria.fr>; Tue, 10 Sep 2013 04:02:00 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail3-smtp-sop.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ap0CAHZ8LlJCJwNzemdsb2JhbABbgz/Cd4E+DgEBCwcNCTyCJQEBBAF5BRY0aRSIAQYMwx+PaweEHQOXdAGBL5NXPA
+X-IPAS-Result: Ap0CAHZ8LlJCJwNzemdsb2JhbABbgz/Cd4E+DgEBCwcNCTyCJQEBBAF5BRY0aRSIAQYMwx+PaweEHQOXdAGBL5NXPA
+X-IronPort-AV: E=Sophos;i="4.90,875,1371074400"; 
+   d="scan'208";a="26274893"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail3-smtp-sop.national.inria.fr with SMTP; 10 Sep 2013 04:01:59 +0200
+Received: (qmail 41614 invoked by uid 9370); 10 Sep 2013 02:01:57 -0000
+Date: 10 Sep 2013 02:01:57 -0000
+Message-ID: <20130910020157.41613.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: alain@frisch.fr
+CC: Xavier.Leroy@inria.fr, caml-list@inria.fr
+In-reply-to: <522D8605.1050603@frisch.fr>
+Subject: Re: [Caml-list] Accelerating compilation
+
+
+> Or are there compelling arguments in favor of using the bytecode version 
+> of ocamlc/ocamlopt?
+
+I have come across one case of the meaningful difference between
+ocamlc and ocamlc.opt: a particular project can only be linked on
+MacOS using ocamlc; ocamlc.opt fails to link. Admittedly, the real
+problem is in what I think a hard-to-justify design decision in
+OCaml linker.
+
+The problem occurs when linking byte-compiled executables that use the
+delimcc library. I will only talk about byte-compiled version of
+delimcc in the message (there are no problems for the native version).
+
+The following message
+        https://sympa.inria.fr/sympa/arc/caml-list/2013-04/msg00072.html
+gives more detail.
+
+Similar to the nums library, delimcc includes some C code, which is
+arranged in a shared library libdelimcc.so. That shared library refers
+to a particular symbol caml_realloc_stack, which is provided by the
+byte-code run-time system (that is, ocamlrun). When we invoke the
+byte-code executable that uses delimcc, ocamlrun loads libdelimcc.so,
+the library looks for the symbol caml_realloc_stack. Since ocamlrun is
+the running executable and its provides the symbol, the resolution
+succeeds and everyone is happy.
+
+The problem occurs when linking the executable that uses delimcc. When
+OCaml linker processes delimcc.cma, it notices that a shared library
+is required. The OCaml linker then loads the library *and forces the
+resolution of all undefined references there*. Therefore, the symbol
+caml_realloc_stack required by libdelimcc.so has to be found. When the
+linking is done by ocamlc, then the running executable is ocamlrun,
+which provides the symbol. However, if the linking is done by
+ocamlc.opt, it has a different run-time that does not provide the
+symbol. Linking fails. Therefore, although ocamlc.opt can be used to
+compile projects with delimcc, the final linking step must be done
+with ocamlc rather than ocamlc.opt
+
+I managed to get around the problem using a weak reference. Alas, the
+subterfuge does not seem to work on Mac OS.
+
+The real problem in my view is the strange decision to load shared
+libraries at link time and force the resolution of their undefined
+references. This decision certainly makes linking slower, without
+providing much benefit, it seems. After all, if the resolution
+succeeded at link time, it may still fail at run time since the
+linked executable can be run in a different location or even a
+different computer.
+
+So, the real problem to me is ocamlc using RTLD_NOW flag when loading
+shared library. Removing the flag would make linking faster, and less
+painful.
+
+A few technical details: dlopen with the problematic flag occurs in
+the function caml_dlopen in the file byterun/unix.c
+
+void * caml_dlopen(char * libname, int for_execution, int global)
+{
+  return dlopen(libname, RTLD_NOW | (global ? RTLD_GLOBAL : RTLD_LOCAL) | RTLD_NODELETE);
+  /* Could use RTLD_LAZY if for_execution == 0, but needs testing */
+}
+
+That function caml_dlopen is used within caml_dynlink_open_lib,
+which, under alias dll_open, is called in Dll.open_dll. The latter
+function is invoked in Bytelink.link_bytecode.
+
+
+

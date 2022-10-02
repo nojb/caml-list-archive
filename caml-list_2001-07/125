@@ -1,0 +1,186 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA24237; Fri, 13 Jul 2001 07:36:37 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA25308 for <caml-list@pauillac.inria.fr>; Fri, 13 Jul 2001 07:36:36 +0200 (MET DST)
+Received: from smtp9.xs4all.nl (smtp9.xs4all.nl [194.109.127.135])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f6D5aZv25473
+	for <caml-list@inria.fr>; Fri, 13 Jul 2001 07:36:35 +0200 (MET DST)
+Received: from beertje.william.bogus (williamc.xs4all.nl [213.84.56.92])
+	by smtp9.xs4all.nl (8.9.3/8.9.3) with ESMTP id HAA13785;
+	Fri, 13 Jul 2001 07:36:33 +0200 (CEST)
+Received: (from williamc@localhost)
+	by beertje.william.bogus (8.11.2/8.11.2/SuSE Linux 8.11.1-0.5) id f6D5bTg11801;
+	Fri, 13 Jul 2001 07:37:29 +0200
+X-Authentication-Warning: beertje.william.bogus: williamc set sender to williamc@paneris.org using -f
+From: William Chesters <williamc@paneris.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15182.35097.777625.123441@beertje.william.bogus>
+Date: Fri, 13 Jul 2001 07:37:29 +0200 (CEST)
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Web Development with OCaml
+In-Reply-To: <3B4BE8CE.B246A7E8@texoma.net>
+References: <Pine.GSO.4.04.10107100957200.23057-100000@clipper.ens.fr>
+	<3B4BE8CE.B246A7E8@texoma.net>
+X-Mailer: VM 6.75 under 21.1 (patch 14) "Cuyahoga Valley" XEmacs Lucid
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+   I once had ideas for an ocaml-based webapp framework, which ended
+up as Melati http://melati.org --- in Java (servlets), for the usual
+reasons :(.
+
+   Melati is not quite as tidy or as fast as it would have been in
+ocaml, but we think it has some good ideas, and it has been used for
+enough commercial projects to prove them sound and practical.  All of
+them would work very nicely in ocaml, because that's what they were
+really inspired by!
+
+   Incidentally I can't see any reason why one shouldn't connect an
+ocaml servlet runner to Apache/Tomcat: the protocol is well defined
+and not Java-specific.
+
+   The key points are: object database with access protection,
+type-sensitive templating system, and generic admin system.
+
+   Apologies that this is rather off topic for caml-list --- maybe
+we should take the web development discussion to sourceforge!
+
+
+   -- An object-oriented database on top of JDBC (SQL).  You specify
+a "table hierarchy" using a Java-like schema file, which maps onto a
+machine-generated Java class hierarchy plus a set of SQL tables and
+indexes to serve as backing store.
+
+   Then accessing your data is as easy as product.getDescription(),
+product.setDescription("blah"), or book.getAuthor().getName() with
+inter-object references being resolved automatically.
+What goes on behind your back is:
+
+      o  Objects---rows, as far as SQL is concerned---are stored on
+         the Java side in an LRU cache.  (For some applications,
+         this cacheing is enough of a speed win to offset all the
+         overhead associated with the OODB and then some.)
+
+      o  You can add your own Java methods to objects, alongside
+         the automatically generated accessors.
+
+      o  Each thread is associated with its own SQL transaction.
+         Consistency is ensured by object- and where necessary
+         table-level locking.
+
+      o  At the end of a transaction, changes you have made to
+         objects via set-methods are either written down to SQL
+         and committed, or rolled back if an exception was thrown.
+
+      o  Reads and writes of object properties are access-checked.
+         The db administrator can protect tables via a user/group/
+         capability system, and the programmer can implement
+         programmatic checks where necessary.
+
+      o  Each thread is considered to be running on behalf of a
+         user (or more generally has an "access token" granting
+         certain capabilities).  The standard Melati servlet
+         base class sets up the user from a cookie or from
+         HTTP basic authentication; the login process is
+         triggered transparently to the programmer by access
+         exceptions which arise when data is not accessible to
+         the "guest" user.
+
+The object database provides the ideal platform on which to rest your
+application logic and dynamic content generation: you have a much less
+verbose, less fussy, more abstract, more programmable, and safer
+interface to your data.
+
+   You do not have to worry about SQL connections, result sets,
+transactions, access checking, login, or _anything_.  It is all
+completely transparent, so the data really just look like standard
+Java objects to the application logic and content generator.  Indeed
+the SQL backend could be replaced entirely by something else, except
+that we provide access to literal SQL queries (returning object
+streams or just fields) for those times when they are very handy.
+
+   camlp4 is perfect for compiling the schema, ocaml objects are
+the perfect model for such an OODB, and the details of things like
+building up and verifying the SQL database at startup time would be
+much easier to handle in ocaml than Java.
+
+   Furthermore, such a thing might be nice to have for all kinds of
+non-web ocaml applications.
+
+
+   -- A "templating engine" for rendering content pages.  We almost
+always use webmacro or velocity with Melati.  All that is required is
+to map constructs like
+
+     <P>From: $message.author.name</P>
+
+onto
+
+     output_string o "<P>From: ";
+     output_string o message#author#name;
+     output_string o "</P>"
+
+plus conditional and iteration constructs.  This is laughably trivial
+using camlp4 and ocaml classes: it would be easy to achieve much
+better efficiency and type-safety than webmacro, without sacrificing
+convenience.
+
+   One thing we have found extremely useful is the facility to say
+in a template
+
+     $html.input($message.SubjectField)
+
+and have that expand to an appropriate HTML input box, or dropdown, or
+whatever as appropriate, depending on the type of the field.
+We use the object database's type system, which is an enriched version
+of SQL's type system, to name sub-templates (or "templets"), such
+as this one for integer values:
+
+    ## File org.melati.poem.IntegerPoemType.wm : the templet used
+    ## for rendering fields of Integer type.
+
+    <INPUT NAME="field_$ml.rendered($field.Name)" SIZE=$field.Width
+           VALUE="$ml.Attr.rendered($field.RawString)">
+
+    ## Add hooks to validate values entered in the field using
+    ## our client-side Javascript library
+
+    <SCRIPT LANGUAGE=JavaScript1.2>
+      add_integer("field_$ml.escaped($field.Name)",
+                  "$ml.escaped($field.DisplayName)",
+                  !$field.Type.Nullable)
+    </SCRIPT>
+
+Administrators can tweak the way individual fields are rendered by
+setting parameters such as field width through the admin interface,
+and if necessary can override the type-default templet for a field
+with something completely different.
+
+
+   -- A web-based data browsing, data entry and admin system.  As soon
+as you start up your Melati application, you can call up forms for
+searching, data entry etc.  This is also where the admin can do user
+management and access control.  See for instance
+
+      http://www.melati.org/melati/org.melati.admin.Admin/melatitest/Main
+
+
+   Anyway, there it is.  As you can probably tell, I would love
+to discuss our experiences with Melati, and more details of scheme we
+have worked out, if it helps something similar come to life in my
+favourite language!  There is much more to say and our code is
+probably readable enough to serve as a source of inspiration.
+Unfortunately I don't have a lot of time to do actual coding.
+
+   Note by the way that Melati is structured as a set of auxiliary
+libraries, not an overarching "environment" which smothers you and
+constrains your freedom.  Your web app is structured as a standard
+Java servlet, i.e. a fairly normal program, or it could even be CGI or
+anything else.  But it still gets to leverage Melati's productivity- and
+quality-enhancing facilities.
+
+   The sources are at http://melati.org/cgi-bin/cvsweb.cgi/org/melati .
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

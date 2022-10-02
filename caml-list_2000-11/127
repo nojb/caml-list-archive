@@ -1,0 +1,151 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA13578 for caml-red; Sun, 19 Nov 2000 15:50:32 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA29406 for <caml-list@pauillac.inria.fr>; Fri, 17 Nov 2000 14:54:12 +0100 (MET)
+Received: from p-mail1.cnet.fr (p-mail1.rd.francetelecom.fr [193.49.124.31])
+	by concorde.inria.fr (8.11.1/8.10.0) with SMTP id eAHDsBj16280
+	for <caml-list@inria.fr>; Fri, 17 Nov 2000 14:54:11 +0100 (MET)
+Received: by p-biset.issy.cnet.fr with Internet Mail Service (5.5.2650.21)
+	id <WZ81Y6HT>; Fri, 17 Nov 2000 14:54:10 +0100
+Received: from lat4149.lannion.cnet.fr ([161.104.14.76]) by l-mhs1.lannion.cnet.fr with SMTP (Microsoft Exchange Internet Mail Service Version 5.5.2650.21)
+	id XB9HFJVZ; Fri, 17 Nov 2000 14:51:17 +0100
+Received: by lat4149.lannion.cnet.fr (Postfix, from userid 1053)
+	id 0161C57DF; Fri, 17 Nov 2000 14:54:07 +0100 (CET)
+Date: Fri, 17 Nov 2000 14:54:07 +0100
+From: CREGUT Pierre FTRD/DTL/LAN <pierre.cregut@rd.francetelecom.fr>
+To: caml-list@inria.fr
+Subject: Re: unwind-protect?
+Message-ID: <20001117145407.A24233@lat4149.lannion.cnet.fr>
+Mail-Followup-To: CREGUT Pierre FTRD/DTL/LAN <pierre.cregut@rd.francetelecom.fr>,
+	caml-list@inria.fr
+References: <87d7fvruas.church.of.emacs@meta.verbum.org> <200011171228.NAA21785@pauillac.inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+In-Reply-To: <200011171228.NAA21785@pauillac.inria.fr>; from Pierre.Weis@inria.fr on ven, nov 17, 2000 at 01:28:46 +0100
+Sender: weis@pauillac.inria.fr
+
+Pierre's solution repeat chdir which is often the long part of the code.
+I like to use the following constructs (I am looking for smarter constructs.
+I am also looking for a standard way of doing it that would go in the
+standard library) :
+
+  type 'a result = Normal of 'a | Exception of exn
+  let catch f a = try Normal (f a) with e -> Exception e
+  let throw = function Normal a -> a | Exception e -> raise e
+  let with_fallback v f fallback = 
+    match v with Normal a -> f a | Exception e -> fallback e
+
+There are some contexts where it is as ubiquitous as the 'a option type.
+For example, RPC on cin : 
+
+  let cout, msg = sync(receive cin) in sync(send (catch f msg))
+
+On the other side you will find :
+
+  let channel = new_channel () in
+  sync(send (channel,msg)); throw (sync (receive channel))  
+
+In the chdir problem (or if you use any kind of lock construct) you can write :
+
+  chdir ...;
+  let r = catch (f a);
+  chdir ...;
+  throw r
+
+The with_fallback function can be used to simulate the so much missing
+
+   trylet .... in .... with ...
+
+capturing only errors in the let part.
+
+Pierre
+
+
+                            ANNEX
+                            =====
+
+i am not convinced that with_fallback is the definitive answer for a fine 
+grained control of exceptions.  To complete a previous post, I would prefer a 
+new "context" construct
+
+let complex_function .... =
+  try
+    let v = context c1 f x1 x2 ... in
+    ....
+    g (context c2 h y1 y2 ...) z1 z2 ...
+    ...
+  with
+    E1 in c1 -> ....
+  | E2 in c2 -> ....
+  | E -> ....
+
+Combined with a tool like ocamlexc, you can  
+- have readable code that separates exceptional cases from the regular
+  treatment.
+- be sure that all your exceptions are trapped
+- be convinced that your error handling code is trapping the right exception
+  not another one that happened to have the same name (typical of Not_found
+  exception handlers). 
+(Note that the "looped approximation' of recursive datatype by ocamlexc could
+limit the power of the analysis as we use an exception containing another
+exception.)
+
+Here is a crude prototype in CAMLP4 (lists are not needed, but you must
+remember which context is embedded in which one. There are also issues
+with tail recursion that can be broken.
+
+********** exc.ml *************
+exception Located of exn * string list
+ 
+let extract = function Located(e,l) -> e,l | e -> e,[]
+ 
+let present exc l = List.mem exc l      
+
+**********excemption.ml*************
+open Pcaml
+open MLast
+
+let match_case = Grammar.Entry.find expr "match_case"
+let try_case = Grammar.Entry.create Pcaml.gram "try_case"
+
+DELETE_RULE
+  expr: "try"; expr; "with"; OPT "|"; LIST1 match_case SEP "|"
+END
+
+EXTEND
+  expr :
+   [ [ "try"; x = expr; "with"; OPT "|"; l = LIST1 try_case SEP "|" ->
+        let l' = l @ [(<:patt<_>>,None,<:expr<raise _exc_>>)] in
+        <:expr< try $x$ with [ _exc_ ->
+            let (_e_,_loc_) = Exc.extract _exc_ in
+            match _e_ with [ $list:l'$ ] ] >>
+    | "context"; name =  UIDENT; e = expr ->
+        <:expr<
+           try $e$ with
+           [  Exc.Located(e,l) -> raise (Exc.Located(e, [ $str:name$ :: l]))
+           | e -> raise (Exc.Located(e,[$str:name$]))] >> ]]
+  ;
+  try_case :
+    [[ p = patt; aso = OPT [ "as"; p = patt -> p ];
+       at_location = OPT ["in"; location = UIDENT -> location];
+       w_opt = OPT [ "when"; e = expr -> e ]; "->"; e = expr ->
+          let p_with_as =
+            match aso with
+              Some as_pat -> <:patt< ($p$ as $as_pat$) >>
+            | _ -> p in
+          let w_with_at =
+            begin match w_opt,at_location with
+            | Some w,Some lc -> Some(<:expr<($w$) && (Exc.present $str:lc$ _loc_)>>)
+            | None,Some lc -> Some (<:expr<Exc.present $str:lc$ _loc_>>)
+            | _,None -> w_opt
+            end in
+          (p_with_as, w_with_at, e) ]]
+  ;
+END  
+
+
+-- 
+Pierre Cregut - pierre.cregut@rd.francetelecom.fr - +33 2 96 05 16 28
+FTR&D - DTL/MSV - 2 avenue Pierre Marzin - 22307 Lannion Cedex - France
+
+

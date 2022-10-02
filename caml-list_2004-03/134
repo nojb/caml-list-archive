@@ -1,0 +1,167 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA18786; Mon, 15 Mar 2004 00:33:56 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA18876 for <caml-list@pauillac.inria.fr>; Mon, 15 Mar 2004 00:33:55 +0100 (MET)
+From: ronniec95@lineone.net
+Received: from localhost.home.net (chowdhury95.demon.co.uk [80.177.9.225])
+	by concorde.inria.fr (8.12.10/8.12.10) with SMTP id i2ENXsHd030462
+	for <caml-list@inria.fr>; Mon, 15 Mar 2004 00:33:54 +0100
+Received: (qmail 2675 invoked by uid 1000); 14 Mar 2004 23:46:30 -0000
+Date: Sun, 14 Mar 2004 23:46:30 +0000
+To: Yamagata Yoriyuki <yoriyuki@mbg.ocn.ne.jp>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Module/functor question
+Message-ID: <20040314234630.GA2668@cradle>
+References: <20040314190527.GA1898@cradle> <20040315.042218.07646200.yoriyuki@mbg.ocn.ne.jp>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20040315.042218.07646200.yoriyuki@mbg.ocn.ne.jp>
+User-Agent: Mutt/1.4i
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; ronniec:01 lineone:01 caml-list:01 functor:01 2004:99 0900,:01 yamagata:01 yoriyuki:01 ronniec:01 lineone:01 caml-list:01 functor:01 2004:99 foo:01 foo:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 134
+
+On Mon, Mar 15, 2004 at 04:22:18AM +0900, Yamagata Yoriyuki wrote:
+> From: ronniec95@lineone.net
+> Subject: [Caml-list] Module/functor question
+> Date: Sun, 14 Mar 2004 19:05:28 +0000
+> 
+> > but I cannot figure out how to declare Foo having a signature of
+> > Serialiser and then use it in main somehow. Assume also that I have
+> > lots of other modules which have same basic interface but additional
+> > methods specific to the modules.
+> 
+> You do not need to declare.  Foo.Make will accept any module whose
+> signature is an *extension* of Serializer.
+> 
+> > (* was hoping for something like this *)
+> > let _ = let m = module Sender(Foo.Make) in
+> > 	m.serialisetoxml (Foo.Make (Xml.parse_from "..."));
+> 
+> By the way, a correct code would be
+> 
+>    let _ =
+>       let module M = Sender(Foo.Make) in
+>       M.serialisetoxml (Foo.Make (Xml.parse_from "..."));
+> 
+> --
+> Yamagata Yoriyuki
+
+Thanks that helped a lot - well it does work! but I'm a bit puzzled by
+the extra declarations I had to do... 
+
+I've copied the exact code below since it's not that long. I wonder
+about header.mli which has 'type t=u' in it which was the only way of
+getting it all to fit together. Why do I have to do that? Is there
+another a more Ocaml way that I should be tackling this problem (I guess
+a more design rather than implementation question...?)
+
+Thanks for any ideas.
+
+Ronnie
+
+
+------- Code ----------
+(*Header.mli*)
+type u
+
+module Make :
+    sig
+        type t = u
+        val as_xml : t -> Xml.xml
+        val create : Xml.xml -> t
+    end
+
+(* A function to construct Header.u objects *)
+val make : ?version:int -> ?msgtypeid:int -> string -> string -> string -> u
+
+(*Header.ml*)
+
+(* some utility functions *)
+let datetimefmt = "%Y%m%dT%H%M%S"
+let find_node name root =
+    let rec find (lst : Xml.xml list) res = match lst with
+    | []    -> if List.length res = 0 
+               then failwith ("Node not found:" ^ name)
+               else res
+    | Xml.Element(id,_,_) as hd::tl when id = name  -> find tl (hd::res)
+    | _::tl                                         -> find tl res
+    in
+        find (Xml.children root) []
+
+
+
+type u= { version : int; created : Calendar.t; environment : string; msgtypeid : int; msgtype : string; originatorid : string; machineid: string; }
+
+(* OK I want everything to have this signature at least *)
+module type Constructor =
+    sig
+        type t = u
+        val as_xml : t -> Xml.xml
+        val create : Xml.xml -> t
+    end
+
+module Make : Constructor =
+struct
+    type t = u (* why do I need this?*)
+    let as_xml d = 
+        Xml.Element("Header",[ 
+                ("MsgVersion",(string_of_int d.version));
+                ("Created",(fun x -> Printer.CalendarPrinter.sprint
+                datetimefmt x)d.created);
+                ("Environment",d.environment);
+                ("MsgTypeId",(string_of_int d.msgtypeid));
+                ("MsgType",d.msgtype)],
+                [Xml.Element("Originator",[
+                    ("OriginatorId",d.originatorid);
+                    ("MachineId",d.machineid)],[])])
+
+    let create (root:Xml.xml) : t =
+        let originator = List.hd (find_node "Originator" root) in
+        {   version = int_of_string(Xml.attrib root "MsgVersion");
+            created = ((fun x -> Printer.CalendarPrinter.from_fstring datetimefmt x)
+            (Xml.attrib root "Created"));
+            environment = Xml.attrib root "Environment";
+            msgtypeid = int_of_string(Xml.attrib root "MsgTypeId");
+            msgtype = Xml.attrib root "MsgType";
+            originatorid = Xml.attrib originator "OriginatorId";
+            machineid = Xml.attrib originator "MachineId"; }
+
+end
+
+let make ?(version = 1) ?(msgtypeid=1) msgtype originator env =
+        { version = version; created = Calendar.now(); environment = env; msgtypeid = msgtypeid; msgtype = msgtype; originatorid = originator; machineid = Unix.gethostname(); }
+
+(*****************************************
+ * main.ml - thanks to Yamagata Yoriyuki 
+ *****************************************)
+
+(* Don't like declaring this AGAIN! in main*)
+module type Constructor =
+    sig
+        type t
+        val as_xml : t -> Xml.xml
+        val create : Xml.xml -> t
+    end
+
+
+module MessageSender (C : Constructor) =
+    struct
+        let send msg = print_string (Xml.to_string (C.as_xml msg))
+    end
+
+let _ = 
+    let module M = MessageSender(Header.Make) in
+    M.send (Header.make "Header" "TestMessage" "DEV") (* this works now!!*)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

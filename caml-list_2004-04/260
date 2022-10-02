@@ -1,0 +1,153 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA04632; Mon, 12 Apr 2004 19:12:08 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA04716 for <caml-list@pauillac.inria.fr>; Mon, 12 Apr 2004 19:12:07 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i3CHD4jq002126;
+	Mon, 12 Apr 2004 19:13:04 +0200
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA04090; Mon, 12 Apr 2004 19:12:04 +0200 (MET DST)
+Date: Mon, 12 Apr 2004 19:12:04 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: John Goerzen <jgoerzen@complete.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Threading: Using and Building
+Message-ID: <20040412191204.A3372@pauillac.inria.fr>
+References: <20040412151948.GA11370@excelhustler.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20040412151948.GA11370@excelhustler.com>; from jgoerzen@complete.org on Mon, Apr 12, 2004 at 10:19:48AM -0500
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 threading:01 threads:01 implemented:01 threading:01 threads:01 introductory:99 behave:01 runtime:01 thread-safe:01 runtime:01 introductory:99 -thread:01 -thread:01 stringent:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 260
+
+> *** Regarding the thread support itself
+> 
+> Chapter 24 of the OCaml documentaion says that "The threads library is
+> implemented by time-sharing on a single processor.  It will not take
+> advantage of multi-processor machines."  That's bad.
+> 
+> But then later on I notice that there are two threading options: system
+> threads and VM-level threads.  The introductory paragraph does not seem
+> to apply to system threads which, in other languages at least, do not
+> behave that way.
+
+Even with system threads, the OCaml runtime system and GC isn't
+thread-safe, so only one Caml thread can execute at any given time
+(this is achieved via a "master mutex" on the runtime system).  So,
+the introductory sentence holds (mostly) for system threads as well:
+you will not get parallel execution of Caml threads.  Although on a
+multiprocessor with system threads, it is possible to have one Caml
+thread running in parallel with one or several C threads.
+
+> *** Regarding building programs and libraries with threading support
+> 
+> My next concern is building programs and libraries to support threading.
+> Chapter 24 also mentions that programs must be linked with -thread, and
+> all object files compiled with -thread, if the final result is to
+> support threads.  Alternatively, -vmthread could be substituted.
+
+These requirements are a bit more stringent than what is actually needed.
+The real requirements are:
+- The -thread or -vmthread option must be given at link-time
+  (so that different versions of the standard library and Unix library
+   can be picked up)
+- The -thread or -vmthread option must be given when compiling a
+  source file that uses modules from the thread library (e.g. Thread, Mutex,
+  Event, etc).
+
+Actually, if you do not meet one of these requirements, you'll get
+"file not found" errors when compiling or linking.  So, don't worry
+about forgetting -thread or -vmthread, the compiler will remind you.
+
+> So my questions are:
+> 
+>  1. Few libraries out there build themselves with -thread or -vmthread.
+>     Is that to be considered a bug?  Is there a workaround short
+>     of recompiling them?
+
+As a consequence of the requirements above, you can use a library not
+compiled with -thread in a program that uses threads.  So, it's not a bug
+and you shouldn't worry about the library not being compiled with -thread.
+(But beware about non-thread safe libraries, see below.)
+
+>  2. Can a library or object file built with -thread or -vmthread be used
+>     in a non-threaded program (one that does not use -thread or
+>     -vmthread?)  Can it be used in a threaded program that uses the
+>     *other* option?  (-thread vs. -vmthread)  Does the answer to this
+>     question vary depending on whether C code is used, or are there
+>     other things that can be done in the code to increase compatibility?
+
+Yes.  Yes.  No.  No.
+
+>  3. I am assuming that -thread and -vmthread are not universally
+>     supported across OCaml platforms.  Would it be correct to assume,
+>     then, that one should check for the presence of -thread or -vmthread
+>     at build time?  Do there exist platforms for which neither are
+>     supported?
+
+My experience is that -vmthread works on basically all variants of Unix,
+-thread works on Windows (with the MS and MinGW ports) and most of the
+recent Unix derivatives.
+
+I'm not sure about Windows with the Cygwin port.  It could be that
+neither -thread nor -vmthread works on this platform due to
+insufficient emulation of Unix syscalls and POSIX threads, but maybe not.
+
+Oh, yes, Mac OS 9 and earlier used to support neither -thread nor
+-vmthread, but they now rest in peace.
+
+>  4. If I am developing an application...  what can I do if it is
+>     multi-threaded but depends on libraries that are not built in a
+>     multi-threaded fashion on the user's system?  What if the libraries are
+>     built with the wrong type of threading (-thread vs. -vmthread)?  What
+>     if some libraries are built with one type and some with another?
+
+See question 2.  There should be no problems.
+
+>  5. If I am developing a library... what must I do to make it maximally
+>     compatible with non-threaded applications and both types of
+>     threaded applications the user may be developing?
+
+Give it a thread-safe (reentrant) API.  That is, avoid global storage.
+Developers of threaded applications will bless you.
+
+>  6. What considerations must one take into account when developing C
+>     interfaces that will be used in multithreaded OCaml programs?
+
+By default, the "master mutex" that ensures single-threaded execution
+of Caml code also ensures single-threaded execution of the C code
+called from Caml.  That makes it mostly safe to use non-thread-aware C
+code in threaded Caml applications.  
+
+It is possible for C/Caml interface code to explicitly relinquish the
+master mutex using the enter_blocking_section() and leave_blocking_section()
+functions.  (Google for these names, you should find earlier posts of
+mine describing how to use them.)  This enables another Caml thread to
+execute concurrently.
+
+>  7. Do any of the standard build systems (OCamlMake, configure.in, etc)
+>     take into account the above answers in a useful way for an
+>     application or library developer?
+
+No idea.
+
+>  8. How do I know which, if any, standard or third-party libraries
+>     installed on my system are threadsafe, and which threading model
+>     they support?
+
+As in most other languages: their documentation should say so clearly,
+but in general one has to read their source code to figure this out.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

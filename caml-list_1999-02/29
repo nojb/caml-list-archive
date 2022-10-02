@@ -1,0 +1,123 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA15915 for caml-redistribution; Mon, 8 Feb 1999 09:02:18 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA08441 for <caml-list@pauillac.inria.fr>; Fri, 5 Feb 1999 19:01:32 +0100 (MET)
+Received: from kronstadt.transbay.net (ip55240.transbay.net [209.133.55.240])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id TAA26558;
+	Fri, 5 Feb 1999 19:01:27 +0100 (MET)
+Received: (from itz@localhost)
+	by kronstadt.transbay.net (8.8.6/8.8.6) id KAA19162;
+	Fri, 5 Feb 1999 10:00:28 -0800
+Sender: weis
+To: Xavier Leroy <Xavier.Leroy@inria.fr>
+Cc: caml-list@inria.fr
+Subject: Re: Catching Break?
+References: <199901251843.KAA23637@kronstadt.transbay.net>
+	<19990126012435.21454@pauillac.inria.fr>
+From: Ian T Zimmerman <itz@transbay.net>
+Date: 05 Feb 1999 10:00:27 -0800
+In-Reply-To: Xavier Leroy's message of Tue, 26 Jan 1999 01:24:35 +0100
+Message-ID: <m2k8xwwx1g.fsf@kronstadt.transbay.net>
+Lines: 99
+X-Mailer: Gnus v5.3/Emacs 19.34
+
+Xavier Leroy <Xavier.Leroy@inria.fr> writes:
+
+>
+> > Why doesn't this work:
+> >  let main() =
+> >   Sys.catch_break true; try Unix.kill (Unix.getpid()) Sys.sigint
+> >   with Sys.Break -> prerr_endline "CAUGHT!"; exit 0
+> >  let _ = main()
+> >  This program just prints "Fatal error: Uncaught exception
+> > Sys.Break" as if the try block weren't there.  Am I overlooking
+> > something really obvious?
+
+>  No, it's fairly subtle, actually.  For various reasons related to
+> the Caml runtime system, signals in OCaml are not necessarily
+> handled at the program point where they are received: the signal
+> handler is called only at the next "safe" program point.
+>  In the case of the ocamlc bytecode interpreter, "safe" program
+> points are at function application and at the beginning of each loop
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+> iteration.  So, in your example above, we leave the "try..with"
+> before the handler for the signal is called, and that handler thus
+> raises the Sys.Break exception outside of the "try..with".
+>  If you add a function call after the Unix.kill, everything should
+> work as expected:
+>
+> > let main() =
+> >   Sys.catch_break true; try Unix.kill (Unix.getpid()) Sys.sigint;
+> >   prerr_endline "Sent signal" with Sys.Break -> prerr_endline
+> >   "CAUGHT!"; exit 0
+>  This is actually a minor OCaml bug; it would be better to check for
+> pending signals just before leaving a "try..with" block.  I'll see
+> what can be done about it.
+
+As I didn't get any further followups on this topic, I looked at the
+bytecode compiler and interpreter.  (As of Ocaml 2.01) I cannot see
+the "function application" case being done:
+
+kronstadt:/usr/src/ocaml-2.01/bytecomp$ grep -B 8 -e Kcheck_signals *.ml
+bytegen.ml-            comp_expr (add_var id (sz+1) env) handler (sz+1) (add_pop 1 cont1))
+bytegen.ml-  | Lifthenelse(cond, ifso, ifnot) ->
+bytegen.ml-      comp_binary_test env cond ifso ifnot sz cont
+bytegen.ml-  | Lsequence(exp1, exp2) ->
+bytegen.ml-      comp_expr env exp1 sz (comp_expr env exp2 sz cont)
+bytegen.ml-  | Lwhile(cond, body) ->
+bytegen.ml-      let lbl_loop = new_label() in
+bytegen.ml-      let lbl_test = new_label() in
+bytegen.ml:      Kbranch lbl_test :: Klabel lbl_loop :: Kcheck_signals ::
+--
+bytegen.ml-  | Lfor(param, start, stop, dir, body) ->
+bytegen.ml-      let lbl_loop = new_label() in
+bytegen.ml-      let lbl_test = new_label() in
+bytegen.ml-      let offset = match dir with Upto -> 1 | Downto -> -1 in
+bytegen.ml-      let comp = match dir with Upto -> Cle | Downto -> Cge in
+bytegen.ml-      comp_expr env start sz
+bytegen.ml-        (Kpush :: comp_expr env stop (sz+1)
+bytegen.ml-          (Kpush :: Kbranch lbl_test ::
+bytegen.ml:           Klabel lbl_loop :: Kcheck_signals ::
+--
+emitcode.ml-      out_int (Array.length tbl_const + (Array.length tbl_block lsl 16));
+emitcode.ml-      let org = !out_position in
+emitcode.ml-      Array.iter (out_label_with_orig org) tbl_const;
+emitcode.ml-      Array.iter (out_label_with_orig org) tbl_block
+emitcode.ml-  | Kboolnot -> out opBOOLNOT
+emitcode.ml-  | Kpushtrap lbl -> out opPUSHTRAP; out_label lbl
+emitcode.ml-  | Kpoptrap -> out opPOPTRAP
+emitcode.ml-  | Kraise -> out opRAISE
+emitcode.ml:  | Kcheck_signals -> out opCHECK_SIGNALS
+--
+instruct.ml-  | Kbranchifnot of label
+instruct.ml-  | Kstrictbranchif of label
+instruct.ml-  | Kstrictbranchifnot of label
+instruct.ml-  | Kswitch of label array * label array
+instruct.ml-  | Kboolnot
+instruct.ml-  | Kpushtrap of label
+instruct.ml-  | Kpoptrap
+instruct.ml-  | Kraise
+instruct.ml:  | Kcheck_signals
+--
+printinstr.ml-      Array.iter (fun lbl -> print_space(); print_int lbl) consts;
+printinstr.ml-      print_string "/";
+printinstr.ml-      Array.iter (fun lbl -> print_space(); print_int lbl) blocks;
+printinstr.ml-      close_box()
+printinstr.ml-  | Kboolnot -> print_string "\tboolnot"
+printinstr.ml-  | Kpushtrap lbl -> print_string "\tpushtrap L"; print_int lbl
+printinstr.ml-  | Kpoptrap -> print_string "\tpoptrap"
+printinstr.ml-  | Kraise -> print_string "\traise"
+printinstr.ml:  | Kcheck_signals -> print_string "\tcheck_signals"
+
+
+So I'll see if inserting a dummy loop after the slow system call
+helps.  But yes something should be done about this.
+
+I haven't even start to think what to do in the native code case...
+
+-- 
+Ian T Zimmerman                        <itz@transbay.net>
+I came to the conclusion that what was wrong about the guillotine
+was that the condemned man had no chance at all, absolutely none.
+Albert Camus, _The Outsider_
+
+
+

@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA23064; Wed, 4 Jun 2003 14:00:14 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA23101 for <caml-list@pauillac.inria.fr>; Wed, 4 Jun 2003 14:00:12 +0200 (MET DST)
+Received: from sockmel.bononia.it (sockmel.bononia.it [193.201.40.5])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h54C0CT17166
+	for <caml-list@inria.fr>; Wed, 4 Jun 2003 14:00:12 +0200 (MET DST)
+Received: from fistandantilus.takhisis.org (sockmel.bononia.it [193.201.40.5])
+	by sockmel.bononia.it (Postfix) with ESMTP id 7EBE456EF2
+	for <caml-list@inria.fr>; Wed,  4 Jun 2003 14:00:11 +0200 (CEST)
+Received: by fistandantilus.takhisis.org (Postfix, from userid 3148)
+	id 2F344274074; Wed,  4 Jun 2003 14:00:11 +0200 (CEST)
+Date: Wed, 4 Jun 2003 14:00:11 +0200
+From: Stefano Zacchiroli <zack@bononia.it>
+To: Inria Ocaml Mailing List <caml-list@inria.fr>
+Subject: [Caml-list] yet another benchmark: List.map vs tail recursive map
+Message-ID: <20030604120011.GA12262@fistandantilus.takhisis.org>
+Mail-Followup-To: Inria Ocaml Mailing List <caml-list@inria.fr>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="mYCpIKhGyMATD0i+"
+Content-Disposition: inline
+User-Agent: Mutt/1.5.4i
+X-Spam: no; 0.00; bononia:01 bug:01 slower:01 segfaults:01 3.06:01 overflows:01 argv:01 0.290:99 0.100:01 ocaml:01 bytecode:01 rec:01 match:02 benchmark:02 60%:97 
+X-Attachments: name="map_bench.txt" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--mYCpIKhGyMATD0i+
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+I've done some benchmarks comparing List.map implementation (not tail
+recursive) and the following tail recursive map implementation (which do
+an additional traversal on the list to reverse it):
+
+  let map' f l =
+    let rec aux acc = function
+      | [] -> List.rev acc
+      | hd :: tl -> aux (f hd :: acc) tl
+    in
+    aux [] l
+
+[ Disclaimer: I will be very happy to discover that my benchmarks are
+  wrong, the challange is to find _where_ the bug is ... ]
+
+Surprisingly enough (for me) the tail recursive version of map seems to
+be a lot (6-7 times) faster than List.map when compiled in _bytecode_.
+
+When compiled in native code the tail recursive version seems to be a
+60% slower than List.map. The point is that the difference becomes
+significative only if you use hundred of times map on short lists,
+otherwise List.map segfaults (the bytecode version of the bench was
+indeed performed augmenting stack size).
+
+I'm now wondering: is worthwhile to have a List.map implementation
+not tail recursive in the standard library? Can we consider to replace
+it with a tail recursive implementation?
+
+Benchmarks code and results attached, I'm using OCaml 3.06 and I've not
+tried the same with the CVS version.
+
+Cheers.
+
+-- 
+Stefano Zacchiroli  --  Master in Computer Science @ Uni. Bologna, Italy
+zack@{cs.unibo.it,debian.org,bononia.it}  -  http://www.bononia.it/zack/
+"  I know you believe you understood what you think I said, but I am not
+sure you realize that what you heard is not what I meant!  " -- G.Romney
+
+--mYCpIKhGyMATD0i+
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="map_bench.txt"
+
+
+(* Source code for the bytecode benchmark: one single run on a long list *)
+
+  let l = Array.to_list (Array.init 1000000 (fun x -> x)) in
+  let map' f l =  (* tail recursive version of map *)
+    let rec aux acc = function
+      | [] -> List.rev acc
+      | hd :: tl -> aux (f hd :: acc) tl
+    in
+    aux [] l
+  in
+  let f x = x * x in  (* yes ... it overflows ... who cares? *)
+  let test_std () = List.map f l in
+  let test_tail_rec () = map' f l in
+  match Sys.argv.(1) with
+  | "1" -> test_std ()
+  | "2" -> test_tail_rec ()
+  | a -> raise (Invalid_argument a)
+
+(* Bytecode benchmark *)
+
+  $ export OCAMLRUNPARAM="l=10M"
+
+  $ time ./a.out 1  # non tail recursive version
+
+  real	0m24.106s
+  user	0m23.390s
+  sys	0m0.290s
+
+  $ time ./a.out 2  # tail recursive version
+
+  real	0m3.627s
+  user	0m3.390s
+  sys	0m0.100s
+
+(* Source code for the native code benchmark: many runs on a "short" list *)
+
+  let l = Array.to_list (Array.init 120000 (fun x -> x)) in
+  let map' f l =
+    let rec aux acc = function
+      | [] -> List.rev acc
+      | hd :: tl -> aux (f hd :: acc) tl
+    in
+    aux [] l
+  in
+  let f x = x * x in
+  let test_std () = List.map f l in
+  let test_tail_rec () = map' f l in
+  let repeat = 100 in
+  match Sys.argv.(1) with
+  | "1" -> for i = 1 to repeat do test_std () done
+  | "2" -> for i = 1 to repeat do test_tail_rec () done
+  | a -> raise (Invalid_argument a)
+
+(* Native code benchmark *)
+
+  $ time ./a.out 1
+
+  real	0m14.683s
+  user	0m14.270s
+  sys	0m0.190s
+
+  $ time ./a.out 2
+
+  real	0m23.343s
+  user	0m22.950s
+  sys	0m0.070s
+
+
+--mYCpIKhGyMATD0i+--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

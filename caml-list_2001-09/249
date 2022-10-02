@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA25133; Sun, 23 Sep 2001 18:24:30 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA25126 for <caml-list@pauillac.inria.fr>; Sun, 23 Sep 2001 18:24:29 +0200 (MET DST)
+Received: from penguin.housemarque.fi (www.housemarque.fi [212.213.160.98])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f8NGORD04160
+	for <caml-list@inria.fr>; Sun, 23 Sep 2001 18:24:28 +0200 (MET DST)
+Received: from [192.168.42.66] (helo=frodo)
+	by penguin.housemarque.fi with smtp (Exim 3.00 #1)
+	id 15lC07-0001se-00
+	for caml-list@inria.fr; Sun, 23 Sep 2001 19:21:03 +0300
+Message-ID: <001501c1444c$a7b0a720$422aa8c0@housemarque.fi>
+From: "Vesa Karvonen" <vesa.karvonen@housemarque.fi>
+To: <caml-list@inria.fr>
+References: <000b01c143aa$d5218690$422aa8c0@housemarque.fi> <20010922211013.A580@eecs.harvard.edu>
+Subject: Re: [Caml-list] On ocamlyacc and ocamllex
+Date: Sun, 23 Sep 2001 19:27:36 +0300
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 5.50.4807.1700
+X-MimeOLE: Produced By Microsoft MimeOLE V5.50.4807.1700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: "Christian Lindig" <lindig@eecs.harvard.edu>
+> On Sun, Sep 23, 2001 at 12:09:14AM +0300, Vesa Karvonen wrote:
+> > I would like to make it so that the lexer would record the positions
+> > of line breaks so that I could directly give line number and column
+> > information in error messages.
+[snip snip]
+> The particular problem can be solved outside of Lex and Yacc: in the
+> Quick C-- compiler we have a mutable Sourcemap.map data type that
+> records the connection between character positions and
+> (file,line,column) triples.
+
+This is basically the same technique that I have been using. The problem is
+that the map has to be global, because the only context passed to the lexer
+actions is the lexbuf. Furthermore, the records need to be manually removed
+(in order to save memory) after a file has been processed completely and the
+recorded connections for the file are no longer needed.
+
+An extendable lexer makes it possible to extend the context passed to the
+lexer actions so that globals can be avoided.
+
+> I agree that more flexible lexer and parser generators would be nice and
+> have myself lobbied for them in the past. On the other hand I have
+> always found my way with the existing ones which probably is the reason
+> that we still use them.
+
+Replacing the Lex and Yacc modules turned out to be simpler than I thought.
+I'm almost done with writing replacements for the Lexing and Parsing modules.
+I have written replacement modules called Lex and Yacc. The Lex module defines
+an abstract parameterized type lexbuf like this:
+
+    type 't lexbuf
+    val access : 't lexbuf -> 't
+    val from_channel : in_channel -> 't -> 't lexbuf
+    ...
+
+It is now possible to make a simple module for tracking line numbers:
+
+    type t
+    val make : unit -> t
+    val new_line_at_pos : t -> int -> unit
+    val line_and_col_of_pos : t -> int -> int * int
+
+And then extend the lexbuf with the line map:
+
+    val from_channel : in_channel -> Line_map.t Lex.lexbuf
+    val new_line : Line_map.t Lex.lexbuf -> unit
+    ...
+
+and use those functions in the lexer actions:
+
+    '\n' { new_line lexbuf; token lexbuf; }
+    ...
+
+I have made it so that the ocamlyacc and ocalmlex generated files go through
+sed commands which change the generated files to work with the Lex and Yacc
+modules instead of the Lexing and Parsing modules.
+
+> > Another issue with ocamllex and ocamlyacc (and lex/flex and
+> > yacc/bison) is that the dependencies between the generated lexer and
+> > parser are not quite optimal. Currently the generated lexer is
+> > dependent on the parser, because the parser generates the token type.
+> > This means that each time the grammar is modified, but not the token
+> > definitions, the lexer is recompiled. This could be avoided by making
+> > it so that the token type is defined in a separate module.
+>
+> This is a general problem with make: when you edit a comment, a file is
+> touched and all dependent files must be recompiled.
+[...]
+
+I think that you slightly misunderstood.
+
+The basic idea was to put the token type definition into a separate module.
+Instead of two source files, you would have three source files:
+
+    lexer.mll
+    token.ml
+    parser.mly
+
+The token definition is now effectively demoted into its own module which is
+now dependent upon by the lexer and parser modules.
+
+In parser.mly there would be code that would tell ocamlyacc to look at
+token.ml for the token type.
+
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

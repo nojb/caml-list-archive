@@ -1,0 +1,168 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA24013; Sun, 24 Oct 2004 13:11:11 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA25747 for <caml-list@pauillac.inria.fr>; Sun, 24 Oct 2004 13:11:09 +0200 (MET DST)
+Received: from rproxy.gmail.com (rproxy.gmail.com [64.233.170.205])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9OBB8Ot026073
+	for <caml-list@inria.fr>; Sun, 24 Oct 2004 13:11:08 +0200
+Received: by rproxy.gmail.com with SMTP id 79so265992rnk
+        for <caml-list@inria.fr>; Sun, 24 Oct 2004 04:11:08 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:in-reply-to:mime-version:content-type:content-transfer-encoding:references;
+        b=Qkrmf6rfE7Q2vRoEnWCb8kKtf4pKR5RPLx/+n/ElRpaT+Lh5+VNp5UJNwZ38LD7ap4s9f5wpfbPoNkdbB7FMeFqleu4UAx3jLKDiRFdLtMOxT5tVZn+ccfkibL1FPmrjw+kvMP2jj8WQAVmY1ZgpR+fgDbjWADxrTAtz7QXWEFA=
+Received: by 10.38.171.37 with SMTP id t37mr575847rne;
+        Sun, 24 Oct 2004 04:11:08 -0700 (PDT)
+Received: by 10.38.14.54 with HTTP; Sun, 24 Oct 2004 04:11:08 -0700 (PDT)
+Message-ID: <d849ad2a041024041121f4fd65@mail.gmail.com>
+Date: Sun, 24 Oct 2004 07:11:08 -0400
+From: John Prevost <j.prevost@gmail.com>
+Reply-To: John Prevost <j.prevost@gmail.com>
+To: Pietro Abate <pietro.abate@anu.edu.au>, ocaml ml <caml-list@inria.fr>
+Subject: Re: [Caml-list] set of sets ...
+In-Reply-To: <20041024075102.GA9493@pulp.anu.edu.au>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <20041024075102.GA9493@pulp.anu.edu.au>
+X-Miltered: at nez-perce with ID 417B8DCC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 val:01 val:01 coerced:01 covariant:01 covariance:01 covariant:01 coerce:01 subtype:01 subtype:01 variant:02 objects:02 unit:03 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 5083
+Lines: 132
+
+In short, your problem is this:
+
+Say you have two types, t1 and t2, and t1 is a subtype of t2. 
+Therefore, you can do (x : t1 :> t2) and coerce a value of type t1 to
+a value of type t2.  You cannot do (x : t2 :> t1).  That's pretty
+basic.  Let's make an example:
+
+type t1 = [ `A ]
+type t2 = [ `A | `B ]
+let t1_to_t2 (x : t1) = (x :> t2)
+
+let x1 = `A
+let x2 = `B
+let x3 = t1_to_t2 x1
+
+There.  That's easy.  It all works and types okay.  The problem is at
+the next level.  Let's look at the type of your "store" class:
+
+class virtual ['a] store :
+  object ('b)
+    method virtual access : 'a ext_rep
+    method virtual add : 'a -> unit
+    method virtual assign : 'b -> unit
+    method virtual copy : 'b
+    method virtual del : 'a -> unit
+  end
+
+To see what the problem is, let's make some smaller examples with
+similar features:
+
+class ['a] c1 (v : 'a) =
+  let x = ref v in
+  object
+    method get = !x
+    method put v = x := v
+  end
+
+let o1t1 = new c1 x1
+let o1t2 = new c1 x2
+let o1t3 = new c1 x3
+
+val o1t1 : t1 c1 = <obj>
+val o1t2 : t2 c1 = <obj>
+val o1t3 : t2 c1 = <obj>
+
+Okay.  So that's working well.  Now--we know we can cast t1 to t2. 
+Can we cast (t1 c1) to (t2 c2)?  Let's see:
+
+# let o1t1_t2 = (o1t1 :> t2 c1);;
+This expression cannot be coerced to type
+  t2 c1 = < get : t2; put : t2 -> unit >;
+it has type t1 c1 = < get : t1; put : t1 -> unit > but is here used with type
+  < get : t1; put : ([> t2 ] as 'a) -> unit; .. >
+Type t1 = [ `A ] is not compatible with type 'a = [> `A | `B ]
+The first variant type does not allow tag(s) `B
+
+Looks like no.  Why not?  Well, let's think about it.  What happens if
+we get a value out of this object?  The value is going to be `A,
+because the initial object contains type t1.  That's fine--if we give
+`A to something that expects `A or `B, it can handle it.  What happens
+if we put a value into this object?  Well, we can only put `A into it.
+ Aha!  Here is the problem!
+
+You can't use the value `B in a spot where only `A is expected to be! 
+Because the "put" method of o2 c1 takes `A|`B, and the "put" method of
+o1 c1 only takes `A, we cannot cast a value of type (o1 c1) to (o2
+c1)--if we did, we could give the object to code that wants to put `B
+into it.  This is called "contravariance", and you can identify it by
+looking at the type signature.  If a type argument appears on the
+right side of the arrow (or there is no arrow), that type is
+"covariant", and behaves as you were expecting.  But if the type
+argument appears on the left side of an arrow, it is
+"contravariant"--it works the opposite way from what you were
+expecting.  If in a single type it is on *both* sides of the arrow,
+then it is *invariant*.  That is the case here.
+
+With c1, look at the type:
+
+class ['a] c1 : 'a -> object
+  method get : 'a
+             (* ^^ this indicates covariance, 'a is on the right *)
+  method put : 'a -> unit
+             (* ^^ this indicates contracariance, 'a is on the left *)
+end
+
+Because c1 is invariant in the type argument 'a, it doesn't matter
+that t1 is a subtype of t2.  The rules are like this:
+
+If 'a is covariant in class c, then (t1 <: t2) implies (t1 c <: t2 c)
+If 'a is contravariant in class c, then (t1 <: t2) implies (t2 c <: t1 c)
+If 'a is invariant in class c, then neither holds, unless t1 = t2.
+
+To make things a little more clear, let's break that down:
+
+class ['a] covariant (x : 'a) = object  method get = x  end
+class ['a] contravariant = object  method put (x : 'a) = ()  end
+
+class ['a] covariant : 'a -> object method get : 'a end
+class ['a] contravariant : object method put : 'a -> unit end
+
+Let's make some covariant objects and cast them:
+
+let covariant_t1 = new covariant x1 (* OK *)
+let covariant_t2 = new covariant x2 (* OK *)
+let covariant_t1_as_t2 = (covariant_t1 :> t2 covariant) (* OK *)
+let covariant_t2_as_t1 = (covariant_t2 :> t1 covariant) (* Error *)
+
+t2 covariant is not a subtype of t1 covariant, so that last is an
+error.  Now we look at contravariant:
+
+let contravariant_t1 = (new contravariant : t1 contravariant) (* OK *)
+let contravariant_t2 = (new contravariant : t2 contravariant) (* OK *)
+let contravariant_t1_as_t2 = (contravariant_t1 :> t2 contravariant) (* Error *)
+let contravariant_t2_as_t1 = (contravariant_t2 :> t1 contravariant) (* OK *)
+
+So here, the other case holds.  And above, in the sample class c1,
+both constraints were there, and things didn't work out.
+
+As a final note, you can cast out the offending methods to get around
+this.  For example, if you use casting to remove the contravariant
+methods from an object of your store class, you can then use the
+resulting object covariantly (only reading data out of the object.) 
+If you use casting to remove the covariant methods from an object of
+your store class, you can then use the resulting object
+contravariantly (only writing data into the object.)
+
+John.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

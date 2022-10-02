@@ -1,0 +1,103 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA16711; Fri, 12 Dec 2003 22:55:00 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA16697 for <caml-list@pauillac.inria.fr>; Fri, 12 Dec 2003 22:54:59 +0100 (MET)
+Received: from smtp3.pp.htv.fi (smtp3.pp.htv.fi [213.243.153.173])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBCLsw112206
+	for <caml-list@inria.fr>; Fri, 12 Dec 2003 22:54:58 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp3.pp.htv.fi (Postfix) with ESMTP
+	id 205EE27BDD2; Fri, 12 Dec 2003 23:54:58 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBCLsvT11879;
+	Fri, 12 Dec 2003 23:54:57 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AUvFR-0008Dr-00; Fri, 12 Dec 2003 23:54:57 +0200
+To: Alain.Frisch@ens.fr
+Cc: Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Freeing dynamically loaded code
+References: <Pine.SOL.4.44.0312122135110.13180-100000@clipper.ens.fr>
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Fri, 12 Dec 2003 23:54:56 +0200
+In-Reply-To: <Pine.SOL.4.44.0312122135110.13180-100000@clipper.ens.fr> (Alain
+ Frisch's message of "Fri, 12 Dec 2003 22:26:46 +0100 (MET)")
+Message-ID: <87vfol7lcf.fsf@naked.iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 dynamically:01 alain:01 frisch:01 closures:01 generic:01 stub:01 stub:01 faked:01 dynlink:01 faked:01 unlucky:01 closures:01 inlined:01 hackery:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Alain Frisch wrote:
+> I propose to avoid creating "bad" closures that points to the loaded
+> code.  We simulate a bad closure by a closure to a generic stub. In
+> addition to the normal environment, we put two additional slots into
+> this closure: a pointer to the code block and an offset. This
+> closure is fully under the control of the GC. The stub is made of a
+> single instruction (or maybe two, see next paragraph), say a new
+> bytecode CALL_DYN, which computes the real destination from the
+> closure and jumps to it. We also need a new CLOSURE_DYN bytecode
+> that behaves as CLOSURE but create a faked closure instead of a bad
+> one. Dynlink changes CLOSURE to CLOSURE_DYN when it loads a
+> module. We need to take care of GRAB, RESTART and CLOSUREREC
+> similarly.
+
+Hmm. Quite ingenious. I read through the CLOSURE and CLOSUREREC calls
+and considered modifying those when linking, but never came up with a
+proper solution. That sounds like it.
+
+> We also need to make sure that the "active" code blocks (the ones
+> which have an active stack frame) are accessible by the GC. We have
+> to be careful since the faked closure may become inacessible even if
+> it is currently running (because of an in-place modification). So
+> CALL_DYN should keep its closure on the stack (which contains a
+> pointer to the code block) and call the real function. The bytecode
+> following CALL_DYN would just pop the closure after the function
+> returns.
+
+Right. If we are unlucky, there might be some other places around the
+code where code is expected to be around without registering
+references to it.
+
+> These changes does not affect the GC at all, and are simple
+> additions to the bytecode interpreter (interp.c).
+
+Yeah, sounds good.
+
+> The cost of calling closures to dynlink'ed modules is increased, but
+> we don't really care since:
+
+> 1) this is bytecode, so anyway ...
+> 2) non dynlink'ed code is not affected at all
+
+Actually... I think we might care. If I didn't misunderstand
+something, this does not only change the calls *to* dynlink'ed
+modules, but for *every* call of a function inside that dynlink'ed
+module. And since function calls do not seem to be inlined in bytecode
+at all, this might seriously affect performance. But, this is mere
+speculation as I don't really know the function call overhead in
+bytecode, nor how much it would be increased by this.
+
+But if it is a problem - I'm not sure how to avoid it. Internal
+closure calls inside the code-file do not need this hackery, but
+separating those closures that are to be called from the outside
+doesn't seem trivial. The external closure pointers held will be
+either closures stored in the module interface posted with SETGLOBAL,
+or just closure pointers given as parameters to external closures - or
+is there still something else?
+
+I'm not sure of your needs for this - but for me it would be no
+problem to for example require special compilation flags for
+dynlinkable files, and require special syntax or something for
+declaring exported closures - as long as safety is preserved, that a
+file is actually incapable of giving out closures that would break in
+GC.
+
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,169 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA00739; Fri, 31 Jan 2003 20:43:14 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA01235 for <caml-list@pauillac.inria.fr>; Fri, 31 Jan 2003 20:43:13 +0100 (MET)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h0VJhCf13828
+	for <caml-list@inria.fr>; Fri, 31 Jan 2003 20:43:12 +0100 (MET)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Fri, 31 Jan 2003 13:42:48 -0600
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Fri, 31 Jan 2003 13:42:47 -0600
+Date: Fri, 31 Jan 2003 13:52:26 -0600 (CST)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Diego Olivier Fernandez Pons <Diego-Olivier.FERNANDEZ-PONS@cicrp.jussieu.fr>
+cc: <caml-list@inria.fr>
+Subject: Re: [Caml-list] @, List.append, and tail recursion
+In-Reply-To: <Pine.A41.4.44.0301311705230.4055078-100000@ibm1.cicrp.jussieu.fr>
+Message-ID: <Pine.LNX.4.33.0301311126450.3577-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 31 Jan 2003 19:42:47.0935 (UTC) FILETIME=[EEBF40F0:01C2C960]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, 31 Jan 2003, Diego Olivier Fernandez Pons wrote:
+
+>     Bonjour,
+> 
+> Some comments on various contributions to this thread
+> 
+> Brian Hurt wrote :
+> 
+> > I'm basically doing sparse vector/matrix stuff, handling
+> > (effectively) (colno * value) list for vectors, and (rowno * vector)
+> > list for matrix.  And I may be hitting lists long enough to trip the
+> > problem.
+> 
+> If you are doing sparse matrix operations and you still hit lists long
+> enough to cause a stack overflow, then your matrix must be really
+> huge.
+
+It'd be more accurate to say I'm not sure my lists will stay short enough.  
+On average they are short enough and sparse enough to make using lists 
+worthwhile.  I expect on average the lists will be about 20 elements or so 
+long.  I should be able to stop thinking here- OK, I'm saving more than 
+enough computation time on the average case that being inefficient on the 
+rare case, where the lists has 30K or more elements in it, is OK.
+
+But I want the rare case to *work* correctly, even if inefficiently.  With 
+the "naive" non-tail-recursive implementation doesn't.  Somewhere above 
+32K elements in the list the recursion trips the stack overflow.  Change 
+the problem in some minor way, and suddenly I'm not generating lists with 
+32K elements in them, maybe just 30K elements in them, and everything 
+works OK.
+
+Optimization is the wrong word.  As Olivier's set_cdr shows, the cost of
+recursion isn't signifigant (kudos to the compiler team).  It's a
+correctness issue more than anything:  the code *should* work.
+
+> 
+> If the ordrer of the terms does not matter (or if you can manage with
+> the position information you keep in your sparse matrix) then you just
+> need to write tail recursive functions, not taking care of the list
+> being reversed
+
+I am keeping the items in order.  Because if they're in order, I can write 
+add in O(n).  If they're not in order, the best (fastest running) way to 
+write add is to first sort both lists O(n log n) and then do the in-order 
+add.
+
+> An other solution is to use a suitable data structure for your
+> application : join-lists, catenable lists, double-linked lists ...
+
+Several reasons, actually:
+
+1) I want to stay as strictly functional as possible.  I'm comming from an 
+imperitive background, and thus want to limit how much I fall back on old 
+habits.  If it can be done functionally (purely applicative), I want to do 
+it that way.
+
+2) The only thing I'm doing with the list that is at all a problem is 
+non-tail-recursion list construction.  And this *should* work correctly.  
+So why should I use some other datastructure when the list primitives do 
+everything I need?  In fact, linked lists of some sort are exactly what I 
+want- not even arrays.  I want to be able to start creating a list of 
+elements without having to know how long it is, and I'm doing a lot of 
+walking the list and basically no accessing random elements.  And I'm 
+always walking the list in the same direction.
+
+3) I perfer to solve the general problem than have to resolve the specific 
+problem every time I hit it.  This is even worse because the problem is 
+only likely to show up in production.  Test cases with small sets of data 
+won't trigger the problem.
+
+> 
+> There are not many applications in which you just can't work around in
+> a simple way... 
+
+I don't want to have to work around it.
+
+> In this case, the only solution is to write you program in
+> C/assembler, with your own memory manager
+
+You should only be programming in assembler if it absolutely cannot be 
+written in C.  You should only be programming in C if you're directly 
+banging on hardware.
+
+> 
+> That is why I suspect you may not be using the best data structures
+> and algorithms avaiable. Could you explain what you are working on ?
+
+The short form: solving a system of nonlinear equations via
+Newton-Kantoravich (sp?).  Basically, I compute the Jacobian F'(X) (a
+matrix of the partial differentials) and the residual F(X) (a vector) and
+solve F'(X) * Y = F(X) to get my new, improved guess X' = X - Y.  Lather,
+rinse, repeat, until F(X) is close enough to 0.  This is basically
+Newton's method extended to deal with multiple equations in multiple
+variables.
+
+In production I wouldn't be surprised to see systems of 30,000+ equations
+in 30,000+ variables.  The Jacobian matrix is going to be very sparse- I
+expect the average row to have 20 or fewer non-zero elements.  Thus the 
+attraction to sparse vectors.  I'm going to be solving it via Gaussian 
+elimination (the Jacobian is likely to be malformed in multiple ways, 
+meaning I can't use any iterative method I know of.  And yes, I've looked 
+at iterative methods as advanced as GMRES- they don't work).  I think that 
+in general I can bound the size of vectors I'm producing.  But there are 
+degenerate cases where I could get above 30K non-zero elements in a 
+vector.
+
+The problem can't be solved at a higher level.  Sparse vectors are the way 
+to go, and I can't gaurentee that I won't get sparse vectors of greater 
+than 30K elements.
+
+> You will find in Chris Okasaki's thesis/book several implementations
+> of catenable lists and many references. One of them embedds a queue in
+> a tree which seems to be what you are looking for (head in O(1),
+> append in O(1))
+
+O(1), or O(log n)?  Most tree operations are O(log n).
+
+This is one of the things I considered, implementing the sparse vectors as 
+trees- maps, effectively.  The problem is that most of the time I want to 
+walk in-order through all non-zero elements of the vector.  With a 
+tree/map, this is O(n log n).  With a list, it's O(n).
+
+I don't see what the resistance here is.  Were I jumping up and down 
+demanding someone else do the work, I could see the response being "it's 
+not worth it to us".  Which is why I'm doing the work myself.  There are, 
+from your point of view, two possibilities:
+
+1) I succeed.  In which case, a new set of behaviors become efficient.  
+Since you weren't using those behaviors anyways, you don't care- as 
+nothing else changes.  Note that I am not proposing to change the 
+semantics of the language.
+
+2) I fail.  In which case nothing changes.  This includes I come up 
+with something which breaks other stuff, at which point Xavier & co. go 
+"Thanks, but no thanks".
+
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

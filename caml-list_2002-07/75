@@ -1,0 +1,132 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA15753; Fri, 5 Jul 2002 10:33:25 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA16235 for <caml-list@pauillac.inria.fr>; Fri, 5 Jul 2002 10:33:24 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g658XOf11062
+	for <caml-list@inria.fr>; Fri, 5 Jul 2002 10:33:24 +0200 (MET DST)
+Received: (from fpottier@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA15907 for caml-list@inria.fr; Fri, 5 Jul 2002 10:33:23 +0200 (MET DST)
+Date: Fri, 5 Jul 2002 10:33:23 +0200
+From: Francois Pottier <francois.pottier@inria.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: generic programming
+Message-ID: <20020705103323.A14853@pauillac.inria.fr>
+Reply-To: Francois.Pottier@inria.fr
+References: <200207030246.WAA28665@dewberry.cc.columbia.edu> <87r8il436y.fsf@ketanu.dyndns.org> <4.3.2.7.2.20020703102610.0248b280@mail.d6.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+In-Reply-To: <4.3.2.7.2.20020703102610.0248b280@mail.d6.com>; from checker@d6.com on Wed, Jul 03, 2002 at 10:29:09AM -0700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, Jul 03, 2002 at 10:29:09AM -0700, Chris Hecker wrote:
+>
+> "Sure. I have a 'problem' example: try to implement STL iterators
+> in Caml. I don't have the expertise in Caml: I think this requires
+> 'higher order functors'. Several people have attempted this, no one
+> has succeeded that I know of."
+
+My memories of STL are vague, but if an iterator is what I think it
+is, then implementing one in O'Caml is pretty straightforward. An
+iterator is a function that returns a function which maintains a
+piece of internal state. There is certainly no need for functors
+here!
+
+Here is one for lists:
+
+(* [iterator s] returns a stateful iterator over the list [s]. That is,
+   if $s = \{ x_1, x_2, \ldots, x_n \}$, then [iterator s] is a function
+   which, when invoked for the $k^{\text{th}}$ time, returns [Some ]$x_k$,
+   if $k\leq n$, and [None] otherwise. *)
+
+(* val iterator : 'a list -> (unit -> 'a option) *)
+
+  let iterator list =
+
+    let remainder = ref list in
+
+    let rec next () =
+      match !remainder with
+      | [] ->
+	  None
+      | elem :: rest ->
+	  remainder := rest;
+	  Some elem in
+
+    next
+
+And (more interesting) here is one for trees:
+
+(* [iterator s] returns a stateful iterator over the tree [s]. That is, if
+   $s = \{ x_1, x_2, \ldots, x_n \}$, where $x_1 < x_2 < \ldots < x_n$, then
+   [iterator s] is a function which, when invoked for the $k^{\text{th}}$
+   time, returns [Some ]$x_k$, if $k\leq n$, and [None] otherwise. Such a
+   function can be useful when one wishes to iterate over a tree's elements,
+   without being restricted by the call stack's discipline.
+
+   Because the call stack is not used to store information about which part
+   of the tree remains to be walked, an explicit (heap-allocated) structure
+   has to be used. It is defined below. Note that it is essentially a list
+   of (element, right-tree) pairs, which corresponds to the information
+   which would be stored in the call stack, if it were used.
+
+   It would be possible to implement a straightforward iterator by first
+   turning the tree into a list, then walking the list. Our implementation
+   is more economical, because it only allocates a structure of size $O(\log
+   n)$ (the call stack) at a given time, and because only one walk is
+   necessary, thus reaping a small constant time factor. *)
+
+(* val iterator : 'a list -> (unit -> 'a option) *)
+
+  type 'a tree =
+    | Empty
+    | Node of 'a tree * 'a * 'a tree * int
+
+  type 'a remainder =
+    | Nothing
+    | ElemThenRightThenParent of 'a * 'a tree * 'a remainder
+
+  let iterator s =
+
+    (* When asked to create an iterator for s, we allocate a piece of state,
+       which shall allow the iterator to remember which part of the tree
+       remains to be walked. It consists of a tree and a remainder, which are
+       to be walked in order. At first, the whole tree [s] has to be walked,
+       and there is no remainder.
+
+       Note that [next] does not work in worst-case constant time, since it
+       may have to travel arbitrarily far down the current sub-tree's left
+       spine. However, it does work in amortized constant time; in other
+       words, iterating over a complete tree still takes worst-case linear
+       time. *)
+
+    let tree = ref s
+    and remainder = ref Nothing in
+
+    let rec next () =
+      match !tree, !remainder with
+      | Empty, Nothing ->
+	  None
+      | Empty, ElemThenRightThenParent (elem, right, parent) ->
+	  tree := right;
+	  remainder := parent;
+	  Some elem
+      | Node(l, v, r, _), parent ->
+	  tree := l;
+	  remainder := ElemThenRightThenParent(v, r, parent);
+	  next () in
+
+    next
+
+I hope this helps,
+
+-- 
+François Pottier
+Francois.Pottier@inria.fr
+http://pauillac.inria.fr/~fpottier/
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

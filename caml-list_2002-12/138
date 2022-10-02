@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA12315; Thu, 12 Dec 2002 17:32:25 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA11038 for <caml-list@pauillac.inria.fr>; Thu, 12 Dec 2002 17:32:24 +0100 (MET)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id gBCGWM106591
+	for <caml-list@inria.fr>; Thu, 12 Dec 2002 17:32:23 +0100 (MET)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Thu, 12 Dec 2002 10:31:16 -0600
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 12 Dec 2002 10:31:16 -0600
+Date: Thu, 12 Dec 2002 10:39:52 -0600 (CST)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Alessandro Baretta <alex@baretta.com>
+cc: Brian Hurt <brian.hurt@qlogic.com>, Ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Resource acquisition is initialization
+In-Reply-To: <3DF8411C.90301@baretta.com>
+Message-ID: <Pine.LNX.4.33.0212121012260.2036-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 12 Dec 2002 16:31:16.0281 (UTC) FILETIME=[E4888290:01C2A1FB]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 12 Dec 2002, Alessandro Baretta wrote:
+
+> 
+> 
+> Brian Hurt wrote:
+> > On Wed, 11 Dec 2002, Blair Zajac wrote:
+> 
+> > The only thing I can think of which cannot tolerate the cleanup slop is 
+> > releasing a mutex.  Deleting the mutex itself is a good application for 
+> > GC, unlocking the mutex is not.
+> 
+> It is not the GC which unlocks the mutex but the application 
+> code. See Mutex.unlock .
+
+Calling a function to unlock a mutex is precise- so long as you remember 
+to always unlock the mutex.  At least, as I'm understanding things.  It's 
+the difference between (in Java-esque):
+
+    {
+        mutex.lock();
+        /* do stuff needing the mutex to be locked */
+        mutex.unlock();
+    }
+
+and:
+    {
+        mutex_lock lock_obj = mutex.get_lock();
+        /* do stuff needing the mutex to be locked */
+    }
+    /* lock_obj is now garbage- eventually the GC will clean it up, thus
+     * unlocking the mutex.  But this may be a while.  Until that happens,
+     * everyone still thinks we're holding the mutex locked.
+     */
+
+The problem with the first representation is that you can forget to unlock 
+the mutex, especially on error paths.  Consider:
+    {
+        mutex.lock();
+        /* do stuff */
+        if (error) { throw AnException(); }
+        /* Opps- did I just forget to unlock the mutex? */
+        mutex.unlock();
+    }
+
+The problem with the second way is that you continue holding the lock for 
+some indefinate amount of time until the GC frees the object.  This is 
+what I meant by "the time you hold the lock is defined by the lifetime of 
+an object".
+
+Note that for most other resources, holding them a little too long isn't a 
+problem.  Consider file handles, for example.  OK, you don't want to leak 
+filehandles anymore than you want to leak memory, opening them and 
+forgetting to ever close them.  But if a file handle stays open a little 
+longer than you really need it to be, it's not a catastrophe.  There are 
+generally enough spare handles that you can still open new files before 
+all the old files get closed.  So the lag isn't critical.
+
+> 
+> > And for that, I think representing 
+> > holding the lock as the lifetime of an object to be a bad idea.  Were Caml 
+> > interested more in doing multithreaded code, I'd recommend something like 
+> > Java's synchronize keyword.
+> 
+> What's the difference with respect to locking a Mutex?
+> 
+
+Java explicitly binds the time you hold a mutex to a certain code block- 
+literally, a set of curly braces {} defines the length of time when you 
+hold a lock.  When you leave that code block, via any means, the lock is 
+automatically released.  So you have code like:
+
+    synchronized(foo) {
+        /* All the code in here has foo locked */
+    }
+    /* Code here has foo unlocked */
+
+This is usefull because the programmer doesn't have to remember to unlock 
+the mutex- the simple act of leaving the block automatically unlocks the 
+mutex.  So:
+
+    synchronized(foo) {
+       if (error) throw AnException();
+    }
+
+isn't an error.  The throw will unlock the mutex on leaving the code 
+block.  This does slow down exceptions a little- now you need to have a 
+stack of locks to unlock as you throw the exception.  However this is way 
+simpler to implement, and way faster, than having to keep track of all 
+objects (and their types) on the stack and call the appropriate 
+destructors as you unwind the stack.  And dealing with the corner cases 
+implied (what happens when you throw an exception, which calls a 
+destructor for an object on the stack, and that destructor throws another 
+exception?).
+
+This is the behavior I think was wanted- to bind the mutex lock to a 
+specific peice of code.  I'd much rather do it explicitly, with a language 
+extension, than a kludge which causes more problems than it solves.
+
+Speaking of which, I've been noodling around with wether it's possible to 
+implement synchronization automatically in the common case.  What objects 
+need to have synchronization is easy to determine- those objects which can 
+be reached from 2 or more threads need synchronization.  The question is, 
+what synchronization.  Or how much.  Can you protect a whole slew of 
+objects with a single lock?
+
+Obviously, removing as much synchronization as possible is good for
+performance.  Also, it's possible to construct examples where if multiple 
+objects are protected by a single lock you don't have deadlock, while if 
+the objects are each protected by their own lock deadlock is possible.
+
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

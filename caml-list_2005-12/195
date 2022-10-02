@@ -1,0 +1,208 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 4149DBB81;
+	Thu, 15 Dec 2005 12:03:57 +0100 (CET)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jBFB3ti4013580;
+	Thu, 15 Dec 2005 12:03:56 +0100
+Received: from rosella (ppp33-4.lns1.syd2.internode.on.net [59.167.33.4] (may be forged))
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.6) with ESMTP id jBFB3jdt079747;
+	Thu, 15 Dec 2005 21:33:45 +1030 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] [ANNOUNCE] Alpha release of Menhir, an LR(1)
+	parser generator for ocaml
+From: skaller <skaller@users.sourceforge.net>
+To: Francois.Pottier@inria.fr
+Cc: Alessandro Baretta <a.baretta@barettadeit.com>,
+	Caml Mailing List <caml-list@yquem.inria.fr>
+In-Reply-To: <20051215084616.GC1966@yquem.inria.fr>
+References: <20051212175838.GA8502@yquem.inria.fr>
+	 <aee06c9e0512131307k3fc494a5k3591d549d552f1b@mail.gmail.com>
+	 <1134540495.8980.63.camel@rosella> <20051214090427.GB1330@yquem.inria.fr>
+	 <439FF395.3090503@barettadeit.com> <1134594294.8942.82.camel@rosella>
+	 <20051215084616.GC1966@yquem.inria.fr>
+Content-Type: text/plain
+Date: Thu, 15 Dec 2005 22:03:44 +1100
+Message-Id: <1134644624.8934.44.camel@rosella>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 43A14D9B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 parser:01 ocaml:01 token:01 expr:01 expr:01 token:01 grammar:01 lexers:01 parsers:01 semicolon:01 parser:01 terminate:01 recursion:01 tokens:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Thu, 2005-12-15 at 09:46 +0100, Francois Pottier wrote:
+
+> Doing this properly requires *not* reading the lookahead token. 
+
+> As you point
+> out, the problems that arise are similar to the way the end of stream is
+> handled.
+> 
+> > It would be really nice if I could write the
+> > production as:
+> > 
+> > exprx: expr ~expr
+> > 
+> > where ~expr means 'any token which forces a reduction
+> > of the whole expression' if you know what I mean.
+> 
+> No, I don't know exactly what you mean :) I need to think more to understand
+> if this construction makes sense. 
+
+> It makes the grammar self-referential, in a
+> way, so it at least has to be monotonic in order to make sense.
+> 
+> Our plan regarding calls to external lexers or parsers was to be more rigid,
+> that is, to require the current statement (or expression, or whatever) to be
+> unambiguously terminated (for instance, by a semicolon) at the point where the
+> external call is made. So what you do with statements would be accepted, but
+> what you do with expressions might be impossible.
+
+So, the idea is this: for an 1 token look ahead parser,
+all productions terminate either with 0 lookahead or 1 lookahead.
+
+Now, you're saying only to support recursion for 0 lookahead
+productions. 
+
+So what if you have a 1 lookahead and you still want
+to recurse??
+
+One answer is: make a new augmented production with is 0 lookahead:
+
+	prod': prod ~prod { $1, $2 }
+
+where ~prod is the nonterminal
+
+	~prod: 
+		| t1 { t1 $1 } 
+		| t2 { t2 $1 }
+		| t3 { t3 $1 }
+		....
+
+where t1, t2, t3, .. are tokens that would not be shifted
+by the parser, and therefore cause prod to be reduced.
+
+The action then returns the result of prod, PLUS the 
+lookahead token. Before recursing, we can simply
+push the lookahead token back into the head of the
+token stream.
+
+Felix does precisely this -- it convents a 1 lookahead
+production into a 0 lookahead production and therefore:
+
+> what you do with expressions might be impossible.
+
+seems possible by the above mechanism.
+It is equivalent to adding a set of terminating tokens.
+
+The *problem* is choosing terminating tokens that
+are viable first tokens of any sequence of symbols
+that can follow an expression elsewhere in the grammar.
+
+For example consider:
+
+	while expr do ..
+	for i in expr to expr do
+
+This grammar would be ambiguous, if, whilst parsing
+an expression, a 'do' or 'to' token did not cause
+expr to be reduced. So 'do' and 'to' are 'expression
+termination tokens', that is, 'do' and 'to' are
+members of the set '~expr'.
+
+I forget the correct terminology about viable
+prefixes and handles.. but I hope the idea is clear.
+
+I think you did raise an important point though:
+the meaning of ~x is dependent on the start symbol.
+So the notation should probably be something like:
+
+	start~x
+
+meaning 'all the tokens which can terminate an x whilst
+parsing start'.
+
+This algorithm 'works' for finding 'start~x':
+
+"try every token. If it leads to a conflict it is not
+in start~x, otherwise it is"
+
+I am doing that by hand at the moment. Here are the relevant 
+parts of Felix:
+
+%type <Flx_ast.expr_t * token> exprx
+%start exprx
+
+exprx:
+  expr expr_terminator { $1,$2 }
+
+expr_terminator:
+  | SEMI { SEMI $1 }
+  | USER_KEYWORD { USER_KEYWORD $1 }
+  | VBAR { VBAR $1 }
+  | ENDMARKER { ENDMARKER }
+
+@for n,t in flx_expr_terminator_keywords:
+  tangle("  | "  + t + " { " + t + " $1 }",inhibit_sref=1)
+
+The @ stuff is a Python script that uses a Python table
+to generate code, elsewhere i have:
+
+flx_expr_terminator_keywords = [
+    ("all", "ALL"),
+    ("assert", "ASSERT"),
+    ("body", "BODY"),
+    ("call", "CALL"),
+    ("case", "CASE"),
+
+....
+
+    ("with", "WITH"),
+    ("until", "UNTIL"),
+    ("_", "UNDERSCORE"),
+    ("_gc_pointer", "GC_POINTER"),
+    ("_svc", "SVC"),
+  ]
+
+flx_other_keywords = [
+    ("and", "AND"),
+    ("as", "AS"),
+....
+    ("regmatch", "REGMATCH"),
+    ("the", "THE"),
+    ("typematch", "TYPEMATCH"),
+  ]
+
+flx_keywords = flx_expr_terminator_keywords + flx_other_keywords
+
+
+I generated the partition by trial and error. When I modify
+the grammar I could miss some cases. In fact,
+I have no idea if the set of terminators is maximal.
+The parser KNOWS .. if I add an wrong keyword
+into the terminator set I get a conflict.
+
+The technique I am using would be impossible to maintain
+if there were 20-30 such productions at 'recursion points'.
+[At the moment in Felix there are just two: statements
+and expression]
+
+I hope this makes sense: I think what I'm asking for
+is quite general, since it enables any LR1 parser
+to be used with an LL parser, provided one can
+'push back' the offending lookahead token.
+(that is, of course, always possible to implement
+by buffering for mutable streams, and persistence
+for functional ones).
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

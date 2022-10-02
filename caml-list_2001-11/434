@@ -1,0 +1,125 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA08738; Mon, 26 Nov 2001 19:39:53 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA08734 for <caml-list@pauillac.inria.fr>; Mon, 26 Nov 2001 19:39:52 +0100 (MET)
+Received: from mailb.telia.com (mailb.telia.com [194.22.194.6])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id fAQIdp101553
+	for <caml-list@inria.fr>; Mon, 26 Nov 2001 19:39:52 +0100 (MET)
+Received: from gateway (h225n2fls34o849.telia.com [217.208.235.225])
+	by mailb.telia.com (8.11.6/8.11.6) with SMTP id fAQIdpK05352
+	for <caml-list@inria.fr>; Mon, 26 Nov 2001 19:39:51 +0100 (CET)
+From: "Mattias Waldau" <mattias.waldau@abc.se>
+To: <caml-list@inria.fr>
+Subject: [Caml-list] Beware of compare (and Ocaml beaten by Java)
+Date: Mon, 26 Nov 2001 19:40:00 +0100
+Message-ID: <AAEBJHFJOIPMMIILCEPBCECKDFAA.mattias.waldau@abc.se>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3 (Normal)
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook IMO, Build 9.0.2416 (9.0.2911.0)
+Importance: Normal
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2600.0000
+In-Reply-To: <20011127015149.A10358@earth.cs.mu.oz.au>
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Why isn't compare compiled as '-'? According to the definition
+of compare this should be okay.
+
+The reason why I am asking this can be found below.
+
+/mattias
+
+
+Suffix arrays are very efficient for fast string searching 
+in big texts. I implemented a first nice version, which 
+took 40 s to run on my P4, when applied to the bible (4.5 MB)
+
+The core of the slow program is
+
+(* compare two substrings of the SAME text 
+   [compare x y] returns [0] if [x=y], a negative integer if
+   [x<y], and a positive integer if [x>y] *)
+let rec same_substr_compare str idx1 idx2 : int =
+  let length = String.length str in
+  (* shortest string is smaller *)
+  if idx1 = length then -1 else
+  if idx2 = length then 1 else 
+  (* compare one char *)
+  let res = compare str.[idx1] str.[idx2] in
+  (* char was equal, recurse *)
+  if res = 0 then same_substr_compare str (idx1+1) (idx2+1)
+  (* char was different, finished *)
+  else res ;;
+
+(* create and sort index array for string *)
+let create_index str : int array =
+  let idx = Array.init (String.length str) (fun ii -> ii) in
+  Array.stable_sort (same_substr_compare str) idx;
+  idx ;;
+
+However, a colleague implemented it using Java. His code 
+only takes 15 s to run.
+
+Thus, I had to further tune the code by replacing 'compare' 
+with '-', inlining better and removing bound-checking 
+on strings and arrays. The new version runs in 10 s. 
+
+During this lesson I learned that
+1. compare is incredible slow! By replacing
+
+	let res = compare str.[idx1] str.[idx2] in
+
+with
+	
+	let res = (-) (int_of_char str.[idx1]) (int_of_char str.[idx2]) in
+
+the run-time of the complete program went down 
+from 20 s to 10 s.
+
+2. Tail-recursive comparation is faster than using a 
+loop and exit (runtime down from 80s to 60s). See the file
+other_compares.ml in the nice version for these other attempts, 
+one example is
+
+exception Result of int ;;
+let substr_compare str idx1 idx2 : int =
+  let res = compare str.[idx1] str.[idx2] in
+  if res <> 0 then res 
+  else try
+    let length = String.length str in
+    let max_size = if idx1 > idx2 then
+      length - idx1 
+    else length - idx2 in
+    for offset = 1 to max_size - 1 do
+      let res = compare str.[idx1+offset] str.[idx2+offset] in
+      if res<>0 then raise (Result res);
+    done;
+    0
+  with Result res -> res ;;
+
+3. Mergesort (=Array.stable_sort) is faster than 
+heapsort (=Array.sort). (runtime down from 60s to 40s).
+(I also tried quicksort (=Sort.array), but after 8 hours
+it still hadn't finished.)
+
+4. The rest is inline and removing bounds checking.
+
+This is the first time I got beaten by Java, I will 
+have to reevaluate Java. Note that Java still does 
+bounds checking!
+
+/mattias
+
+The nice version is at 
+http://www.abc.se/~m10217/download/mans.tar.bz2
+
+The fast version is at
+http://www.abc.se/~m10217/download/mans.opt.tar.bz2
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

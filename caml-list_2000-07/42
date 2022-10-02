@@ -1,0 +1,122 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA02286 for caml-red; Sun, 16 Jul 2000 23:35:49 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA29080 for <caml-list@pauillac.inria.fr>; Mon, 10 Jul 2000 12:17:25 +0200 (MET DST)
+Received: from isil.localdomain (adsl-151-201-232-238.bellatlantic.net [151.201.232.238])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e6AAHM101867;
+	Mon, 10 Jul 2000 12:17:23 +0200 (MET DST)
+Received: by isil.localdomain (Postfix, from userid 1000)
+	id B5FF536B20; Mon, 10 Jul 2000 06:17:40 -0400 (EDT)
+To: Daniel de Rauglaudre <daniel.de_rauglaudre@inria.fr>
+Cc: caml-list@inria.fr
+Subject: Re: Camlp4's (lack of) hygiene (was Re: Macros)
+References: <8js72h$11h$1@nnrp1.deja.com>
+	<Pine.LNX.4.21.0007041051140.20796-100000@punaluu.informatik.uni-freiburg.de>
+	<8juuep$420$1@news.planetinternet.be>
+	<u0lmzhyllz.fsf@hana.kurims.kyoto-u.ac.jp>
+	<8jv92l$qpb$1@bird.wu-wien.ac.at>
+	<u0wvj0datl.fsf@hana.kurims.kyoto-u.ac.jp>
+	<87d7kqitmo.fsf_-_@isil.localdomain> <87r995jynp.fsf@isil.localdomain>
+	<20000710113758.F6842@jaune.inria.fr>
+From: John Prevost <prevost@maya.com>
+Date: 10 Jul 2000 06:17:37 -0400
+In-Reply-To: Daniel de Rauglaudre's message of "Mon, 10 Jul 2000 11:37:58 +0200"
+Message-ID: <87g0pi1e7y.fsf@isil.localdomain>
+Lines: 93
+User-Agent: Gnus/5.0808 (Gnus v5.8.8) Emacs/20.7
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: weis@pauillac.inria.fr
+
+>>>>> "dr" == Daniel de Rauglaudre <daniel.de_rauglaudre@inria.fr> writes:
+
+    dr> Well, if I find how to do that, I think it would not be a
+    dr> problem to add things in Ocaml compiler to allow that, if it
+    dr> is not too complicated.
+
+Well, it is pretty complicated.  That level of things essentially
+requires that the compiler actually knows about the grammar stuff
+which is in effect and can get at the module the grammar was defined
+in order to use the right bindings.
+
+If I were, say, writing my own system which had a module named MLast,
+and wanted to write a quotation for my AST, I would need to give my
+module a different name.  This hygiene issue is equivalent to the
+division between static and dynamic binding.  Essentially, a quotation
+which refers to symbols by name uses the values of those symbols at
+the time the quotation is called, not the time the quotation is
+defined.
+
+Basically, I think that having quotations (at least) as a hygienic
+macro facility in O'Caml would be very nice.  Having syntax extensions
+would be cool--but, it's much harder to do.  Making quotations
+hygienic would involve .cmo .cmi and .cmx files carrying information
+about quotation definitions, which would be scoped like other symbols.
+Something maybe like:
+
+<:q_MLast.expr< ... >>
+
+open q_MLast
+<:expr< ... >>
+
+This would be a Major Change to the system.  So, as I said before, I
+doubt it will happen.  Maybe in O'Caml 4.  :)
+
+    dr> ??? No. These quotations do not depend on Pcaml... only on
+    dr> MLast.
+
+You're right--sorry.  :) I should've actually looked at things.
+Here's a relevant function, turning the quotation's parse tree into
+MLast expressions.  I'll explain the places where hygiene could be
+violated quickly before the code.
+
+Notice that the quotation is actually written using itself (it's from
+the meta directory.  :), but it does use MLast in one place textually
+right here--in the Node case.  Some and None are also referred to
+directly.  (And I'm sure that the expanded version refers to MLast
+quite a bit more.)
+
+The hygiene problem is that if MLast (or None or Some) is bound in the
+source text of the file using this quotation, then the value used will
+be that of the source file--not the one in scope in the definition
+below.  A (admittedly stupid) definition like:
+
+type 'a bigoption =
+  | None
+  | Some of 'a
+  | Many of 'a list
+
+in code that uses q_MLast would show this nicely.  Using module paths
+only helps somewhat, since you don't know that a module is actually in
+scope with that name.  And the pervasives module isn't actually
+available by name--if you override it, it's overridden for good.  (So
+there's nothing you can write below that can even avoid the little bit
+I wrote above.)
+
+value rec expr_of_ast =
+  fun
+  [ Node n al ->
+      List.fold_left (fun e a -> <:expr< $e$ $expr_of_ast a$ >>)
+        <:expr< MLast.$uid:n$ loc >> al
+  | List al ->
+      List.fold_right (fun a e -> <:expr< [$expr_of_ast a$ :: $e$] >>) al
+        <:expr< [] >>
+  | Tuple al -> <:expr< ($list:List.map expr_of_ast al$) >>
+  | Option None -> <:expr< None >>
+  | Option (Some a) -> <:expr< Some $expr_of_ast a$ >>
+  | Str s -> <:expr< $str:s$ >>
+  | Chr c -> <:expr< $chr:c$ >>
+  | Bool True -> <:expr< True >>
+  | Bool False -> <:expr< False >>
+  | Cons a1 a2 -> <:expr< [$expr_of_ast a1$ :: $expr_of_ast a2$] >>
+  | Record lal -> <:expr< {$list:List.map label_expr_of_ast lal$} >>
+  | Loc -> <:expr< loc >>
+  | Antiquot loc s ->
+      let e =
+        try Grammar.Entry.parse Pcaml.expr_eoi (Stream.of_string s) with
+        [ Stdpp.Exc_located (bp, ep) exc ->
+            raise (Stdpp.Exc_located (fst loc + bp, fst loc + ep) exc) ]
+      in
+      MLast.ExAnt loc e ]
+and label_expr_of_ast (l, a) =
+  (<:expr< MLast.$lid:l$ >>, expr_of_ast a)
+
+

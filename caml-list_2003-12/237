@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA13136; Mon, 22 Dec 2003 09:52:43 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA12967 for <caml-list@pauillac.inria.fr>; Mon, 22 Dec 2003 09:52:42 +0100 (MET)
+Received: from smtp2.pp.htv.fi (smtp2.pp.htv.fi [213.243.153.14])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hBM8qFb09474
+	for <caml-list@inria.fr>; Mon, 22 Dec 2003 09:52:38 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp2.pp.htv.fi (Postfix) with ESMTP
+	id E0A00297296; Mon, 22 Dec 2003 09:55:43 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBM7thT04928;
+	Mon, 22 Dec 2003 09:55:43 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AYKuk-0004fZ-00; Mon, 22 Dec 2003 09:55:42 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] [PATCH] Dynamic freeing of dynamically loaded code
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Mon, 22 Dec 2003 09:55:40 +0200
+Message-ID: <873cbdqoar.fsf@naked.iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; dynamically:01 tweaking:01 dynamically:01 finalization:01 byterun:01 dynlink:01 bloat:01 hashtbl:01 resizing:01 bug:01 dynlink:01 loadfile:01 50,000:99 ocamlrun:01 closures:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+* NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE *
+
+  This is a preliminary release of this patch and contains requires
+  still a lot of tweaking to be decently usable. Feel free to play
+  around with it, but don't expect it to work or solve your problems.
+
+* NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE * NOTE *
+
+Yuletime tidings!
+
+So, as the questions on the list on how to make dynamically loaded
+code garbage collectable evolved into implementation plans, now the
+implementation plans evolved into actual code.
+
+I'll outline really briefly what the implementation consists of:
+
+ - Staticalloc module to have static_alloc'd blocks that are freed on
+ finalization.
+
+ - Modification to byterun - on CLOSURE and CLOSUREREC instructions,
+ if nvars is below zero, negate it before using and append the last
+ element of current env into the created closure.
+
+   - Explanation: making two new bytecode instructions, CLOSUREDYN and
+   CLOSURERECDYN, proved to be more difficult than I assumed, so I
+   went the trivial way for now.
+
+ - Implement reify_bytecode_with_ref - do as reify_bytecode, but go
+ through the codeblock and negate all nvars parameters to CLOSURE and
+ CLOSUREDYN and append given ref to the closure generated.
+
+ - Make Dynlink use all this.
+
+ - Fix utils/consistbl.ml to only store last crc given for an
+ interface name. Should not affect functionality at all, but prevents
+ memory bloat. (In the process of finding this I also noticed that
+ Hashtbl resizing will use a non-tail-recursive function to reallocate
+ a single bucket - and if that bucket is large enough: stack
+ overflow. I filed a bug report on this already.)
+
+What is the result now then:
+
+ - Running Dynlink.loadfile "test.cmo";; on a file 1,000,000 times
+ results a memory image rougly 12Mb when finished. Even 50,000 times
+ used to make it 40Mb and crash on a stack overflow. Since the memory
+ image of ocamlrun at start seems to be around 4Mb, a conservative
+ estimate for the amount of memory taken by the loading would be 8Mb -
+ that is, roughly 8 bytes per load. And atleast four bytes will
+ necessarily go to the allocation of a new global on each time around.
+
+ - Performance impacts of this on either normal bytecode, or
+ dynamically loaded code, were totally unnoticeable. Somebody should
+ run a much longer tests and prepare them better though. The impact of
+ the code should be that executing CLOSURE and CLOSUREDYN instructions
+ is a tiny bit more expensive, and each closure created from
+ dynamically loaded code takes one word more memory.
+
+What are the limitations then:
+
+ - If the module defines any toplevel functions, it cannot ever be
+ freed, because the closures are referenced from the global
+ table. This is true even for loadfile_private. Eg. code that defines
+ functions will still not be garbage collected.
+
+ - If the module has any literals, the literals will not be freed and
+ will be reallocated on each time it is loaded.
+
+ - The global_data table will bloat for each load and the space will
+ not be reclaimed.
+
+ - Toploop doesn't use this yet.
+
+What next:
+
+ - Removing the limitations as much as possible - some might be
+ unavoidable, but the cost shouldn't be higher than what it is now -
+ and 8 bytes per loaded file is quite acceptable in all but the
+ stringest environments.
+
+So, in summary:
+
+SUCCESS!
+
+There is still a lot to do, though, and I will keep on working on the
+implementation. Any review on the code anyone might wish to do would
+be welcome indeed - as well as general comments on the subject.
+
+I fear to attach the diff here as I don't know the policy of this list
+on them, so I will put it online. If it's okay to post patches here, I
+will do so in future revisions of this code. Also I wonder how I might
+supply this patch when it's finished to the OCaml maintainers - they
+will probably wish to do several things differently though - or if
+just having it here on the mailing list is enough.
+
+The patch should be applied on top of a current cvs checkout of
+ocaml. Making it compile is a bit tricky though. I include hand hacked
+Makefile and .depend changes in it to make it easier - yet I didn't
+wish to supply a new ocamlc binary or anything. When starting to use
+the code, first run 'make world' - this will break at some point
+because the primitives are different - after that do 'make bootstrap',
+which should complete gracefully. After that you can do whatever, like
+'make clean', 'make world.opt' and 'make install' - everything should
+work.
+
+So, here's the link:
+
+  http://www.iki.fi/naked/ocaml-dynlink-free.diff
+
+Thanks for listening, and have a nice holiday everyone!
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,101 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q3JAWBiC012213
+	for <caml-list@sympa-roc.inria.fr>; Thu, 19 Apr 2012 12:32:11 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtEDAJ/oj09KN1ZKnGdsb2JhbAA6CYVlq3wBAQEBAQgLCR0nggkBAQQBIwQnKwULCxoCCBAOAgIxDAoQBhsVBIdpBQQHpziTKoEviTqEPDVjBJcBhE+NQw
+X-IronPort-AV: E=Sophos;i="4.75,445,1330902000"; 
+   d="scan'208";a="154706394"
+Received: from mail6.webfaction.com (HELO smtp.webfaction.com) ([74.55.86.74])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 19 Apr 2012 12:32:05 +0200
+Received: from heyho.local (53-232.197-178.cust.bluewin.ch [178.197.232.53])
+	by smtp.webfaction.com (Postfix) with ESMTP id 9E18120AB7BB;
+	Thu, 19 Apr 2012 05:32:03 -0500 (CDT)
+Date: Thu, 19 Apr 2012 12:31:56 +0200
+From: =?utf-8?Q?Daniel_B=C3=BCnzli?= <daniel.buenzli@erratique.ch>
+To: Satoshi Ogasawara <ogasawara@itpl.co.jp>
+Cc: caml-list@inria.fr
+Message-ID: <A9328FABD92A4920AB6703673BC7ACD6@erratique.ch>
+In-Reply-To: <4F8FD3EB.5050307@itpl.co.jp>
+References: <4F8D9D0E.1040007@itpl.co.jp>
+ <F7294E8F02FB474AA2373765B8BCAB57@erratique.ch>
+ <4F8E1FF4.5070702@itpl.co.jp>
+ <B2FE8DD50C9B4611809BC1F6B9CDD2E4@erratique.ch>
+ <4F8EA91C.3060001@itpl.co.jp>
+ <2B372C89CE4F408688B67B090FA5105C@erratique.ch>
+ <4F8EFC34.7080906@itpl.co.jp>
+ <B6E07E1F07A048D1BE101C5F5D01C781@erratique.ch>
+ <4F8FD3EB.5050307@itpl.co.jp>
+X-Mailer: sparrow 1.5 (build 1043.1)
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q3JAWBiC012213
+Subject: Re: [Caml-list] [ANN] PEC ver. 1.1
+
+Le jeudi, 19 avril 2012 à 10:59, Satoshi Ogasawara a écrit :
+> If I understand correctly sending [v] to [e] immediately during update cycle
+> are violate the semantics because it cause more than one values on one event at
+> the same time.
+
+
+Yes.  
+
+> Using React,
+>  
+> let e, sender = E.create () in
+> let e' = E.map (fun x -> Queue.add q (fun () -> sender 1); x + 1) e in
+> let e'' = E.map (fun x -> Queue.add q (fun () -> sender 2); x + 1) e in
+>  
+> does this code violate the semantics of events?  
+
+Yes. It has the same problem. Let's start with :
+
+> let e, sender = E.create () in
+> let e' = E.map (fun x -> Queue.add q (fun () -> sender 1); x + 1) e in
+
+
+
+
+Since the thunk is delayed to be executed after the update cycle we *could* say that an occurence of [e] at time [t] defines the occurence of [e] at time [t + dt]. Note however that this is a bad idea, the right way to solve these problems is to use fixed point operators, see [1].
+
+Now this is all fine, during the update cycle, which is made under a synchrony hypothesis (i.e. it takes no time, see [2]), we are defining the occurence of [e] at time [t + dt] as being 1. So far so good.  
+
+But now we change the program and add
+
+> let e, sender = E.create () in
+> let e' = E.map (fun x -> Queue.add q (fun () -> sender 1); x + 1) e in
+> let e'' = E.map (fun x -> Queue.add q (fun () -> sender 2); x + 1) e in
+
+  
+
+
+This is not fine at all, during the update cycle, which again, takes no time, i.e. everything therein happens simultaneously at time [t], we are defining the occurence of [e] at time [t + dt] as being 1 and 2 at the same time. A schizophrenic event which obviously violates the semantics of events since an event must have at most one occurence at any given time [t].
+
+So basically when you allow feedback from primitive events to primitive events you have to be very careful. Maybe that's needed in practice, again, I don't have enough experience to assert that, but if you do it you should make sure that the semantics of events is not violated.  
+
+> If so, PEC is also unsound.
+> I'd like to know PEC is unsound or not.
+
+
+PEC may not be unsound as a whole. However the idea that you can just send to primitive events during update cycles and not bother is unsound with respect to the semantics of events as soon as you send two different values to the same primitive event.  
+
+> To prevent glitches, PEC distinct one update cycle to another by time identity.
+> And calculated results are cached for same update cycle.
+> Update order is straight forward. Just follow from leaf to primitive source event.
+> It's not problem because only one primitive value changes at one update cycle.
+
+
+Right. But you still have to maintain some kind of mapping between the primitive event and the leaves they may influence to know which ones to update when the corresponding primitive event occurs. Do you store that in the primitive event itself or do you use a global data structure ?
+
+While I'm not very fond of the sub/unscribe part I think it's an interesting implementation and may try, once I get some time, to adapt it to React to see what we can get from it (I also think that the resulting implementation could be much simpler). One can in fact argue that using React you also have to do the same manual management by having to keep reference on leaf events to avoid them being gc'd. The difference is that PEC trusts the client to perform unsubscribes correctly to avoid leaks while React allows not to bother about that at all (but Weak pointers have their cost). Besides it may be the case that in practice sub/unsuscribe calls are not that plentyfull; I would count one subscribe and no unsubscribe in the breakout.ml example of React's distribution.  
+
+Best,
+
+Daniel
+
+[1] http://erratique.ch/software/react/doc/React.E.html#VALfix
+[2] http://erratique.ch/software/react/doc/React#simultaneity  
+
+
+

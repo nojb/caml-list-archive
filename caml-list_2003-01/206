@@ -1,0 +1,177 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA20834; Fri, 24 Jan 2003 16:35:08 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA24836 for <caml-list@pauillac.inria.fr>; Fri, 24 Jan 2003 16:35:07 +0100 (MET)
+Received: from mail-dub.microsoft.com (mail-dub.microsoft.com [213.199.128.160])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h0OFZ6r24546
+	for <caml-list@inria.fr>; Fri, 24 Jan 2003 16:35:06 +0100 (MET)
+Received: from dub-imc-01.europe.corp.microsoft.com ([65.53.196.35]) by mail-dub.microsoft.com with Microsoft SMTPSVC(5.0.2195.5329);
+	 Fri, 24 Jan 2003 15:35:06 +0000
+Received: from 65.53.196.35 by dub-imc-01.europe.corp.microsoft.com (InterScan E-Mail VirusWall NT); Fri, 24 Jan 2003 15:35:06 -0000
+Received: from TVP-MSG-03.europe.corp.microsoft.com ([157.58.40.125]) by dub-imc-01.europe.corp.microsoft.com with Microsoft SMTPSVC(5.0.2195.5329);
+	 Fri, 24 Jan 2003 15:35:06 +0000
+X-MimeOLE: Produced By Microsoft Exchange V6.5.6830.0
+Content-class: urn:content-classes:message
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+Subject: RE: [Caml-list] @, List.append, and tail recursion
+Date: Fri, 24 Jan 2003 15:35:05 -0000
+Message-ID: <92FC642DD24AC94AA356906BD9FCD2D8D8422F@tvp-msg-03.europe.corp.microsoft.com>
+Thread-Topic: [Caml-list] @, List.append, and tail recursion
+Thread-Index: AcLDRnBhOvGKlFY/SaKjcoOHCUMQBQAdvonw
+From: "Andrew Kennedy" <akenn@microsoft.com>
+To: "Brian Hurt" <brian.hurt@qlogic.com>,
+        "Ocaml Mailing List" <caml-list@inria.fr>
+X-OriginalArrivalTime: 24 Jan 2003 15:35:06.0315 (UTC) FILETIME=[2BA3C1B0:01C2C3BE]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Brian,
+
+The optimization you describe is sometimes known as
+"tail modulo cons", and is an example of "destination-passing
+style". In other words, the place to put the result (in
+this case, the address of the tail of a just-constructed=20
+cons cell) is passed on in a tail-recursive call.
+
+See "A Functional Representation of Data Structures with a Hole"
+by Minamide in POPL'98.
+
+http://www.score.is.tsukuba.ac.jp/~minamide/index.html
+
+Although Minimide formalizes the problem in the context of
+a typed intermediate language, it's probably quite easy to=20
+spot special cases quite far down the compiler pipeline.
+- Andrew.
+
+> -----Original Message-----
+> From: Brian Hurt [mailto:brian.hurt@qlogic.com]=20
+> Sent: Friday, January 24, 2003 12:48 AM
+> To: Ocaml Mailing List
+> Subject: [Caml-list] @, List.append, and tail recursion
+>=20
+>=20
+>=20
+> I hit a bug recently wiith @ and List.append.  Since they're=20
+> recursive,=20
+> not tail-recursive, on long enough lists Ocaml thinks you've gone=20
+> infinitely recursive and aborts.  The code:
+>=20
+>=20
+> let longlist len =3D
+>     let rec longlist_int v c acc =3D
+>         if (c =3D=3D 0) then acc else longlist_int (v + 1) (c -=20
+> 1) (v :: acc)
+>     in
+>     longlist_int 0 len []
+> ;;
+>=20
+> let x =3D longlist 65536 ;;
+>=20
+> List.append x [] ;;
+>=20
+> Exits with:
+>=20
+> Stack overflow during evaluation (looping recursion?).
+>=20
+> So does:
+> x @ [] ;;
+>=20
+> You can work around this like:
+>=20
+> let append' a b =3D
+>    List.rev_append (List.rev a) b
+> ;;
+>=20
+> Since both rev_append and rev are tail recursive (looping) and not=20
+> recursive, this works.  But some ad-hoc testing says that=20
+> this method is=20
+> about 50% slower than normal append for lists short enough=20
+> not to abort.
+>=20
+> Thinking about this, I realized that my code is doing stuff=20
+> like this all over the place.  I'm basically doing sparse=20
+> vector/matrix stuff, handling
+> (effectively) (colno * value) list for vectors, and (rowno *=20
+> vector) list for matrix.  And I may be hitting lists long=20
+> enough to trip the problem.
+>=20
+> Which means I'm currently doing a lot of recursion of the form:
+>=20
+> let rec foo x =3D=20
+>    match x with
+>        [] -> []
+>        | head :: tail -> (expr head) :: (foo tail)
+> ;;
+>=20
+> for various complexities.  And it has occured to me that all of these=20
+> forms *should* be optimizable into loops.  The general case=20
+> would work=20
+> something like this in C:
+>=20
+> struct list_t {
+>     void * datum;
+>     struct list_t * next_p;
+> }
+>=20
+> struct list_t * foo (struct list_t * x) {
+>     struct list_t * retval =3D NULL;
+>     struct list_t ** ptr_pp =3D &retval;
+>=20
+>     while (x !=3D NULL) {
+>         struct list_t * temp =3D alloc(sizeof(struct list_t));
+>         *ptr_pp =3D temp;
+>         temp->datum =3D expr(x->datum);
+>         temp->next_p =3D NULL; /* be nice to the GC */
+>         ptr_pp =3D &(temp->next_p);
+>         x =3D x->next_p;
+>     }
+>     return retval;
+> }
+>=20
+> If expr() returned a list, the only change necessary would be=20
+> to find the=20
+> end of the list before moving on, like:
+>=20
+> struct list_t * foo (struct list_t * x) {
+>     struct list_t * retval =3D NULL;
+>     struct list_t ** ptr_pp =3D &retval;
+>=20
+>     while (x !=3D NULL) {
+>         *ptr_p =3D expr(x->datum); /* expr allocates the list */
+>         /* We assume the last element of the list expr() returned has
+>          * NULL for next_p.
+>          */
+>         while (*ptr_p !=3D NULL) {
+>            ptr_p =3D &((*ptr_p)->next_p);
+>         }
+>         x =3D x->next_p;
+>     }
+>     return retval;
+> }
+>=20
+> Rather than just looking at making @ an inline C function, I=20
+> think we (the=20
+> Ocaml community) should be looking at adding this more general=20
+> optimization in.
+>=20
+> So now we get to my two questions:
+> a) is anyone working on this/intending to work on this RSN?
+> b) if the answer to (a) is no, can anyone give me some=20
+> pointers on where=20
+> to start looking at code, so I can add it in?
+>=20
+> Brian
+>=20
+>=20
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives:=20
+http://caml.inria.fr Bug reports: http://caml.inria.fr/bin/caml-bugs
+FAQ: http://caml.inria.fr/FAQ/ Beginner's list:
+http://groups.yahoo.com/group/ocaml_beginners
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

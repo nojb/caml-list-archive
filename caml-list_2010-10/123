@@ -1,0 +1,164 @@
+Return-Path: <dim@dimino.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id E886DBBAF
+	for <caml-list@yquem.inria.fr>; Mon, 25 Oct 2010 19:26:36 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvsEAEpaxUzVuiYS/2dsb2JhbAChTnG+HA2FOwQ
+X-IronPort-AV: E=Sophos;i="4.58,236,1286143200"; 
+   d="scan'208";a="76239042"
+Received: from solaria.dimino.org ([213.186.38.18])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 25 Oct 2010 19:26:36 +0200
+Received: from aurora (localhost.localdomain [127.0.0.1])
+	by solaria.dimino.org (Postfix) with ESMTP id B2BC780048;
+	Mon, 25 Oct 2010 19:26:35 +0200 (CEST)
+Received: by aurora (Postfix, from userid 1000)
+	id 6199A416AA; Mon, 25 Oct 2010 19:26:34 +0200 (CEST)
+Date: Mon, 25 Oct 2010 19:26:33 +0200
+From: =?iso-8859-1?Q?J=E9r=E9mie?= Dimino <jeremie@dimino.org>
+To: Yaron Minsky <yminsky@gmail.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Asynchronous IO programming in OCaml
+Message-ID: <20101025172633.GC32282@aurora>
+References: <044101cb7367$10f94b30$32ebe190$@com>
+ <AANLkTikgf2qF4y=o+S8PYUxZoCrCG-TRcovUq8uB=y7k@mail.gmail.com>
+ <A7C6ED92-10BA-444B-A381-FC6AB7666932@recoil.org>
+ <20101024225037.GA8999@aurora>
+ <87y69mk6jm.fsf@frosties.localdomain>
+ <20101025111022.GA32282@aurora>
+ <AANLkTimP77PDEChW3Yt6uUy_qxYpj6EOZWQ_==id-LBC@mail.gmail.com>
+ <20101025143317.GB32282@aurora>
+ <AANLkTikZvCMQaOFknx4TBKUESpYcc2riRUexpU4QnFht@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <AANLkTikZvCMQaOFknx4TBKUESpYcc2riRUexpU4QnFht@mail.gmail.com>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+X-Spam: no; 0.00; ocaml:01 yaron:01 minsky:01 fcntl:01 unistd:01 buffer:01 4096:01 buffer:01 4096:01 fcntl:01 unistd:01 char:01 char:01 wrote:01 caml-list:01 
+
+On Mon, Oct 25, 2010 at 11:34:41AM -0400, Yaron Minsky wrote:
+>    I don't quite understand how this whole benchmark holds together.  Could
+>    you post the C code?  I don't understand the differences between (1), (2)
+>    and (3) well enough to explain where the factor of 100 comes in.
+
+Yes. Here is the code of the first program:
+
+,----
+| #include <sys/types.h>
+| #include <sys/stat.h>
+| #include <fcntl.h>
+| #include <unistd.h>
+| 
+| int main()
+| {
+|   int fd = open("data", O_RDONLY);
+|   char buffer[4096];
+| 
+|   while (read(fd, buffer, 4096) > 0);
+| 
+|   close(fd);
+| 
+|   return 0;
+| }
+`----
+
+the code of the second:
+
+,----
+| #include <sys/types.h>
+| #include <sys/stat.h>
+| #include <fcntl.h>
+| #include <unistd.h>
+| #include <pthread.h>
+| 
+| int fd;
+| char buffer[4096];
+| int done = 0;
+| 
+| void *callback(void* data)
+| {
+|   int count = read(fd, buffer, 4096);
+|   if (count == 0) done = 1;
+|   return NULL;
+| }
+| 
+| int main()
+| {
+|   fd = open("data", O_RDONLY);
+| 
+|   while (!done) {
+|     pthread_t thread;
+|     pthread_create(&thread, NULL, callback, NULL);
+|     pthread_join(thread, NULL);
+|   }
+| 
+|   close(fd);
+| 
+|   return 0;
+| }
+`----
+
+and the third:
+
+,----
+| #include <sys/types.h>
+| #include <sys/stat.h>
+| #include <fcntl.h>
+| #include <unistd.h>
+| #include <pthread.h>
+| 
+| int fd;
+| char buffer[4096];
+| int done = 0;
+| pthread_cond_t start = PTHREAD_COND_INITIALIZER;
+| pthread_cond_t stop = PTHREAD_COND_INITIALIZER;
+| pthread_mutex_t start_mutex = PTHREAD_MUTEX_INITIALIZER;
+| pthread_mutex_t stop_mutex = PTHREAD_MUTEX_INITIALIZER;
+| 
+| void *callback(void* data)
+| {
+|   while (!done) {
+|     pthread_cond_wait(&start, &start_mutex);
+| 
+|     int count = read(fd, buffer, 4096);
+|     if (count == 0) done = 1;
+| 
+|     pthread_mutex_lock(&stop_mutex);
+|     pthread_cond_signal(&stop);
+|     pthread_mutex_unlock(&stop_mutex);
+|   }
+|   return NULL;
+| }
+| 
+| int main()
+| {
+|   fd = open("data", O_RDONLY);
+| 
+|   pthread_cond_init(&start, NULL);
+|   pthread_cond_init(&stop, NULL);
+| 
+|   pthread_mutex_lock(&start_mutex);
+|   pthread_mutex_lock(&stop_mutex);
+| 
+|   pthread_t thread;
+|   pthread_create(&thread, NULL, callback, NULL);
+| 
+|   while (!done) {
+|     pthread_mutex_lock(&start_mutex);
+|     pthread_cond_signal(&start);
+|     pthread_mutex_unlock(&start_mutex);
+| 
+|     pthread_cond_wait(&stop, &stop_mutex);
+|   }
+| 
+|   pthread_join(thread, NULL);
+|   close(fd);
+| 
+|   return 0;
+| }
+`----
+
+Jérémie
+

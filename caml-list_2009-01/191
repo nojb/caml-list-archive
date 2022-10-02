@@ -1,0 +1,125 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id B3D62BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 21 Jan 2009 11:49:12 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApoEAKuMdkmCNhAB/2dsb2JhbADMTYJLgyg
+X-IronPort-AV: E=Sophos;i="4.37,299,1231110000"; 
+   d="scan'208";a="22830698"
+Received: from kurims.kurims.kyoto-u.ac.jp ([130.54.16.1])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 21 Jan 2009 11:49:11 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.8/8.13.8) with ESMTP id n0LAd5jx006323;
+	Wed, 21 Jan 2009 19:39:05 +0900 (JST)
+Date: Wed, 21 Jan 2009 19:38:55 +0900 (JST)
+Message-Id: <20090121.193855.42791952.garrigue@math.nagoya-u.ac.jp>
+To: darioteixeira@yahoo.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Private types in 3.11, again
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <865755.99476.qm@web111508.mail.gq1.yahoo.com>
+References: <597161.6065.qm@web111501.mail.gq1.yahoo.com>
+	<865755.99476.qm@web111508.mail.gq1.yahoo.com>
+X-Mailer: Mew version 4.2 on Emacs 22.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; variants:01 variants:01 node:01 annotations:01 coercions:01 node:01 sig:01 val:01 val:01 struct:01 seq:01 seq:01 printf:01 sprintf:01 printf:01 
+
+From: Dario Teixeira <darioteixeira@yahoo.com>
+> I ditched the regular variants in favour of polymorphic variants, hoping
+> the coercion trick described by Jacques Garrigue would help [1].  I've also
+> simplified the formulation as much as possible.  Anyway, I'm still stuck
+> with the same problem: while function 'sprint' works alright inside the
+> Node module, its clone 'sprint2' fails to compile when placed outside.
+> Is this a case where no amount of explicit annotations and coercions will
+> work or am I missing something obvious?
+> 
+> Thanks in advance!
+> Regards,
+> Dario Teixeira
+> 
+> [1] http://groups.google.com/group/fa.caml/msg/855011402f1ca1b5
+> 
+> 
+> module Node:
+> sig
+> 	type elem_t = [ `Text of string | `Bold of elem_t list ]
+> 	type +'a t = private elem_t
+> 
+> 	val text: string -> [> `Basic ] t
+> 	val bold: 'a t list -> [> `Complex ] t
+> 	val sprint: 'a t -> string
+> end =
+> struct
+> 	type elem_t = [ `Text of string | `Bold of elem_t list ]
+> 	type +'a t = elem_t
+> 
+> 	let text str = `Text str
+> 	let bold seq = `Bold seq
+> 	let rec sprint = function
+> 		| `Text str	-> Printf.sprintf "(Text %s)" str
+> 		| `Bold seq	-> Printf.sprintf "(Bold %s)" (List.fold_left (^) "" (List.map sprint seq))
+> end
+> 
+> 
+> module Foobar:
+> sig
+> 	val sprint2: 'a Node.t -> string
+> end =
+> struct
+> 	let rec sprint2 node = match (node : _ Node.t :> [> ]) with
+> 		| `Text str	-> Printf.sprintf "(Text %s)" str
+> 		| `Bold seq	-> Printf.sprintf "(Bold %s)" (List.fold_left (^) "" (List.map sprint2 (seq : _ Node.t list :> [>] list)))
+> end
+
+The problem is clear enough: the annotation in your recursive call to
+sprint2 is inverted. It assumes that seq has type Node.t, while it is
+Node.elem_t, and tries to convert it to a list of variants, which is
+incompatible to the input to sprint2, which is Node.t (due to the
+annotation on node.)
+But you cannot just revert the annotation, since the subtyping only
+goes in one direction.
+The solution here is to split the definition in two steps:
+
+module Foobar:
+sig
+  val sprint2: 'a Node.t -> string
+end = struct
+  let rec sprint2 = function
+    | `Text str	-> Printf.sprintf "(Text %s)" str
+    | `Bold seq	-> Printf.sprintf "(Bold %s)" (List.fold_left (^) "" (List.map sprint2 seq))
+  let sprint2 node = sprint2 (node : 'a Node.t :> [> ])
+end
+
+However, I agree with my eponym that there is little point in using a
+private abbreviation where you could use a private row, and avoid
+coercions. When doing this, you have to be careful that your type is
+recursive, so that the row should be recursive too.
+
+You should change the signature to be:
+  type 'a elem_t = [ `Text of string | `Bold of 'a list ]
+  type +'a t = private [< 'b elem_t] as 'b
+and the implementation
+  type 'a elem_t = [ `Text of string | `Bold of 'a list ]
+  type +'a t = 'b elem_t as 'b
+
+Then the module Foobar types without any coercion.
+
+I have also looked at your previous code, using normal variants.
+It looks like you are trying to do something like GADTs, and I don't
+see how you could possibly do that without adding some support inside
+the first module (where the phantom type is defined.) For instance,
+you could define a generic mapping function there, and use instances
+of it outside of the module.
+
+Hope this helps,
+
+Jacques Garrigue 
+

@@ -1,0 +1,79 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA08248 for caml-redistribution; Sun, 12 Dec 1999 23:10:10 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA12761 for <caml-list@pauillac.inria.fr>; Sat, 11 Dec 1999 19:09:12 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id TAA26303;
+	Sat, 11 Dec 1999 19:09:08 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA07817; Sat, 11 Dec 1999 19:09:08 +0100 (MET)
+Message-ID: <19991211190908.14090@pauillac.inria.fr>
+Date: Sat, 11 Dec 1999 19:09:08 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: John Prevost <prevost@maya.com>, caml-list@inria.fr
+Subject: Re: Internals details for cmmgen.ml
+References: <87emcv5i5d.fsf@isil.maya.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <87emcv5i5d.fsf@isil.maya.com>; from John Prevost on Fri, Dec 10, 1999 at 03:12:14AM -0500
+Sender: weis
+
+> My main focus has been on adding small bits of code to
+> asmcomp/cmmgen.ml for the new functionality.  Two of the new
+> primitives (Pregionrefs and Pregionsets) need to check the protection
+> bits recorded for the region before trying to access it, and somehow
+> raise an exception if the access check fails.
+> 
+> I'm currently using the following kludge to make bad region access
+> checks fail:
+> 
+> let region_checkaccess exp = function
+>   | Reg_Read ->
+>     Cifthenelse(
+>       Cop(Cand, [region_prot exp; Cconst_int 1]),
+>       Cconst_pointer 1,
+>       Cop(Ccheckbound, [Cconst_int 0; Cconst_int 0]))
+>   | Reg_Write ->
+>     Cifthenelse(
+>       Cop(Cand, [region_prot exp; Cconst_int 2]),
+>       Cconst_pointer 1,
+>       Cop(Ccheckbound, [Cconst_int 0; Cconst_int 0]))
+> (* XXX Bounds check on 0 is a kludge to force exception *)
+> 
+> Is there a better way for me to cause an exception to be thrown at
+> this point?  Do I need to fall back to a Cextcall to ask someone to
+> throw an exception for me?  Or could (and should) I actually use
+> Craise with arcane knowledge that a certain exception maps to a
+> certain integer value?
+
+Using a "checkbound" is perhaps the simplest solution.  Otherwise,
+some system-wide exceptions such as Invalid_argument are assigned
+global symbols and you don't need to guess their integer index inside
+their defining module: just emit the C-- code corresponding to
+
+        (raise (symbol "Invalid_argument") (string "my message"))
+
+If you're really into high-performance stuff, you could fold the
+permission check and the bounds check in one "checkbound" instruction.
+Just arrange the "write enable" flag to be (the Caml integer) 0 if
+write is allowed, and -1 if it is not.  Then, generate something like
+
+        (checkbound (or index (write_enable_flag region) (size region)))
+
+Although hacking cmmgen.ml is fun, you could get a more portable
+implementation by writing it in ML using unsafe string accesses.
+Those will happily work on any char *, not necessarily on well-formed
+Caml strings.  Something like:
+
+        external mmap : ... -> string
+        type t = { data: string; length: int }
+
+        let read_char reg idx =
+          if idx < 0 || idx >= reg.length
+          then raise (Invalid_argument "Region.read_char")
+          else String.unsafe_get reg.data idx
+
+It will be a bit slower, but maybe not too much.
+
+- Xavier Leroy
+
+
+

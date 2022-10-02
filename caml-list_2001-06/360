@@ -1,0 +1,153 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA02198; Mon, 25 Jun 2001 19:12:04 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA02366 for <caml-list@pauillac.inria.fr>; Mon, 25 Jun 2001 19:12:03 +0200 (MET DST)
+Received: from cahors.inria.fr (cahors.inria.fr [128.93.8.84])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f5PHC2L02868
+	for <caml-list@inria.fr>; Mon, 25 Jun 2001 19:12:02 +0200 (MET DST)
+Received: from localhost (cahors.inria.fr [128.93.8.84])
+	by cahors.inria.fr (8.11.0/8.8.7) with ESMTP id f5PHC2K25762
+	for <caml-list@inria.fr>; Mon, 25 Jun 2001 19:12:02 +0200
+To: caml-list@inria.fr
+Subject: "Re: [Caml-list] A G'Caml question" + additional info
+In-Reply-To: <Pine.BSF.4.21.0106192012390.24429-100000@shell5.ba.best.com>
+References: <Pine.BSF.4.21.0106192012390.24429-100000@shell5.ba.best.com>
+X-Mailer: Mew version 1.94.2 on Emacs 20.5 / Mule 4.1 (AOI)
+X-URL: http://pauillac.inria.fr/~furuse/
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20010625191156X.Jun.Furuse@inria.fr>
+Date: Mon, 25 Jun 2001 19:11:56 +0200
+From: Jun Furuse <Jun.Furuse@inria.fr>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 123
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello,
+
+Thanks your comment about the exntesion. It is natural idea to extend
+generic values and it must be definitively required. This extension
+of generic values cannot be handled by the normal redefinition which
+is available in G'Caml. They essentially requires its own syntax and
+typing, which are still not be implemented...
+
+Let me explain details using your example:
+
+> # generic rec print = case 
+>   | int -> unit => print_int
+>   | string -> unit => print_string
+>   | $a list -> unit => 
+>       function [] -> ()
+>       |   x :: xs -> print x; print xs
+>   ;;            
+>
+> # generic rec print = case float -> unit => print_float | $a -> unit =>
+> print;;
+> 
+> # print 1.0;;
+> 1- : unit = ()
+> # print 1 (* infinite loop! *)
+> 
+> Well, that should be expected, since we try and print an int, which isn't
+> a float, so we try (from $a -> unit => print) to print, ad
+> infinitum. 
+
+Yes, as you pointed out, your second definition of print will not
+work, because its definition is completely independent from the first;
+it uses the same name print, but it points to the new print. 
+We can have the same thing even in the normal let rec expressions:
+
+   let f () = print_string "hello";;
+   let rec f () = f ()
+
+The second f does not call the first f, but itself (and loops forever).
+
+> # let print' = print ;;
+>
+> # generic rec print = case 
+>   | float -> unit => print_float 
+>   | $a -> unit => print'
+>   ;;
+>
+> # print [1.0;2.0;3.0];; 
+> This generic full instance is used with type float list -> unit
+>  which is not its valid instance of ...
+
+This does not work neither. Since what print recursively calls
+is the original print, not the newly defined print. Therefore
+we cannot use the interesting mixed case of float list -> unit...
+
+> Is there some trick to build up recursive generics by parts? One thing 
+> to do is to break the recursive generic into a non-recursive generic
+> and a recursive function which applies the generic to the elements, 
+> but that feels like cheating. Maybe open recursion for generics would 
+> be desirable, so that I can add a new case and have the recursive call in 
+> an existing case call the new one? Yes, it's a half baked idea, but maybe 
+> a better cook can finish baking...
+
+As we have seen, redefinitions cannot achieve what you (and I) want. 
+We will need some special construction for the extension. We will have
+the new "include" phrase to import the type case definitions of the
+other generic values. For example:
+
+	generic print' = case
+	| include print
+	| float -> unit => print_float
+	;;
+
+This newly defined print' will be semantically equivalent to the 
+following generic definition:
+ 
+	generic print' = case
+	| int -> unit => print_int
+	| string -> unit => print_float
+	| $a list -> unit =>
+	     function [] -> ()
+		    | x :: xs -> print' x; print' xs  
+	| float -> unit => print_float
+	;;
+
+Note that the recursive occurrences of print in the original
+definition are now replaced by print', in order to point 
+the newly defined generic value. In this sense, the include phrase is
+not the pure inclusion of the source. Thus, the new print' can print
+float lists:
+
+      # print' [1.2; 3.4; 5.6];;
+      1.23.45.6- : unit = ()
+
+Thus, the generic values are "open" to the others who include them,
+but it is not the open recursion you mentioned; print and print' are
+different values and independent each other. 
+
+  We do not want to introduce the full open recursion to generic
+values. You could add new type cases easily using the open recursion
+and it should be helpful in some cases. But it can also introduce
+heavy semantic confusion to our programs, since in the open recursion
+the semantics of generic values could not be fixed until all modules 
+are linked together. 
+
+-----------------------------------------------------------------------
+
+Several people have courageously tried some module programming using
+G'Caml and reported troubles. I am sorry but you cannot write .mli
+files with extensional polymorphic values. At the time of the
+implementation, we had not had clear idea to store generic constraints
+in signatures... Please only use the toplevel.
+
+I explained briefly the limitations of the current implementation at
+
+  http://pauillac.inria.fr/~furuse/generics/
+
+However, none of them are theoretical. 
+They can be fixed when I will get some more time for coding!
+
+Regards,
+
+-----------------------------------------------------------------------
+Jun P. Furuse 					 Jun.Furuse@inria.fr
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

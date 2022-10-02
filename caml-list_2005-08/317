@@ -1,0 +1,119 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 56DF6BDCB
+	for <caml-list@yquem.inria.fr>; Wed, 31 Aug 2005 09:58:37 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j7V7wagn015414
+	for <caml-list@yquem.inria.fr>; Wed, 31 Aug 2005 09:58:36 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA29794 for <caml-list@pauillac.inria.fr>; Wed, 31 Aug 2005 09:58:35 +0200 (MET DST)
+Received: from alex.barettalocal.com (h213-255-109-130.albacom.net [213.255.109.130] (may be forged))
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j7V7wZQb015402
+	for <caml-list@inria.fr>; Wed, 31 Aug 2005 09:58:35 +0200
+Received: from [127.0.0.1] (localhost.localdomain [127.0.0.1])
+	by alex.barettalocal.com (Postfix) with ESMTP id 27E7DF3861;
+	Wed, 31 Aug 2005 09:56:30 +0200 (CEST)
+Message-ID: <431562AD.8050302@barettadeit.com>
+Date: Wed, 31 Aug 2005 09:56:29 +0200
+From: Alex Baretta <alex@barettadeit.com>
+User-Agent: Debian Thunderbird 1.0.2 (X11/20050331)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Andrej.Bauer@andrej.com, Ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Restarting a piece of code
+References: <43107BC6.2010508@andrej.com>
+In-Reply-To: <43107BC6.2010508@andrej.com>
+Content-Type: text/plain; charset=ISO-8859-2
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 4315632C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 4315632B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; baretta:01 caml-list:01 andrej:01 computed:01 runtime:01 computations:01 globals:01 recursive:01 computations:01 parametric:01 -rectypes:01 rec:01 recursive:01 baretta:01 activating:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+Andrej Bauer wrote:
+> I have a problem which I do not know how to program in The Right Way.
+> I would be grateful to hear ideas on how to do it.
+> 
+> Suppose I have a bunch of functions (the actual example is exact real
+> number arithmetic) which optimistically compute results (e.g. we compute
+> numbers up to some precision and hope it will be good enough) that may
+> turn out not to be good enough later during the computation. When this
+> happens, the entire computation needs to be restarted (e.g. we need to
+> recompute the numbers again with higher precision).
+
+This is a very interesting idea. Something similar comes up in my
+AS/Xcaml application server when an HTTP resource which has already
+computed a portion of the HTTP response realizes that it cannot continue
+and must delegate the response to a different HTTP resource. An
+exception is raised which is caught by the AS/Xcaml runtime system,
+which aborts the current computation and restarts the computation of the
+request by activating the HTTP resource whose URL is provided in the
+exception body.
+
+***
+
+Back to your question, I suggest not to represent computations as thunks
+but to use continuation passing style. This programming paradigm
+provides enough flexibility to allow for different overflow thresholds
+in different parts of the computation, without need for globals and side
+effects (yes, you should worry about them, they are the bad guys).
+
+exception Overflow
+
+let grow_threshold old_value = ...
+
+let compute threshold threshold_transformation computation =
+  try
+    computation (threshold_transformation threshold)
+  with Overflow ->
+    let new_threshold = grow_threshold threshold in
+      computation (threshold_transformation new_threshold)
+
+Recursive computations occur through the compute driver, which also
+receives a threshold_transformation function determining the value of
+the threshold for the next computation. If you want your code to be
+parametric with respect to the threshold growing policy, you might want
+to modify the code as follows (-rectypes required!)
+
+let rec compute grow_threshold = fun
+  threshold
+  threshold_transformation
+  computation
+->
+  try
+    computation
+      (compute grow_threshold)
+      (threshold_transformation threshold)
+  with Overflow ->
+    let new_threshold = grow_threshold threshold in
+      computation
+        (compute grow_threshold)
+        (threshold_transformation new_threshold)
+
+
+In this case the driver for recursive computations is no longer the
+global compute function but the first parameter of the computation function.
+
+Alex
+
+-- 
+*********************************************************************
+http://www.barettadeit.com/
+Baretta DE&IT
+A division of Baretta SRL
+
+tel. +39 02 370 111 55
+fax. +39 02 370 111 54
+
+Our technology:
+
+The Application System/Xcaml (AS/Xcaml)
+<http://www.asxcaml.org/>
+
+The FreerP Project
+<http://www.freerp.org/>
+

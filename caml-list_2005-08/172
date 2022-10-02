@@ -1,0 +1,81 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 1DB86BDC5
+	for <caml-list@yquem.inria.fr>; Fri, 19 Aug 2005 18:11:44 +0200 (CEST)
+Received: from kraid.nerim.net (smtp-105-friday.nerim.net [62.4.16.105])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j7JGBhTQ021331
+	for <caml-list@yquem.inria.fr>; Fri, 19 Aug 2005 18:11:43 +0200
+Received: from [192.168.1.2] (xleroy.net1.nerim.net [62.212.116.147])
+	by kraid.nerim.net (Postfix) with ESMTP id 4250F40E35;
+	Fri, 19 Aug 2005 18:11:42 +0200 (CEST)
+Message-ID: <430604BE.2080205@inria.fr>
+Date: Fri, 19 Aug 2005 18:11:42 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050317)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Jonathan Roewen <jonathan.roewen@gmail.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] In need of serious help regarding threading
+References: <ad8cfe7e050818190449d36dd@mail.gmail.com> <ad8cfe7e05081821017731a850@mail.gmail.com>
+In-Reply-To: <ad8cfe7e05081821017731a850@mail.gmail.com>
+X-Enigmail-Version: 0.91.0.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 430604BF.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 threading:01 debugger:01 debugging:01 ocaml:01 runtime:01 debugging:01 stack:01 heap:01 pointers:01 stack:01 descriptors:01 pointers:01 descriptors:01 hash:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+> It appears (with the help of a friend good with a debugger) that
+> there's something going wrong with my code, and how it's interacting
+> with the GC.
+
+Please don't get offended by what I'm going to say, but I have the
+feeling that you're attacking extremely hard problems without adequate
+debugging tools and without enough understanding of the OCaml runtime
+system.
+
+I'll try to provide some explanations nonetheless, but please don't
+bombard this list with too many cries for help.
+
+What the debugging session shows is a problem with return address
+determination during the stack scanning performed by the GC.  To find
+heap pointers contained in the stack, the GC scans it one frame at a
+time, using compiler-generated frame descriptors to locate the
+pointers.  The frame descriptors are keyed to the return address in
+the Caml code through a hash table (variable frame_descriptors, hash table
+lookup at lines 135-141 and 249-255 in file asmrun/roots.c).
+
+Your run appears to be looping in the hash table lookup, indicating
+that 1- the return address being looked up (variable retaddr) is not
+in the table (this should never happen in normal operation), and 2-
+your environment lets you dereference the NULL pointer without
+crashing (bad idea!).
+
+A good way to debug this is to print the value of the "retaddr" local
+variable at lines 134 and 249 in asmrun/roots.c and correlate it with your
+disassembly.  It should always refer to code addresses immediately
+following a "call camlModule__function" or a "call caml_call_gc"
+instruction.  While you're at it, print also the "sp" variable: it
+should stay within the stack of a thread.  The problem is likely to
+come from wrong values of the bottom_of_stack and last_return_address
+starting points for the stack walk.
+
+Your second test (Gc.full_major() in the main thread) further suggests
+that the problem does not occur if the main thread is the one calling
+the GC.  Try to put Gc.full_major() in another thread to see what
+happens.  That could narrow the problem to the saving and restoring of
+caml_bottom_of_stack and caml_last_return_address globals during
+context switches.
+
+Finally, notice that your stacks are tiny (4096 words???).  Unless
+they are protected by guard pages, expect a lot of trouble when they
+overflow (they will).
+
+- Xavier Leroy
+

@@ -1,0 +1,106 @@
+Return-Path: <abate@pulp.rsise.anu.edu.au>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 16DBFBB83
+	for <caml-list@yquem.inria.fr>; Fri, 18 Aug 2006 03:15:28 +0200 (CEST)
+Received: from mail.rsise.anu.edu.au (mail.rsise.anu.edu.au [150.203.208.4])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k7I1FOMU028556
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Fri, 18 Aug 2006 03:15:27 +0200
+Received: from localhost (localhost [127.0.0.1])
+	by mail.rsise.anu.edu.au (Postfix) with ESMTP id 00C0154030
+	for <caml-list@yquem.inria.fr>; Fri, 18 Aug 2006 11:15:06 +1000 (EST)
+Received: from mail.rsise.anu.edu.au ([150.203.208.4])
+	by localhost (mail [127.0.0.1]) (amavisd-new, port 10024) with ESMTP
+	id 04210-03 for <caml-list@yquem.inria.fr>;
+	Fri, 18 Aug 2006 11:15:05 +1000 (EST)
+Received: from pulp.rsise.anu.edu.au (pulp.rsise.anu.edu.au [150.203.208.49])
+	by mail.rsise.anu.edu.au (Postfix) with ESMTP id DEB275402F
+	for <caml-list@yquem.inria.fr>; Fri, 18 Aug 2006 11:15:05 +1000 (EST)
+Received: by pulp.rsise.anu.edu.au (Postfix, from userid 1560)
+	id D3427A0AFC8; Fri, 18 Aug 2006 11:15:17 +1000 (EST)
+Date: Fri, 18 Aug 2006 11:15:17 +1000
+From: Pietro Abate <Pietro.Abate@anu.edu.au>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Dynamic loading of bytecode
+Message-ID: <20060818011517.GA6557@pulp.rsise.anu.edu.au>
+References: <c1490a380608140821q497970cfr6a8f091ec73b19ef@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <c1490a380608140821q497970cfr6a8f091ec73b19ef@mail.gmail.com>
+X-Operating-System: GNU/Linux
+X-Organization: Research School of Information Science and Engineering (Australian National University)
+User-Agent: Mutt/1.5.13 (2006-08-11)
+X-Virus-Scanned: by amavisd-new-20030616-p10 (Debian) at mail.rsise.anu.edu.au
+X-Spam: no; 0.00; bytecode:01 hiearchy:01 toploop:01 dependencies:01 hashtbl:01 hashtbl:01 uncapitalize:01 cmo:01 modname:01 modname:01 printf:01 printf:01 dynlink:01 loadfile:01 endline:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Mon, Aug 14, 2006 at 05:21:25PM +0200, Tom wrote:
+> How can you load the whole module hiearchy (many modules, dependent on one
+> another) with a single command in toploop?
+
+I use these two functions to resolve linear dependencies. 
+I'm sure there is a better solution... 
+
+let modules = Hashtbl.create 17;;
+let are_loading = Hashtbl.create 17;;
+
+let find_in_path path name =
+ let filename = ((String.uncapitalize name) ^ ".cmo") in
+ if not (Filename.is_implicit filename) then
+ if Sys.file_exists filename then filename else raise Not_found
+ else
+ begin
+ let rec try_dir = function
+ | [] -> raise Not_found
+ | dir::rem ->
+ let fullname = Filename.concat dir filename in
+ if Sys.file_exists fullname then fullname
+ else try_dir rem
+ in try_dir path
+ end
+
+let rec load_module modname path =
+ try
+ Hashtbl.find modules modname
+ with
+ Not_found ->
+ try
+ Hashtbl.add modules modname ();
+ Hashtbl.add are_loading modname ();
+ (* Printf.printf "Loading: %s ..." modname; *)
+ Dynlink.loadfile (modname);
+ (* print_endline "done."; *)
+ Hashtbl.remove are_loading modname
+ with
+ | Dynlink.Error(Dynlink.Unavailable_unit(depend))
+ | Dynlink.Error(
+ Dynlink.Linking_error(_,Dynlink.Undefined_global(depend))
+ ) ->
+ begin
+ try
+ if Hashtbl.mem are_loading depend
+ then failwith ("Crossing with "^depend);
+ load_module (find_in_path path depend) path;
+ Hashtbl.remove modules modname;
+ load_module modname path
+ with Not_found ->
+ failwith ("Cannot find "
+ ^String.lowercase(depend)^" in "^
+ (List.fold_left (fun s x -> s^x) " " path))
+ end
+ | Dynlink.Error(e) -> failwith (Dynlink.error_message e)
+;;
+
+-- 
+++ Blog: http://blog.rsise.anu.edu.au/?q=pietro
+++ 
+++ "All great truths begin as blasphemies." -George Bernard Shaw
+++ Please avoid sending me Word or PowerPoint attachments.
+   See http://www.fsf.org/philosophy/no-word-attachments.html
+

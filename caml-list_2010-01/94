@@ -1,0 +1,165 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 2B490BBAF
+	for <caml-list@yquem.inria.fr>; Sat,  9 Jan 2010 20:29:41 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am0BAI9nSEtV2gB5mWdsb2JhbACDXpd7AQEBAQEICwoHE6tWjEiBK4IuVgSJJg
+X-IronPort-AV: E=Sophos;i="4.49,248,1262559600"; 
+   d="scan'208";a="53568569"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 09 Jan 2010 20:29:39 +0100
+Received: from [192.168.0.12] (unknown [85.218.92.99])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id 83C0B8343A1;
+	Sat,  9 Jan 2010 20:29:33 +0100 (CET)
+Message-ID: <4B48D912.8090602@citycable.ch>
+Date: Sat, 09 Jan 2010 20:29:22 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20090707)
+MIME-Version: 1.0
+To: Richard Jones <rich@annexia.org>
+Cc: David Allsopp <dra-news@metastack.com>,
+	'caml-list List' <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] problem creating .cma library
+References: <56670.41.177.16.252.1262195331.squirrel@41.177.16.252> <4B3BE288.4030701@citycable.ch> <3EE07409-9559-4B91-BA3E-8787D1378275@inria.fr> <4B47C201.7090201@citycable.ch> <4B47C59C.9080505@starynkevitch.net> <4B47C9BE.4060309@citycable.ch> <001f01ca9101$7ee76850$7cb638f0$@romulus.metastack.com> <4B486974.7060007@citycable.ch> <20100109125224.GC26610@annexia.org>
+In-Reply-To: <20100109125224.GC26610@annexia.org>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: quoted-printable
+X-Spam: no; 0.00; guillaume:01 guillaume:01 pointer:01 ocaml:01 pointer:01 camlparam:01 allocates:01 allocates:01 pcre:01 bindings:01 bindings:01 camlparam:01 camlreturn:01 pcre:01 camlprim:01 
+
+Richard Jones a =C3=A9crit :
+>
+> Why is this a problem?  Because you might in your C code have some
+> value on the stack.  'value' is (or can be) a pointer.  The OCaml
+> garbage collector can move pointed-to-objects around, firstly from the
+> minor heap to the major heap, secondly when compacting the major heap.
+> So your C value (pointer) *could* become an invalid pointer if what it
+> was pointing to got moved.
+
+Yes, I understood the nature of the problem.
+
+> The way to avoid this small chance is to register the value with the
+> garbage collector, which is essentially what the CAMLparam* and
+> CAMLlocal* macros do.  So if the GC needs to move that object, it will
+> update the pointer for you.
+>=20
+> If your function never allocates (and never calls anything which
+> allocates), then you don't need to register values, because no
+> allocation =3D> they can't be moved.  [In fact there are some other
+> exceptions as well where you can prove that an allocation won't move
+> your pointer, eg. if you only allocate one thing and immediately
+> return the value.]
+
+I've been looking at the pcre bindings, and these bindings make minimal=20
+usage of CAMLparam, CAMLlocal and CAMLreturn.
+
+For instance, here is the piece of code that executes R code ad catches=20
+errors. I've tried to follow guidelines available on the net, and=20
+inspired myself from pcre.
+
+> CAMLprim value r_eval_sxp (value sexp_list) {
+>   CAMLparam0();
+>   CAMLlocal2(ml_error_call, ml_error_message);
+>   SEXP e;
+>   int error =3D 0;
+>   PROTECT(e =3D R_tryEval(Sexp_val(sexp_list), R_GlobalEnv, &error));
+>   UNPROTECT(1);
+>   if (error) {
+>     ml_error_call =3D Val_sexp(error_call);
+>     error_call =3D NULL;
+>     ml_error_message =3D caml_copy_string(error_message);
+>     error_message =3D NULL;
+>     value error_result =3D caml_alloc_small(2, 0);
+>     Store_field(error_result, 0, ml_error_call);
+>     Store_field(error_result, 1, ml_error_message);
+>     raise_with_arg(*caml_named_value("OCaml-R generic error"), error_re=
+sult);
+>   }
+>   CAMLreturn(Val_sexp(e));
+> }
+
+Do you see GC / allocation / threading problems with it?
+
+Would it be legitimate to include CAMLlocal2 inside the error-handling=20
+braces?
+
+> You might find my series on the garbage collector interesting if you
+> want to look into this further:
+>=20
+> http://rwmj.wordpress.com/?s=3Docaml+internals
+
+These are very interesting. Could not find part 6, though...
+
+> Also if you are calling C functions which don't allocate from OCaml
+> code, you might want to read about noalloc:
+>=20
+> http://camltastic.blogspot.com/2008/08/tip-calling-c-functions-directly=
+-with.html
+
+Two comments on this:
+
+-1- I remember a post by Jon Harrop concerning external mathematical=20
+functions such as the exponential in Pervasives. He was arguing that it=20
+could be done directly from the .ml file by using such "tags". Where can=20
+I find a list of all these tags for external functions? There's "float",=20
+but are there others?
+
+-2- If I understand this post well, the following function
+
+> CAMLprim value init_r (value argv, value sigs) {
+>=20
+>   /* -1- argv is an OCaml array of strings, which gives the command lin=
+e
+>      arguments used to invoke the R interpreter. Code segfaults if
+>      the array does not contain a first element, which is the name of
+>      the program, typically "R", or "OCaml-R". Other arguments typicall=
+y
+>      are "--vanilla", "--slave"...
+>=20
+>      -2- sigs is an OCaml int. When set to 0, R signal handlers are not
+>      removed. When set to, say, 1, R signal handlers are removed. It is
+>      very useful to remove signal handlers when embedding R. */
+>=20
+>   int length =3D Wosize_val(argv);
+>   char* argv2[length];
+>   int i;
+>=20
+>   // We duplicate the OCaml array into a C array.
+>   for (i=3D0; i<length; i++) argv2[i]=3DString_val(Field(argv, i));
+>=20
+>   /* Don't let R set up its own signal handlers when sigs =3D 1.
+>      This requires R >=3D 2.3.1. */
+>   if (Int_val(sigs)) R_SignalHandlers =3D 0;
+>=20
+>   // This is the libR.so function.
+>   i =3D Rf_initEmbeddedR(length, argv2);
+>=20
+>   // Returns 1 if R is correctly initialised.
+>   return Val_int(i);
+> }
+
+could be called with "noalloc"?
+
+>> By the way, here's a question I've been wondering about this section.=20
+>> Rule 3: When I have a Abstract_tag block used to wrap a pointer in the=
+ C=20
+>> heap, it seems to me that you can just do it with a Field(v,0)=3D=20
+>> assignment. Do you need Store_field for that?
+>=20
+> This is to do with the Remembered Set.  See part 5 of the above
+> series.
+
+The remembere set, in this context, explains why I would need=20
+Store_field when dealing with pure OCaml world. When wrapping pointers=20
+to the C heap in abstract blocks, I do not see the point of Store_field,=20
+and it seems to me that Field=3D assignment is fine. Am I mistaken?
+
+All the best,
+
+--=20
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

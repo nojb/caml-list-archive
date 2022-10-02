@@ -1,0 +1,106 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA13770 for caml-redistribution@pauillac.inria.fr; Fri, 18 Feb 2000 10:47:36 +0100 (MET)
+Resent-Message-Id: <200002180947.KAA13770@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA19831 for <caml-list@pauillac.inria.fr>; Fri, 18 Feb 2000 02:28:01 +0100 (MET)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id CAA18489
+	for <caml-list@inria.fr>; Fri, 18 Feb 2000 02:27:59 +0100 (MET)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id CAA28941;
+	Fri, 18 Feb 2000 02:26:43 +0100 (MET)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <200002180126.CAA28941@miss.wu-wien.ac.at>
+Subject: Re: Calling C from OCaml, GC problems
+To: David.Mentre@irisa.fr (David=?iso-8859-1?q?_Mentr=E9?=)
+Date: Fri, 18 Feb 2000 02:26:41 +0100 (MET)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <wd8ael1noi1.fsf@parate.irisa.fr> from "David=?iso-8859-1?q?_Mentr=E9?=" at Feb 16, 2000 04:41:42 PM
+X-Mailer: ELM [version 2.5 PL2]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Fri, 18 Feb 2000 10:47:36 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+>  1. the ocaml doc (paragraph 15.5) states that CAMLparam and CAMLreturn
+>     macros should be used. However, example code in 15.7 does not use
+>     them (even if functions have value typed parameters). The Unix
+>     interfacing code ocaml-2.04/otherlibs/unix/) doesn't use those macro
+>     either. Faulty doc?  Are those macros not mandatory? What is the
+>     rationale?
+
+"CAMLparam" + "CAMLreturn" are used in cases where the C-program has to
+allocate memory on the OCaml-heap. This can, however, trigger a garbage
+collection. If you are unlucky, the values you have received from OCaml are
+not referenced from any other value in OCaml anymore, i.e. they are not
+reachable.
+
+The garbage collector may therefore reclaim the values in question. If you
+still need them in the C-program and you try to access them later, you
+might cause a segfault, because the memory of these values has been freed -
+or even worse: you manipulate some new value which was allocated in this
+place, which may cause problems much later.
+
+To prevent this from happening, you have to "secure" the values by using
+the macros mentioned above. "CAMLparam" ensures that the values stay
+reachable for the time you still need them, "CAMLreturn" removes this
+protection again and returns the value.
+
+You need not protect the value parameters if you do not allocate anything
+on the OCaml-heap or if you do not need them anymore before doing the next
+allocation. This is probably the case in the Unix-library, where you mostly
+just extract some system value (file descriptors, etc.) and pass it to the
+appropriate system call.
+
+>  2. when compiling, I've tons of warning like this:
+[...]
+>     Did I use wrongly those CAML* macros?
+
+I know that the macros require parenthesis now (OCaml 2.99) - so you will
+probably have to put them around "result" in "CAMLreturn result" to stay
+compatible.
+
+Otherwise the CAML-macros seem to be ok, but I am not quite sure about your
+correct use of values like (e.g. "MANAGER m"). I'd have to see the whole
+code, unfortunately, your host is unreachable at the moment...
+
+>  3. The code is running on small examples but segfault on bigger
+>     ones. From gdb backtrace, it seems clear that my bug is releated to
+>     a GC problem:
+
+This might be a problem of wrong "protection" of some values: small
+examples are unlikely to cause many allocations. This means that the
+probability of causing and finding the bug is lower.
+
+Unfortunately, depending on what C does with the values, the problem can be
+hidden for quite some time until the code really causes a segfault. So the
+true location of the problem may be far from the point in the source where
+the fault appears.
+
+>     The bdd library is using itself a memory management library calling
+>     sbrk(2). Can it trigger problems with OCaml GC (like the GC going
+>     into bdd structures)?
+
+Hm, no idea. The man page of "sbrk" says somewhere:
+
+  It is unspecified whether the pointer returned by sbrk() is aligned
+  suitably for any purpose.
+
+And the OCaml manual says:
+
+  Any word-aligned pointer to an address outside the heap can be safely
+  cast to and from the type value. This includes pointers returned
+  by malloc, and pointers to C variables (of size at least one word)
+  obtained with the & operator.
+
+It is beyond my understanding whether this might be the cause of problems,
+but "sbrk" seems to be somewhat dangerous in this respect.
+
+Good luck chasing the bug!
+
+- Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+

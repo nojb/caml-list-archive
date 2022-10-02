@@ -1,0 +1,169 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA13568; Mon, 14 Jan 2002 13:15:06 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA13525 for <caml-list@pauillac.inria.fr>; Mon, 14 Jan 2002 13:15:06 +0100 (MET)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g0ECF5f00587
+	for <caml-list@inria.fr>; Mon, 14 Jan 2002 13:15:05 +0100 (MET)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.10.1/1.01.28121999) with ESMTP id g0ECF5X97801
+          ; Mon, 14 Jan 2002 13:15:05 +0100 (CET)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.9.2/jb-1.1)
+	id NAA10225 ; Mon, 14 Jan 2002 13:15:05 +0100 (MET)
+Date: Mon, 14 Jan 2002 13:15:04 +0100 (MET)
+From: Alain Frisch <frisch@clipper.ens.fr>
+To: Jeff Henrikson <jehenrik@yahoo.com>
+cc: <caml-list@inria.fr>
+Subject: Re: [Caml-list] record labels of record scope using camlp4
+In-Reply-To: <000101c19ccc$ffe8e8c0$0b01a8c0@mit.edu>
+Message-ID: <Pine.GSO.4.33.0201141242570.12723-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, 14 Jan 2002, Jeff Henrikson wrote:
+
+> It seems like a lot of people dislike the fact that record labels have
+> module scope instead of record scope.
+
+I think it should be possible to minimize the incovenience without
+rejecting module scope. For instance, one could introduce the syntax:
+
+module_path.{ x1 = e1; ....; xn = en }
+
+as an abbreviation for:
+
+{ module_path.x1 = e1; ...; module_path.xn = en }
+
+
+Another way would be to use type information provided by the type-checker.
+For accessing field, here is a description of a simple patch to the
+type-checker that could be handy; the idea is that, when the expression e
+is known to be a record of a given type, one can use a "record scope" rule
+for label. A ten-minutes hack leads me to:
+
+in typing/types.{ml,mli}:
+...
+and type_kind =
+    Type_abstract
+  | Type_variant of (string * type_expr list) list
+  | Type_record of (string * mutable_flag * type_expr * label_description
+option ref) list * record_representation
+...
+(note the extra (dirty) label_description option ref)
+
+and trivial modification in many places ...
+
+in typing/datarepr.ml:
+let label_descrs ty_res lbls repres =
+  let all_labels = Array.create (List.length lbls) dummy_label in
+  let rec describe_labels num = function
+      [] -> []
+    | (name, mut_flag, ty_arg, l) :: rest ->
+        let lbl =
+          { lbl_res = ty_res;
+            lbl_arg = ty_arg;
+            lbl_mut = mut_flag;
+            lbl_pos = num;
+            lbl_all = all_labels;
+            lbl_repres = repres } in
+	(match !l with
+	  | Some _ -> ()  (* Note sure what this corresponds to *)
+	  | None -> l := Some lbl);
+        all_labels.(num) <- lbl;
+        (name, lbl) :: describe_labels (num+1) rest in
+  describe_labels 0 lbls
+
+
+in typing/typedecl.ml:
+        | Ptype_record lbls ->
+            let all_labels = ref StringSet.empty in
+            List.iter
+              (fun (name, mut, arg) ->
+                if StringSet.mem name !all_labels then
+                  raise(Error(sdecl.ptype_loc, Duplicate_label name));
+                all_labels := StringSet.add name !all_labels)
+              lbls;
+            let lbls' =
+              List.map
+                (fun (name, mut, arg) ->
+                         (name, mut, transl_simple_type env true arg, ref
+None))
+                lbls in
+            let rep =
+              if List.for_all (fun (name, mut, arg, _) -> is_float env
+arg) lbls
+'
+              then Record_float
+              else Record_regular in
+            Type_record(lbls', rep)
+        end;
+      type_manifest =
+
+(note the extra ref None)
+
+in typing/typecore.ml (function type_exp):
+  | Pexp_field(sarg, lid) ->
+      let arg = type_exp env sarg in
+      let label =
+        try
+	  try
+	    match lid with
+	      | Longident.Lident name -> lookup_label arg.exp_type name env
+	      | _ -> raise Not_found
+          with Not_found -> Env.lookup_label lid env
+        with Not_found ->
+          raise(Error(sexp.pexp_loc, Unbound_label lid)) in
+      let (ty_arg, ty_res) = instance_label label in
+
+where lookup_label is defined as:
+
+let rec lookup_label ty name env =
+  let ty = repr ty in
+  match ty.desc with
+  | Tconstr (path, _, _) ->
+      let td = Env.find_type path env in
+      begin match td.type_kind with
+      | Type_record (fields, _) ->
+	  let (_,_,_,l) =
+	    List.find (fun (name', _, _,_) -> name = name') fields in
+	  (match !l with
+	      Some l -> l
+	    | None -> raise Not_found)
+      | Type_abstract when td.type_manifest <> None ->
+          lookup_label (expand_head env ty) name env
+      | _ -> raise Not_found
+      end
+  | _ ->
+      raise Not_found
+
+
+
+This patch allows to write things like:
+
+type t = { x : int; y : int };;
+type s = { x : string };;
+let f (t : t) : int = t.x;;
+
+The same could be done for record expression (in function type_expect):
+
+let r : t = { x = 2; y = 3 } in
+...
+
+
+On the one hand, this kind of interaction with the type-checker is quite
+dangerous as it breaks complete type inference, but in OCaml, there are
+already some cases where type annotations are mandatory; on the other
+hand, it leads to a lightweight syntax and is probably what programmers
+expect.
+
+
+(sorry for suggesting a solution to a non-issue ;) )
+
+-- 
+  Alain
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

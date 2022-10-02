@@ -1,0 +1,132 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id F4154BB83
+	for <caml-list@yquem.inria.fr>; Thu,  7 Sep 2006 02:20:37 +0200 (CEST)
+Received: from rabbit.math.nagoya-u.ac.jp (rabbit.math.nagoya-u.ac.jp [133.6.130.5])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k870KZSS032561
+	for <caml-list@inria.fr>; Thu, 7 Sep 2006 02:20:37 +0200
+Received: from localhost (moose-172 [172.16.254.3])
+	by rabbit.math.nagoya-u.ac.jp (8.12.11/3.7W) with ESMTP id k870Jsf2019253;
+	Thu, 7 Sep 2006 09:19:54 +0900 (JST)
+Date: Thu, 07 Sep 2006 09:19:48 +0900 (JST)
+Message-Id: <20060907.091948.56533867.garrigue@math.nagoya-u.ac.jp>
+To: diego-olivier.fernandez-pons@cicrp.jussieu.fr,
+	Diego.FERNANDEZ_PONS@etu.upmc.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Equality/Hashtable for functions (inline help
+ feature)
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <Pine.A41.4.44.0609061934150.524484-100000@ibm1>
+References: <44FF033C.3040405@abc.se>
+	<Pine.A41.4.44.0609061934150.524484-100000@ibm1>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 44FF65D3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; hashtable:01 pons:01 pons:01 bool:01 computes:01 computes:01 hash:01 bool:01 hashtables:01 hash:01 simulate:01 wrappers:01 verbose:01 val:01 'b-:01 
+
+From: Diego Olivier Fernandez Pons <Diego.FERNANDEZ_PONS@etu.upmc.fr>
+
+> I would like to write a (non intrusive) inline help feature for some
+> modules I wrote, that would look like
+> 
+> # help MyModule.is_prime;
+> - : string = "is_prime : int -> bool computes if an integer given as a
+> parameter is prime"
+> # help MyModule.probabilistic_is_prime;
+> - : string = "..."
+> 
+> I can write a function of type 'a -> string which computes the hash key of
+> the parameter and returns the string associated in a table, but I cannot
+> do a physical equality based desambigusation for collision since the
+> equality is typed
+> 
+> let
+>    f = function x -> x + 1 and
+>    g = function x -> x + 2
+> in (f == f, f == g)
+> - : bool * bool = (true, false)
+> 
+> let
+>    f = function x -> x + 1 and
+>    g = fun x y -> x + y
+> in (f == f, f == g)
+> This expression has type int -> int -> int but is here used with type int
+> -> int
+> 
+> Does anyone know how I could circumvent this problem ?
+
+Short answer:
+Help being a metalevel feature, just don't bother and use Obj.repr,
+which will converts all your functions to type Obj.t.
+(Obj.repr is less dangerous than Obj.magic, as it doesn't let you
+create values with wrong types; it can still cause segementation
+faults in very special cases, but the only such example I know is when
+you apply it to floats, not functions.)
+Note that you cannot use hashtables, as the default hash function will
+fail on functions, but you can use an association list with physical
+equality.
+
+
+Type theoretician answer:
+What you would need to do that transparently inside the type system is
+generic functions with dynamics.
+But, for a limited number of types, you can simulate it by rolling out
+your own dynamic type wrappers. This is rather verbose, and completely
+unadapted to your purpose, but here it is.
+
+type ('a,'b) t =
+    Val of 'a
+  | Int of (int,'b) t
+  | Bool of (bool,'b) t
+  | Fun of ('b->'a, 'b) t
+  | Copy of ('a,'a) t
+
+type t' = (unit,unit) t
+
+# let wrap_iii f : t' = Int(Copy(Fun(Fun(Val f)))) ;;
+val wrap_iii : (int -> int -> int) -> t' = <fun>
+# let wrap_ii_i f : t' = Int(Copy(Fun(Copy(Int(Fun(Val f)))))) ;;
+val wrap_ii_i : ((int -> int) -> int) -> t' = <fun>
+
+# let add = (+)
+  let add' = wrap_iii add
+  let sub = (-)
+  let sub' = wrap_iii sub ;;
+val add : int -> int -> int = <fun>
+val add' : t' = Int (Copy (Fun (Fun (Val <fun>))))
+val sub : int -> int -> int = <fun>
+val sub' : t' = Int (Copy (Fun (Fun (Val <fun>))))
+
+let cmp = object (cmp)
+  method eq : 'a 'b. ('a,'b) t -> ('a,'b) t -> bool = fun f g ->
+    match f, g with
+      Val f, Val g -> f == g
+    | Int f, Int g -> cmp#eq f g
+    | Bool f, Bool g -> cmp#eq f g
+    | Fun f, Fun g -> cmp#eq f g
+    | Copy f, Copy g -> cmp#eq f g
+    | _ -> false
+end
+
+# cmp#eq add' add';;
+- : bool = true
+# cmp#eq add' sub';;
+- : bool = false
+
+Of course you must extend t with all the types that you want to use.
+If you use types of arity more than 2 then you must add extra
+parameters to t, and the equivalent of Copy for these extra positions.
+Technically, t works like a small register machine, which is
+sufficient since the number of type is fixed. GADTs would give you a
+stack machine, but this wouldn't really help in this setting.
+
+Jacques Garrigue
+

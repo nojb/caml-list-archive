@@ -1,0 +1,344 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id DAD3ABC69
+	for <caml-list@yquem.inria.fr>; Thu, 16 Aug 2007 18:06:18 +0200 (CEST)
+Received: from ptb-relay02.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l7GG6HgU002895
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Thu, 16 Aug 2007 18:06:18 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1ILhrU-0004TQ-I6
+	for caml-list@yquem.inria.fr; Thu, 16 Aug 2007 17:06:17 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] High-performance bytecode interpreter in OCaml
+Date: Thu, 16 Aug 2007 16:55:00 +0100
+User-Agent: KMail/1.9.7
+References: <007c01c7df94$756a40c0$ac01a8c0@johnyaya>
+In-Reply-To: <007c01c7df94$756a40c0$ac01a8c0@johnyaya>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200708161655.00702.jon@ffconsultancy.com>
+X-Miltered: at concorde with ID 46C475F9.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; bytecode:01 ocaml:01 dispatcher:01 opcode:01 recursive:01 ocaml:01 printf:01 argv:01 stdin:01 printf:01 stdin:01 bytecode:01 argv:01 amortized:01 flatten:01 
+
+On Thursday 16 August 2007 00:31:51 Grant Olson wrote:
+> I think you'd make things too complicated with CPS.  Why not just create a
+> dispatcher function and opcode instructions that are all tail recursive?
+
+Just spent this morning quantifying this out of interest. The BF language is a 
+good place to start:
+
+  http://www.muppetlabs.com/~breadbox/bf/
+
+You can write an interpreter for BF in a small amount of code and learn how to 
+optimize it without too much difficulty.
+
+I'm going to present three different OCaml programs. I'll start by comparing 
+their performance before presenting and discussing the code. I've benchmarked 
+them all evaluating a BF program that solves the Towers of Hanoi (including 
+ASCII art!) from that web page:
+
+OCaml 1: 186s  41LOC
+C:        79s  77LOC
+OCaml 2:  59s  42LOC
+OCaml 3:  29s  59LOC
+OCaml 3:  25s  47LOC
+
+Note that most of the OCaml implementations are substantially shorter and 
+faster than the C.
+
+Here is a simple OCaml1 interpreter of the BF language:
+
+open Printf
+let data = String.make 1000000 '\000'
+let edit f p =
+  let c = f (int_of_char data.[p]) land 0xff in
+  data.[p] <- char_of_int c
+let try_input_line ch = try Some(input_line ch) with End_of_file -> None
+let rec read ch = match try_input_line ch with
+  | Some line -> line :: read ch
+  | None -> []
+let code = match Sys.argv with
+  | [|_; file|] ->
+      let ch = open_in file in
+      let code = read ch in
+      close_in ch;
+      code
+  | _ -> read stdin
+let code = String.concat "" code
+let rec run p pc stack =
+  if pc < 0 || pc >= String.length code then exit 0;
+  match code.[pc], stack with
+   | '>', _ -> run (p + 1) (pc + 1) stack
+   | '<', _ -> run (p - 1) (pc + 1) stack
+   | '+', _ -> edit ((+) 1) p; run p (pc + 1) stack
+   | '-', _ -> edit (fun n -> n-1) p; run p (pc + 1) stack
+   | '.', _ -> printf "%c%!" data.[p]; run p (pc + 1) stack
+   | ',', _ -> data.[p] <- input_char stdin; run p (pc + 1) stack
+   | '[', _ when data.[p] = '\000' -> ffwd 1 p (pc + 1) stack
+   | '[', _ -> run p (pc + 1) (pc :: stack)
+   | ']', _::stack when data.[p] = '\000' -> run p (pc + 1) stack
+   | ']', pc::_ -> run p (pc + 1) stack
+   | _ -> run p (pc + 1) stack
+and ffwd lev p pc stack =
+  match code.[pc], lev with
+  | ']', 1 -> run p (pc + 1) stack
+  | ']', lev -> ffwd (lev - 1) p (pc + 1) stack
+  | '[', _ -> ffwd (lev + 1) p (pc + 1) stack
+  | _ -> ffwd lev p (pc + 1) stack
+let () = run 0 0 []
+
+As you can see, this program dispatches over the characters directly from the 
+bytecode itself. No attempt is made to make the bytecode into a friendlier 
+data structure for OCaml. This implementation is over 2x slower than the 
+naive C code for two main reasons:
+
+1. Reading and writing characters is slow in OCaml.
+
+2. Pattern matching over characters is slow in OCaml.
+
+If you look at some typical BF source code you'll notice that it is often 
+quite repetitive:
+
+>>>>>>>>>>>>>>>>>>>>>>>>>[-]>[-]+++++++++++++++++++++++++++.++++++++++++++++
+++++++++++++++++++++++++++++++++++++++++++++++++.-------------------.-------
+--------------------------------------.+++++++++++++++++++++++++++++++++++++
+
+This is easily exploited by run-length encoding the bytecode as it is loaded. 
+The second interpreter does exactly this, converting the BF source code into 
+an intermediate representation that is denser:
+
+open Printf
+let data = String.make 1000000 '\000'
+let try_input_line ch = try Some(input_line ch) with End_of_file -> None
+let rec read ch = match try_input_line ch with
+  | Some line -> line :: read ch
+  | None -> []
+let code = match Sys.argv with
+  | [|_; file|] ->
+      let ch = open_in file in
+      let code = read ch in
+      close_in ch;
+      code
+  | _ -> read stdin
+let code = String.concat "" code
+let rec compile pc t =
+  if pc >= String.length code then pc, List.rev t else
+  match code.[pc], t with
+  | '>', `Move n::t -> compile (pc+1) (`Move (n + 1)::t)
+  | '<', `Move n::t -> compile (pc+1) (`Move (n - 1)::t)
+  | ('>' | '<'), t -> compile pc (`Move 0::t)
+  | '+', `Add n::t -> compile (pc+1) (`Add (n + 1)::t)
+  | '-', `Add n::t -> compile (pc+1) (`Add (n - 1)::t)
+  | ('+' | '-'), t -> compile pc (`Add 0::t)
+  | '.', t -> compile (pc+1) (`Out::t)
+  | ',', t -> compile (pc+1) (`In::t)
+  | '[', t ->
+      let pc, t' = compile (pc+1) [] in
+      compile (pc+1) (`Loop t'::t)
+  | ']', t -> pc, List.rev t
+  | _, t -> compile (pc+1) t
+let rec run p = function
+  | `Move dp::t -> run (p + dp) t
+  | `Add dn::t -> data.[p] <- char_of_int(int_of_char data.[p] + dn); run p t
+  | `Out::t -> print_char data.[p]; run p t
+  | `In::t -> data.[p] <- input_char stdin; run p t
+  | `Loop t'::t ->
+      let rec aux p = if data.[p] = '\000' then p else aux (run p t') in
+      run (aux p) t
+  | [] -> p;;
+let _ =
+  let _, t = compile 0 [] in
+  run 0 t
+
+Sequences such as +++++ or >>>>> are now amortized into `Add 5 and `Move 5, 
+respectively. Note that this often less memory efficient but OCaml is much 
+faster at handling variant types. The resulting data structure looks like:
+
+ [`Move 121; `Loop [`Add -1]; `Move 41; `Loop [`Add -1]; `Move 41;
+  `Loop [`Add -1]; `Move 41; `Loop [`Add -1]; `Move 1; `Loop [`Add -1];
+  `Add 27; `Out; `Add 64; `Out; `Add -19; `Out; `Add -45; `Out; `Add 64;
+  `Out; `Add -41; `Out; `Add 24; `Out; `Loop [`Add -1]; `Add 27; `Out;
+  `Add 64; `Out; `Add -41; `Out; `Add 9; `Out; `Add -9; `Out; `Add 5; `Out;
+  `Add 17; `Out; `Add 12; `Out; `Add 27; `Out; `Add 8; `Out; `Add -18; `Out;
+  `Add 13; `Out; `Add 1; `Out; `Add -83; `Out; `Add 79; `Out; `Add -9; `Out;
+  `Add -70; `Out; `Add 40; `Out; `Add 25; `Out; `Add 13; `Out; `Add 1; `Out;
+  `Add -6; `Out; `Add -73; `Out; `Add 73; `Out; `Add 5; `Out; `Add -78; `Out;
+  `Add 34; `Out; `Add 48; `Out; `Add -17; `Out; `Add 8; `Out; `Add 5; `Out;
+  `Add -8; `Out; `Add -60; `Out; `Add 57; `Out; `Add 8; `Out;
+  `Loop [`Add -1]; `Add 27; `Out; `Add 64; `Out; `Add -40; `Out; `Add 8;
+  `Out; `Add -10; `Out; `Add 4; `Out; `Add 19; `Out; `Add 15; `Out; `Add 27;
+  `Out; `Add -9; `Out; `Add 11; `Out; `Out; `Add -15; `Out; `Add 9; `Out;
+  `Add -78; `Out; `Add 66; `Out; `Add 23; `Out; `Add -89; `Out; `Add 35;
+  `Out; `Add 41; `Out; `Add -3; `Out; `Add -3; `Out; `Out; `Add 9; `Out;
+  `Add 3; `Out; `Add -14; `Out; `Add -68; `Out; `Add 55; `Out; `Add 24; `Out;
+  `Add -3; `Out; `Add -6; `Out; `Add -70; `Out; `Add 28; `Out; `Add 44; `Out;
+  `Add 12; `Out; `Out; `Add -4; `Out; `Add -54; `Out; `Add -11; `Out; `Out;
+  `Add 72; `Out; `Out; `Out; `Add -73; `Out; `Add 53; `Out; `Add 9; `Out;
+  `Add -3; `Out; `Add -3; `Out; `Out; ...])
+
+This simple optimization is enough to beat C, even though the C implementation 
+goes to some lengths to run-length encode code loops (which can only buy you 
+a factor of 2). This is faster for two main reasons:
+
+1. O(n) loops have been reduced to O(1) operations.
+
+2. Pattern matching dispatches over sum types much more efficiently than over 
+characters or strings.
+
+In order to draw a justifiable conclusion about the relative performance of 
+dynamic dispatch and static continuations, we should put more effort into 
+optimizing this code. As OCaml is slow at handling characters, it might be 
+worth sacrificing 8x the memory consumption for an int array rather than a 
+string to represent the scratch space "data". We can also use an ordinary 
+variant type (these are often dispatch over more efficiently) and flatten the 
+data structure to avoid using lists of variants by placing the tail in each 
+constructor:
+
+open Printf
+let data = Array.make 1000000 0
+let try_input_line ch = try Some(input_line ch) with End_of_file -> None
+let rec read ch = match try_input_line ch with
+  | Some line -> line :: read ch
+  | None -> []
+let code = match Sys.argv with
+  | [|_; file|] ->
+      let ch = open_in file in
+      let code = read ch in
+      close_in ch;
+      code
+  | _ -> read stdin
+let code = String.concat "" code
+type t =
+  | Move of int * t
+  | Add of int * t
+  | Out of t
+  | In of t
+  | Loop of t * t
+  | Nil
+let rec rev_append x = function
+  | Move(n, t) -> rev_append (Move(n, x)) t
+  | Add(n, t) -> rev_append (Add(n, x)) t
+  | Out t -> rev_append (Out x) t
+  | In t -> rev_append (In x) t
+  | Loop(t', t) -> rev_append (Loop(t', x)) t
+  | Nil -> x
+let rev = rev_append Nil
+let rec compile pc t =
+  if pc >= String.length code then pc, rev t else
+  match code.[pc], t with
+  | '>', Move(n, t) -> compile (pc+1) (Move(n + 1, t))
+  | '<', Move(n, t) -> compile (pc+1) (Move(n - 1, t))
+  | ('>' | '<'), t -> compile pc (Move(0, t))
+  | '+', Add(n, t) -> compile (pc+1) (Add(n + 1, t))
+  | '-', Add(n, t) -> compile (pc+1) (Add(n - 1, t))
+  | ('+' | '-'), t -> compile pc (Add(0, t))
+  | '.', t -> compile (pc+1) (Out t)
+  | ',', t -> compile (pc+1) (In t)
+  | '[', t ->
+      let pc, t' = compile (pc+1) Nil in
+      compile (pc+1) (Loop(t', t))
+  | ']', t -> pc, rev t
+  | _, t -> compile (pc+1) t
+let add dn p =
+  data.(p) <- data.(p) + dn
+let rec run p = function
+  | Move(dp, t) -> run (p + dp) t
+  | Add(dn, t) -> add dn p; run p t
+  | Out t -> printf "%c%!" (char_of_int data.(p)); run p t
+  | In t -> data.(p) <- int_of_char(input_char stdin); run p t
+  | Loop(t', t) ->
+      let rec aux p = if data.(p) = 0 then p else aux (run p t') in
+      run (aux p) t
+  | Nil -> p;;
+let _ =
+  let _, t = compile 0 Nil in
+  run 0 t
+
+Finally, we can use continuations to avoid all dynamic dispatch by building a 
+tree of closures that capture the closure they will invoke in their 
+environment. The following uses this approach and is my most efficient so 
+far:
+
+open Printf
+let data = Array.make 1000000 0
+let try_input_line ch = try Some(input_line ch) with End_of_file -> None
+let rec read ch = match try_input_line ch with
+  | Some line -> line :: read ch
+  | None -> []
+let code = match Sys.argv with
+  | [|_; file|] ->
+      let ch = open_in file in
+      let code = read ch in
+      close_in ch;
+      code
+  | _ -> read stdin
+let code = String.concat "" code
+let rec compile pc t =
+  if pc >= String.length code then pc, List.rev t else
+  match code.[pc], t with
+  | '>', `Move n::t -> compile (pc+1) (`Move (n + 1)::t)
+  | '<', `Move n::t -> compile (pc+1) (`Move (n - 1)::t)
+  | ('>' | '<'), t -> compile pc (`Move 0::t)
+  | '+', `Add n::t -> compile (pc+1) (`Add (n + 1)::t)
+  | '-', `Add n::t -> compile (pc+1) (`Add (n - 1)::t)
+  | ('+' | '-'), t -> compile pc (`Add 0::t)
+  | '.', t -> compile (pc+1) (`Out::t)
+  | ',', t -> compile (pc+1) (`In::t)
+  | '[', t ->
+      let pc, t' = compile (pc+1) [] in
+      compile (pc+1) (`Loop t'::t)
+  | ']', t -> pc, List.rev t
+  | _, t -> compile (pc+1) t
+let rec run = function
+  | [] -> (fun p -> p)
+  | h::t ->
+      let k = run t in
+      match h with
+      | `Move dp -> (fun p -> k(p + dp))
+      | `Add dn -> (fun p -> data.(p) <- data.(p) + dn; k p)
+      | `Out -> (fun p -> printf "%c%!" (char_of_int data.(p)); k p)
+      | `In -> (fun p -> data.(p) <- int_of_char(input_char stdin); k p)
+      | `Loop t' ->
+          let k' = run t' in
+          (fun p ->
+             let rec aux p = if data.(p) = 0 then p else aux (k' p) in
+             k (aux p))
+let _ =
+  let _, t = compile 0 [] in
+  run t 0
+
+Note that this implementation is also significantly shorter than the previous 
+one and, IMHO, just as clear.
+
+Even in the case of BF, where the dispatch is over a small number of 
+possibilities, generating a tree of closures is still ~16% more efficient 
+(despite the overhead of closure invocation compared to the previously 
+tail-recursive call of "run"). So this approach is definitely worth 
+considering.
+
+As an aside, I've also written a MetaOCaml implementation but cannot get it to 
+run anything like as fast. I was very surprised by this as I found it quite 
+easy to get substantial performance improvements in term level interpreters 
+using MetaOCaml.
+
+To read more detailed information about the design and implementation of 
+term-level, bytecode, staged and macro interpreters and rewriters, please 
+subscribe to the OCaml Journal.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+OCaml for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists/?e
+

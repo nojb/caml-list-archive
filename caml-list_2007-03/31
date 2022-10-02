@@ -1,0 +1,160 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id DD37EBC6B
+	for <caml-list@yquem.inria.fr>; Mon,  5 Mar 2007 20:02:50 +0100 (CET)
+Received: from ipmail03.adl2.internode.on.net (ipmail03.adl2.internode.on.net [203.16.214.135])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l25J2klA030687
+	for <caml-list@yquem.inria.fr>; Mon, 5 Mar 2007 20:02:49 +0100
+Received: from ppp19-103.lns2.syd7.internode.on.net (HELO [192.168.1.201]) ([59.167.19.103])
+  by ipmail03.adl2.internode.on.net with ESMTP; 06 Mar 2007 05:32:43 +1030
+X-IronPort-AV: i="4.14,251,1170595800"; 
+   d="scan'208"; a="58225391:sNHT31807888"
+Subject: Re: [Caml-list] to merge list of lists
+From: skaller <skaller@users.sourceforge.net>
+To: Jon Harrop <jon@ffconsultancy.com>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <200703050853.12223.jon@ffconsultancy.com>
+References: <20070305061050.GA21256@pulp.rsise.anu.edu.au>
+	 <1173083859.25568.47.camel@rosella.wigram>
+	 <200703050853.12223.jon@ffconsultancy.com>
+Content-Type: text/plain
+Date: Tue, 06 Mar 2007 06:02:38 +1100
+Message-Id: <1173121358.25568.104.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.8.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 45EC6956.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; combinator:01 arrays:01 arrays:01 compiler:01 semantics:01 downto:01 downto:01 btyp:01 btyp:01 iter:01 20,000:98 20,:98 20,:98 sourceforge:01 wrote:01 
+
+On Mon, 2007-03-05 at 08:53 +0000, Jon Harrop wrote:
+> On Monday 05 March 2007 08:37, skaller wrote:
+> > On Mon, 2007-03-05 at 17:10 +1100, Pietro Abate wrote:
+> > > mergel [] [[1;2;3];[4;5;6];[7;8;9]];;
+> > > - : int list list = [[1; 4; 7]; [2; 5; 8]; [3; 6; 9]]
+> >
+> > In this case there is a library function:
+> >
+> >       List.concat
+> >
+> > that already does exactly what you want :)
+> 
+> List.concat doesn't do that:
+> 
+> # List.concat [[1;2;3];[4;5;6];[7;8;9]];;
+> - : int list = [1; 2; 3; 4; 5; 6; 7; 8; 9]
+> 
+> Note that the OP is not asking for a concat or even a merge, but a transpose.
+
+Yes, sorry! I didn't look closely enough.
+I have a related function in Felix, which transposes
+a tuple of tuples, which is done with a term like
+
+	_tuple_trans ((1,2,3),(4,5,6),(7,8,9))
+
+here's the code, which is quite imperative, and which has
+extra mess from the error diagnostics. In this case there
+is a special representation for the type of a tuple
+with all the elements the same type, instead of
+
+	int * int * int
+
+the type can be given as
+
+	int * 3
+
+where 3 = 1 + 1 + 1, 1 is the usual unit type, and + is
+an anonymous variant combinator. A type like 3 is
+called a unitsum (it is a sum of units). This in turn
+allows arrays to be considered as tuples of the same
+element type, and the special representation is required
+to allow arrays of large extent (there's no way a representation
+of a 20,000 integer tuple is going to fly in a production
+compiler). Also note the result of this calculation is
+a bound term, the function 'be' binds expressions,
+and this code is part of that function.
+
+So the code is somewhat more complex, but it does the
+same thing. It's very hard to tell if the code is correct:
+I'd be interested in a more functional way to do this
+that was actually simpler (but had the same semantics).
+The 'guts' of the calculation is done by the 'tr'
+function introduced on line 2.
+
+
+  | `AST_apply (sr,(`AST_name (_,"_tuple_trans",[]),e)) ->
+    let tr nrows ncolumns =
+      let e' = ref [] in
+      for i = nrows - 1 downto 0 do
+        let x = ref [] in
+        for j = ncolumns - 1 downto 0 do
+          let v = `AST_get_n (sr,(i,`AST_get_n (sr,(j,e)))) in
+          x := v :: !x;
+        done;
+        e' := `AST_tuple (sr,!x) :: (!e');
+      done
+      ;
+      be (`AST_tuple (sr,!e'))
+    in
+    let calnrows t = 
+      let nrows =
+        match t with 
+        | `BTYP_tuple ls -> length ls
+        | `BTYP_array (_,`BTYP_unitsum n) -> n
+        | _ -> clierrn [sr] "Tuple transpose requires entry to be tuple"
+      in 
+      if nrows < 2 then
+        clierr sr "Tuple transpose requires tuple argument with 2 or
+more elements"
+      ;
+      nrows
+    in
+    let colchk nrows t =
+      match t with 
+      | `BTYP_tuple ls -> 
+        if length ls != nrows then
+          clierr sr ("Tuple transpose requires entry to be tuple of
+length " ^ si nrows)
+
+      | `BTYP_array (_,`BTYP_unitsum n) ->
+        if n != nrows then
+          clierr sr ("Tuple transpose requires entry to be tuple of
+length " ^ si nrows)
+        
+      | _ -> clierr sr "Tuple transpose requires entry to be tuple"
+    in
+    let _,t = be e in
+    let ncolumns, nrows = 
+      match t with
+      | `BTYP_tuple ls ->
+        let ncolumns  = length ls in
+        let nrows = calnrows (hd ls) in
+        iter (colchk nrows) ls;
+        ncolumns, nrows
+
+      | `BTYP_array (t,`BTYP_unitsum ncolumns) ->
+        let nrows = calnrows t in
+        ncolumns, nrows
+
+      | _ -> clierr sr "Tuple transpose requires tuple argument"
+    in
+      if nrows > 20 then
+        clierr sr ("tuple fold: row bound " ^ si nrows ^ ">20, to
+large")
+      ;
+      if ncolumns> 20 then
+        clierr sr ("tuple fold: column bound " ^ si ncolumns^ ">20, to
+large")
+      ;
+      tr nrows ncolumns
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

@@ -1,0 +1,131 @@
+Return-Path: <jos@catnook.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id D2176BC69
+	for <caml-list@yquem.inria.fr>; Wed,  1 Aug 2007 20:05:29 +0200 (CEST)
+Received: from lizzy.dyndns.org (209-204-188-132.dsl.static.sonic.net [209.204.188.132])
+	by concorde.inria.fr (8.13.6/8.13.6) with SMTP id l71I5R3d005409
+	for <caml-list@inria.fr>; Wed, 1 Aug 2007 20:05:28 +0200
+Received: (qmail 29578 invoked by uid 1000); 1 Aug 2007 17:59:07 -0000
+Date: Wed, 1 Aug 2007 10:59:07 -0700
+From: Jos Backus <jos@catnook.com>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] undefined symbol `caml_tuplify2' in dynamic rocaml
+	extension
+Message-ID: <20070801175907.GA29353@lizzy.catnook.local>
+Reply-To: jos@catnook.com
+References: <20070801040102.GA88101@lizzy.catnook.local> <20070801091647.GB31718@tux-chan> <20070801161702.GA28680@lizzy.catnook.local>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20070801161702.GA28680@lizzy.catnook.local>
+User-Agent: Mutt/1.5.16 (2007-06-09)
+X-Miltered: at concorde with ID 46B0CB67.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; 0200,:01 ocaml:01 a's:01 def:01 makefile:01 usr:01 lib:01 ocaml':01 terminating:01 gcc:01 usr:01 lib:01 ocaml:01 -fpic:01 -wall:01 
+
+On Wed, Aug 01, 2007 at 09:17:02AM -0700, Jos Backus wrote:
+> On Wed, Aug 01, 2007 at 11:16:47AM +0200, Mauricio Fernandez wrote:
+[snip]
+> > If you could pinpoint the conversion that's triggering the problem (and it's
+> > indeed a problem caused by a Ruby <-> OCaml conversion) we'd be one step
+> > away from fixing it.  Have you tried to disassemble the extension and see
+> > where caml_tuplify2 is being called?
+> 
+> I'll have a look. I do see references to caml_tuplify2 in other .a's as well.
+
+It turns out my extension doesn't call it but one of the required libraries
+does.
+
+Here's what I am doing:
+
+Exerpt from extconf.rb:
+
+    # extension name, XXX in   require 'XXX'
+    EXT_NAME = "kpp"
+
+    Interface.generate("kpp") do
+      def_class("KPP") do |c|
+	t = c.abstract_type
+	fun "make", STRING => t
+	method "eval", [t, STRING] => LIST(STRING)
+      end
+    end
+
+$ ruby extconf.rb
+$ make
+[lots of errors because of unfound header files]
+$ vi Makefile
+[Add `-I/usr/lib/ocaml' to INCFLAGS]
+$ make
+kpp_rocaml_wrapper.c:39: error: missing terminating " character
+$ vi kpp_rocaml_wrapper.c
+[Change line 39:
+
+static VALUE String_list_caml_to_ruby(value v);"
+
+to
+
+static VALUE String_list_caml_to_ruby(value v);
+]
+$ make
+gcc -I. -I/usr/lib/ruby/1.8/i386-linux -I/usr/lib/ruby/1.8/i386-linux -I. -I/usr/lib/ocaml  -fPIC -O2 -g -pipe -m32 -march=i386 -mtune=pentium4 -Wall  -fPIC  -c kpp_rocaml_wrapper.c
+kpp_rocaml_wrapper.c: In function `string_ruby_to_caml_safe':
+kpp_rocaml_wrapper.c:133: warning: implicit declaration of function `caml_alloc_string'
+kpp_rocaml_wrapper.c: At top level:
+kpp_rocaml_wrapper.c:45: warning: 'do_raise_exception' defined but not used
+kpp_rocaml_wrapper.c:59: warning: 'do_raise_exception_tag' defined but not used
+ocamlopt.opt -c   rubyOCamlUtil.ml
+ocamlopt.opt  -output-obj -o kpp_rocaml_runtime.o nums.cmxa rubyOCamlUtil.cmx rubyOCamlUtil.o 
+gcc -shared  -L"/usr/lib" -o kpp.so kpp_rocaml_wrapper.o kpp_rocaml_runtime.o /usr/lib/ocaml/libasmrun.a /usr/lib/ocaml/libunix.a /usr/lib/ocaml/libnums.a -lruby  -lpthread -ldl -lcrypt -lm   -lc
+$ cat test_kpp.rb 
+require 'kpp'
+
+kpp = KPP.make ""
+p kpp.eval("")
+$ ruby test_kpp.rb 
+test_kpp.rb:3:in `make': Couldn't find OCaml value 'KPP.make'. (StandardError)
+        from test_kpp.rb:3
+$ vi Makefile
+[Add `-Wl,--whole-archive ../kpp/kpp.a -Wl,--no-whole-archive' to LOCAL_LIBS]
+$ make clean all
+$ ruby test_kpp.rb
+./kpp.so: ./kpp.so: undefined symbol: camlStr__parse_368 - ./kpp.so (LoadError)
+        from test_kpp.rb:1
+$ vi Makefile
+[Add `/usr/lib/ocaml/str.a' to LOCAL_LIBS]
+$ make clean all
+$ ruby test_kpp.rb
+./kpp.so: ./kpp.so: undefined symbol: camlCamlinternalOO__create_object_opt_357 - ./kpp.so (LoadError)
+        from test_kpp.rb:1
+$ vi Makefile
+[Add `/usr/lib/ocaml/stdlib.a' to LOCAL_LIBS]
+$ make clean all
+$ ruby test_kpp.rb
+./kpp.so: ./kpp.so: undefined symbol: caml_hash_univ_param - ./kpp.so (LoadError)
+        from test_kpp.rb:1
+$ vi Makefile
+[Add `/usr/lib/ocaml/libasmrun.a' (again) to LOCAL_LIBS]
+$ make clean all
+$ ruby test_kpp.rb
+./kpp.so: ./kpp.so: undefined symbol: caml_tuplify2 - ./kpp.so (LoadError)
+        from test_kpp.rb:1
+$ 
+
+At this point, LOCAL_LIBS looks like this:
+
+LOCAL_LIBS = kpp_rocaml_runtime.o /usr/lib/ocaml/libasmrun.a \
+    /usr/lib/ocaml/libunix.a /usr/lib/ocaml/libnums.a -Wl,--whole-archive \
+    ../kpp/kpp.a -Wl,--no-whole-archive /usr/lib/ocaml/str.a \
+    /usr/lib/ocaml/stdlib.a /usr/lib/ocaml/libasmrun.a
+ 
+This is where I'm stuck.
+
+-- 
+Jos Backus
+jos at catnook.com
+

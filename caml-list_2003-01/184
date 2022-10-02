@@ -1,0 +1,131 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA00476; Fri, 24 Jan 2003 02:14:50 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA00506 for <caml-list@pauillac.inria.fr>; Fri, 24 Jan 2003 02:14:49 +0100 (MET)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h0O1Elv20422
+	for <caml-list@inria.fr>; Fri, 24 Jan 2003 02:14:48 +0100 (MET)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Thu, 23 Jan 2003 18:39:03 -0600
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 23 Jan 2003 18:39:03 -0600
+Date: Thu, 23 Jan 2003 18:48:04 -0600 (CST)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Ocaml Mailing List <caml-list@inria.fr>
+Subject: [Caml-list] @, List.append, and tail recursion
+Message-ID: <Pine.LNX.4.33.0301231815580.2036-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 24 Jan 2003 00:39:03.0909 (UTC) FILETIME=[FEBFA150:01C2C340]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I hit a bug recently wiith @ and List.append.  Since they're recursive, 
+not tail-recursive, on long enough lists Ocaml thinks you've gone 
+infinitely recursive and aborts.  The code:
+
+
+let longlist len =
+    let rec longlist_int v c acc =
+        if (c == 0) then acc else longlist_int (v + 1) (c - 1) (v :: acc)
+    in
+    longlist_int 0 len []
+;;
+
+let x = longlist 65536 ;;
+
+List.append x [] ;;
+
+Exits with:
+
+Stack overflow during evaluation (looping recursion?).
+
+So does:
+x @ [] ;;
+
+You can work around this like:
+
+let append' a b =
+   List.rev_append (List.rev a) b
+;;
+
+Since both rev_append and rev are tail recursive (looping) and not 
+recursive, this works.  But some ad-hoc testing says that this method is 
+about 50% slower than normal append for lists short enough not to abort.
+
+Thinking about this, I realized that my code is doing stuff like this all
+over the place.  I'm basically doing sparse vector/matrix stuff, handling
+(effectively) (colno * value) list for vectors, and (rowno * vector) list
+for matrix.  And I may be hitting lists long enough to trip the problem.
+
+Which means I'm currently doing a lot of recursion of the form:
+
+let rec foo x = 
+   match x with
+       [] -> []
+       | head :: tail -> (expr head) :: (foo tail)
+;;
+
+for various complexities.  And it has occured to me that all of these 
+forms *should* be optimizable into loops.  The general case would work 
+something like this in C:
+
+struct list_t {
+    void * datum;
+    struct list_t * next_p;
+}
+
+struct list_t * foo (struct list_t * x) {
+    struct list_t * retval = NULL;
+    struct list_t ** ptr_pp = &retval;
+
+    while (x != NULL) {
+        struct list_t * temp = alloc(sizeof(struct list_t));
+        *ptr_pp = temp;
+        temp->datum = expr(x->datum);
+        temp->next_p = NULL; /* be nice to the GC */
+        ptr_pp = &(temp->next_p);
+        x = x->next_p;
+    }
+    return retval;
+}
+
+If expr() returned a list, the only change necessary would be to find the 
+end of the list before moving on, like:
+
+struct list_t * foo (struct list_t * x) {
+    struct list_t * retval = NULL;
+    struct list_t ** ptr_pp = &retval;
+
+    while (x != NULL) {
+        *ptr_p = expr(x->datum); /* expr allocates the list */
+        /* We assume the last element of the list expr() returned has
+         * NULL for next_p.
+         */
+        while (*ptr_p != NULL) {
+           ptr_p = &((*ptr_p)->next_p);
+        }
+        x = x->next_p;
+    }
+    return retval;
+}
+
+Rather than just looking at making @ an inline C function, I think we (the 
+Ocaml community) should be looking at adding this more general 
+optimization in.
+
+So now we get to my two questions:
+a) is anyone working on this/intending to work on this RSN?
+b) if the answer to (a) is no, can anyone give me some pointers on where 
+to start looking at code, so I can add it in?
+
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

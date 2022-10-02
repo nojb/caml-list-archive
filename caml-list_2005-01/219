@@ -1,0 +1,155 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 2EF4EBC8C
+	for <caml-list@yquem.inria.fr>; Tue, 25 Jan 2005 18:01:25 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j0PH1OZG015445
+	for <caml-list@yquem.inria.fr>; Tue, 25 Jan 2005 18:01:24 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA29496 for <caml-list@pauillac.inria.fr>; Tue, 25 Jan 2005 18:01:24 +0100 (MET)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j0PH1L2l001587
+	for <caml-list@inria.fr>; Tue, 25 Jan 2005 18:01:23 +0100
+Received: from [192.168.1.200] (ppp205-248.lns1.syd3.internode.on.net [203.122.205.248])
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id j0PH1DrS048400;
+	Wed, 26 Jan 2005 03:31:14 +1030 (CST)
+Subject: Re: [Caml-list] Type indexed types?
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: Jim Farrand <jim@farrand.net>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <20050125122849.GB15086@draco.xyxyx.org>
+References: <20050125122849.GB15086@draco.xyxyx.org>
+Content-Type: text/plain
+Message-Id: <1106672472.28636.20.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 26 Jan 2005 04:01:13 +1100
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 41F67B64.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 41F67B61.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 sourceforge:01 wrote:01 overload:01 arbitrarily:01 pairs:01 pairs:01 compares:01 rec:01 rhs:01 rhs:01 sigs:01 dfns:01 overload:01 glebe:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+On Tue, 2005-01-25 at 23:28, Jim Farrand wrote:
+> Hi,
+> 
+> This is what I need to do:
+> 
+> Given a type, u, and a collection of types, ts, find a type t such that:
+>   * t is a member of ts
+>   * t can be unified with u
+>   * There is no type v in ts, which unifies with u and is more general
+>     than t.
+> 
+> (In other words, find the most specific type in ts that is still equal
+> to or a generalisation of u.)
+
+This is the overload resolution problem?
+Shouldn't that last condition be reversed?
+
+You're looking for the most specialised, not most general
+type that matches u.
+
+> For example:
+> 
+> ts = list int, int, list 'a, 'a
+> 
+> For u = list int, the result would be list int.  For u = list string,
+> the result would be list 'a, and for u = string the result would be 'a.
+> 
+> Note that I already have a function which can compute if type a is a
+> specialisation of type b.
+> 
+> I think that in theory, I could do a brute force approach:
+>   * Grab all types in ts that are generalisations of u.
+>   * Order the results according to how specific they are.
+>   * Arbitrarily choose one of the most specific.
+> 
+> But there must be a smarter way!  
+
+Not really. Here is what Felix does: first, find all the
+matches. Now we need the most specialised. My notes say:
+
+  (* start with an empty list, and fold one result
+  at a time into it, as follows: if one element
+  of the list is greater (more general) than the candidate,
+  then add the candidate to the list and remove all
+  element greater than the candidate,
+
+  otherwise, if one element of the list is less then
+  the candidate, keep the list and discard the candidate.
+
+  The list starts off empty, so that all elements in
+  it are vacuously incomparable. It follows either
+  the candidate is not less than all the list,
+  or less than all the list: that is, there cannot
+  be two element a,b such that a < c < b, since by
+  transitivity a < c would follow, contradicting
+  the assumption the list contains no ordered pairs.
+
+  If in case 1, all the greater element are removed and c added,
+  all the elements must be less or not comparable to c,
+  thus the list remains without comparable pairs,
+  otherwise in case 2, the list is retained and c discarded
+  and so trivially remains unordered.
+  *)
+
+
+So basically, you keep a list of incomparable types,
+and fold one of the candidates into it at a time,
+retaining the invariant. If the candidate compares
+with any element in the list, you either chuck out
+the candidate because it is too general (the list
+remains the same), or you chuck out all the elements
+in the list that it is comparable with, and then add it to the list 
+(so the list ends up with all incomparable elements again).
+
+Here's my actual algorithm, cleaned up a bit.
+As far as I know this is the best possible
+algorithm.
+
+  let candidates = fold_left
+  (fun oc r ->
+     match r with Unique (j,c,_,_) -> 
+     let rec aux lhs rhs =
+       match rhs with
+       | [] -> 
+         r::lhs (* return all non-greater elements plus candidate *)
+       | (Unique(i,typ,mgu,ts) as x)::t 
+       ->
+         begin match compare_sigs syms.dfns typ c with
+         | `Less -> 
+           lhs @ rhs (* keep whole list, discard c *) 
+         | `Equal -> 
+             ERROR "[resolve_overload] Ambiguous call"
+         | `Greater -> 
+           aux lhs t (* discard greater element *)
+         | `Incomparable -> 
+           aux (x::lhs) t (* keep element *)
+         end
+       | Fail::_ -> assert false
+     in aux [] oc
+     | Fail -> assert false
+  )
+  []
+  candidates in
+  match candidates with
+  | [Unique (i,t,mgu,ts)] -> 
+    Some (i,t,mgu,ts)
+
+  | [] -> None
+  | _ -> 
+   ERROR "More than one match"
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+

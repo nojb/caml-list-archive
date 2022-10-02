@@ -1,0 +1,142 @@
+Return-Path: <nicolas.pouillard@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.1 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id AB620BC0B
+	for <caml-list@yquem.inria.fr>; Sat,  9 Dec 2006 14:12:15 +0100 (CET)
+Received: from py-out-1112.google.com (py-out-1112.google.com [64.233.166.177])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id kB9DCEsi006001
+	for <caml-list@yquem.inria.fr>; Sat, 9 Dec 2006 14:12:15 +0100
+Received: by py-out-1112.google.com with SMTP id a78so618905pyh
+        for <caml-list@yquem.inria.fr>; Sat, 09 Dec 2006 05:12:12 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:sender:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references:x-google-sender-auth;
+        b=SN9hotNEYzIoaqRZqvHTbYnv4W7lcE02Cc+OFnpyEuZNEPkEYLvzu84OJslhtn62eGgS7f8PQD4EsPy7H0jZKeTBWKhatZjau/2cXnbtJKC4/++dxUX5KxH4+GmkRO9IoGfjt5NkLauko7WNmsetvlYI+tq2eTp/ggCSr2lbWTE=
+Received: by 10.35.112.4 with SMTP id p4mr5034267pym.1165669932144;
+        Sat, 09 Dec 2006 05:12:12 -0800 (PST)
+Received: by 10.35.72.18 with HTTP; Sat, 9 Dec 2006 05:12:12 -0800 (PST)
+Message-ID: <cd67f63a0612090512j13398231i1a598b796b9625e3@mail.gmail.com>
+Date: Sat, 9 Dec 2006 14:12:12 +0100
+From: "Nicolas Pouillard" <nicolas.pouillard@inria.fr>
+Sender: nicolas.pouillard@gmail.com
+To: "Jim Grundy" <jim_grundy@ichips.intel.com>
+Subject: Re: [Caml-list] A Question About Types and Inlining
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <4579F1A4.6080606@ichips.intel.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+References: <4579F1A4.6080606@ichips.intel.com>
+X-Google-Sender-Auth: 1ce0f5ccfb27c7ce
+X-Miltered: at discorde with ID 457AB62E.004 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; inlining:01 solver:01 ocaml:01 solver:01 literals:01 uncomment:01 compiler:01 compilation:01 camlp:01 compilation:01 foo:01 mli:01 ifdef:01 syntax:01 foo:01 
+
+Hi Jim,
+
+On 12/9/06, Jim Grundy <jim_grundy@ichips.intel.com> wrote:
+> Apologies in advance for a naive question...
+>
+> I'm working on a SAT solver in OCaml.  The solver has various types,
+> like three-valued bools, variables, literals.  I have modules that
+> encapsulate these types and the operations on them.
+>
+> Now, as it turns out, all these types are represented as ints, but the
+> other modules that use those types don't need to know that - and as a
+> matter of taste I'd rather not expose this.
+>
+> The signatures of these modules currently contain lines like this:
+>
+> type variable (* = int *)
+>
+> If I uncomment all instances of (* = int *) and reveal the
+> representation to the compiler then I get a ... 36% performance
+> improvement in the SAT solver.
+>
+> I have two questions:
+>
+> 1/ Is there some way I can reveal this representation to the parts of
+> the system that clearly need it for effective optimization, without
+> opening this up for general use.
+>
+> 2/ Failing that, has someone got a pleasant method of doing conditional
+> compilation so that I can switch these comments on and off with ease?
+
+I take the second part of your question since the obvious answer is camlp4:
+
+There is an extension called pa_macro that provides conditional compilation.
+
+Alas this extension doesn't work with signatures so the following
+example is not (yet) supported:
+
+(* foo.mli *)
+IFDEF ABSTRACT THEN
+type t
+ELSE
+type t = int
+ENDIF
+
+To address that shortcoming you can write an extension syntax dealing
+with some semi-opaque types. Such an extension can allow us to write
+that:
+
+(* foo.mli *)
+type t = semi opaque int
+
+And have compilation option to set:
+
+# For an abstract version
+$ ocamlc -c -pp "camlp4o ./pa_opaque.cmo -abstract" foo.mli
+
+# For a concrete version
+$ ocamlc -c -pp "camlp4o ./pa_opaque.cmo -concrete" foo.mli
+
+With this extension:
+
+-----------8<-------------------------------------------------------------------------
+(* pa_opaque.ml *)
+open Pcaml;;
+let abstract = ref true;;
+EXTEND
+ctyp: [[ LIDENT "semi"; LIDENT "opaque"; t = SELF ->
+  if !abstract then <:ctyp< 'abstract >> else t
+]];
+END;;
+
+Pcaml.add_option "-abstract" (Arg.Set abstract)
+  "Use abstract types for semi opaque ones";;
+Pcaml.add_option "-concrete" (Arg.Clear abstract)
+  "Use concrete types for semi opaque ones";;
+-----------8<-------------------------------------------------------------------------
+
+
+Compiled that way:
+
+$ ocamlc -c -I +camlp4 -pp "camlp4o pa_extend.cmo q_MLast.cmo" pa_opaque.ml
+
+Best regards,
+
+>
+> I'm using version 3.09.2 of ocamlopt.
+>
+> Thanks in advance
+>
+> Jim
+>
+>
+> --
+> Jim Grundy, Research Scientist. Intel Corporation, Strategic CAD Labs
+> Mail Stop RA2-451, 2501 NW 229th Ave, Hillsboro, OR 97124-5503, USA
+> Phone: +1 971 214-1709   Fax: +1 971 214-1771
+> http://www.intel.com/technology/techresearch/people/bios/grundy_j.htm
+> Key Fingerprint: 5F8B 8EEC 9355 839C D777  4D42 404A 492A AEF6 15E2
+>
+
+-- 
+Nicolas Pouillard
+

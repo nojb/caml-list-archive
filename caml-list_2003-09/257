@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA02182; Sun, 21 Sep 2003 18:45:56 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA29840 for <caml-list@pauillac.inria.fr>; Sun, 21 Sep 2003 18:45:54 +0200 (MET DST)
+Received: from mail2.tpgi.com.au (mail.tpgi.com.au [203.12.160.58])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h8LGjr524836
+	for <caml-list@inria.fr>; Sun, 21 Sep 2003 18:45:53 +0200 (MET DST)
+Received: from 203-219-16-216-syd-ts21-2600.tpgi.com.au (203-219-16-216-syd-ts21-2600.tpgi.com.au [203.219.16.216])
+	by mail2.tpgi.com.au (8.12.9/8.12.9) with ESMTP id h8LGjkUr011993;
+	Mon, 22 Sep 2003 02:45:47 +1000
+Subject: Re: [Caml-list] inference engine
+From: skaller <skaller@ozemail.com.au>
+Reply-To: skaller@ozemail.com.au
+To: Alain.Frisch@ens.fr
+Cc: Caml list <caml-list@inria.fr>
+In-Reply-To: <1063741611.14799.3.camel@pelican>
+References: <Pine.SOL.4.44.0309141135150.7473-100000@clipper.ens.fr>
+	 <1063741611.14799.3.camel@pelican>
+Content-Type: text/plain
+Message-Id: <1064162741.12854.73.camel@pelican>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 22 Sep 2003 02:45:42 +1000
+Content-Transfer-Encoding: 7bit
+X-Kaspersky-Antivirus: Passed
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 inference:01 ozemail:01 alain:01 frisch:01 recursion:01 ocamlopt:01 -pp:01 usr:01 site-lib:01 usr:01 site-lib:01 flx:01 flx:01 ipk:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 2003-09-17 at 05:46, skaller wrote:
+> On Sun, 2003-09-14 at 19:48, Alain.Frisch@ens.fr wrote:
+> > On 14 Sep 2003, skaller wrote:
+> 
+> > > in particular, in the case like:
+> > >
+> > > 	let rec f1 (x1:t1):r1 = ..
+> > > 	and f2 (x2:t2):r2 = ...
+> > > 	and f3 (x2:t3):r3 = ..
+> > > 	...
+> > > 	and f999 (x999:t999):r999 = ...
+> > >
+> > > the fact the the constraints t1, r1, t2, t2, ..
+> > > are not applied until after the whole recursion
+> > > is typed
+> > 
+> > Again, this is wrong.
+> 
+> Hmm, well the examples are invented to be like
+> actual code I have. So perhaps I'm not understanding
+> why I'm getting the false errors sometimes.
+
+Here's an example of what I mean (see below for explanation):
+-------------------------------------------------------------------------
+ocamlopt.opt  -I src  -pp 'camlp4o
+/usr/local/lib/ocaml/site-lib/ulex/pa_ulex.cma' -I
+/usr/local/lib/ocaml/site-lib/ulex -c src/flx_ulex.ml
+File "lpsrc/flx_ulex.ipk", line 730, characters 24-9479:
+This expression has type
+  lexer_state =
+    < adj : int -> unit; append_comment : string -> unit;
+      comment_level : int; decode : (string -> string) -> string ->
+string;
+      decr_comment : unit; get_absolute : string -> string;
+      get_comment : string; get_incdirs : string list;
+      get_relative : string -> string;
+      get_srcref : Ulexing.lexbuf -> string * int * int * int; inbody :
+      unit; incr_comment : unit; is_at_line_start : bool;
+      newline : Ulexing.lexbuf -> unit; set_comment : string -> unit;
+      set_filename : string -> unit; set_line : int -> unit;
+      string_of_srcref : Ulexing.lexbuf -> string >
+but is here used with type Ulexing.lexbuf
+ --------------------------------------------------
+
+now, this message is quite "wrong". There is in fact no
+error in the piece of code mentioned in the message.
+The message actually occured previously: here it is:
+
+        let ts = pre_flx_lex buf state in 
+
+In this line of code, the order of the arguments
+buf and state are backwards. The inference engine
+deduced the types of the arguments, and
+*incorrectly* decided this piece of code was correct,
+and the rather large (10K character) piece of code which came
+later was wrong.
+
+In fact, that piece of code starts off:
+
+	and pre_flx_lex state = lexer 
+
+This is a lexer spec for the ulex package, which after
+pre-processing reads:
+
+	and pre_flx_lex state lexbuf = 
+
+In fact, in the mli file:
+
+val pre_flx_lex : 
+  lexer_state -> 
+  Ulexing.lexbuf -> 
+  Flx_parse.token list
+
+the correct interface is given. The .mli file is already
+compiled, but it isn't consulted until too late to detect
+my intent.
+
+IF the type constraint were entered into the inference
+engine first, the actual error would have been detected.
+As it is, the source reference of the information used
+by the inference engine is lost, so it can't say something
+like
+
+	"This expression has type lexer_state,
+	but appears to be used here with type Ulexing.lexbuf.
+	This was deduced from line xxx chars yyy-zzz"
+
+[Where that's the line number of the place the inference
+was made]
+
+I can understand that inferences are incremental, and there 
+would be a lot of pain tracking *all* the places the data came
+from to make a type inference: I'm not suggesting that.
+
+Instead, I tried to suggest that somehow the constraint
+be included as early as possible. Clearly here that is NOT
+the case, or the error would have been detected where
+it actually occured.
+
+Whilst I'm getting used to this, it is a large downside
+for newer Ocaml programmers: C++ programmers for example
+are used to really horrible template error messages,
+but not *wrong* error messages (although I have to admit
+some C++ error diagnostic come rather close to that :(
+
+This isn't a complaint. I was simply trying to suggest
+a possible way to improve the error reporting. 
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,183 @@
+Return-Path: <alain.frisch@lexifi.com>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 33DF97EEB4
+	for <caml-list@sympa.inria.fr>; Wed,  6 Feb 2013 10:50:19 +0100 (CET)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain.frisch@lexifi.com) identity=pra;
+  client-ip=193.252.23.213;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain.frisch@lexifi.com";
+  x-sender="alain.frisch@lexifi.com";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain.frisch@lexifi.com) identity=mailfrom;
+  client-ip=193.252.23.213;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain.frisch@lexifi.com";
+  x-sender="alain.frisch@lexifi.com";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.213;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain.frisch@lexifi.com";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApUAAPQmElHB/BfVkWdsb2JhbABFgzm5M4NvDgEBAQEJCwsHFAMkgh8BAQUnEUABEAsYCRYPCQMCAQIBRQYNAQcBAReHersykVsDliGFcI1h
+X-IPAS-Result: ApUAAPQmElHB/BfVkWdsb2JhbABFgzm5M4NvDgEBAQEJCwsHFAMkgh8BAQUnEUABEAsYCRYPCQMCAQIBRQYNAQcBAReHersykVsDliGFcI1h
+X-IronPort-AV: E=Sophos;i="4.84,614,1355094000"; 
+   d="scan'208";a="1593807"
+Received: from msa04.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.213])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 06 Feb 2013 10:50:11 +0100
+Received: from [192.168.1.112] ([92.151.93.123])
+	by mwinf5d42 with ME
+	id wxqA1k00S2fi5KQ03xqA5L; Wed, 06 Feb 2013 10:50:11 +0100
+Message-ID: <51122752.9040503@lexifi.com>
+Date: Wed, 06 Feb 2013 10:50:10 +0100
+From: Alain Frisch <alain.frisch@lexifi.com>
+Organization: LexiFi
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:17.0) Gecko/20130107 Thunderbird/17.0.2
+MIME-Version: 1.0
+To: Christophe Papazian <christophe.papazian@gmail.com>
+CC: Caml List <caml-list@inria.fr>, 
+ Sebastien Briais <sebastien.briais@lexifi.com>
+References: <A0D04133-A54F-458E-A584-8139F90C2711@gmail.com>
+In-Reply-To: <A0D04133-A54F-458E-A584-8139F90C2711@gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Validation-by: alain.frisch@lexifi.com
+Subject: Re: [Caml-list] Memoize GADT
+
+We have encountered exactly the same problem recently.  A slightly more 
+general version of your question is how to memoize a function of type
+
+   'a t -> 'a s
+
+for two type parametrized constructors t and s (and similarly with 
+higher arities).  We want an hash table which can hold key/value 
+bindings ('a t * 'a s) for any 'a.  The equality of keys must be such 
+that when (key1 : 'a t) is equal to (key2 : 'b t), we can deduce that 'a 
+and 'b are the same type (i.e. the value must hold enough information to 
+deduce the type from the content), which guarantees that 'a s and 'b s 
+are also the same type (and so the existing value associated to key1 can 
+be returned for key2).  This assumption often holds when 'a t is a GADT 
+representing "expressions which evaluate to values of type 'a".
+
+Our solution (implemented by my colleague Sebastien, in Cc:) has been to 
+create a functor with the following signature:
+
+======================================================================
+module type ParametricType = sig
+   type 'a t
+end
+
+module ParametricEquality : sig
+   type (_, _) t =
+     | Eq: ('a, 'a) t
+     | Ne: ('a, 'b) t
+end
+
+module type ParametricHashedType = sig
+   type 'a t
+   val equal: 'a t -> 'b t -> ('a, 'b) ParametricEquality.t
+   val hash: 'a t -> int
+end
+
+module ParametricHashtbl : sig
+   module type S = sig
+     type 'a key
+     type 'a value
+     type binding = Binding: 'a key * 'a value -> binding
+     type t
+     val create: int -> t
+     val clear: t -> unit
+     val reset: t -> unit
+     val copy: t -> t
+     val add: t -> 'a key -> 'a value -> unit
+     val remove: t -> 'a key -> unit
+     val find: t -> 'a key -> 'a value
+     val find_all: t -> 'a key -> 'a value list
+     val replace: t -> 'a key -> 'a value -> unit
+     val mem: t -> 'a key -> bool
+     val length: t -> int
+     val iter: (binding -> unit) -> t -> unit
+     val fold: (binding -> 'a -> 'a) -> t -> 'a -> 'a
+   end
+   module Make(X:ParametricHashedType)(Y:ParametricType): S with type 'a 
+key = 'a X.t and type 'a value = 'a Y.t
+end
+======================================================================
+
+Note that the first input of the function (ParametricHashedTyped) looks 
+like the standard argument to Hashtbl.Make, except that the equality 
+function returns a dynamic witness of equality between 'a and 'b in case 
+of equality between two values of types 'a t and 'b t.  This is 
+implemented using a GADT.  We also use a GADT to introduce an 
+existential on 'a for key/value pairs of type ('a t * 'a s) to be used 
+for iterators (iter/fold).  Instead we could have defined those 
+iterators as taking a polymorphic function as argument (through 
+polymorphic methods or record fields, or with a first-class module), but 
+they would have been more heavy to use on the call site (although this 
+would avoid the allocation of the Binding constructor).
+
+On the implementation side, there are three choices:
+
+  - Create a type-safe implementation by instantiating Hashtbl, and 
+store values which keep a copy of the key, with an existential both on 
+keys and on values.  This requires extra comparisons and boxing. (Good 
+exercise left to the reader!)
+
+  - Copy and adapt the implementation of Hashtbl, which can avoid some 
+of the extra comparisons. (Painful!)
+
+  - The quicker way (and the one we have chosen for now) is to 
+instantiate Hashtbl on type Obj.t for keys and values, and using unsafe 
+operations (Obj.magic) to cast its result to the signature above.  I 
+don't think it is good style to share here code using Obj.magic, so I 
+will refrain from doing so :-)
+
+We have done the same for Set, Map, association lists and Weak (for 
+such, I believe, the unsafe implementation is the only choice, because 
+if we wrap the values with freshly allocated existential constructors, 
+they can immediately be garbage-collected).
+
+It would probably make sense to provide such functors as part of the stdlib.
+
+
+
+Alain
+
+
+
+
+
+
+
+On 02/06/2013 09:19 AM, Christophe Papazian wrote:
+> Hi,
+>
+> this must be a very basic question for some of you, sorry for the inconvenience :
+>
+> When I have function "f" of type (a -> b), I can easily add a layer to that function to memoize the result by using a (a,b) Hashtbl.t to store the results of the expensive to compute "f".
+>
+> let mf = let e = Hashtbl.create 0 in ( fun x -> try Hashtbl.find e x with Not_found -> let res = f x in Hashtbl.add e x res; res )
+>
+> But now, I have a function "g"
+> 	let g (type a) : a gadt -> a = ....
+>
+> And If I apply the same method, type a becomes weak (_'a).
+>
+> Is there something simple to memoize that function as easy as the previous example and keep its polymorphism ? I think not, but I hope to be wrong.
+>
+> Thanks
+>
+> 	Christophe
+>
+>
+

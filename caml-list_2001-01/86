@@ -1,0 +1,165 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA20664 for caml-red; Wed, 10 Jan 2001 09:31:53 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA13169 for <caml-list@pauillac.inria.fr>; Tue, 9 Jan 2001 19:02:59 +0100 (MET)
+Received: from mrwall.kal.com (mrwall.kal.com [194.193.14.236])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with SMTP id f09I2wL24402;
+	Tue, 9 Jan 2001 19:02:58 +0100 (MET)
+Received: from mrwall.kal.com [194.193.14.236]
+	(HELO localhost)
+	by mrwall.kal.com (AltaVista Mail V2.0J/2.0J BL25J listener)
+	id 0000_0045_3a5b_52bb_9015;
+	Tue, 09 Jan 2001 18:04:43 +0000
+Received: from somewhere by smtpxd
+Message-ID: <3145774E67D8D111BE6E00C0DF418B663AA6FB@nt.kal.com>
+From: Dave Berry <dave@kal.com>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>, Charles Martin
+  <martin@chasm.org>
+Cc: caml-list@inria.fr
+Subject: RE: Module hierarchies
+Date: Tue, 9 Jan 2001 18:06:36 -0000 
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.0.1460.8)
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Sender: weis@pauillac.inria.fr
+
+I think you have to step back and ask what you're trying to achieve.  In
+particular, there are two related issues.  One is nested namespaces, which
+is obviously desirable. The second is units of delivery, by which I mean
+DLLs, Components, Libraries, Executables, object files, or groups of these.
+As a generic term, I'll call these "deliverables".  (I'd like to use
+"packages", but this would cause confusion with Java and Ada -- neither of
+which actually package the results of compiling a so-called "package").
+
+I'll use an example with which I'm more familiar: the SML Basis Library.
+This contains several modules, some of which are grouped in various ways.
+One such grouping is the IO modules; these are designed so that you can use
+the rest of the library without having to use the IO modules, e.g. in case
+you have your own IO subsystem.  So we want to be able to load a subset of
+the full library.
+
+Another grouping is the OS modules.  These are nested under a main OS
+module, so you have OS.Path, OS.FileSys, etc. 
+
+Above this it might be useful to have a Basis namespace, to distinguish
+Basis.List from anybody else's List structure.  (The actual Basis Library
+doesn't specify such a module).
+
+To add further complication, some entries in the Basis Library are optional.
+E.g. an implementation can have any non-zero number of Int<N> modules, for
+arbitrary <N>.  So you can't write a signature that describes the Basis
+library!
+
+So, how should this be packaged, and how should it be referenced?  You don't
+necessarily want to distribute the library as a single DLL, because you
+might want to use only some parts of it.  But you still want a nested
+namespace.  So it's a bad idea to require that a namespace refers to a
+single compiled object.   This is effectively what SML does -- a namespace
+is a structure, and if one part of a structure is available then all parts
+are (although an implementation might do something clever with delayed
+loading).
+
+You do want some way of distributing the library as a small number of files.
+Distributing large numbers of object files is a pain, especially if they
+have to be uninstalled in certain places.  Archive files (ar, jar) are one
+solution.  You might also have a library that you want to distribute as a
+DLL. 
+
+Then you need to express dependencies.  I think it's useful to be able to do
+this at the library level -- e.g. to say that application A depends on
+Basis.IO, and application B depends on Basis.* .  You don't want to have to
+list each file separately.  Possibly this can be done by command-line
+arguments, e.g. compile -I Basis\IO ?
+
+So there are lots of issues to consider.  At Harlequin we wrote several
+project management systems for MLWorks, and a couple more for Dylan.  They
+all involved difficult design decisions.   My current belief is that you
+need a separate notion of library, being a namespace that corresponds to a
+deliverable, with some notion of dependencies at the library level, as well
+as dependencies between the modules in a library.
+
+Dave.
+
+
+-----Original Message-----
+From: Xavier Leroy [mailto:Xavier.Leroy@inria.fr]
+Sent: Monday, January 08, 2001 10:24
+To: Charles Martin
+Cc: caml-list@inria.fr
+Subject: Re: Module hierarchies
+
+
+> An alternative is to adopt the Java convention, in which a module such a
+>      engine/graphics/texture/manager.ml
+> is automagically mapped to Engine.Graphics.Texture.Manager.
+
+Yes, this has been suggested already on this list.  Problem number one
+is, as you said:
+
+> The difficulty
+> now is what to do about the file/module
+>      engine/graphics/texture.ml <=> Engine.Graphics.Texture
+> It seems to me the easiest solution is to assume that a directory/file
+> layout has the semantics of a single file in which the modules are
+> catenated in depth-first order.
+
+This is one solution, but this ordering for submodules is somehow
+arbitrary.  More pragmatically, it seems very hard (in the current
+implementation) to maintain the correspondence between a directory and
+a structure with sub-modules corresponding to the directory elements.
+
+An alternative solution (suggested by Judicaël Courant some time ago)
+would be to have a new command that groups together several
+separately-compiled modules into one module having the original
+modules as sub-structures.  E.g.
+
+        ocamlnewmagiccommand -o lib.cmo a.cmo b.cmo c.cmo
+
+would generate lib.cmo and lib.cmi files equivalent to the following
+source code for lib.ml:
+
+        module A = struct (* contents of a.ml *) end
+        module B = struct (* contents of b.ml *) end
+        module C = struct (* contents of c.ml *) end
+
+In other terms, while the current OCaml library archive files (.cma files)
+generated by "ocamlc -a" are "flat" and introduce no additional
+structuring, the new command would do both library archiving and
+introducing of a layer of structuring.
+
+Of course, the order of .cmo files on the command line would determine
+the order of the sub-modules, thus relieving the compiler from
+guessing this order.
+
+(As an aside, it is interesting to note that the Linux kernel sources
+-- a large source tree indeed -- uses "ld -r" in subdirectories to group
+together the object files for each subdirectory in one easy to
+manipulate .o file.  This is kind of the same idea, except that of
+course C's namespace is flat, so no additional structuring is introduced.)
+
+I still have no idea how hard it is to implement Judicaël's scheme,
+though.
+
+Coming back to the general problem of structuring a large OCaml
+project, my experience with the OCaml compiler itself is that the
+solution based on a flat module namespace + subdirectories to
+partition the files + a big Makefile at the top works out quite well
+for projects of about 100 KLOC, and could scale up some more, although
+perhaps not to 1 MLOC.  In particular, one big Makefile is a lot
+easier to maintain than a zillion tiny recursive Makefiles.
+
+When comparing with Java, you have to keep in mind that Java source
+files are smaller and more numerous than Caml source files, since the
+latter can contain several classes as well as submodules.  (Not to
+mention that a 10-line OCaml datatype declaration is roughly
+equivalent to 11 Java classes, each in its own file...)  So, the need
+to break up a Java project into several packages appears earlier than
+the need to break up a Caml project into several directories.
+
+Still, I'd be very interested to know how others "do it" with large
+OCaml projects.
+
+Happy new year,
+
+- Xavier Leroy
+
+

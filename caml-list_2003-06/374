@@ -1,0 +1,168 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA04711; Wed, 25 Jun 2003 02:25:35 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA04172 for <caml-list@pauillac.inria.fr>; Wed, 25 Jun 2003 02:25:33 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h5P0PVf20603
+	for <caml-list@inria.fr>; Wed, 25 Jun 2003 02:25:32 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2/3.7W) with ESMTP id JAA00131;
+	Wed, 25 Jun 2003 09:25:26 +0900 (JST)
+To: bywang@saul.cis.upenn.edu
+Cc: caml-list@inria.fr
+Subject: [Caml-list] Visitor pattern (was copy of parametrized object)
+In-Reply-To: <200306242033.h5OKX2Xj000711@saul.cis.upenn.edu>
+References: <20030624213608T.garrigue@kurims.kyoto-u.ac.jp>
+	<200306242033.h5OKX2Xj000711@saul.cis.upenn.edu>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20030625092536F.garrigue@kurims.kyoto-u.ac.jp>
+Date: Wed, 25 Jun 2003 09:25:36 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 134
+X-Spam: no; 0.00; jacques:01 bow-yaw:01 bywang:01 instantiate:01 val:01 identically:01 visitors:99 monomorphic:01 extensible:01 ocaml:01 inherit:01 imho:01 int:01 garrigue:01 polymorphic:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Bow-Yaw Wang <bywang@saul.cis.upenn.edu>
+
+> > That's just the point of non-generalized variables: if you instantiate
+> > them somewhere, the type is propagated everywhere. So as long as the
+> > type of o is '_a t, there is no hope.
+> 
+> But is it necessary to propagate everywhere? If I create 
+> another t object, it is of type '_a t too. But the new
+> object remains intact while the copied object changes its 
+> type when I instantiate the original.
+
+Sure, if you create a new object you know for sure it doesn't share
+data with the first one, so you're safe.
+
+You can also write
+
+# let new_t () = new t;;
+val new_t : unit -> 'a t = <fun>
+# let o = new_t ();;
+val o : '_a t = <obj>
+
+See how new_t has a polymorphic type?
+Calling [new t] is just equivalent to [new_t ()]. (Actually this
+generates almost the same code). So no surprise they should be typed
+identically.
+
+> > I wonder what you need exactly.
+> 
+> It is about a simplified visitor design pattern. Let's say
+> we have:
+> 
+> class ['value, 'visitor] a = 
+>   object 
+>     constraint 'visitor = < in_a : unit -> 'value; .. > 
+>     method invite (v : 'visitor) = v#in_a () 
+>   end;;
+
+If this is really what you want, then you must use a polymorphic method.
+I switch the definition order for simplicity.
+
+class virtual ['value] visitor_t = 
+  object 
+    method virtual in_a : unit -> 'value
+  end;;
+
+class a = 
+  object 
+    method invite : 'visitor 'value. ('value #visitor_t as 'visitor) -> 'value
+        = fun v -> v#in_a () 
+  end;;
+
+Then all the following will work:
+ 
+> I can create two different visitors:
+> 
+> class int_visitor_t = 
+>   object 
+>     inherit [int] visitor_t 
+>     method in_a () = 0 
+>   end;;
+> 
+> let int_v = new int_visitor_t;;
+> 
+> class string_visitor_t = 
+>   object 
+>     inherit [string] visitor_t 
+>     method in_a () = "a" 
+>   end;;
+> 
+> let str_v = new string_visitor_t;;
+> 
+> Suppose I have two objects:
+> 
+> let x = new a;;
+> let y = Oo.copy x;;
+No need to copy (this is wrong anyway, copying is just unrelated to typing).
+
+> I want both int_v and str_v to be invited. I can do
+> 
+> x#invite int_v;;
+and
+  x#invite str_v;;
+will work too.
+
+> Now since the visitor type is constrained, it cannot
+> be polymorphic in class a. A simple solution (IMHO)
+> is to have an independent copy of x. It doesn't seem
+> to be necessary to tie the monomorphic type variables
+> of the copy to the original. And it would make the
+> previous visitor pattern implementation cleaner. 
+> Otherwise, I'll have to build another x from scratch.
+
+There is no notion of independent copy that I know.
+It is plain necessary to tie the monomorphic type variables of the
+copy to the original, as the example in my previous mail showed.
+So if you want to stick to you weaker approach, you'll have to build
+another x from scratch.
+
+By the way, I'm not sure this coding of the visitor pattern is a good
+programming approach in ocaml: most things can be done in a simpler
+way using a function rather than a visitor, since anyway generally all
+cases of a visitor have the same return type.
+
+# class a = 
+  object 
+    method invite : 'cases 'value. (([> `A] as 'cases) -> 'value) -> 'value =
+      fun f ->  f `A
+  end;;
+class a : object method invite : ([> `A ] -> 'a) -> 'a end
+
+The advantage is two-fold: you don't need to define a class for each
+visitor (this is a pain), and now the variables 'cases and 'value are
+really independent, so if you want to define the class a in a more
+extensible way, you can write:
+
+# class ['cases] a = 
+  object 
+    method invite : 'value. (([> `A] as 'cases) -> 'value) -> 'value =
+      fun f ->  f `A
+  end;;
+class ['a] a :
+  object constraint 'a = [> `A ] method invite : ('a -> 'b) -> 'b end
+# let x = new a;;
+val x : _[> `A ] a = <obj>
+# x#invite (fun `A -> 0);;
+- : int = 0
+# x#invite (fun `A -> "a");;
+- : string = "a"
+
+Another remark is that in most cases there is no need to wrap your
+variant type in an object anyway, and then you don't need classes at
+all :-)
+
+Jacques Garrigue
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

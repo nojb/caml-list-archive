@@ -1,0 +1,161 @@
+Return-Path: <bhurt@spnz.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL,MAILTO_TO_SPAM_ADDR 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 96215BC6B
+	for <caml-list@yquem.inria.fr>; Sat,  4 Aug 2007 14:04:52 +0200 (CEST)
+Received: from bsd4.nyct.net (mail-out8.nyct.net [216.139.141.8])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l74C4pt2022583
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sat, 4 Aug 2007 14:04:52 +0200
+Received: from [192.168.42.2] (adsl-216-139-154-52.nyct.net [216.139.154.52])
+	by bsd4.nyct.net (8.13.4/8.13.4) with ESMTP id l74C4dOk088642;
+	Sat, 4 Aug 2007 08:04:40 -0400 (EDT)
+	(envelope-from bhurt@spnz.org)
+Date: Sat, 4 Aug 2007 08:15:25 -0400 (EDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost
+To: tmp123@menta.net
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Sorted list
+In-Reply-To: <46B4485B.7040406@menta.net>
+Message-ID: <Pine.LNX.4.64.0708040754370.20887@localhost>
+References: <46B4485B.7040406@menta.net>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at concorde with ID 46B46B63.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; elt:01 sugestion:01 sig:01 val:01 ord:01 struct:01 ord:01 node:01 node:01 nodes:01 mutable:01 nodes:01 2007,:98 req:98 req:98 
+
+
+
+On Sat, 4 Aug 2007, tmp123@menta.net wrote:
+
+> Hello,
+>
+> In order to implement a timers subsystem, I need a module with the following 
+> values:
+>
+> *) add_timer : time -> ( unit -> unit ) -> timerid,
+> for public usage, where "add_timer t f" means execute "f" at time "t".  The 
+> result is an identifier who allows cancelation of the timer.
+> *) cancel_timer: timerid -> unit
+> for public usage, cancel a previously added timer
+> *) peek_minimum_timer : unit -> ( time, unit -> unit )
+> for internal usage, get the timer with minimum time. Returns the time and the 
+> related function.
+> *) remove_minimum_timer : ?? -> unit
+> for internal usage, remove the timer with the minimum time. It will be called 
+> after execute a timer.
+>
+> Thus, in a generic sense, what I need is a "sorted list", with easy insertion 
+> of elements, and peek/pop of the head (minimum).
+>
+> Of the standard modules, the most similar seems "set", because allows 
+> insertion and has the funcion "min_elt". However, the problem is, if two 
+> timers have the same time, addition of the second one removes the first.
+>
+> Please, has someone any sugestion?
+
+What you want is a priority queue.
+
+Here's a simple one: a leftist priority queue.  The core operation is 
+join, which takes two priority queues and joins them together:
+
+module type Req = sig
+ 	type t
+ 	val compare : t -> t -> int
+end
+
+module Make(Ord: Req) = struct
+
+type elem = Ord.t;;
+
+type t =
+ 	| Node of int * t * Ord.t * t
+ 	| Empty
+;;
+
+let height = function
+ 	| Empty -> 0
+ 	| Node(h, _, _, _) -> h
+;;
+
+let join p q =
+ 	match p, q with
+ 	| Empty, Empty -> Empty
+ 	| Empty, _ -> q
+ 	| _, Empty -> p
+ 	| Node(_, pl, px, pr), Node(_, ql, qx, qr) ->
+ 		let x, l, m, r =
+ 			if (Ord.compare px qx) <= 0 then
+ 				px, pl, pr, q
+ 			else
+ 				qx, p ql, qr
+ 		in
+ 		(* pick the tallest of l, m, and r to be the new left
+ 		 * node.  The new right node is the join of the remaining
+ 		 * two nodes.
+ 		 *)
+ 		let left, right =
+ 			if (height l) >= (height m) then
+ 				if (height l) >= (height r) then
+ 					l, (join m r)
+ 				else
+ 					r, (join l m)
+ 			else
+ 				if (height m) >= (height r) then
+ 					m, (join l r)
+ 				else
+ 					r, (join l m)
+ 		in
+ 		let h = 1 + (max (height left) (height right)) in
+ 		Node(h, left, x, right)
+;;
+
+let empty = Empty;;
+
+let singelton x = Node(1, Empty, x, Empty);;
+
+let is_empty = function
+ 	| Empty -> true
+ 	| Node(_, _, _, _) -> false
+;;
+
+let get_head = function
+ 	| Empty -> invalid_arg "head on empty priority queue!"
+ 	| Node(_, _, x, _) -> x
+;;
+
+let remove_head = function
+ 	| Empty -> invalid_arg "remove_head on empty priority queue!"
+ 	| Node(_, l, _, r) -> join l r
+;;
+
+let add q x =
+ 	let p = singleton x in
+ 	join q p
+;;
+
+let rec filter f = function
+ 	| Empty -> Empty
+ 	| Node(_, l, x, r) ->
+ 		if f x then
+ 			join (join (filter l) (singleton x)) (filter r)
+ 		else
+ 			join (filter l) (filter r)
+;;
+
+The one problem with this is that filter is O(N log N).  I'd probably just 
+add a bit of mutable data to the timer structure, a boolean flag to say 
+wether it's been deleted our not.  Then, when you remove the head node, 
+you keep removing the head node while it's been deleted (i.e. a deleted 
+node doesn't get removed until it times out).  If the number of deleted 
+nodes reaches some sufficiently high percentage, you can then afford to 
+filter the whole table and delete all of them at once.
+
+Brian
+

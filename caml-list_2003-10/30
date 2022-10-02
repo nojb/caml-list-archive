@@ -1,0 +1,309 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA04101; Thu, 2 Oct 2003 16:55:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA09616 for <caml-list@pauillac.inria.fr>; Thu, 2 Oct 2003 16:55:21 +0200 (MET DST)
+Received: from ep09.kernel.pl (ep09.kernel.pl [212.87.11.162])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h92EtK104305
+	for <caml-list@pauillac.inria.fr>; Thu, 2 Oct 2003 16:55:21 +0200 (MET DST)
+Received: (qmail 18094 invoked by uid 566); 2 Oct 2003 14:55:16 -0000
+Date: Thu, 2 Oct 2003 16:53:27 +0200
+From: Michal Moskal <malekith@pld-linux.org>
+To: Ram Bhamidipaty <ramb@sonic.net>
+Cc: caml-list@pauillac.inria.fr
+Subject: Re: [Caml-list] what is the functional way to solve this problem?
+Message-ID: <20031002145327.GA4690@roke.freak>
+Mail-Followup-To: Ram Bhamidipaty <ramb@sonic.net>,
+	caml-list@pauillac.inria.fr
+References: <16252.6810.502406.679837@oak.ramandgita.com>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="uAKRQypu60I7Lcqm"
+Content-Disposition: inline
+In-Reply-To: <16252.6810.502406.679837@oak.ramandgita.com>
+User-Agent: Mutt/1.4.1i
+X-PGP-Fingerprint: CF89 1B14 11BE 1CC9 2CA3  7497 5E32 69B4 BC71 B4C2
+X-AntiVirus: scanned for viruses by AMaViS 0.2.1 (http://amavis.org/)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; michal:01 moskal:01 malekith:01 pld-linux:01 caml-list:01 dynamically:01 resizing:01 python:01 python:01 0.00:01 0.00:01 22%:99 2,2:99 0.32:99 71%:99 
+X-Attachments: name="stats.ml" name="mkd.ml" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--uAKRQypu60I7Lcqm
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+On Thu, Oct 02, 2003 at 05:31:22AM -0700, Ram Bhamidipaty wrote:
+> Someone suggested that my previous question about dynamically resizing
+> arrays hinted that my solution may be going in a non-functional
+> direction. That might be true.
+> 
+> So here is the problem I am trying to solve. I would like to solve it
+> in a "functional way".
+
+Use Map. You won't notice a difference.
+
+[...]
+> I have already written a python application that can read this data file and
+> generate the data I am looking for. I was not happy with the python solution
+> because it was not very fast. Even with using a heap to store the top 100
+> largest files I was not able to create a python solution that could beat
+> a "grep | sort" pipeline (on unix of course).
+
+[...]
+
+./stats < /shm/d  0.11s user 0.00s system 78% cpu 0.139 total
+
+grep '^F' /shm/d  0.02s user 0.00s system 22% cpu 0.090 total
+sort -n -t' ' -k2,2  0.32s user 0.05s system 71% cpu 0.517 total
+tail -100  0.02s user 0.00s system 3% cpu 0.514 total
+
+ 86287  263948 1912177 /shm/d
+
+Did I win something? ;-)
+
+[...]
+
+> My goal of implementing this in OCaml is to beat the grep+sort
+> combination. If I can create a solution that can output all the
+> date I want - in one pass - AND still be faster than the grep+sort
+> partial solution - _that_ would be cool!
+> 
+> Having said all that - I wanted to use an array to hold the data for
+> each directory. I hoped that using an array would be faster than a
+> hash table since I know that the directory numbers are assigned
+> sequentially.
+
+Map! Map! Stop thinking in such an imperative way ;-)
+
+Key points of my implementation:
+
+1. It also uses heap (simple one from pure-fun)
+2. It is compiled with ocamlopt (ocamlc version is 6 times slower)
+3. It doesn't use Scanf. For such linear task as this Scanf takes 10 or
+   more times to parse input then actual computations.
+4. There is little trick, that heap holds 101 elements, and always
+   discards last one, so we don't need to check if newly inserted
+   element is really bigger then min we just deleted.
+5. The code isn't very pretty (it would be better to make heap functor
+   with item count, and so on). It is left as an exercise to the reader.
+
+You're free to use it. I also attach program I used to create input.
+
+-- 
+: Michal Moskal :: http://www.kernel.pl/~malekith : GCS {C,UL}++++$ a? !tv
+: When in doubt, use brute force. -- Ken Thompson : {E-,w}-- {b++,e}>+++ h
+
+--uAKRQypu60I7Lcqm
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="stats.ml"
+
+exception Empty
+
+module Heap (Element : Map.OrderedType) =
+struct
+  module Elem = Element
+
+  type heap = E | T of int * Elem.t * heap * heap
+
+  let rank = function E -> 0 | T (r,_,_,_) -> r
+
+  let makeT x a b =
+    if rank a >= rank b then T (rank b + 1, x, a, b)
+    else T (rank a + 1, x, b, a)
+
+  let empty = E
+  let is_empty h = h = E
+
+  let rec merge h1 h2 = match h1, h2 with
+    | _, E -> h1
+    | E, _ -> h2
+    | T (_, x, a1, b1), T (_, y, a2, b2) ->
+        if Elem.compare x y <= 0 then makeT x a1 (merge b1 h2)
+        else makeT y a2 (merge h1 b2)
+
+  let insert x h = merge (T (1, x, E, E)) h
+  let find_min = function E -> raise Empty | T (_, x, _, _) -> x
+  let delete_min = function E -> raise Empty | T (_, x, a, b) -> merge a b
+
+  let flatten x =
+    let rec loop acc = function
+      | E -> acc
+      | T (_, x, a, b) -> loop (loop (x :: acc) a) b
+    in loop [] x
+end
+
+
+module Dir = struct
+  type t =
+    {
+      size : int;
+      name : string;
+      parent : t option;
+      no : int;
+    }
+
+  let compare x y = x.size - y.size
+end
+
+module Int = struct
+  type t = int
+  let compare x y = x - y
+end
+
+module File = struct
+  type t =
+    {
+      size : int;
+      dir : Dir.t;
+      name : string;
+    }
+
+  let compare x y = x.size - y.size
+end
+
+module Dir_set = Map.Make(Int)
+module Dir_heap = Heap(Dir)
+module File_heap = Heap(File)
+
+type line =
+  | D of int * int * string
+  | F of int * string
+  | Eof
+
+let limit = 100
+
+let read () =
+  try
+    let l = read_line () in
+    let rec scan_int pos =
+      match l.[pos] with
+      | '0' .. '9' -> scan_int (pos + 1)
+      | _ -> pos
+    in
+    let int_from pos =
+      let xend = scan_int pos in
+      (int_of_string (String.sub l pos (xend - pos)), xend + 1)
+    in
+    match l.[0] with
+    | 'D' ->
+      let (x, p) = int_from 2 in
+      let (y, p) = int_from p in
+      let s = String.sub l p (String.length l - p) in
+      D (x, y, s)
+    | 'F' -> 
+      let (x, p) = int_from 2 in
+      let s = String.sub l p (String.length l - p) in
+      F (x, s)
+    | _ -> invalid_arg "read"
+  with End_of_file -> Eof
+
+let rec loop dh fh ds cur_dir = 
+  let push_dir () =
+    let (dh_sz, dh) = dh in
+    if dh_sz > limit then 
+      (dh_sz, Dir_heap.insert cur_dir (Dir_heap.delete_min dh))
+    else 
+      (dh_sz + 1, Dir_heap.insert cur_dir dh)
+  in
+  
+  function
+  | Eof ->
+    (push_dir (), fh)
+  | D (no, par, nam) ->
+    let cur_dir =
+      {
+        Dir.parent = Some (Dir_set.find par ds);
+        Dir.name = nam;
+        Dir.size = 0;
+        Dir.no = no;
+      }
+    in loop (push_dir ()) fh (Dir_set.add cur_dir.Dir.no cur_dir ds) cur_dir (read ())
+  | F (sz, name) ->
+    let f = { File.size = sz; File.name = name; File.dir = cur_dir } in
+    let fh =
+      let (fh_sz, fh) = fh in
+      if fh_sz > limit then 
+        (fh_sz, File_heap.insert f (File_heap.delete_min fh))
+      else 
+        (fh_sz + 1, File_heap.insert f fh)
+    in loop dh fh ds {cur_dir with Dir.size = cur_dir.Dir.size + sz} (read ())
+
+let main =
+  let start nam =
+    let dir = { Dir.name = nam; Dir.size = 0; Dir.no = 0; Dir.parent = None } in
+    let ds = Dir_set.add 0 dir Dir_set.empty in
+    loop (0, Dir_heap.empty) (0, File_heap.empty) ds dir (read ()) 
+  in
+  let l = read_line () in
+  let (dh, fh) = Scanf.sscanf l "R 0 %[^\n]" start in
+  let dir_name d =
+    let rec loop acc = function
+      | { Dir.name = n; Dir.parent = None } -> n :: acc
+      | { Dir.name = n; Dir.parent = Some p } -> loop (n :: acc) p
+    in String.concat "/" (loop [] d)
+  in
+  let print_dir d = 
+    Printf.printf "%10d %s\n" d.Dir.size (dir_name d) 
+  in
+  let print_file f = 
+    Printf.printf "%10d %s/%s\n" f.File.size (dir_name f.File.dir) f.File.name
+  in
+  let dh =
+    let (dh_sz, dh) = dh in
+    if dh_sz > limit then Dir_heap.delete_min dh
+    else dh
+  in 
+  Printf.printf "DIRS:\n";
+  List.iter print_dir (List.sort Dir.compare (Dir_heap.flatten dh));
+  let fh =
+    let (fh_sz, fh) = fh in
+    if fh_sz > limit then File_heap.delete_min fh
+    else fh
+  in 
+  Printf.printf "FILES:\n";
+  List.iter print_file (List.sort File.compare (File_heap.flatten fh));
+
+--uAKRQypu60I7Lcqm
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="mkd.ml"
+
+let id = ref 0
+
+let rec go dir_name par_id =
+  Unix.chdir dir_name;
+  incr id;
+  let id = !id in
+  Printf.printf "D %d %d %s\n" id par_id dir_name;
+  let d = Unix.opendir "." in
+  let dirs = ref [] in
+  let rec loop () =
+    let f = Unix.readdir d in
+    let st = Unix.lstat f in
+    let _ =
+      match f.[0], st.Unix.st_kind with
+      | '.', _ -> ()
+      | _, Unix.S_DIR -> dirs := f :: !dirs
+      | _, Unix.S_REG -> Printf.printf "F %d %s\n" st.Unix.st_size f
+      | _ -> ()
+    in loop ()
+  in
+  begin
+    List.iter (fun f -> go f id) 
+      (try
+        loop ()
+       with End_of_file -> Unix.closedir d; !dirs)
+  end;
+  Unix.chdir ".."
+
+let _ =
+  Printf.printf "R 0 .\n";
+  go "." 0
+
+
+--uAKRQypu60I7Lcqm--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

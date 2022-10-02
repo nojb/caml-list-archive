@@ -1,0 +1,93 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA27131; Thu, 18 Dec 2003 08:59:08 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA27185 for <caml-list@pauillac.inria.fr>; Thu, 18 Dec 2003 08:59:06 +0100 (MET)
+Received: from smtp2.pp.htv.fi (smtp2.pp.htv.fi [213.243.153.14])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBI7wdX18731
+	for <caml-list@inria.fr>; Thu, 18 Dec 2003 08:58:55 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp2.pp.htv.fi (Postfix) with ESMTP id B71E0297117
+	for <caml-list@inria.fr>; Thu, 18 Dec 2003 09:58:38 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBI7wbT06003
+	for <caml-list@inria.fr>; Thu, 18 Dec 2003 09:58:38 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AWt3M-0002cK-00
+	for <caml-list@inria.fr>; Thu, 18 Dec 2003 09:58:36 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] Implementation plan for freeing dynamically loaded code
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Thu, 18 Dec 2003 09:58:35 +0200
+Message-ID: <87hdzyr1zo.fsf@naked.iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; dynamically:01 dynamically:01 pointers:01 malloc:01 finalization:01 alloc:01 finalization:01 alloc:01 behave:01 counterparts:01 traversing:01 dynlink:01 dynlink:01 mangling:01 behave:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This is an initial outline of an implementation plan for making
+dynamically loaded code garbage collectable.
+
+1. Custom block for code parts
+
+Implement a small module providing custom blocks, which give pointers
+to malloc()'d blocks and a finalization function which free()'s the
+blocks at that time.
+
+Allocation would call stat_alloc() and store the address in the custom
+block, finalization would call stat_free() on the address - and some
+function is provided to give the address as a string type, like
+Meta.static_alloc does.
+
+2. Two new bytecode instructions, CLOSUREDYN and CLOSURERECDYN
+
+These two instructions would behave mostly like their original
+counterparts, CLOSURE and CLOSUREREC, but would copy the *last*
+element of the current environment to be an extra last element in the
+generated closure. Environment should always be a closure pointer, so
+CLOSURE and CLOSUREREC would work similarily in this respect I
+believe.
+
+3. Bytecode patcher for CLOSURE,CLOSUREREC -> CLOSUREDYN,CLOSURERECDYN
+
+A simple bytecode traversing code that would change the CLOSURE
+opcodes to CLOSUREDYN opcodes and CLOSUREREC opcodes to
+CLOSURERECDYN. The 'size' of each instruction and almost ready code
+for this can be taken from tools/dumpobj.ml.
+
+4. Modification of dynlink.ml to use these
+
+The dynlink library needs to take advantage of these new functions. It
+needs to allocate the code block with the custom block code, it needs
+to run the bytecode patcher on the bytecode before starting it - and
+Meta.reify_bytecode needs to be altered to place a given value into
+the closure it creates for the bytecode. That way when the CLOSUREDYN
+calls are invoked when running the code block initially, they will
+have the reference to the allocated block as the last element of the
+environment. And since every code pointer that references this code
+block has to have been created from a CLOSUREDYN (or CLOSURERECDYN)
+instruction, we can safely use that last element of environment
+everywhere.
+
+And that's it.
+
+Strictly speaking, the new bytecode instructions aren't at all needed
+- but mangling the original bytecode to push the correct pointer on
+the stack so that it becomes the last parameter seems like a too
+difficult exercise. It becomes more viable if special compilation can
+be expected from dynamically loaded code.
+
+So, if anyone has improvement suggestions, or reasons why this
+wouldn't work at all, please tell me. Otherwise, I shall probably get
+to work in the near future and see what comes up. I wish to do a bunch
+of tests on custom blocks in any case, to learn how they really
+behave.
+
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

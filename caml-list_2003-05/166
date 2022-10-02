@@ -1,0 +1,76 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA09584; Fri, 16 May 2003 11:54:14 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA09947 for <caml-list@pauillac.inria.fr>; Fri, 16 May 2003 11:54:13 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h4G9sAH05915;
+	Fri, 16 May 2003 11:54:10 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA09906; Fri, 16 May 2003 11:54:10 +0200 (MET DST)
+Date: Fri, 16 May 2003 11:54:10 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Christoph Bauer <c_bauer@informatik.uni-kl.de>
+Cc: OCaml List <caml-list@inria.fr>
+Subject: Re: [Caml-list] POSIX Threads: kill
+Message-ID: <20030516115410.A8817@pauillac.inria.fr>
+References: <m3issbb8pr.fsf@diebuntekuh.de>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <m3issbb8pr.fsf@diebuntekuh.de>; from c_bauer@informatik.uni-kl.de on Fri, May 16, 2003 at 10:24:00AM +0200
+X-Spam: no; 0.00; caml-list:01 posix:01 threads:01 3.06:01 otherlibs:01 systhreads:01 implemented:01 cleanup:01 cancelled:99 unwind:01 runtime:01 threading:01 inherently:01 mutexes:01 compiler:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> in file ocam-3.06/otherlibs/systhreads/thread_posix is this comment:
+> 
+> (* Thread.kill is currently not implemented due to problems with
+>    cleanup handlers on several platforms *)
+> 
+> Is anybody working on it?
+
+The problem is as follows.  
+
+POSIX threads have a notion of cleanup handlers, which are functions
+that are called when the thread dies, either voluntarily (via
+pthread_exit) or by being cancelled by another thread (via
+pthread_cancel).
+
+On some platforms (Tru64 Unix for sure, perhaps Solaris as well),
+cleanup handlers are implemented via C++ exceptions.  (It is true that
+POSIX threads is a C interface, however the Tru64 C compiler
+understands C++ exceptions even when compiling pure C sources.)
+Namely, a cleanup handler is mapped to a try... finally construct that
+just does the right thing.
+
+The problem is that C++ exception handling is based on unwinding stack
+frames one by one till a matching exception handler is found.  This
+requires stack frames to adhere strictly to a particular format, and
+be equipped with stack descriptors that the C++ stack unwind mechanism
+understands.  But of course the stack frames used ocamlopt-generated
+code do not adhere to this format, and do not come with C++ stack
+descriptors.  Hence, if the "systhreads" library was using
+pthread_exit and pthread_cancel, the C/C++ runtime system would try to
+unwind Caml stack frames, and just crash the whole program.
+
+> Is there a solution for linux-i386?
+
+LinuxThreads on Linux doesn't rely on C++ exceptions, so it doesn't
+suffer from the problem above.  However, LinuxThreads is being
+replaced by NPTL, another, better threading library for Linux, and I
+don't know how NPTL implements cleanup handlers.
+
+The general solution is to avoid using Thread.kill.  Terminating another
+thread at arbitrary times is an inherently unsafe operation: the
+killed thread may be holding mutexes, for instance.  There's a good
+explanation of the problems in the Java documentation:
+
+http://java.sun.com/j2se/1.4.2/docs/guide/misc/threadPrimitiveDeprecation.html
+
+explaining why they "deprecated" their equivalent of Thread.kill.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

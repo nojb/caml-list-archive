@@ -1,0 +1,109 @@
+Return-Path: <markus.mottl@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 0E3A9BC57
+	for <caml-list@yquem.inria.fr>; Wed,  3 Mar 2010 18:47:33 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqYEAJ8vjkvRVdvWimdsb2JhbACREIluCBcBCgkMBxEFH7EagV6FJS2ISgEBAwWEdwSDFw
+X-IronPort-AV: E=Sophos;i="4.49,574,1262559600"; 
+   d="scan'208";a="45857278"
+Received: from mail-ew0-f214.google.com ([209.85.219.214])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 03 Mar 2010 18:47:32 +0100
+Received: by ewy6 with SMTP id 6so1188135ewy.17
+        for <caml-list@inria.fr>; Wed, 03 Mar 2010 09:47:32 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:in-reply-to:references
+         :date:message-id:subject:from:to:cc:content-type;
+        bh=0AouRrcZ9tCBXXwyV/5CqDeZH7vBR1MMkTcTXTl/Kng=;
+        b=oKOvNGn9tHzQbPaDVYMtYV6VdLbcM0hGz/KZjtKm1itgaBcteiD++pryBM47nAfREu
+         Dg2tPGlPjJRXbYovdynReG98gCWyv4AF9Y7gZvOUejp4z3v4iWLzQUIeQ/ZgDGJl4E+j
+         QEHQVpNGOl/lfQo0UeUOICiikHTjXEytvD0Qc=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :cc:content-type;
+        b=nwdU6Khs2K79SG7Cnk9aZ47idRKmseoLRe6ZTf0FK0Kjq/Tx5w72XyDNSQGFdz9+6a
+         4SChkXI5x1QKw9t0BKbFNwcyipi9rNtVm177hrS0nFleVev9k1Z+yegfcG0KTGd15P6O
+         aM5cwKxLWZBbEiqL4KA0LWbaYflMOMUE5LdFw=
+MIME-Version: 1.0
+Received: by 10.216.165.203 with SMTP id e53mr261833wel.68.1267638447491; Wed, 
+	03 Mar 2010 09:47:27 -0800 (PST)
+In-Reply-To: <1267636293.17362.1362924937@webmail.messagingengine.com>
+References: <1267636293.17362.1362924937@webmail.messagingengine.com>
+Date: Wed, 3 Mar 2010 12:47:27 -0500
+Message-ID: <f8560b81003030947y2ba72bacq332ec6947753d624@mail.gmail.com>
+Subject: Re: [Caml-list] Encoding an extensible parse tree and subtyping 
+	within OCaml
+From: Markus Mottl <markus.mottl@gmail.com>
+To: ocaml@optimojoe.com
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; subtyping:01 ocaml:01 markus:01 mottl:01 markus:01 mottl:01 ocaml:01 compiler:01 variants:01 printf:01 printf:01 recursive:01 variants:01 recursive:01 bread:98 
+
+On Wed, Mar 3, 2010 at 12:11,  <ocaml@optimojoe.com> wrote:
+> type basic'=('a basic as 'a) basic;;
+> type ext'=('a ext as 'a) ext;;
+
+This could also be written as:
+
+  type basic' = basic' basic
+  type ext' = ext' ext
+
+Cyclic types are acceptable to the compiler if the cycle is on
+polymorphic variants.
+
+> let (x:'a basic)=`Add (`Int 1,`Int 2);;
+> let (y:'a ext)=`Mul (x,`Int 3);;
+> let (z:'a basic)=`Add (`Int 3,x);;
+> let w=`Add (`Mul (`Int 1,`Int 2),`Int 3);;
+> let (bad:'a basic)=`Add (1,2);;
+
+When solving the problem with "bad", type constraints are your friend.
+ Just define type 'basic" as e.g.:
+
+  type 'a basic= [base | `Add of 'a*'a | `Sub of 'a*'a ] constraint 'a
+= [> base];;
+
+To fix the "Junk" problem, you may need to specify the type for one of
+the patterns, e.g.:
+
+       match x with
+       | (`Int x : ext')-> Printf.printf "%d" x
+       ...
+
+But the function itself is not extensible.  To achieve this, you'll
+have to define it in a similar way as we did for the type by
+introducing another parameter to "tie the recursive knot".  E.g.
+(ignore incorrect printing of arithmetic expressions):
+
+  let pp_base (`Int n) = Printf.printf "%d" n
+
+  let pp_basic pp = function
+    | #base as base -> pp_base base
+    | `Add (l, r) -> pp l; Printf.printf "+"; pp r
+    | `Sub (l, r) -> pp l; Printf.printf "-"; pp r
+
+  let pp_ext pp = function
+    | #basic as basic -> pp_basic pp basic
+    | `Mul (l, r) -> pp l; Printf.printf "*"; pp r
+
+  let rec pp_basic' basic' = pp_basic pp_basic' basic'
+  let rec pp_ext' ext' = pp_ext pp_ext' ext'
+
+You will need to constrain a pattern with a type again if you want to
+make sure that the pattern match fails in the right place (match case)
+if unsupported tags are added.  You could also turn warnings into
+errors, which should also fail on the "unused match case" then.
+
+IMHO, these features of polymorphic variants are the best thing since
+sliced bread, since they allow for elegant extensibility of e.g.
+recursive DSLs.
+
+Regards,
+Markus
+
+-- 
+Markus Mottl        http://www.ocaml.info        markus.mottl@gmail.com
+

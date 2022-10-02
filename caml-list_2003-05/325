@@ -1,0 +1,158 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA20416; Thu, 29 May 2003 00:50:37 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA20403 for <caml-list@pauillac.inria.fr>; Thu, 29 May 2003 00:50:25 +0200 (MET DST)
+Received: from grace.speakeasy.org (grace.speakeasy.org [216.254.0.2])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with SMTP id h4SMoOT22968
+	for <caml-list@inria.fr>; Thu, 29 May 2003 00:50:24 +0200 (MET DST)
+Received: (qmail 12266 invoked by uid 36130); 28 May 2003 22:49:37 -0000
+Received: from localhost (sendmail-bs@127.0.0.1)
+  by localhost with SMTP; 28 May 2003 22:49:37 -0000
+Date: Wed, 28 May 2003 15:49:37 -0700 (PDT)
+From: brogoff@speakeasy.net
+To: Warren Harris <warren@kontiki.com>
+cc: "caml-list@inria.fr" <caml-list@inria.fr>
+Subject: Re: [Caml-list] module type constraints problem
+In-Reply-To: <3ED5143A.4000706@kontiki.com>
+Message-ID: <Pine.LNX.4.44.0305281407160.32649-100000@grace.speakeasy.net>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Spam: no; 0.00; brogoff:01 caml-list:01 elt:01 val:01 struct:01 expr:01 harris:01 abstraction:01 iterated:01 mismatch:01 constrain:01 checker:01 equality:01 speakeasy:01 sig:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi, 
+
+Here's a hint; Your element type, 'a, is wrong. Try something like this:
+
+module type ITER =
+  sig
+    type 'a elt
+    type 'a t
+    val iter : ('a elt -> unit) -> 'a t -> unit
+  end
+
+module ListIter : ITER =
+  struct
+    type 'a elt = 'a 
+    type 'a t = 'a list
+    let iter f l = List.iter f l
+  end
+
+type expr =
+    Expr of int * expr * expr
+  | Int of int
+  | Unit
+
+module ExprIter : (ITER with type 'a elt = expr and type 'a t = expr) =
+  struct
+    type 'a elt = expr
+    type 'a t = expr
+    let rec iter f e =
+      begin
+        f e;
+        match e with
+          Expr(i, a, b) -> (iter f a; iter f b)
+        | _ -> ()
+      end
+  end
+
+-- Brian
+
+On Wed, 28 May 2003, Warren Harris wrote:
+
+> Hi. I'm wondering if someone on this mailing list can help me with a 
+> module type problem. What I would like to achieve is an iteration 
+> abstraction (module) that is parameterized by the node and element type 
+> of the data to be iterated over. I want to implement this abstraction 
+> for different data types including lists, and a language expression type.
+> 
+> In the list case, the element type is abstract ('a), and the node type 
+> is 'a list.
+> 
+> In the expr case, the element type is expr (the exprs themselves, not 
+> some sub-element of the exprs), and the node type is also expr.
+> 
+> Here's my module type:
+> 
+>     module type Iter =
+>     sig
+>       type 'a t
+>       val iter : ('a -> unit) -> 'a t -> unit
+>     end
+> 
+> and here's the list implementation (works great):
+> 
+>     module ListIter : Iter =
+>     struct
+>       type 'a t = 'a list
+>       let iter f l = List.iter f l
+>     end
+> 
+> Here's a simlified version of my expr type:
+> 
+>     type expr =
+>         Expr of int * expr * expr
+>       | Int of int
+>       | Unit
+> 
+> But this implementation of the Iter module won't type check:
+> 
+>     module ExprIter : Iter =
+>     struct
+>       type 'a t = expr
+>       let rec iter f e =
+>         f e;
+>         match e with
+>             Expr(i, a, b) -> iter f a; iter f b
+>           | e -> ()
+>     end
+> 
+>     Signature mismatch:
+>     Modules do not match:
+>       sig type 'a t = expr val iter : (expr -> 'a) -> expr -> unit end
+>     is not included in
+>       Iter
+>     Values do not match:
+>       val iter : (expr -> 'a) -> expr -> unit
+>     is not included in
+>       val iter : ('a -> unit) -> 'a t -> unit
+> 
+> Adding explicit constraints to the parameters of the iter function don't 
+> help either:
+> 
+>     module ExprIter : Iter =
+>     struct
+>       type 'a t = expr
+>       let rec iter (f:'a -> unit) (e:'a t) =
+>         f e;
+>         match e with
+>             Expr(i, a, b) -> iter f a; iter f b
+>           | e -> ()
+>     end
+> 
+>     Signature mismatch:
+>     Modules do not match:
+>       sig type 'a t = expr val iter : (('a t as 'a) -> unit) -> 'a ->
+>     unit end
+>     is not included in
+>       Iter
+>     Values do not match:
+>       val iter : (('a t as 'a) -> unit) -> 'a -> unit
+>     is not included in
+>       val iter : ('a -> unit) -> 'a t -> unit
+> 
+> Is there some additional way to constrain this problem such that the 
+> type checker will accept it? If you look closely, 'a t = 'a = expr yet 
+> the type checker is failing to deduce the equality of the two iter 
+> function types.
+> 
+> Any help would be greatly appreciated,
+> 
+> Warren
+> 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

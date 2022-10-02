@@ -1,0 +1,129 @@
+Return-Path: <fuchs@cs.uiowa.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 064EDBBAF
+	for <caml-list@yquem.inria.fr>; Sat, 23 May 2009 23:17:47 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AloCAKoEGEqA/yxhe2dsb2JhbACXYwEBFiIFqGQyhzCISgSECw
+X-IronPort-AV: E=Sophos;i="4.41,237,1241388000"; 
+   d="scan'208";a="40428689"
+Received: from serv07.divms.uiowa.edu ([128.255.44.97])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 23 May 2009 23:17:46 +0200
+Received: from [192.168.0.66] (97-127-128-185.cdrr.qwest.net [97.127.128.185])
+	(authenticated bits=0)
+	by serv07.divms.uiowa.edu (8.14.3/8.14.3) with ESMTP id n4NLHfXl012871
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NOT)
+	for <caml-list@inria.fr>; Sat, 23 May 2009 16:17:44 -0500
+DKIM-Signature: v=1; a=rsa-sha256; c=simple/simple; d=cs.uiowa.edu; s=cs;
+	t=1243113464; bh=m4fheQyn1gKwZN7dzB4wYwqn3aiesDClkDZgsx4sOgc=;
+	h=Subject:From:Reply-To:To:Content-Type:Date:Message-Id:
+	 Mime-Version:Content-Transfer-Encoding;
+	b=f4PtQODSGryyExWCEhGUBKALNWhdZ+fzPHDmQQRKyRjyqndTC9sjyZxelhnH3zc/B
+	 9x0dW+WbhxswAMvNvEh3W9AQFXMTQgGhRIJOiYgJhAHvZwc+/XliHJVwZpT+74EagR
+	 kDVCMsLtB1khVZUcP1hrlZ2dDcWjc+UlOWtdIeqQ=
+Subject: Strange buffering interaction: stdout / file_descr
+From: Alexander Fuchs <fuchs@cs.uiowa.edu>
+Reply-To: fuchs@cs.uiowa.edu
+To: caml-list@inria.fr
+Content-Type: text/plain
+Date: Sat, 23 May 2009 16:17:41 -0500
+Message-Id: <1243113461.18993.34.camel@Knecht>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.26.1 
+Content-Transfer-Encoding: 7bit
+X-DIVMS-Sent: RDbOueLDZYaK3ZLujxHSOQ
+X-Scanned-By: MIMEDefang 2.67 on 128.255.44.22
+X-Virus-Scanned: clamav-milter 0.95.1 at serv07.divms.uiowa.edu
+X-Virus-Status: Clean
+X-Spam: no; 0.00; stdout:01 uiowa:01 stdout:01 bug:01 ocamlc:01 ocaml:01 byte:01 stdin:01 stdin:01 -version:01 buffer:01 buffer:01 endline:01 endline:01 waitpid:01 
+
+Hi,
+
+I am trying to use Unix.create_process to create a process and redirect
+its input/output channels. Actually, as a first step I want to determine
+if process creation succeeded. I couldn't find any straightforward way
+to figure this out, so I am just making the program output its version,
+and them I am trying to read from its output channel. If the output
+channel is ready according to Unix.select, but returns 0 bytes with
+Unix.read, I can conclude that process creation failed (e.g. the wrong
+path was given). I hope I am just missing something obvious here and
+someone can point me to a better solution.
+
+Anyway, when doing this, I get some strange behavior. First the main
+program outputs something on stdout, without flushing stdout. Then a
+process is created, with redirecting it input/output channels to new
+socket pairs, but process creation fails (intentionally). But now
+reading from the process' stdout, which should be completely independent
+from the main program's stdout, yields what was previously output on the
+main program's stdout. If instead I flush stdout before calling
+Unix.create_process, this doesn't happen, and nothing can be read from
+the failed process' stdout, as expected.
+
+Is this a bug in the interaction of channels / file_descr, or should
+this be make sense? 
+
+For illustration I attached a sample program, compile with ocamlc
+unix.cma <file_name>. It first outputs "main" on its stdout, then tries
+to create a process, fails, reads "main" from the process' stdout, and
+prints it.
+
+Tested with ocaml 3.11.0 native and byte code, on x86_64 GNU/Linux.
+
+
+Thanks,
+	Alex
+
+
+
+
+let () =
+  print_string "main";
+
+  let (stdout_r, stdout_w) = Unix.socketpair Unix.PF_UNIX
+Unix.SOCK_STREAM 0 in
+  let (stdin_r, stdin_w) = Unix.socketpair Unix.PF_UNIX Unix.SOCK_STREAM
+0 in
+
+  let cmd = "none" in
+
+  (* without flush reading from stdout_r yields "main" *)
+  (* flush stdout; *)
+  let pid = Unix.create_process cmd [| cmd; "-version" |] stdin_r
+stdout_w stdout_w in
+
+  Unix.close stdin_r;
+  Unix.close stdout_w;
+
+  begin
+
+    let (outs, _, _) = Unix.select [stdout_r] [] [] (-1.0) in
+
+    match outs with
+    | [out] ->
+        let buffer = String.make 100 ' ' in
+        let size =  Unix.read out buffer 0 100 in
+
+        if size > 0 then begin
+          print_endline (buffer)
+        end
+
+        else begin
+          print_endline "create_process failed"
+        end
+
+    | _ ->
+        assert false;
+  end;
+
+  Unix.close stdout_r;
+  Unix.close stdin_w;
+  Unix.kill pid Sys.sigkill;
+  let (_, _status) = Unix.waitpid [] pid in
+  ()
+
+

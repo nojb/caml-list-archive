@@ -1,0 +1,159 @@
+Return-Path: <william.wood3@comcast.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id D287BBB81
+	for <caml-list@yquem.inria.fr>; Sat,  1 Oct 2005 07:46:42 +0200 (CEST)
+Received: from rwcrmhc12.comcast.net (rwcrmhc12.comcast.net [216.148.227.85])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j915kfBo000507
+	for <caml-list@yquem.inria.fr>; Sat, 1 Oct 2005 07:46:42 +0200
+Received: from 192.168.1.100 (c-24-118-210-113.hsd1.mn.comcast.net[24.118.210.113])
+          by comcast.net (rwcrmhc12) with SMTP
+          id <2005100105464001400ko6dme>; Sat, 1 Oct 2005 05:46:40 +0000
+Subject: Re: Ant:  Re: [Caml-list] Avoiding shared data
+From: Bill Wood <william.wood3@comcast.net>
+To: caml-list@yquem.inria.fr
+In-Reply-To: <200509301707.01281.pal_engstad@naughtydog.com>
+References: <20050926081727.GA9114@coruscant.stwing.upenn.edu>
+	 <20050926210730.55850.qmail@web26803.mail.ukl.yahoo.com>
+	 <20050930225737.GA592@first.in-berlin.de>
+	 <200509301707.01281.pal_engstad@naughtydog.com>
+Content-Type: text/plain; charset=iso-8859-13
+Date: Sat, 01 Oct 2005 00:46:39 -0500
+Message-Id: <1128145599.23400.55.camel@localhost>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.0.1-1mdk 
+Content-Transfer-Encoding: 8bit
+X-Miltered: at concorde with ID 433E22C1.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 avoiding:01 shivers:01 icfp:01 gatech:01 shivers:01 argues:01 rec:01 verbose:01 verbose:01 refactor:01 hof:01 monadic:01 syntax:01 haskell:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.9 required=5.0 tests=DNS_FROM_RFC_POST,
+	DNS_FROM_RFC_WHOIS,FORGED_RCVD_HELO autolearn=disabled version=3.0.3
+
+   . . .
+> I've always thought that this was a really bad argument from the ML camp. The 
+> logic of complicated control-paths is very easily made a zillion times worse 
+> by writing in a tail-recursive style. It is *not* a good programming practice 
+> to make hard-to-read code!
+> 
+> I encourage people to read the paper by Olin Shivers: "The Anatomy of a Loop - 
+> A story of scope and control", which was presented at ICFP 2005, and can be 
+> found at http://www.cc.gatech.edu/~shivers/papers/loop.pdf.
+> 
+> The author argues that "Writing loops with tail-recursive function calls is 
+> the equivalent of writing them with gotoÿs." and gives an example that I've 
+> rewritten from Scheme-ish into OCaml-ish:
+> 
+> let myfunc l =
+>   let rec loop rest result =
+>     match rest with 
+>       | [] -> List.rev result
+>       | x::xs -> 
+> 	  if xpred x then
+> 	    let y = verbose_code_using_x x in
+> 	      if ypred y then 
+> 		let z = verbose_code_using_y y in
+> 		  loop xs (z_expression :: result)
+> 	      else
+> 		loop xs result
+> 	  else
+> 	    loop xs result
+>   in
+>     loop l [] 
+> ;;
+> 
+> Obviously, one would like to refactor this into HOF, but in this situation it 
+> is hard to see how one should do it. The author instead proposes to use loops 
+> in a monadic style, which I've again rewritten:
+> 
+> let myfunc l =
+>    loop [ for x in l
+> 	; when xpred x 
+> 	;   let y = verbose_code_using_x x
+> 	;   when ypred y
+> 	;     let z = verbose_code_using_y y
+> 	;     save z
+> 	]
+> 
+> The point being (syntax aside) that this code is much more readible, easier to 
+> change and easier to verify than the code given above. [Of course, Haskell 
+> has the really cool list-comprehension syntax that alleviates some of ML's 
+> problems, but still.]
+
+I about half agree with Mr. Engstad's observation.  I have often used
+the fact that the accumulator passed around in tail-recursive functions
+acts like a state (some people call these *state threads*), and I've
+used techniques like pushing Dijkstra's weakest-precondition predicate
+transformers over accumulators to reason about tail-recursive functional
+code almost as if it were imperative (the only difference with Mr.
+Shivers is that my programming is goto-less :-).
+
+However, the example is a little unfortunate in that transforming it to
+an arguably cleaner HOF form is fairly easy.  If we first define
+function composition as an operator (shouldn't this be an OCaml
+Pervasive?), say
+
+  let ($@) fyz fxy x = fyz (fxy x);;
+
+then the tail-recursive version of myfunc transforms into my_hof_func:
+
+   let my_hof_func l =
+     let fumble =
+       let save = rev $@ (fold_left (fun la i -> i :: la) []) in
+         save $@
+	   (map verbose_code_using_y) $@
+	     (filter ypred) $@
+	       (map verbose_code_using_x) $@
+	         (filter xpred)
+   in fumble l;;
+
+where packaging and return of the result has been encapsulated in the
+local function 'save' (I'm also assuming z_expression was supposed to be
+z).
+
+A minor problem is that the textual order of the predicates and
+functions is reversed.  Even this can be handled by a sleazy trick --
+reverse the order of the operands to the compose operator like so:
+
+   let ($@) fxy fyz x = fyz (fxy x);;
+
+We can then rewrite my_hof_func as
+
+   let my_hof_func l =
+     let fumble =
+       let save = (fold_left (fun la i -> i :: la) []) $@ rev in
+         (filter xpred)             $@
+         (map verbose_code_using_x) $@
+         (filter ypred)             $@
+         (map verbose_code_using_y) $@
+         save
+   in fumble l;;
+
+The actions/functions are read in the order they are performed/applied,
+and trivial reformatting even makes it look sorta like imperative code.
+
+A very similar transformation could be done on the "Scheme-ish"
+original, where a variable-arity form (compose f1 ... fn) is used to
+equally good effect.
+
+I think the ease-of-reading issue can now be revisited on a slightly
+more even playing field.  The transformed, HOF, code is a couple of
+lines longer, but the meaning is fairly transparent because native OCaml
+facilities are used throughout.  The monadic form above is a trifle
+shorter, but has the liability that the new syntax has complex semantics
+-- what *exactly* is going on with "when" and "save"?.  I note also that
+the monadic form looks very similar to the infamous Common Lisp "loop"
+facility (the one towards the back of The Book, with all the keywords).
+Many lispers love it, and many loathe it.
+
+Does anybody know if MLers have looked at either the Series or the
+Generators-and-Gatherers described in Appendices A and B of Common Lisp
+the Language, 2nd ed.?  Some of the ideas there look interesting.
+
+Interesting topic,
+
+ -- Bill Wood
+    bill.wood@acm.org
+
+

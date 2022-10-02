@@ -1,0 +1,151 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA32758; Tue, 24 Aug 2004 12:27:02 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA21807 for <caml-list@pauillac.inria.fr>; Tue, 24 Aug 2004 12:27:01 +0200 (MET DST)
+Received: from relay.felk.cvut.cz (relay.felk.cvut.cz [147.32.80.7])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i7OAR0RM030996
+	for <caml-list@pauillac.inria.fr>; Tue, 24 Aug 2004 12:27:00 +0200
+Received: from k333.felk.cvut.cz (k333.felk.cvut.cz [147.32.87.5])
+	by relay.felk.cvut.cz (8.12.11/8.12.11) with ESMTP id i7OALlOs041887
+	for <caml-list@pauillac.inria.fr>; Tue, 24 Aug 2004 12:21:47 +0200 (CEST)
+	(envelope-from kybic@fel.cvut.cz)
+Received: from K333/SpoolDir by k333.felk.cvut.cz (Mercury 1.48);
+    24 Aug 04 12:21:47 +0100
+Received: from SpoolDir by K333 (Mercury 1.48); 24 Aug 04 12:21:23 +0100
+Received: from biogw-ii-19.felk.cvut.cz (147.32.84.19) by k333.felk.cvut.cz (Mercury 1.48) with ESMTP;
+    24 Aug 04 12:21:20 +0100
+To: caml-list@pauillac.inria.fr
+Subject: [Caml-list] Re:  Correct locations for macro camlp4 extensions
+References: <m2657aw64q.fsf@biogw-ii-19.felk.cvut.cz>
+	<1093281685.412a2795efb43@webmail.fas.harvard.edu>
+From: Jan Kybic <kybic@fel.cvut.cz>
+In-Reply-To: <1093281685.412a2795efb43@webmail.fas.harvard.edu>
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.2.93
+Date: 24 Aug 2004 09:02:29 +0200
+Message-ID: <m23c2d6mt6.fsf_-_@biogw-ii-19.felk.cvut.cz>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Lines: 109
+X-MailScanner-felk: Found to be clean
+X-MailScanner-SpamCheck-felk: not spam, SpamAssassin (score=-4.481,
+	required 5, BAYES_00 -4.90, DATE_IN_PAST_03_06 0.42)
+X-Miltered: at concorde with ID 412B17F4.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; camlp:01 haskell:01 camlp:01 parentheses:01 'where':99 420:99 ocamlc:01 -pp:01 mlast:01 usr:01 pcaml:01 mlast:01 expr:01 expr:01 gensym:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Which Haskell operator features does this emulate?  I know you can make an 
+> operator without any camlp4 that does right-associative application, basically 
+
+What I had in mind is function decomposition '.', you write
+
+( f . g . h ) x     instead of        h ( g ( f x ) ) 
+
+The other operator is '$':
+
+f $ g $ h x         instead of        f ( g ( h x ) )
+
+both can save a lot of parentheses. 
+
+As somebody else on the list asked, I am attaching a source code
+syntext.ml and an example for the syntax extensions I mentioned in my
+previous email ( operator '$', 'repeat'/'until' cycle, 'where' expression, and
+generalized 'for' cycle.) Bear in mind, though, that I have not
+written any of them and I understand only in general terms how they
+work. I am only posting them here so that they are not lost. (I am not
+adding pa_macro, since it is a part of the standard distribution.)
+
+Now, the question remains: How do I instrument the code below so that
+the ocaml compiler is informed about the correct line numbers?
+
+Jan
+
+-- 
+-------------------------------------------------------------------------
+Jan Kybic <kybic@ieee.org>                  tel. +420 2 2435 7264
+       or <kybic@fel.cvut.cz>,     http://cmp.felk.cvut.cz/~kybic
+
+(** Syntax extensions for Caml programs. To be compiled with
+	ocamlc -pp "camlp4o pa_extend.cmo q_MLast.cmo" \
+	-I /usr/lib/ocaml/camlp4 -c syntext.ml
+ *)
+
+ open Pcaml
+
+#load "pa_extend.cmo";;
+#load "q_MLast.cmo";;
+
+
+let expr_where = Grammar.Entry.create gram "expr_where";;
+let let_gen = Grammar.Entry.create gram "let_general";;
+
+let gensym =
+  let cnt = ref 0 in
+  fun var ->
+    let x = incr cnt; !cnt in
+    var ^ "_gensym" ^ string_of_int x
+      
+let gen_for loc v iv wh nx e =
+  let loop_fun = gensym "iter" in
+  <:expr<
+  let rec $lid:loop_fun$ $lid:v$ =
+    if $wh$ then do { $e$; $lid:loop_fun$ $nx$ } else ()
+ in $lid:loop_fun$ $iv$ >>
+       
+   
+ EXTEND
+
+   (* infix operator $, functional composition *)
+  expr: AFTER "apply"
+   [[ f = expr; "$"; g = expr -> <:expr< fun x -> $f$ ($g$ x) >> ]];
+
+
+   (* repeat/until cycle *)
+  expr: LEVEL "expr1"
+    [[ "repeat"; e1 = expr; "until"; e2 = expr ->
+         <:expr< do { $e1$; while not $e2$ do { $e1$ } } >> ]];
+
+  (* where expressions *)
+  expr: BEFORE "top"
+	[[ e = SELF; (ifRec,l) = expr_where -> 
+	    <:expr< let $rec:ifRec!=None$ $list:l$ in $e$ >> ]];
+
+  expr_where:
+	[["where"; _ = OPT "begin"; (ifRec,l) = let_gen; "end" ->
+	    (ifRec,l)
+	| "where"; "("; (ifRec,l) = let_gen; ")" -> (ifRec,l) ]];
+
+  
+  let_gen: [[r = OPT "rec"; l = LIST1 let_binding SEP "and" -> (r,l)]];
+
+         expr: LEVEL "expr1"
+           [ [ "for"; v = LIDENT; iv = expr LEVEL "simple";
+               wh = expr LEVEL "simple"; nx = expr LEVEL "simple";
+               "do"; e = expr; "done" ->
+                 gen_for loc v iv wh nx e ] ]
+         ;
+
+
+ END;;
+
+(* examples, how to use the syntax extensions. To be compiled with:
+  ocamlc -pp "camlp4o ./syntext.cmo" -I /usr/lib/ocaml/camlp4 test.ml\
+          -o test
+*)
+
+let _ =  
+         repeat print_int (z 3) ; until true
+           where ( z x = (f $ g ) x where
+                     ( f x = x + 3 and g x = x + 7 )
+                 )
+
+
+let _ = for c 0 (c<10) (c+2) do print_int c; done
+
+(* end of examples *)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

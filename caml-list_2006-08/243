@@ -1,0 +1,124 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 7C039BB83
+	for <caml-list@yquem.inria.fr>; Thu, 24 Aug 2006 07:38:17 +0200 (CEST)
+Received: from ash25e.internode.on.net (ash25e.internode.on.net [203.16.214.182])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k7O5cFAv021342
+	for <caml-list@yquem.inria.fr>; Thu, 24 Aug 2006 07:38:16 +0200
+Received: from rosella (ppp14-47.lns2.syd7.internode.on.net [59.167.14.47])
+	by ash25e.internode.on.net (8.13.6/8.13.5) with ESMTP id k7O5bnm2044286;
+	Thu, 24 Aug 2006 15:07:50 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] Re: Select on channels (again)
+From: skaller <skaller@users.sourceforge.net>
+To: Nathaniel Gray <n8gray@gmail.com>
+Cc: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>,
+	caml-list@yquem.inria.fr
+In-Reply-To: <aee06c9e0608231231w26e34f8cs6e44e55ed2c236ab@mail.gmail.com>
+References: <aee06c9e0608211547o6130050aq70a265cc1f50611d@mail.gmail.com>
+	 <ad8cfe7e0608211742g6bb29ad6i9d13d5f07abafe27@mail.gmail.com>
+	 <aee06c9e0608212327y25e87a11wa52b40a1653a2d55@mail.gmail.com>
+	 <20060822.172138.82692882.garrigue@math.nagoya-u.ac.jp>
+	 <aee06c9e0608222216r6fc72f84vd0a2dcdb04cc1ec8@mail.gmail.com>
+	 <1156314944.7834.46.camel@rosella.wigram>
+	 <aee06c9e0608231231w26e34f8cs6e44e55ed2c236ab@mail.gmail.com>
+Content-Type: text/plain
+Date: Thu, 24 Aug 2006 15:37:49 +1000
+Message-Id: <1156397869.16998.122.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.6.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 44ED3B47.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; semantics:01 non-blocking:01 sockets:01 integers:01 sockets:01 integers:01 non-blocking:01 byte:01 semantics:01 bounded:01 bounded:01 semantically:01 2006:98 sourceforge:01 sourceforge:01 
+
+On Wed, 2006-08-23 at 12:31 -0700, Nathaniel Gray wrote:
+> On 8/22/06, skaller <skaller@users.sourceforge.net> wrote:
+
+> > The problem would be the semantics you indicate above.
+> > You're going to get non-blocking behaviour when the
+> > channels are quiet, but once there is some data,
+> > you get blocking.
+> 
+> I don't follow you.  Are you talking about input or output channels?
+> Can you give an example?
+
+Sure .. two sockets, with integers coming down them encoded as
+characters .. perhaps a CSV file.
+
+The sockets are quiet. Then some data comes down one,
+and you go off and try to read an integer .. but half way
+through you run out of data and block.
+
+Now a whole stream of integers comes down the OTHER socket.
+Bad luck, your thread is blocked waiting on data from the
+first socket.
+
+Select or not .. buffering or not: you might as well have just 
+picked a socket and done a blocking read on it.
+
+Unless you can *guarantee* some invariant is preserved,
+you've achieved nothing.
+
+The correct way to use select is in conjunction
+with a polling loop that does non-blocking I/O. 
+
+Polling all your channels without blocking is what you want,
+that way you read or write data efficiently.
+
+But such a polling loop wastes cycles and isn't very responsive,
+so you use select() to skip over polling channels that cannot 
+be ready, if that happens to be all of them, you might as well
+block until the situation changes, if some channels are
+ready you can go off and try I/O on them, and not bother
+with the non-ready channels.
+
+The key thing here is that select is an optimisation:
+the IMPORTANT point is that the polling must use
+non-blocking I/O.
+
+Note: just because select() indicates an fd is ready
+doesn't mean it is. There's no assurance even one byte
+can be read or written.
+
+Select() is just like a condition variable -- you have
+to assume spurious wakeups. Both provide a way to know
+when and what to check which avoids excessive polling.
+Select, like condition variables, are just hints to
+improve response time and resource utilisation:
+they have no semantics. (More precisely the delivery
+of a signal MUST wake up the client but the converse
+isn't required).
+
+The important semantics are in YOUR code: the condition 
+check must not block, similarly, I/O must not block.
+
+So basically doing blocking I/O in conjunction
+with select makes no sense.
+
+IF you had some known semantics such as that
+messages were of bounded length and transmitted
+in bounded time .. select would be useful, since
+blocking operations would block only for bounded time,
+in which case they're not blocking at all.
+
+So you are right, a channel based select COULD be useful,
+given such a constraint, however it doesn't break the
+rule above, since blocking for a bounded time is 
+semantically a non-blocking operation: an operation
+is only blocking if it can block for an unbounded time.
+
+For this reason most programmers consider all disk I/O
+as non-blocking .. even though the OS kernel may
+not agree with this interpretation :)
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

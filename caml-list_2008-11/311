@@ -1,0 +1,135 @@
+Return-Path: <darioteixeira@yahoo.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: **
+X-Spam-Status: No, score=2.0 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE,
+	DNS_FROM_RFC_POST,DNS_FROM_RFC_WHOIS autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 7AA06BB84
+	for <caml-list@yquem.inria.fr>; Sat, 29 Nov 2008 17:40:54 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiQCALf+MElDww+1mGdsb2JhbACOJYUjAQEBAQEICQwHEa5Ci0YFAgGCeg
+X-IronPort-AV: E=Sophos;i="4.33,687,1220220000"; 
+   d="scan'208";a="20548891"
+Received: from web111509.mail.gq1.yahoo.com ([67.195.15.181])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 29 Nov 2008 17:40:53 +0100
+Received: (qmail 37536 invoked by uid 60001); 29 Nov 2008 16:40:52 -0000
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+  s=s1024; d=yahoo.com;
+  h=X-YMail-OSG:Received:X-Mailer:Date:From:Subject:To:MIME-Version:Content-Type:Content-Transfer-Encoding:Message-ID;
+  b=V6gxRw4zNqr0vK7yOvKXgjF6zkW+JmeWitOwCNAlJiq2lr95lf4tYLHKew/jZJFqJSCK/JulfYoovyoaChls454qxEaI46mEYEVqb+SAN94qi7kefhpBpUHFBUVoLSbgFEIia4W6GJtDPcc3zpZ/s5Q6A+T1PBFM2l9Rhy2LVvQ=;
+X-YMail-OSG: CFdkJCMVM1kxkf0UYp7jp5T59O08ZdSoFuZxc8_iU9QOuO4jGqeEwiTzYGmpHU2.6bJWJdsJ5lxhnOV4hnev7RdvK1s4iDz4dtHQ3apzP_vfsOmyrmKVtAWkU6xJ9OCR2CRDrpxZSDDdO2R5RmPpTxTBRCk.8TT3gjxNmdKm
+Received: from [213.205.70.212] by web111509.mail.gq1.yahoo.com via HTTP; Sat, 29 Nov 2008 08:40:51 PST
+X-Mailer: YahooMailWebService/0.7.260.1
+Date: Sat, 29 Nov 2008 08:40:51 -0800 (PST)
+From: Dario Teixeira <darioteixeira@yahoo.com>
+Subject: Issues with Sexplib (#1)
+To: caml-list@yquem.inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <110907.37517.qm@web111509.mail.gq1.yahoo.com>
+X-Spam: no; 0.00; foobar:01 foobar:01 constructors:01 constructors:01 sig:01 sexp:01 sexp:01 val:01 val:01 struct:01 endline:01 compile-time:01 runtime:01 runtime:01 recursively:01 
+
+Hi,
+
+I have found a couple of issues with Sexplib/Type-conv.  I am not sure they
+are bugs or features, but to me they come across as unexpected, regardless.
+In this message I'll report the first one;  the second follows momentarily.
+
+Consider the Foobar module defined below.  It uses a phantom type to annota=
+te
+values of type Foobar.t, defined recursively.  The idea is that constructor=
+s
+A and C are deemed "basic" while B and D are "complex".  Functions make_bas=
+ic
+and make_complex are used to "freeze" the structure.  Because the complex
+phantom value propagates across a structure, one cannot apply make_basic to
+a structure that uses any of the complex constructors.  On the other hand,
+make_complex can be applied to any structure.
+
+module Foobar:
+sig
+    type foobar_t =3D
+        | A
+        | B
+        | C of foobar_t
+        | D of foobar_t
+        with sexp
+
+    type basic_t =3D [ `Basic ] with sexp
+    type complex_t =3D [ `Complex ] with sexp
+
+    type 'a t with sexp
+
+    val make_a: unit -> [> `Basic ] t
+    val make_b: unit -> [> `Complex ] t
+    val make_c: 'a t -> 'a t
+    val make_d: 'a t -> [> `Complex ] t
+
+    val make_basic: [< `Basic ] t -> [ `Basic ] t
+    val make_complex: [< `Basic | `Complex ] t -> [ `Complex ] t
+end =3D
+struct
+    type foobar_t =3D
+        | A
+        | B
+        | C of foobar_t
+        | D of foobar_t
+        with sexp
+
+    type basic_t =3D [ `Basic ] with sexp
+    type complex_t =3D [`Complex ] with sexp
+
+    type 'a t =3D foobar_t with sexp
+
+    let make_a () =3D A
+    let make_b () =3D B
+    let make_c foobar =3D C foobar
+    let make_d foobar =3D D foobar
+
+    let make_basic x =3D x
+    let make_complex x =3D x
+end
+
+
+So far so good; now consider the code below, which serialises and then
+unserialises a value of type Foobar.t.  Note how a "complex" structure
+can be unserialised as "basic" without any consequences.  Therefore, the
+(de)serialisation process can be used to circumvent the restrictions impose=
+d
+by the phantom type.
+
+open Foobar
+
+let foobar =3D make_complex (make_c (make_b ()))
+
+let doc =3D
+     let sexp =3D sexp_of_t sexp_of_complex_t foobar in
+     let str =3D Sexplib.Sexp.to_string_hum sexp
+     in print_endline str;
+     let sexp2 =3D Sexplib.Sexp.of_string str in
+     let doc =3D t_of_sexp basic_t_of_sexp sexp2
+     in doc
+
+
+The resulting types are:
+
+val foobar : Document.Foobar.complex_t Document.Foobar.t    (* Complex *)
+val doc : Document.Foobar.basic_t Document.Foobar.t         (* Basic *)
+
+I understand that phantom types have only a compile-time significance,
+with no runtime expression at all (hence their name).  Therefore, it's not
+altogether surprising that the S-expression builder would simply ignore the=
+m.
+Still, is there a way to make them explicit in the serialised data, such
+that the unserialiser would cause a runtime error in the above example?
+Note that the serialiser is already passed sexp_of_complex_t though it
+doesn't seem to put it into any actual use.
+
+Thanks for your time!
+Best regards,
+Dario Teixeira
+=0A=0A=0A      
+

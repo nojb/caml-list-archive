@@ -1,0 +1,202 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA13356; Sat, 24 Apr 2004 10:09:04 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA13410 for <caml-list@pauillac.inria.fr>; Sat, 24 Apr 2004 10:09:03 +0200 (MET DST)
+Received: from mail-in-01.arcor-online.net (mail-in-01.arcor-online.net [151.189.21.41])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i3O892YM027396
+	for <caml-list@inria.fr>; Sat, 24 Apr 2004 10:09:02 +0200
+Received: from diebuntekuh.de (dialin-212-144-210-002.arcor-ip.net [212.144.210.2])
+	by mail-in-01.arcor-online.net (Postfix) with ESMTP id C3EB9BD14C1
+	for <caml-list@inria.fr>; Sat, 24 Apr 2004 10:08:59 +0200 (CEST)
+Received: by diebuntekuh.de (Postfix, from userid 500)
+	id D3DED608EC0; Sat, 24 Apr 2004 10:15:00 +0200 (CEST)
+To: OCaml List <caml-list@inria.fr>
+Subject: Re: [Caml-list] how to define a property list
+References: <Pine.SOL.4.44.0404231958500.23434-100000@clipper.ens.fr>
+	<m3wu46cyt0.fsf@diebuntekuh.de>
+From: Christoph Bauer <c_bauer@informatik.uni-kl.de>
+Date: Sat, 24 Apr 2004 10:15:00 +0200
+In-Reply-To: <m3wu46cyt0.fsf@diebuntekuh.de> (Christoph Bauer's message of
+ "Fri, 23 Apr 2004 20:51:55 +0200")
+Message-ID: <m3pt9xkd17.fsf@diebuntekuh.de>
+User-Agent: Gnus/5.1006 (Gnus v5.10.6) Emacs/21.3 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 bauer:01 bauer:01 200105:01 rewrote:01 none':99 bug:01 hashtable:01 unit-:01 mli:01 concret:99 functor:01 val:01 val:01 tigger:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+>> http://caml.inria.fr/archives/200105/msg00175.html
+
+I rewrote this code as a module. Differences are
+
+  * there is no `prop := None' bug (maybe others)
+  * it uses a hashtable to find the unit->unit functions (should be much faster)
+  * Symbols can be created from strings, variants, ints, ...
+  * properties can have trigger-functions, one for get and one for put. These
+    function will be called on each reading or modifying of the property. 
+    This is maybe more than someone wants, but it's cheap to implement.
+
+
+Is there one of those ExtLibs which accepts this module as contribution?
+
+Regards,
+Christoph Bauer
+
+(* symbols.mli *)
+
+(** Symbols with properties of various types. *)
+
+module type KEY_TYPE = sig type t end
+(** 
+
+  KEYTYPE abstracts from the concret type of a symbol.
+  
+*)
+
+
+
+module Make :
+  functor (Key_type : KEY_TYPE) ->
+    sig
+      type 'a property 
+      type symbol 
+      val make : Key_type.t -> symbol
+	(** [make key] creates a symbol. *)
+      val key_of_symbol : symbol -> Key_type.t
+	(** [key_of_symbol symbol] returns the key of a symbol. *)
+
+      val make_property :
+        ?put_trigger:(symbol -> 'a -> unit) ->
+        ?get_trigger:(symbol -> 'a -> unit) -> unit -> 'a property
+	(** [make_property ?put_tigger ?get_trigger ()] creates a new property.
+	     [put symbol this_property] calls the [put_trigger] (if specified) 
+	  and [get symbol this_property] calls the [get_trigger]. *)
+
+      val put : symbol -> 'a property -> 'a -> unit
+	(** [put symbol prop value] puts a property with value [value] to a symbol.
+	  [put] calls the put_trigger for property.
+	*)
+      val get : symbol -> 'a property -> 'a
+	(** [get symbol property] returns the value of the property of the symbol.  
+	  [get] calls the get_trigger for property.
+	*)
+    end
+
+
+(** [StringSymbol = Make(String)] *)
+module StringSymbol :
+  sig
+    type 'a property 
+    type symbol 
+    val symbol_table : (String.t, symbol) Hashtbl.t
+    val make : String.t -> symbol
+    val key_of_symbol : symbol -> String.t
+    val make_property :
+      ?put_trigger:(symbol -> 'a -> unit) ->
+      ?get_trigger:(symbol -> 'a -> unit) -> unit -> 'a property
+    val put : symbol -> 'a property -> 'a -> unit
+    val get : symbol -> 'a property -> 'a
+  end
+
+(* symbols.ml *)
+
+module type KEY_TYPE =
+sig
+  type t
+end
+
+	    
+let some_of = 
+  function 
+      Some x -> x
+    | None -> invalid_arg "some_of"
+
+module Make(Key_type: KEY_TYPE) =
+  struct
+    type 'a  property = {
+      id : int;
+      mutable value : 'a option;
+      get_trigger : (symbol -> 'a ->  unit) option; (* maybe mutable ? *)
+      put_trigger : (symbol -> 'a -> unit) option; (* maybe mutable ? *)
+    }
+    and symbol = {
+      name : Key_type.t;
+      mutable properties : (int, unit->unit) Hashtbl.t;
+    }
+	
+    let symbol_table = Hashtbl.create 127
+    let make name = 
+      try Hashtbl.find symbol_table name 
+      with Not_found ->
+	let s = { name = name; properties = Hashtbl.create 13 } in
+	  Hashtbl.add symbol_table name s;
+	  s
+	    
+    let key_of_symbol symbol = symbol.name
+				    
+    let pcounter = ref ~-1
+    let make_property ?put_trigger ?get_trigger () =  (* not thread safe *)
+      incr pcounter;
+      { 
+	id = !pcounter; 
+	value = None;
+	get_trigger = get_trigger;
+	put_trigger = put_trigger;
+      }
+	
+    let put symbol prop value =
+      Hashtbl.add symbol.properties prop.id (fun () -> prop.value <- Some value);
+      match prop.put_trigger with
+	  Some g -> g symbol value
+	| None -> ()
+
+	    
+    let get symbol prop =
+      let f = Hashtbl.find symbol.properties prop.id in
+	f ();
+	(match prop.get_trigger with
+	     Some g -> g symbol (some_of prop.value);
+	   | None -> ());
+	some_of prop.value
+  end
+
+module StringSymbol = Make(String)
+
+
+(* symbol_test.ml *)
+
+module Symbol = Symbol.StringSymbol
+
+let () = 
+  let symbol = Symbol.make "hello" in
+  let string_property = Symbol.make_property 
+			  ~get_trigger:  (fun s v -> print_endline ("get on `" ^ Symbol.key_of_symbol s ^ "' returns `" ^ v ^ "'")) () 
+  and int_property = Symbol.make_property
+		       ~put_trigger: (fun s v -> print_endline ("put `" ^ string_of_int v ^ "' to `" ^ Symbol.key_of_symbol s ^ "'")) () 
+  and bool_property = Symbol.make_property () in
+    Symbol.put symbol string_property "test";
+    Symbol.put symbol int_property 42;
+    Symbol.put symbol bool_property true;
+    let s = Symbol.get symbol string_property
+    and i = Symbol.get symbol int_property
+    and b = Symbol.get symbol bool_property in
+      print_endline 
+	("s=" ^ s ^ "\n" 
+	 ^ "i=" ^ string_of_int i ^ "\n"
+	 ^ "b=" ^ if b then "true" else "false")
+    
+					
+-- 
+beginfig(1)u=3cm;draw fullcircle scaled 2u;x0=x1=y1=x2=y3=0;-y0=y2=x3=1u;
+filldraw z0..{left}z1{left}..z2{curl 1}..z3..z0..cycle;def t(expr p)=fullcircle
+scaled .25u shifted(0,p*u);enddef;unfill t(.5);fill t(-.5);endfig;bye
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

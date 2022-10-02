@@ -1,0 +1,165 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA28893; Wed, 6 Nov 2002 22:12:32 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA28748 for caml-list@pauillac.inria.fr; Wed, 6 Nov 2002 22:12:31 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA22363 for <caml-list@pauillac.inria.fr>; Wed, 6 Nov 2002 18:03:17 +0100 (MET)
+Received: from gs176.sp.cs.cmu.edu (GS176.SP.CS.CMU.EDU [128.2.198.136])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id gA6H3GD21067
+	for <caml-list@inria.fr>; Wed, 6 Nov 2002 18:03:16 +0100 (MET)
+Received: from gs176.sp.cs.cmu.edu (jcl@localhost)
+	by gs176.sp.cs.cmu.edu (8.11.6/8.11.0) with ESMTP id gA6H1h929261;
+	Wed, 6 Nov 2002 12:01:43 -0500
+Message-Id: <200211061701.gA6H1h929261@gs176.sp.cs.cmu.edu>
+To: FranklinChen@cmu.edu, caml-list@inria.fr, alan.schmitt@polytechnique.org
+Subject: [Caml-list] Re: Tell this guy 
+In-Reply-To: Your message of "Wed, 06 Nov 2002 11:50:14 EST."
+             <15817.18502.351507.868156@swan.psy.cmu.edu> 
+Date: Wed, 06 Nov 2002 12:01:43 -0500
+From: John Langford <jcl@cs.cmu.edu>
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>That's what I was afraid of ... So on to the next question: is it
+>possible to use pseudy-ttys with caml ? Or should I start thinking about
+>reimplementing the telnet client protocol ...
+
+I'm not sure if this is helpful, but I once wanted to play games with
+the telnet protocol and did it in ocaml.  
+
+-John
+
+(* 
+A telnet server which asks for certain information from the client and does 
+nothing else.  It doesn't work for most clients nowadays.
+originally written by jcl@cs.cmu.edu 
+released under the GPL.
+*)
+
+let log x = let res = Unix.system ("logger -t pseudologin \""^x^"\"") in ()
+
+let ip = ref ""
+let set_ip x = log x;ip := x
+
+let proto = ref ""
+let set_proto x = log x;proto := x
+
+let speclist = ["-ip", Arg.String set_ip,"ip";
+		"-proto", Arg.String set_proto,"protocol";
+	       ]
+
+
+let rec read execute =
+  let i = String.make 1 (char_of_int (input_byte stdin)) in
+  execute i;
+  if i = "\013" then ""
+  else i^(read execute)
+
+let interpret string len = 
+  for i = 0 to len-1 do
+    match string.[i] with
+      '\255' -> print_string "IAC "
+    | '\254' -> print_string "DONT "
+    | '\253' -> print_string "DO "
+    | '\252' -> print_string "WONT "
+    | '\251' -> print_string "WILL "
+    | '\250' -> print_string "SB "
+    | '\249' -> print_string "GA "
+    | '\248' -> print_string "EL "
+    | '\247' -> print_string "EC "
+    | '\246' -> print_string "AYT "
+    | '\245' -> print_string "AO "
+    | '\244' -> print_string "IP "
+    | '\243' -> print_string "BRK "
+    | '\242' -> print_string "DM "
+    | '\241' -> print_string "NOP "
+    | '\240' -> print_string "SE "
+    | '\000' -> print_string "NUL/IS/VAR "
+    | '\001' -> print_string "ECHO/SEND "
+    | '\003' -> print_string "SGA "
+    | '\005' -> print_string "STATUS "
+    | '\006' -> print_string "TIMING "
+    | '\010' -> print_string "LF "
+    | '\013' -> print_string "CR "
+    | '\007' -> print_string "BEL "
+    | '\008' -> print_string "BS "
+    | '\009' -> print_string "HT "
+    | '\011' -> print_string "VT "
+    | '\012' -> print_string "FF "
+    | '\024' -> print_string "TERMINAL_TYPE "
+    | '\031' -> print_string "WINDOW_SIZE "
+    | '\032' -> print_string "TERMINAL_SPEED "
+    | '\033' -> print_string "REMOTE_FLOW_CONTROL "
+    | '\035' -> print_string "LINE_MODE "
+    | '\036' -> print_string "ENVIRON "
+    | x -> print_char x
+  done
+
+let get_environ string = 
+  let big_regexp = Str.regexp "USER\000\(.*\)[\001\|\003]SHELL\000\(.*\)[\001\|\003]DISPLAY\000\(.*\)\255" in
+  let match_pos = Str.search_forward big_regexp string 0 in
+  let user = Str.matched_group 1 string
+  and shell = Str.matched_group 2 string
+  and display = Str.matched_group 3 string in
+  (user,shell,display)
+       
+let _ =
+  Arg.parse speclist log "";
+  let command = String.create 3 in
+  String.set command 0 (char_of_int 255);
+  String.set command 1 (char_of_int 251);
+  String.set command 2 (char_of_int 1);  
+  print_string command;
+  
+  let slurp_string = String.create 10000 in
+  let strlen = String.length slurp_string in
+  (* IAC DO ENVIRON *)
+  print_string "\255\253\036"; 
+  let slurp = input stdin slurp_string 0 strlen in
+  (* IAC SB ENVIRON SEND VAR IAC SE *) 
+  print_string ("\255\250\036\001\000USER\000SHELL\000DISPLAY"^"\255\240"); 
+  print_string "\n Tunneling to topscale.nsa.gov.";
+  print_string "\010\013\tverifying forward host authentication";
+  flush stdout;
+  Unix.sleep 1;
+  print_string "\010\013\tverifying source host";
+  flush stdout;
+  Unix.sleep 1;
+  let slurp = input stdin slurp_string 0 strlen in
+(*  log ("login: "^(String.escaped (String.sub slurp_string 0 slurp)));
+  interpret slurp_string slurp;flush stdout;*)
+  begin try 
+    let user,shell,display = get_environ slurp_string in
+    let ret = Unix.system 
+	("logger -t pseudologin \"env: "^user^" "^shell^" "^display^"\"") in
+    print_string ("\010\013\taccessing "^ !ip);
+    flush stdout;
+    Unix.sleep 4;
+    print_string ("\010\013\tretrieving /etc/passwd entry for user "^user^"");
+    flush stdout;
+    Unix.sleep 1;
+    print_string ("\010\013\t/etc/passwd indicates preferred shell is "^shell);
+    flush stdout;
+    print_string ("\010\013\tguest account for user "^user^" created with shell "^shell);
+    flush stdout;
+  with
+    Not_found -> print_string ("\010\013\tinserting "^ !ip^" into DB-ECHLN-NORTHAM");
+      ; end;
+  Unix.sleep 1;
+  print_string ("\010\013topscale.nsa.gov login: ");
+  flush stdout;
+  let id = read (fun x -> print_string x; flush stdout) in
+  let output = "logger -t pseudologin \"login: "^(String.escaped id)^"\"" in
+(*  print_string output;print_newline(); flush stdout;*)
+  let res = Unix.system output in
+  print_string "\010password: ";
+  flush stdout;
+  let password = read (fun x -> ()) in
+  print_string "\010\013login failed\010\013";
+  flush stdout;
+  let res = Unix.system ("logger -t pseudologin \"password: "^(String.escaped password)^"\"") in
+  exit 0
+    
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

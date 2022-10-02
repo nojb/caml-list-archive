@@ -1,0 +1,125 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 43DBC7EFCD
+	for <caml-list@sympa.inria.fr>; Wed,  1 Oct 2014 12:29:47 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail3-smtp-sop.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AksBAO7WK1RCJwNzd2dsb2JhbABgg2FZyjSHVQKBChYBEQEMBw8HQIQEAgQnUhshEyEdKxSIQ748GI4TgStoBxaDGIEdBZYphwkBmXIhL4JKAQEB
+X-IPAS-Result: AksBAO7WK1RCJwNzd2dsb2JhbABgg2FZyjSHVQKBChYBEQEMBw8HQIQEAgQnUhshEyEdKxSIQ748GI4TgStoBxaDGIEdBZYphwkBmXIhL4JKAQEB
+X-IronPort-AV: E=Sophos;i="5.04,631,1406584800"; 
+   d="scan'208";a="81517228"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 01 Oct 2014 12:29:46 +0200
+Received: by www1.g3.pair.com (Postfix, from userid 9370)
+	id AA0C0C382A; Wed,  1 Oct 2014 06:29:43 -0400 (EDT)
+From: oleg@okmij.org
+To: gabriel.scherer@gmail.com
+CC: goswin-v-b@web.de, caml-list@inria.fr
+In-reply-to:
+	<CAPFanBFyQApQX7rwkjy1PCyKqyyjuP0YauOJcnw58AFoEiyGZg@mail.gmail.com>
+Message-Id: <20141001102943.AA0C0C382A@www1.g3.pair.com>
+Date: Wed,  1 Oct 2014 06:29:43 -0400 (EDT)
+Subject: Re: [Caml-list] Why List.map does not be implemented
+
+
+Gabriel Scherer wrote
+> My intuition would be that the mutation should not be observable in this
+> case, as it is only done on "private" data that the List.map function
+> allocate, owns, and which never escapes in its immutable form.
+
+Let me explain, on the example of the simplest Hansei function
+        val flip : float -> bool
+that flips (a possibly unfair) coin; flip 0.5 flips the fair coin.
+A good way to understand the meaning of this function is to take the
+frequentist approach. There are two ways the function call (flip 0.5)
+can return: it can return with true or with false. There are total two
+choices, in one of them the function returns true, in another
+false. So, the probability of returning true is 1/2. In general, the
+complete distribution -- which is the meaning of the program 
+(flip 0.5) -- is as follows
+
+# exact_reify (fun () -> flip 0.5);;
+- : bool Ptypes.pV = [(0.5, Ptypes.V true); (0.5, Ptypes.V false)]
+
+which is what Hansei computes. Let's take a more complex example,
+closer to the topic: two independent coin flips
+
+# let model () = List.map flip [0.5; 0.5]
+val model : unit -> bool list = <fun>
+
+# exact_reify model;;
+- : bool list Ptypes.pV =
+[(0.25, Ptypes.V [true; true]); (0.25, Ptypes.V [true; false]);
+ (0.25, Ptypes.V [false; true]); (0.25, Ptypes.V [false; false])]
+
+The result correctly tells that there are four possible choices.
+
+Let us consider the function map from the Batteries. After desugaring,
+it has the following form
+
+type 'a mut_list = {
+    hd: 'a;
+    mutable tl: 'a list
+  }
+
+let map : ('a -> 'b) -> 'a list -> 'b list = fun f -> function
+  | [] -> []
+  | h :: t ->
+      let rec loop dst = function
+        | [] -> ()
+        | h :: t ->
+            let cell = {hd = f h; tl = []} in
+            dst.tl <- Obj.magic cell;
+            loop cell t
+      in
+      let r = {hd = f h; tl = []} in
+      loop r t;
+      Obj.magic r
+
+Using this function, we obtain
+
+# let model1 () = map flip [0.5; 0.5]
+val model1 : unit -> bool list = <fun>
+
+# exact_reify model1
+- : bool list Ptypes.pV =
+[(0.5, Ptypes.V [true; false]); (0.5, Ptypes.V [false; false])]
+
+Something went wrong, didn't it? Where are the other two possible
+choices -- with true for the second flip -- for the list of two
+independent coin flips?
+
+To understand the problem, let us recall the main principle stated
+earlier: ``There are two ways the function call (flip 0.5)
+can return: it can return with true or with false.'' That is, the
+function call (flip 0.5) returns *twice*. Therefore, the call (f h)
+in the let cell statement returns twice. Therefore, the assignment
+            dst.tl <- Obj.magic cell;
+will be executed twice. And the second execution of that assignment
+will be with a different cell, which will override and destroy the
+result of the first assignment. That is how the "true" choices became
+lost.
+
+
+

@@ -1,0 +1,149 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 673E37F7C3
+	for <caml-list@sympa.inria.fr>; Fri, 14 Feb 2014 09:57:47 +0100 (CET)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.212;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.212;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.212;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApcBAPps/VLB/BfUnGdsb2JhbABZDoMwg1e8UoEvDgEBAQEBCAsJCRQogiUBAQQBIwQLAQUzDQYLCxgCAgUWCwICCQMCAQIBRQYBDAgBAYd5DKZTohEXgSmNHTqCb4FJAQOUQ4NpgTKFFY5KQA
+X-IPAS-Result: ApcBAPps/VLB/BfUnGdsb2JhbABZDoMwg1e8UoEvDgEBAQEBCAsJCRQogiUBAQQBIwQLAQUzDQYLCxgCAgUWCwICCQMCAQIBRQYBDAgBAYd5DKZTohEXgSmNHTqCb4FJAQOUQ4NpgTKFFY5KQA
+X-IronPort-AV: E=Sophos;i="4.95,843,1384297200"; 
+   d="scan'208";a="58433461"
+Received: from msa03.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.212])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 14 Feb 2014 09:57:46 +0100
+Received: from [192.168.1.133] ([92.151.124.253])
+	by mwinf5d12 with ME
+	id S8xl1n00a5U8taL038xmBt; Fri, 14 Feb 2014 09:57:46 +0100
+Message-ID: <52FDDA89.5070303@frisch.fr>
+Date: Fri, 14 Feb 2014 09:57:45 +0100
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:24.0) Gecko/20100101 Thunderbird/24.3.0
+MIME-Version: 1.0
+To: Christophe Troestler <Christophe.Troestler@umons.ac.be>, 
+ OCaml Mailing List <caml-list@inria.fr>
+References: <20140214.082352.48621319473754158.Christophe.Troestler@umons.ac.be>
+In-Reply-To: <20140214.082352.48621319473754158.Christophe.Troestler@umons.ac.be>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 8bit
+Subject: Re: [Caml-list] First class modules aliases
+
+Hi Christophe,
+
+On 02/14/2014 08:23 AM, Christophe Troestler wrote:
+> I have encoutered several annoyances with module aliasing in the
+> context of first class modules.  For example, if I declare
+>
+>      module type A = sig type t end
+>      type 'a a = (module A with type t = 'a)
+>      module type IA = A with type t = int
+>      type ia = (module IA)
+>
+> then I expect the types “int a” and “ia” to be equivalent but this is
+> not the case:
+>
+>      let f (a: int a) = (a : ia)
+>
+> gives the error
+>
+>      This expression has type int a = (module A with type t = int)
+>      but an expression was expected of type ia = (module IA)
+
+Indeed, two "package types" are equal (w.r.t. unification) if they have 
+the same module type path (nominally, after expanding bare module type 
+aliases) and the same list of constraints (modulo reordering).  In this 
+case, module type paths are different (A and IA) and so are the lists of 
+constraints (of respective length 1 and 0).
+
+One could try to use a more relaxed definition of equality, based on 
+actually comparing module type expressions.  At least for closed package 
+types (i.e. for (module A with t = int) but not (module A with t = 'a)), 
+this might be doable, although introducing a dependency between the 
+unification algorithm and the equality check for module types might 
+cause unexpected problems.
+
+> Another example is:
+>
+>      module X = struct
+>        module type T = sig type s end
+>        type 'a t = (module T with type s = 'a)
+>        let id (x: int t) = x
+>      end
+>
+>      let f (x: int X.t) = x
+>
+>      module Y = struct
+>        include X
+>        let h x = f(id x)
+>      end
+>
+> To make it work, I basically have to perform by hand the aliasing that
+> “include X” should make:
+>
+>      module Y : sig type 'a t  val h : int t -> int t end = struct
+>        type 'a t = 'a X.t
+>        let h x = f(X.id x)
+>      end
+
+Here the problem is that "include X" copies the definition of the module 
+type T, as if you had written:
+
+   module T = sig type s end
+
+and thus it introduces a new module type path.  Since package types use 
+a nominal equality between module type paths, (module T) and (module 
+X.T) are incompatible.   One way to fix it would be to tweak the 
+"strengthening" algorithm which adds equalities to module types in order 
+to turn a module type declaration to an alias to the original definition 
+instead of copying it.  Concretely, one would change in 
+Mtype.strengthen_sig:
+
+
+   | Sig_modtype(id, decl) :: rem ->
+       let newdecl =
+         match decl.mtd_type with
+           None ->
+             {decl with mtd_type = Some(Mty_ident(Pdot(p, Ident.name id, 
+nopos)))}
+         | Some _ ->
+             decl
+       in
+       ...
+
+into:
+
+   | Sig_modtype(id, decl) :: rem ->
+       let newdecl =
+             {decl with mtd_type = Some(Mty_ident(Pdot(p, Ident.name id, 
+nopos)))}
+       in
+       ...
+
+Since module type paths are interpreted nominally (for first-class 
+modules), it could indeed make sense to keep the equation like that.
+
+But maybe there are unfortunate consequences of doing so.  I hope that 
+our usual experts of the type system will comment!
+
+
+
+Alain

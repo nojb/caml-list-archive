@@ -1,0 +1,134 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA22281; Fri, 14 Feb 2003 16:22:59 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA21533 for <caml-list@pauillac.inria.fr>; Fri, 14 Feb 2003 16:22:58 +0100 (MET)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.177])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h1EFMvf24034
+	for <caml-list@inria.fr>; Fri, 14 Feb 2003 16:22:57 +0100 (MET)
+Received: from [212.227.126.160] (helo=mrelayng.kundenserver.de)
+	by moutng.kundenserver.de with esmtp (Exim 3.35 #1)
+	id 18jhg1-0008Cp-00; Fri, 14 Feb 2003 16:22:57 +0100
+Received: from [80.129.97.26] (helo=gate.gerd-stolpmann.de)
+	by mrelayng.kundenserver.de with asmtp (Exim 3.35 #1)
+	id 18jhg0-0001BX-00; Fri, 14 Feb 2003 16:22:56 +0100
+Received: from ice.gerd-stolpmann.de (ice.gerd-stolpmann.de [192.168.0.13])
+	by gate.gerd-stolpmann.de (Postfix) with ESMTP
+	id 646E556C5; Fri, 14 Feb 2003 16:23:26 +0100 (CET)
+Received: by ice.gerd-stolpmann.de (Postfix, from userid 1000)
+	id C157DB059; Fri, 14 Feb 2003 16:23:02 +0100 (CET)
+Subject: Re: [Caml-list] SIGTERM signal in multithreaded application
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Basile STARYNKEVITCH <basile@starynkevitch.net>
+Cc: caml-list@inria.fr
+In-Reply-To: <15948.5589.540342.961807@hector.lesours>
+References: <15948.5589.540342.961807@hector.lesours>
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+X-Mailer: Ximian Evolution 1.0.5 
+Date: 14 Feb 2003 16:23:02 +0100
+Message-Id: <1045236182.970.111.camel@ice>
+Mime-Version: 1.0
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Am Don, 2003-02-13 um 23.01 schrieb Basile STARYNKEVITCH:
+> Dear All
+> 
+> while working on  POESIA - www.poesia-filter.org ; see CVS code under
+> http://www2.poesia-filter.org:8000/ 
+> 
+> I notice that (with the native ocamlopt 3.06 compiler) on my Linux/x86
+> Debian/Sid (2.4.20 kernel, glibc 2.3.1)
+> 
+> When a multithreaded process is sent a SIGTERM or SIGINT signal
+> (either by a ^C on the terminal, or by the kill command) every thread
+> executes the signal handler with a negative signal number, and the
+> Sys.sigterm is -11 (negative eleven)
+> 
+> Is it possible to code so that only the main thread recieves a SIGTERM
+> signal and not all threads? Is this a Linux pthread or a OCaml runtime
+> system issue?
+> 
+> (I don't master all the subtilities of Linux threads, in particular
+> w.r.t signals).
+
+Unfortunately, Linux does not implement the pthread specification
+correctly for signal handling. pthread says that only one thread
+gets the signal, and the thread is selected among all threads that
+do not block the signal explicitly (there is a per-thread blocking
+mask in addition to the usual per-process mask).
+
+Linux, however, does not distinguish correctly between processes
+and threads. Every thread is actually a process with special
+attributes, and thus signals can be directly sent to threads,
+as threads have PIDs. Furthermore, threads are members of process
+groups.
+
+What happens if you press ^C? sigint is sent to the whole process
+group, and this includes all threads individually (which is wrong).
+So all threads get this signal. A correct implementation would
+deliver the signal only to one of the threads.
+
+What happens if you kill the main (topmost) process? sigterm is 
+sent to this process only, and special logic forwards the signal
+to one of the subprocesses that implement the threads. But only
+to one of the threads, and this is the correct handling according
+to the pthread specification.
+
+If you do not set a signal handler for sigterm, all threads are
+terminated. This is again the right behaviour.
+
+I am a bit confused that you say that every thread gets such a
+sigterm. Are you sure that you do not mix this case up with the
+two other mentioned situations?
+
+There seems to be no real solution for controlling signal handling
+in mt programs in O'Caml. There is no function that calls
+pthread_sigmask to prevent that certain threads get signals.
+The description for Thread.wait_signal sounds like that this function
+would attract all signals sent to the process, but in reality 
+the function waits only for signals that happen to be delivered
+to the thread.
+
+What we need is a way to create a thread that does all signal
+handling. A simple solution would an argument to Thread.create
+indicating whether the new thread receives signals or not,
+so it is simple to handle all signals in one thread:
+
+------------------------------------------------------------------
+let f_signal lock =
+  (* Wait until the game is over, and handle signals in the meantime *)
+  Mutex.lock lock
+;;
+
+let lock_signal = Mutex.create() in
+Mutex.lock lock_signal;
+
+(* Creating threads: *)
+let t1 = Thread.create ~signals:false f1 () in
+...
+let tn = Thread.create ~signals:false fN () in
+let ts = Thread.cretae ~signals:true f_signal lock_signal in
+
+(* Waiting for shutdown: *)
+Thread.join t1;
+...
+Thread.join tn;
+
+(* Stopping ts manually: *)
+Mutex.unlock lock_signal;
+Thread.joind ts;
+------------------------------------------------------------------
+
+I think this is already enough to solve the usual signal problems.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+------------------------------------------------------------
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

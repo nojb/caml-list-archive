@@ -1,0 +1,107 @@
+Return-Path: <rich@annexia.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by sympa.inria.fr (Postfix) with ESMTPS id 5DC777ED35
+	for <caml-list@sympa.inria.fr>; Mon, 16 Jul 2012 14:23:31 +0200 (CEST)
+Received-SPF: None (mail1-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  rich@annexia.org) identity=pra; client-ip=80.68.91.176;
+  receiver=mail1-smtp-roc.national.inria.fr;
+  envelope-from="rich@annexia.org";
+  x-sender="rich@annexia.org"; x-conformance=sidf_compatible
+Received-SPF: Pass (mail1-smtp-roc.national.inria.fr: domain of
+  rich@annexia.org designates 80.68.91.176 as permitted sender)
+  identity=mailfrom; client-ip=80.68.91.176;
+  receiver=mail1-smtp-roc.national.inria.fr;
+  envelope-from="rich@annexia.org";
+  x-sender="rich@annexia.org"; x-conformance=sidf_compatible;
+  x-record-type="v=spf1"
+Received-SPF: None (mail1-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@furbychan.cocan.org) identity=helo;
+  client-ip=80.68.91.176;
+  receiver=mail1-smtp-roc.national.inria.fr;
+  envelope-from="rich@annexia.org";
+  x-sender="postmaster@furbychan.cocan.org";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvwEAJYHBFBQRFuw/2dsb2JhbABFuSyBB4JOE4EOJiiIRQeaX6BiBIVOiR2CPGADlTqJJ4ZggmA
+X-IronPort-AV: E=Sophos;i="4.77,594,1336341600"; 
+   d="scan'208";a="167012303"
+Received: from furbychan.cocan.org ([80.68.91.176])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/AES256-SHA; 16 Jul 2012 14:23:29 +0200
+Received: from rich by furbychan.cocan.org with local (Exim 4.72)
+	(envelope-from <rich@annexia.org>)
+	id 1SqkKl-0003fp-Gi
+	for caml-list@inria.fr; Mon, 16 Jul 2012 13:23:27 +0100
+Date: Mon, 16 Jul 2012 13:23:27 +0100
+From: "Richard W.M. Jones" <rich@annexia.org>
+To: caml-list@inria.fr
+Message-ID: <20120716122327.GA16367@annexia.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: [Caml-list] Anyone else seeing core dumps in
+ caml_thread_reinitialize?
+
+
+I'm certainly not ruling out a bug in either libguestfs or our OCaml
+4.00.0 +beta2 package, but has anyone who writes highly intensive
+multithreaded programs which also fork seen segfaults in
+caml_thread_reinitialize just after the fork?
+
+The actual code being hit is:
+
+  static void caml_thread_reinitialize(void)
+  {
+    caml_thread_t thr, next;
+    struct channel * chan;
+
+    /* Remove all other threads (now nonexistent)
+       from the doubly-linked list of threads */
+    thr = curr_thread->next;
+    while (thr != curr_thread) {
+      next = thr->next;            <---
+      stat_free(thr);
+      thr = next;
+    }
+
+and here is the stack trace:
+
+#0  0x00000000004abcc8 in caml_thread_reinitialize ()
+#1  0x0000003fc26bab9e in __libc_fork ()
+    at ../nptl/sysdeps/unix/sysv/linux/fork.c:188
+#2  0x0000003fc266cf34 in _IO_new_proc_open (fp=fp@entry=0x7f7868000f30, 
+    command=command@entry=0x7f787a7fa2c0 "LC_ALL=C '/bin/qemu-kvm' -nographic -version 2>/dev/null", mode=<optimized out>, mode@entry=0x7f7881ecd090 "r")
+    at iopopen.c:187
+#3  0x0000003fc266d1c7 in _IO_new_popen (
+    command=0x7f787a7fa2c0 "LC_ALL=C '/bin/qemu-kvm' -nographic -version 2>/dev/null", mode=0x7f7881ecd090 "r") at iopopen.c:308
+#4  0x00007f7881eab88d in test_qemu_cmd (g=g@entry=0x7f78680008c0, 
+    cmd=cmd@entry=0x7f787a7fa2c0 "LC_ALL=C '/bin/qemu-kvm' -nographic -version 2>/dev/null", ret=ret@entry=0x7f7868000910) at launch.c:1428
+#5  0x00007f7881eaba04 in test_qemu (g=0x7f78680008c0) at launch.c:1410
+#6  0x00007f7881eabaea in qemu_supports (g=g@entry=0x7f78680008c0, 
+    option=option@entry=0x0) at launch.c:1479
+#7  0x00007f7881eac921 in launch_appliance (g=g@entry=0x7f78680008c0)
+    at launch.c:586
+#8  0x00007f7881ead991 in guestfs__launch (g=g@entry=0x7f78680008c0)
+    at launch.c:530
+#9  0x00007f7881e4fda8 in guestfs_launch (g=g@entry=0x7f78680008c0)
+    at actions.c:1119
+#10 0x0000000000496ad8 in ocaml_guestfs_launch (gv=578721382704613384)
+    at guestfs_c_actions.c:7544
+#11 0x00000000004c3f9a in caml_c_call ()
+#12 0x0000000000000001 in ?? ()
+
+Unfortunately I have not been able to reproduce this bug in anything
+smaller than my very large test case, which is why I'm asking if
+anyone else has seen anything like this before.
+
+  https://bugzilla.redhat.com/show_bug.cgi?id=838081
+
+Rich.
+
+-- 
+Richard Jones
+Red Hat

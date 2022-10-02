@@ -1,0 +1,79 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA15195; Fri, 12 Dec 2003 22:26:50 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA15163 for <caml-list@pauillac.inria.fr>; Fri, 12 Dec 2003 22:26:49 +0100 (MET)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBCLQl107836
+	for <caml-list@inria.fr>; Fri, 12 Dec 2003 22:26:47 +0100 (MET)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.12.10/1.01.28121999) with ESMTP id hBCLQlaW091041
+          ; Fri, 12 Dec 2003 22:26:47 +0100 (CET)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.12.3/jb-1.1)
+	id hBCLQkl8000297 ; Fri, 12 Dec 2003 22:26:46 +0100 (MET)
+X-Authentication-Warning: clipper.ens.fr: frisch owned process doing -bs
+Date: Fri, 12 Dec 2003 22:26:46 +0100 (MET)
+From: Alain.Frisch@ens.fr
+X-X-Sender: frisch@clipper.ens.fr
+Reply-To: Alain.Frisch@ens.fr
+To: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+cc: Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Freeing dynamically loaded code
+In-Reply-To: <874qw594ys.fsf@naked.iki.fi>
+Message-ID: <Pine.SOL.4.44.0312122135110.13180-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavisd-milter (http://amavis.org/)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; alain:01 frisch:01 caml-list:01 dynamically:01 closures:01 generic:01 stub:01 stub:01 faked:01 dynlink:01 faked:01 closures:01 alain:01 interp:01 closure:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, 12 Dec 2003, Nuutti Kotivuori wrote:
+
+> Well, like Xavier Leroy said at the end of the mail - *he* probably
+> isn't doing it. That doesn't mean there wouldn't be someone else crazy
+> enough to try :-)
+>
+> And atleast I'm not dropping the investigation just yet.
+
+Thinking again about the technical challenge (put the dynlink'ed code
+under GC control), I think the following approach is worth a try.
+
+The question is how to let the GC know that the code block cannot be freed
+as long as there is some accessible closure pointing into this block. We
+can think of using something similar to InfixTag, but this is a heavy
+solution as it requires to modify the GC in many places.
+
+I propose to avoid creating "bad" closures that points to the loaded code.
+We simulate a bad closure by a closure to a generic stub. In addition to
+the normal environment, we put two additional slots into this closure: a
+pointer to the code block and an offset. This closure is fully under the
+control of the GC. The stub is made of a single instruction (or maybe two,
+see next paragraph), say a new bytecode CALL_DYN, which computes the real
+destination from the closure and jumps to it. We also need a new
+CLOSURE_DYN bytecode that behaves as CLOSURE but create a faked closure
+instead of a bad one. Dynlink changes CLOSURE to CLOSURE_DYN when it loads
+a module. We need to take care of GRAB, RESTART and CLOSUREREC similarly.
+
+We also need to make sure that the "active" code blocks (the ones which
+have an active stack frame) are accessible by the GC. We have to be
+careful since the faked closure may become inacessible even if it
+is currently running (because of an in-place modification). So CALL_DYN
+should keep its closure on the stack (which contains a pointer to the
+code block) and call the real function. The bytecode following CALL_DYN
+would just pop the closure after the function returns.
+
+These changes does not affect the GC at all, and are simple additions to
+the bytecode interpreter (interp.c). The cost of calling closures to
+dynlink'ed modules is increased, but we don't really care since:
+1) this is bytecode, so anyway ...
+2) non dynlink'ed code is not affected at all
+
+
+Any comment on this?
+
+  Alain
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

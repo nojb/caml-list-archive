@@ -1,0 +1,141 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA05683 for caml-redistribution; Mon, 4 Jan 1999 20:10:15 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA27979 for <caml-list@pauillac.inria.fr>; Mon, 4 Jan 1999 17:27:35 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id RAA04252;
+	Mon, 4 Jan 1999 17:27:32 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA08357; Mon, 4 Jan 1999 17:27:33 +0100 (MET)
+Message-ID: <19990104172733.40923@pauillac.inria.fr>
+Date: Mon, 4 Jan 1999 17:27:33 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Laurent Colombet <Laurent.Colombet@cea.fr>, caml@vega.serma.cea.fr,
+        caml-list@inria.fr
+Subject: Re: Q: How i can use Mutex and thread ..
+References: <368101B2.87BE44C6@cea.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <368101B2.87BE44C6@cea.fr>; from Laurent Colombet on Wed, Dec 23, 1998 at 03:44:03PM +0100
+Sender: weis
+
+>   I have the following error :
+>         Objective Caml version 2.01
+> # let forks = Array.create 5 (Mutex.create());;
+> Reference to undefined global `Mutex'
+
+If you wish to use threads under the toplevel environment, you need to
+build a custom toplevel first:
+
+        ocamlmktop -custom -thread -o threadedocaml threads.cma -cclib -lthreads
+
+(This is for bytecode threads; if you're using POSIX threads or
+Windows threads, see the manual, chapter "The threads library", for
+the correct libraries to use.)
+
+Then, just run "threadedocaml" and voilà, you've got the thread
+functions.
+
+> P.S. Examples of Ocaml programs using thread are welcome
+
+Enclosed below are two good examples: one shows a "producer" thread
+and a "consumer" thread connected via a bounded circular buffer
+(illustrates mutexes and conditions); the other is the well-known
+channel-based sieve of Eratosthenes (illustrates events).
+
+Hope this helps,
+
+- Xavier Leroy
+
+(******************** Classic producer-consumer **********************)
+
+type 'a prodcons =
+  { buffer: 'a array;
+    lock: Mutex.t;
+    mutable readpos: int;
+    mutable writepos: int;
+    notempty: Condition.t;
+    notfull: Condition.t }
+
+let create size init =
+  { buffer = Array.create size init;
+    lock = Mutex.create();
+    readpos = 0;
+    writepos = 0;
+    notempty = Condition.create();
+    notfull = Condition.create() }
+
+let put p data =
+  Mutex.lock p.lock;
+  while (p.writepos + 1) mod Array.length p.buffer = p.readpos do
+    Condition.wait p.notfull p.lock
+  done;
+  p.buffer.(p.writepos) <- data;
+  p.writepos <- (p.writepos + 1) mod Array.length p.buffer;
+  Condition.signal p.notempty;
+  Mutex.unlock p.lock
+
+let get p =
+  Mutex.lock p.lock;
+  while p.writepos = p.readpos do
+    Condition.wait p.notempty p.lock
+  done;
+  let data = p.buffer.(p.readpos) in
+  p.readpos <- (p.readpos + 1) mod Array.length p.buffer;
+  Condition.signal p.notfull;
+  Mutex.unlock p.lock;
+  data
+
+(* Test *)
+
+let buff = create 20 0
+
+let rec produce n =
+  print_int n; print_string "-->"; print_newline();
+  put buff n;
+  produce (n+1)
+
+let rec consume () =
+  let n = get buff in
+  print_string "-->"; print_int n; print_newline();
+  consume ()
+
+let _ =
+  Thread.create produce 0;
+  consume()
+
+(*********************** Eratosthene's sieve ***********************)
+
+open Printf
+open Thread
+
+let rec integers n ch =
+  Event.sync (Event.send ch n);
+  integers (n+1) ch
+
+let rec sieve n chin chout =
+  let m = Event.sync (Event.receive chin) in
+  if m mod n = 0
+  then sieve n chin chout
+  else (Event.sync (Event.send chout m); sieve n chin chout)
+
+let rec print_primes ch max =
+  let n = Event.sync (Event.receive ch) in
+  if n > max
+  then ()
+  else begin
+    printf "%d\n" n; flush stdout;
+    let ch_after_n = Event.new_channel () in
+    Thread.create (sieve n ch) ch_after_n;
+    print_primes ch_after_n max
+  end
+
+let go max =
+  let ch = Event.new_channel () in
+  Thread.create (integers 2) ch;
+  print_primes ch max;;
+
+let _ = go 1000
+
+
+
+

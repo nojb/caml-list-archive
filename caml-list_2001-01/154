@@ -1,0 +1,138 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA01221 for caml-red; Sat, 20 Jan 2001 16:18:09 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA03657 for <caml-list@pauillac.inria.fr>; Wed, 17 Jan 2001 14:43:39 +0100 (MET)
+Received: from mrwall.kal.com (mrwall.kal.com [194.193.14.236])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with SMTP id f0HDhcL14959;
+	Wed, 17 Jan 2001 14:43:38 +0100 (MET)
+Received: from mrwall.kal.com [194.193.14.236]
+	(HELO localhost)
+	by mrwall.kal.com (AltaVista Mail V2.0J/2.0J BL25J listener)
+	id 0000_0045_3a65_a1d8_17ee;
+	Wed, 17 Jan 2001 13:44:56 +0000
+Received: from somewhere by smtpxd
+Message-ID: <3145774E67D8D111BE6E00C0DF418B663B84E6@nt.kal.com>
+From: Dave Berry <dave@kal.com>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>
+Cc: Norman Ramsey <nr@eecs.harvard.edu>, caml-list@inria.fr
+Subject: RE: questions about costs of nativeint vs int
+Date: Wed, 17 Jan 2001 13:47:35 -0000
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.0.1460.8)
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Sender: weis@pauillac.inria.fr
+
+I was assuming a different approach to GC, using a new header format rather
+than ssociating static GC descriptors to every call site and heap block.  I
+think this should be no slower than normal tagged GC. 
+
+Let me describe the MLWorks tagging scheme, because it's got some ideas that
+might be useful to other implementors, even without extending it to support
+untagged integers.
+
+Unlike most ML compilers, which use 31-bit integers and assume that heap
+objects are word-aligned, MLWorks used 30-bit integers and assumed that heap
+objects were double-word-aligned.  The use of 30-bit integers stemmed from
+the tagged integer operations on SPARCs (now deprecated).  Combined with
+aligning heap objects on double words, this gave 8 run-time tags:
+
+Integers: Even(000), Odd(100)
+Headers:  Heap block(010), Unused(110)
+Pointers:  Normal(001), Ref(011), Pair(101), Unused(111)
+
+Aligning heap objects on double-words required padding even-length objects
+by an extra word.  But using a special pointer for pairs meant that we could
+drop header words for pairs completely, which saved more space than was
+introduced by padding longer structures.
+
+I would be interested to learn whether any of these ideas are useful to
+other compilers.
+
+Given this framework, my idea for supporting untagged integers was to ensure
+that all untagged elements of a record were placed at the end of the record.
+The unused header tag (110) would mark the beginning of this section, and
+would encode the number of untagged words to skip.  So if a record did not
+include any untagged elements, the GC cost would be unaffected.
+
+I was also planning to use the unused pointer tag (111) to encode lists of
+untagged integers.  A 111 tag would both point to a pair and indicate that
+the word immediately after the pointer was untagged.
+
+Both approaches require that the compiler knows the actual layout of every
+type, with coercions inserted for some polymorphic operations.  I accept
+your point that the complexity and cost of doing this may outweigh the
+gains.  Certainly it's complicated if you pursue a full typeful approach to
+compilation.  For functors, I would probably go for compiling functors to
+lambda code, and only generating machine code at functor application time.
+This would have other optimisation advantages (at least, it would have done
+for MLWorks, which didn't have any meaningful cross-module optimisation).
+But obviously that's a major change to any system.
+
+Dave.
+
+
+-----Original Message-----
+From: Xavier Leroy [mailto:Xavier.Leroy@inria.fr]
+Sent: Sunday, January 14, 2001 11:13
+To: Dave Berry
+Cc: Norman Ramsey; caml-list@inria.fr
+Subject: Re: questions about costs of nativeint vs int
+
+
+> Do you have any plans to implement unboxed native integers?
+
+Ocaml performs some amount of local (intra-function) unboxing on large
+integers (nativeint, int32, int64) as well as on floats.  Version 3.00
+missed some opportunities for local unboxing of large integers, but
+the next release will improve this, bringing integer unboxing to the
+level of float unboxing.  However, large integers as well as
+floats remain boxed across functions and inside data structures
+(with a few special cases for arrays and big arrays).
+
+But you were probably asking about having native integers unboxed
+everywhere in the program.  I did that in my Gallium experimental
+compiler in 1993-1994, using the type-based and coercion-based
+approach presented in my POPL 92 paper.  Gallium had 32-bit unboxed
+integers, 64-bit unboxed floats, and unboxed tuples, in variables as
+well as inside data structures.
+
+Later, I gave up on this technology for several reasons:
+
+1- The approach is very hard to extend to structures and functors.
+The FLINT and TIL teams later succeeded in making type-based data
+representations work in the presence of functors, using run-time type
+inspection instead (or in addition to) coercions.  Still, I think this
+approach is too complex for its own good, and entails significant
+performance hits on polymorphic or functorized code.
+
+2- GC becomes too slow.  It is not hard to write a GC that can handle
+mixtures of boxed and unboxed data (without tag bits for the latter):
+just associate static GC descriptors to every call site and to every
+heap block.  Gallium did it, no big deal.  But the cost of interpreting
+these descriptors at every GC is quite high -- much higher than
+testing primary/secondary tags on data like the OCaml GC does.
+
+As a consequence, programs that do a lot of symbolic manipulations,
+which spend a lot of time in GC, run slower, while they don't benefit
+from unboxed integers and floats since they don't use integers and
+floats much.  I found this unacceptable: symbolic computation is ML's
+bread-and-butter, and should remain as fast as possible.
+
+3- Local unboxing (of the sort I mentioned earlier) achieves
+decent performances on floating-point and integer intensive code --
+almost as good as Gallium-style unboxing, and without any of the
+GC slowdowns.  (See my TIC'97 paper for some measures.)
+
+> I would really have liked to see this happen, because it would have made
+> integration with C both easier and more efficient.
+
+Yes, but at so many extra costs (in GC speed and in overall complexity)
+that I don't think it's worth it.
+
+Cheers,
+
+- Xavier
+
+PS.  All papers mentioned are available at
+http://pauillac.inria.fr/~xleroy/leroy.html
+
+

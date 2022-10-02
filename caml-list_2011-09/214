@@ -1,0 +1,74 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8SBJIIs004068
+	for <caml-list@sympa-roc.inria.fr>; Wed, 28 Sep 2011 13:19:18 +0200
+X-IronPort-AV: E=Sophos;i="4.68,455,1312149600"; 
+   d="scan'208";a="121957776"
+Received: from macadam.inria.fr ([128.93.8.130])
+  by mail1-relais-roc.national.inria.fr with ESMTP/TLS/AES128-SHA; 28 Sep 2011 13:19:13 +0200
+Mime-Version: 1.0 (Apple Message framework v1084)
+Content-Type: text/plain; charset=us-ascii
+From: Damien Doligez <damien.doligez@inria.fr>
+In-Reply-To: <4E820844.7050705@soton.ac.uk>
+Date: Wed, 28 Sep 2011 13:19:11 +0200
+Cc: OCaML Mailing List <caml-list@inria.fr>
+Content-Transfer-Encoding: 7bit
+Message-Id: <2F6B5C48-88B0-4717-87FD-BD044B3D36E4@inria.fr>
+References: <4E820844.7050705@soton.ac.uk>
+To: Thomas Fischbacher <t.fischbacher@soton.ac.uk>
+X-Mailer: Apple Mail (2.1084)
+Subject: Re: [Caml-list] Weird GC behaviour
+
+Hi Thomas,
+
+On 2011-09-27, at 19:30, Thomas Fischbacher wrote:
+
+> For Rtag, inlining get_rtag does not make a difference, but for Ftag,
+> inlining the get_ftag call breaks things both with the interpreter and
+> compiler, but in different ways.
+
+That's the key.
+
+>  if works
+>    then (get_ftag "funny",get_rtag "funny")
+>    else (Ftag "funny", Rtag (ref "funny"))
+>  in
+
+In this expression, you have four interesting subexpressions.  Three of
+them involve calling some function with "funny" as argument, and these
+functions allocate values that point to the "funny" string.  These values
+are heap-allocated and behave as you expect.
+
+The fourth one is (Ftag "funny").  This is a constant expression and its
+evaluation does not allocate in the heap.  Since it's constant, it's
+allocated once by the compiler, and every time you execute this code
+it's the same value that is returned.
+
+In byte-code it's still allocated in the heap, but at load-time, and
+a reference to it is hidden in the closure of the enclosing function.
+Hence, it never gets deallocated:
+
+> $ ocaml gc_bug.ml
+> Removing ref 'funny'
+> ht_str entries: 1 ht_ref entries: 0
+
+You don't get the "Removing str 'funny'" message because the value
+stays alive throughout program execution.
+
+In native code, it's even more optimized: the value is "allocated" at
+compile time as constant data outside the heap.  Hence, you can't even
+register a finalizer for it:
+
+> $ ocamlopt -o gc_bug gc_bug.ml
+> 
+> $ ./gc_bug
+> Fatal error: exception Invalid_argument("Gc.finalise")
+
+
+Only heap data can be finalized.
+
+So you have to be aware of the difference between (get_ftag "funny") and
+(Ftag "funny") because they don't have exactly the same semantics: a call
+to get_ftag is guaranteed to allocate a new block each time.
+
+-- Damien
+

@@ -1,0 +1,192 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id DB477BC75
+	for <caml-list@yquem.inria.fr>; Tue, 22 Feb 2005 00:22:50 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j1LNMoYf011352
+	for <caml-list@yquem.inria.fr>; Tue, 22 Feb 2005 00:22:50 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA19597 for <caml-list@pauillac.inria.fr>; Tue, 22 Feb 2005 00:22:50 +0100 (MET)
+Received: from ptb-relay03.plus.net (ptb-relay03.plus.net [212.159.14.214])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j1LNMntr028407
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Tue, 22 Feb 2005 00:22:49 +0100
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay03.plus.net with esmtp (Exim) id 1D3Mt6-000BmL-Sz; Mon, 21 Feb 2005 23:22:48 +0000
+From: Jon Harrop <jon@jdh30.plus.com>
+Organization: Flying Frog Consultancy Ltd.
+To: "Don Syme" <dsyme@microsoft.com>
+Subject: Re: [Caml-list] Persistence
+Date: Mon, 21 Feb 2005 23:24:10 +0000
+User-Agent: KMail/1.7.1
+Cc: "Caml mailing list" <caml-list@inria.fr>
+References: <5DCA48FADB33FF4D8C32A164DF24F2B0027899E2@EUR-MSG-03.europe.corp.microsoft.com>
+In-Reply-To: <5DCA48FADB33FF4D8C32A164DF24F2B0027899E2@EUR-MSG-03.europe.corp.microsoft.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200502212324.11937.jon@jdh30.plus.com>
+X-Miltered: at concorde with ID 421A6D4A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 421A6D49.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 syme:01 wrote:01 intuitively:01 convincing:01 run-time:01 internals:01 stl:01 stl:01 ocaml:01 wrote:01 computations:01 ocaml:01 optimising:01 hash:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+On Monday 21 February 2005 20:17, Don Syme wrote:
+> Could you send around the source code to this?  I intuitively knew that
+> such performance results were likely, but had never had such a
+> convincing example to wave at people.
+
+Yes. The implementation of traveling salesman given in my book is another 
+example which is several orders of magnitude faster than the C/C++/Fortran 
+implementations given in all of the other text books that I have read.
+
+This problem also happens to be a defacto standard test given to most natural 
+science undergrads on their computing courses, which should be good for book 
+sales. Tell everyone you know. :-)
+
+> It would also be interesting to ask some C++ programmers how they would
+> go about optimizing this code, for a couple of reasons
+>
+> (a) to see if they come up with anything faster; and
+
+I managed to, after a while. However, doing this optimisation required me to 
+have several things:
+
+1. Estimates of run-time sizes of data structures.
+2. Knowledge of the internals of the STL set implementation.
+3. Knowledge of the complexities of various operations over STL sets.
+4. Huge kahunas, as the resulting code is much more likely to be wrong.
+
+The optimised C++ is also specialised by (1), whereas the OCaml code will 
+always be efficient (because Xavier wrote the hard part ;-). Also, the C++ 
+implementation consumes twice as much memory (which could be a real killer as 
+many scientific computations use resources to the limit of the available 
+computer).
+
+Both the OCaml and the C++ can probably be optimised more, but I'm interested 
+in problems where author-time is comparable to execution-time. Were I to 
+continue optimising, I would move to hash sets, but these require an 
+imperative approach which negates the principal advantage of the current 
+OCaml implementation: persistence.
+
+> (b) to see if they would ever even think of using
+> sharing-of-complex-immutable-internal-data-structure-nodes as an
+> optimization technique.
+
+No way. :-)
+
+Also (from the traveling salesman solution):
+
+ (c) to see if they would ever even think of reinventing closures.
+
+For people who just want a quick look, here is the OCaml code for the core 
+function:
+
+  let rec nth_nn =
+    let memory = Hashtbl.create 1 in
+    fun n (i, io) ->
+      try Hashtbl.find memory (n, i)
+      with Not_found -> match n with
+        0 -> AtomSet.singleton (i, io)
+      | 1 ->
+          let nn = bonds.(i - 1) in
+          if io = zero then nn else
+          let aux (j, jo) s = AtomSet.add (j, add_i io jo) s in
+          AtomSet.fold aux nn AtomSet.empty
+      | n ->
+          let pprev = nth_nn (n-2) (i, io) in
+          let prev = nth_nn (n-1) (i, io) in
+          let aux j t = AtomSet.union (nth_nn 1 j) t in
+          let t = AtomSet.fold aux prev AtomSet.empty in
+          let t = AtomSet.diff (AtomSet.diff t prev) pprev in
+          Hashtbl.add memory (n, i) t;
+          t in
+
+$ time ./nth 30 1 <cfg-diamond >tmp
+
+real    0m4.167s
+user    0m3.940s
+sys     0m0.000s
+
+$ time ./nth.opt 30 1 <cfg-diamond >tmp
+
+real    0m0.492s
+user    0m0.450s
+sys     0m0.000s
+
+Here's the elegant C++ equivalent:
+
+const AtomSet nth_nn(int n, int i, const vector<int> io) {
+  const Map::key_type k=make_pair(n, make_pair(i, io));
+  Map::const_iterator m=memory.find(k);
+  if (m != memory.end()) return m->second;
+  AtomSet s;
+  if (n == 0) {
+    s.insert(make_pair(i, io));
+    return s;
+  } else
+    if (n == 1) {
+      const AtomSet &nn=bonds[i-1];
+      for (AtomSet::const_iterator it=nn.begin();
+    it != nn.end(); it++) {
+ int j = it->first;
+ vector<int> jo = it->second;
+ for (i=0; i<d; i++)
+   jo[i] += io[i];
+ s.insert(make_pair(j, jo));
+      }
+      return s;
+    } else {
+      const AtomSet
+ &pprev = nth_nn(n-2, i, io),
+ &prev = nth_nn(n-1, i, io);
+      for (AtomSet::const_iterator it=prev.begin();
+    it != prev.end(); it++) {
+ const AtomSet &t = nth_nn(1, it->first, it->second);
+ AtomSet t2;
+ set_union(s.begin(), s.end(),
+    t.begin(), t.end(),
+    inserter(t2, t2.begin()));
+ s=t2;
+      }
+      AtomSet s2;
+      set_difference(s.begin(), s.end(),
+       prev.begin(), prev.end(),
+       inserter(s2, s2.begin()));
+      s=AtomSet();
+      set_difference(s2.begin(), s2.end(),
+       pprev.begin(), pprev.end(),
+       inserter(s, s.begin()));
+    }
+  memory[k] = s;
+  return memory.find(k)->second;
+}
+
+With this C++, I get:
+
+$ time ./nth 30 1 <cfg-diamond >tmp
+
+real    1m31.178s
+user    1m12.680s
+sys     0m0.100s
+
+With my sneaky optimisation:
+
+$ time ./nth 30 1 <cfg-diamond >tmp
+
+real    0m0.479s
+user    0m0.480s
+sys     0m0.000s
+
+I've just noticed that the timing results are quite interesting functions of 
+"n". I think I'll plot them...
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://ffconsultancy.com
+

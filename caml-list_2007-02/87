@@ -1,0 +1,123 @@
+Return-Path: <avaron@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.2 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id CEE0EBC6A
+	for <caml-list@yquem.inria.fr>; Wed,  7 Feb 2007 23:06:07 +0100 (CET)
+Received: from posen.amnh.org (posen.amnh.org [216.73.241.10])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l17M66Ts029496
+	for <caml-list@yquem.inria.fr>; Wed, 7 Feb 2007 23:06:07 +0100
+Received: from localhost (localhost [127.0.0.1])
+	by posen.amnh.org (Postfix) with ESMTP id 560C02409A3
+	for <caml-list@yquem.inria.fr>; Wed,  7 Feb 2007 17:06:06 -0500 (EST)
+X-Virus-Scanned: amavisd-new at amnh.org
+Received: from posen.amnh.org ([127.0.0.1])
+	by localhost (posen.amnh.org [127.0.0.1]) (amavisd-new, port 10024)
+	with ESMTP id DzMBuwegMwjW for <caml-list@yquem.inria.fr>;
+	Wed,  7 Feb 2007 17:06:04 -0500 (EST)
+Received: from [172.16.63.190] (216-73-250-14.dynamic.amnh.org [216.73.250.14])
+	by posen.amnh.org (Postfix) with ESMTP id 496B62409A8
+	for <caml-list@yquem.inria.fr>; Wed,  7 Feb 2007 17:06:04 -0500 (EST)
+Mime-Version: 1.0 (Apple Message framework v752.3)
+Content-Transfer-Encoding: quoted-printable
+Message-Id: <5F3F8FC7-2C10-4F4A-A7D3-6268AD6D1E5A@gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; delsp=yes; format=flowed
+To: OCaml List <caml-list@yquem.inria.fr>
+From: Andres Varon <avaron@gmail.com>
+Subject: marshal and C structures crash
+Date: Wed, 7 Feb 2007 17:05:27 -0500
+X-Mailer: Apple Mail (2.752.3)
+X-j-chkmail-Score: MSGID : 45CA4D4F.000 on discorde : j-chkmail score : X : 0/20 1 0.000 -> 1
+X-Miltered: at discorde with ID 45CA4D4F.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; bug:01 ocaml:01 bug:01 ocaml:01 variants:01 functors:01 model:01 marshaled:01 segfault:01 computations:01 computations:01 gdb:01 marshaled:01 segfaults:01 assertion:01 
+
+Hello Everyone,
+
+I would like to ask a question regarding a bug I have been observing =20
+in one program, which I have been unable to fix:
+
+The program in question is a large phylogenetic analysis application =20
+(bioinformatics), which has been written in OCaml and C. It's almost =20
+ready for public beta testing _excepting_ for this particular bug. =20
+The bulk of the code is in OCaml (~70.000 LOC), and a small fraction =20
+of core functions in C (obviously it's hard to post the code in =20
+question). It runs both in sequential and parallel versions using =20
+MPI, and uses heavily polymorphic variants, functors, and object =20
+oriented features, where each fit better our requirements.
+
+I had the parallel version broken for a while, but it used to run =20
+without a problem. Few weeks ago, when I updated the code for =20
+parallel runs (using a master-slave distributed model), I started to =20
+observe slaves segfaulting after a while. I nailed down the problem =20
+to some marshal related issue that I can reproduce in the sequential =20
+versions by doing the following:
+
+1. load some data in the program and marshal what I would have sent =20
+to a slave in a file
+2. run the program in a loop that unmarshals the data from the file, =20
+and repeats a short script. The loop usually ends with a crash (few =20
+iterations).
+
+The data structure being marshaled is pure OCaml (Sets and Maps of =20
+other ocaml structures), and so all C structures (wrapped with a =20
+custom tag), are produced locally. The segfault happens if the =20
+computations are concentrated in either one of the only two C custom =20
+types, which where programmed independently by two of us (extremely =20
+different computations).
+
+If I don't do the unmarshal step, but run the previous loop by just =20
+reading the data from the input files, the program works flawlessly, =20
+and tools such as valgrind, watch points I have set in gdb, and lots =20
+of  assertions in our C and ocaml code, pass every test. I also have =20
+checks for every array access in our C side to ensure that each =20
+access and write occurs within bounds.
+
+However, if the data comes from the marshaled channel, after few =20
+iterations the program segfaults, and the reason appears to be =20
+(according to valgrind, and all my attempts to detect a failure  as =20
+early as possible), that some custom type is free while still alive =20
+from the OCaml side (what I catch is a double free, or that the =20
+contents of a DNA sequence is invalid because it has been free =20
+already). Note, again, that I am completely unable to reproduce the =20
+issue (even a single warning or assertion failure), unless I =20
+unmarshal the data to start with. Moreover, the error occurs with two =20=
+
+data structures that where programmed independently by two =20
+experienced OCaml programmers. I believe that OCaml is duplicating =20
+the custom type and therefore I get two ocaml values pointing at the =20
+same C structure, is that possible?. I though one of the C types uses =20=
+
+a pool of arrays to speedup some computations, the other one only has =20=
+
+one pointer, going from the Ocaml custom type to the C structure, and =20=
+
+from there to a couple of arrays, that's it.   Also note that every =20
+type is treated as an immutable data structure, and we provide no in-=20
+place modifications in our OCaml interface.
+
+Of course, I have been hunting a bug in my C functions and can't find =20=
+
+anything that could cause the double free (the only way to call =20
+seq_CAML_free is from the garbage collector!), or an out of bounds =20
+write. Is there anything special about marshaling that could be =20
+causing this? Even some particular pattern in the way OCaml allocates =20=
+
+memory for the unmarshaling step? Any ideas about what the problem =20
+could be or where should I look at?
+
+As you see, I'm lost; I just don't see where else can I place a check =20=
+
+in our code.
+
+For those of you who reached this line of my email, thanks for the =20
+effort! I will listen at any ideas that could pop up in your minds.
+
+best,
+
+Andr=E9s Var=F3n
+American Museum of Natural History=
+

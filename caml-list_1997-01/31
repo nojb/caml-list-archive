@@ -1,0 +1,103 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA16377 for caml-redistribution; Fri, 31 Jan 1997 08:41:10 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA25923 for <caml-list@pauillac.inria.fr>; Thu, 30 Jan 1997 11:29:13 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35]) by concorde.inria.fr (8.7.6/8.7.3) with ESMTP id LAA08647; Thu, 30 Jan 1997 11:29:06 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA25915; Thu, 30 Jan 1997 11:29:01 +0100 (MET)
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+Message-Id: <199701301029.LAA25915@pauillac.inria.fr>
+Subject: Re: Constructors in camllight vs. ocaml
+In-Reply-To: <v01530500af093c3eab44@[10.0.2.15]> from Simon Clematide at "Jan 20, 97 04:31:29 pm"
+To: sclematide@access.ch (Simon Clematide)
+Date: Thu, 30 Jan 1997 11:29:01 +0100 (MET)
+Cc: caml-list@inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> Why do camllight and ocaml treat constructors differently?
+> 
+> In camllight I can write
+>     #type ip = Pair of int * int;;
+>    Type ip defined.
+> and the system recognizes Pair automatically as a value
+>     #Pair;;
+>     - : int * int -> ip = <fun>
+> 
+> Doing the same in ocaml (1.03) I get:
+>         # type ip = Pair of int * int;;
+>         type ip = Pair of int * int
+>         # Pair;;
+>         The constructor Pair expects 2 argument(s),
+>         but is here applied to 0 argument(s)
+> 
+> I do prefer the behavior of camllight especially for porting SML code.
+
+The basic reason is the module system, but let me elaborate.
+
+For reasonable performance, a datatype definition such as
+
+                type ip = Pair of int * int
+
+must not represent values of type ip literally, i.e. as a block tagged
+"Pair" pointing to a two-field block representing a pair of integers.
+It is crucial performance-wise to fold the two blocks into one block
+tagged "Pair" holding the two integers. Pretty much all ML compilers
+do this.
+
+Without modules, the compiler can still maintain the illusion that
+Pair is really a one-argument constructor containing a pair, and not a
+two-argument constructor. Accesses such as
+
+        match x with Pair p -> p
+
+are not terribly efficient (the pair is actually reconstructed on the
+right-hand side in Caml Light), but they work.
+
+The big problem is with modules and data abstraction. Namely, should
+we allow the following structure
+
+        struct type p = int * int
+               type ip = Pair of int * int
+               ...
+        end
+
+to match the following signature
+
+        sig   type p
+              type ip = Pair of p
+        end
+
+If you believe the SML/Camllight illusion that constructors have 0 or
+1 argument, then the answer should be "yes". However, this causes no
+end of trouble in a compiler, because code typechecked against the
+signature above assumes that values of type ip are one-field blocks
+pointing to a value of type p, while code internal to the structure
+assumes two-field blocks from which values of type p must be
+reconstructed.
+
+This problem has plagued the SML/NJ implementation for quite a while,
+and the solutions that have been proposed are all extremely
+heavy-weight.
+
+I think it's not worth the effort to maintain the illusion that
+constructors have 0 or 1 argument. Let's just face the truth and
+consider them as N-ary, as in Prolog.
+
+Incidentally, if you *really* need a constructor with one argument
+that is a pair, you can always declare it as
+
+        type p = int * int
+        type ip = Pair of p
+
+This will direct the OCaml compiler to use the proper representation for a
+one-argument constructor. Of course, that representation will occupy
+twice as much space as that of "type ip = Pair of int * int", and be
+twice as slow to access.
+
+Regards,
+
+- Xavier Leroy
+
+
+
+

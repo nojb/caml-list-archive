@@ -1,0 +1,77 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA15489; Thu, 11 Dec 2003 15:36:46 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA15477 for <caml-list@pauillac.inria.fr>; Thu, 11 Dec 2003 15:36:45 +0100 (MET)
+Received: from aomori.annexia.org (annexia.force9.co.uk [212.56.101.183])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hBBEair19153
+	for <caml-list@inria.fr>; Thu, 11 Dec 2003 15:36:44 +0100 (MET)
+Received: from rich by aomori.annexia.org with local (Exim 3.36 #1 (Debian))
+	id 1AURvk-0005VG-00
+	for <caml-list@inria.fr>; Thu, 11 Dec 2003 14:36:40 +0000
+Date: Thu, 11 Dec 2003 14:36:40 +0000
+To: caml-list@inria.fr
+Subject: [Caml-list] Garbage collection and a reference counting library 
+Message-ID: <20031211143640.GA21082@redhat.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.4i
+From: Richard Jones <rich@annexia.org>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; scalar:01 subroutine:01 val:01 alloc:01 val:01 finalization:01 deallocated:01 indirection:01 freshmeat:01 vectors:01 hashes:01 funcs:01 allocator:01 ltd:98 ocaml:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Dear OCamlers,
+
+I wrote an interface to allow OCaml to call Perl code and libraries.
+This interface doesn't pay much attention to collecting memory
+correctly.  In particular when a Perl SV (scalar value) is allocated
+and passed to us, it will have a Perl internal link count of, say, 1,
+and we never decrement that link count, so Perl will never free it.
+
+This wasn't originally an issue because all the programs I was writing
+were shortlived (and Perl has enough memory leaks of its own anyway).
+But inevitably perhaps, I'm now dealing with a long-running OCaml /
+Perl hybrid program, and the lack of proper memory handling has bitten
+me on the backside.  So now it looks like I'll need to spend some time
+fixing this.
+
+But I'm not really sure how to do this.  At present the code uses the
+following subroutine to wrap up Perl SVs (the void *ptr in this case)
+in OCaml objects with an ABSTRACT_TAG.  (Note also the XXX comment,
+since I'm not actually sure if this code itself is correct).
+
+static value
+Val_voidptr (void *ptr)
+{
+  value rv = alloc (1, Abstract_tag); /* XXX Is this correct? */
+  Field(rv, 0) = (value) ptr;
+  return rv;
+}
+
+#define Voidptr_val(type,rv) ((type *) Field ((rv), 0))
+
+#define Val_sv(sv) (Val_voidptr ((sv)))
+#define Sv_val(svv) (Voidptr_val (SV, (svv)))
+
+I imagine that what I should do is to add a finalization function, so
+that when 'rv' is garbage collected, I should decrement the Perl link
+count, thus forcing Perl to free the associated SV.
+
+Is this safe though?  Can OCaml copy this object, and collect one of
+them, thus causing the SV to be deallocated early?  Do I need another
+layer of indirection between 'rv' and the SV?
+
+Rich.
+
+-- 
+Richard Jones. http://www.annexia.org/ http://freshmeat.net/users/rwmj
+Merjis Ltd. http://www.merjis.com/ - improving website return on investment
+C2LIB is a library of basic Perl/STL-like types for C. Vectors, hashes,
+trees, string funcs, pool allocator: http://www.annexia.org/freeware/c2lib/
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

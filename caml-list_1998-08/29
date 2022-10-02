@@ -1,0 +1,174 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA23716 for caml-redistribution; Mon, 31 Aug 1998 13:57:56 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA04347 for <caml-list@pauillac.inria.fr>; Sun, 30 Aug 1998 12:37:47 +0200 (MET DST)
+Received: from arthur.u-strasbg.fr (arthur.u-strasbg.fr [130.79.75.24])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id MAA12615
+	for <caml-list@inria.fr>; Sun, 30 Aug 1998 12:37:46 +0200 (MET DST)
+From: boos@arthur.u-strasbg.fr
+Received: (from boos@localhost)
+	by arthur.u-strasbg.fr (8.8.7/8.8.7) id MAA05749;
+	Sun, 30 Aug 1998 12:38:54 +0200
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+Date: Sun, 30 Aug 1998 12:38:53 +0200 (CEST)
+To: caml-list@inria.fr
+CC: Vladimir Vyskocil <vyskocil@math.unice.fr>
+Subject: Re: OCaml 2.0
+In-Reply-To: <35E4193B.30969200@math.unice.fr>
+References: <35E4193B.30969200@math.unice.fr>
+X-Mailer: VM 6.43 under 20.4 "Emerald" XEmacs  Lucid
+Message-ID: <13801.761.800633.413993@arthur.u-strasbg.fr>
+Sender: weis
+
+
+[sorry, no english version today :(]
+
+Bonjour,
+
+Vladimir Vyskocil writes:
+ > Bonjour,
+/.../
+ > Some type variables are unbound in this type:
+ >   class a : object ('a) method call_pipo : < pipo : 'a -> 'b; .. > -=
+> 'b
+ > end
+ > The method call_pipo has type
+ >   < pipo : < call_pipo : 'a; .. > -> 'b; .. > -> 'b as 'a
+ > where 'c is unbound
+ >
+ > Le type 'c n'apparait pas dans la signature de la classe, a quoi
+ > correspond t'il ?
+ >
+
+Il correspond au ".." qui apparait dans la classe.
+Pour faire appara=EEtre explicitement cette paramétrisation (notez la=
+ contrainte)
+
+# class ['a] a =  object (self) method call_pipo (x : 'a)= (x#pipo =
+self) end ;;
+class ['a] a :
+  object ('b)
+    constraint 'a = < pipo : 'b -> 'c; .. >
+    method call_pipo : 'a -> 'c
+  end
+#
+
+------------------------------------------------------------------
+
+ > - Dans l'exemple suivant :
+ >
+ > class a =
+ >   object (self)
+ >   method call_pipo (x:b) = x#pipo self
+ >   end
+ > and b a =
+ >   object
+ >   method pipo (x:a):a = x
+ >   end;;
+ > This expression has type < call_pipo : b -> 'a; .. >
+ > but is here used with type 'b
+ > Self type cannot escape its class
+ >
+ > pourriez vous expliquer ce message d'erreur et donner une maniere de=
+
+ > re-ecrire cela ?
+ >
+
+
+Ces problèmes sont discutés dans le manuel de référence, pages =
+34 à 37.
+C'est vrai que le message d'erreur n'est pas très explicite, il
+devrait au minimum dire qu'il s'agit d'un problème épineux et qu'il=
+
+faut lire la doc ...
+
+Il faut se rendre compte que le type de self est non pas "a", mais
+celui de la classe où 'self' est utilisé, ce qui inclut "a" mais=
+
+également toute classe héritant de "a".
+
+Premier problème rencontré : la méthode "pipo" entra=EEne une con=
+trainte
+de type clairement non respectée ici. Il faudrait restreindre le type=
+
+de self à "a".
+
+Second problème : une telle coercition n'est pas évidente à écr=
+ire.
+
+(self : #a :> a) ne convient pas,  car le type "a" n'est pas encore
+entièrement défini à ce moment là.
+Pour préciser le type que l'on désire obtenir, on peut utiliser une=
+
+classe virtuelle (1), ou un type de classe (2).
+
+(1) # class virtual ['a]  va =
+=09object
+=09=09method virtual call_pipo : 'a -> 'a va
+=09end;;
+
+class virtual ['a] va : object method virtual call_pipo : 'a -> 'a va e=
+nd
+
+
+(2) # class type ['a] ta = object method call_pipo : 'a -> 'a ta end;=
+;
+
+class type ['a] ta = object method call_pipo : 'a -> 'a ta end
+
+
+On pourrait ensuite écrire la coercition (self :> b va) (1) ou (self =
+:> b
+ta) (2), mais cela ne fonctionne pas parce que self ne peut pas être
+unifiée directement avec un type clos. En effet, le fait d'unifier=
+
+(self : <call_pipo : 'a -> 'a va; ..> as 'a) avec le type "b va"
+impliquerait que self soit lui-même de type "b va", ce qui est faux
+(self est de type "a", sous-type de "b va").
+Il est nécessaire ici de préciser  explicitement le domaine de self=
+.
+Il faut donc écrire (self : b #va :> b va) (1), ou (self : b #ta :> b=
+ ta) (2).
+
+L'exemple complet devient :
+
+(1) #  class a =
+=09object (self)
+=09=09inherit [b] va   (* cet héritage n'est pas nécessaire *)
+=09=09method call_pipo (x:b) = x#pipo (self : b #va :> b va)
+=09end
+ and b =
+=09object
+=09=09method pipo (x:a):a = x
+=09end;;
+
+class a : object method call_pipo : b -> b va end
+class b : object method pipo : b va -> b va end
+
+
+(2) # class a =
+=09object (self)
+=09=09method call_pipo (x:b) = x#pipo (self : b #ta :> b ta)
+=09end
+=09 and b =
+=09object
+=09=09method pipo (x:a):a = x
+=09end;;
+
+class a : object method call_pipo : b -> b ta end
+class b : object method pipo : b ta -> b ta end
+
+
+En tout cas, voilà qui f=FBt un problème fort intéressant dont l'=
+exploration
+m'a amené (je pense !) à comprendre plus complètement ces questio=
+ns.
+
+
+-- Christian
+
+
+
+
+
+

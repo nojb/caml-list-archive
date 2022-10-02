@@ -1,0 +1,121 @@
+Return-Path: <ocaml@optimojoe.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id B6B53BC37
+	for <caml-list@yquem.inria.fr>; Fri, 29 Jan 2010 10:34:28 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsoDAJg6YktCbwQaemdsb2JhbACPYQGLaAEBFCYEvxAFhEA
+X-IronPort-AV: E=Sophos;i="4.49,367,1262559600"; 
+   d="scan'208";a="54904574"
+Received: from out2.smtp.messagingengine.com ([66.111.4.26])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 29 Jan 2010 10:34:27 +0100
+Received: from compute2.internal (compute2.internal [10.202.2.42])
+	by gateway1.messagingengine.com (Postfix) with ESMTP id DCA35CB852
+	for <caml-list@inria.fr>; Fri, 29 Jan 2010 04:34:25 -0500 (EST)
+Received: from heartbeat2.messagingengine.com ([10.202.2.161])
+  by compute2.internal (MEProxy); Fri, 29 Jan 2010 04:34:25 -0500
+DKIM-Signature: v=1; a=rsa-sha1; c=relaxed/relaxed; d=messagingengine.com; h=date:from:to:subject:message-id:mime-version:content-type; s=smtpout; bh=2VZONaB5sawPr8m8xe0BmFqgQbg=; b=HGkLsEOa5Ki/NbbAvRHF6u66AEovKBiuUARA7GtqtgEA8qppxZSaqWUmOvuhyBo37ChIF/C2u8yyV5ws+VkAPyNh8WsNeIv2Q5utd2ZH1zrseRd2deb/l36y5qjbDtBT9vvCWfjIB0gQ6BOT3C5yEmV+Huh89JZPt/RSUhEu0Cg=
+X-Sasl-enc: edfETugRcceXBEmaJUlflkpYHh2g7LWiIFvMnuX0Uhah 1264757664
+Received: from [10.123.10.10] (softbank126112016066.biz.bbtec.net [126.112.16.66])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id A34A538B83
+	for <caml-list@inria.fr>; Fri, 29 Jan 2010 04:34:24 -0500 (EST)
+Date: Fri, 29 Jan 2010 10:12:44 +0100 (CET)
+From: Joseph Young <ocaml@optimojoe.com>
+X-X-Sender: josyoun@myhome
+To: caml-list@inria.fr
+Subject: Linking to C libraries when calling camlp4
+Message-ID: <Pine.LNX.4.64.1001290952580.4721@myhome>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Spam: no; 0.00; ocaml:01 camlp:01 camlp:01 ocamlc:01 -custom:01 -cclib:01 flags:01 statically:01 flags:01 makefile:01 gcc:01 ocamlc:01 ocamlmktop:01 -custom:01 -cclib:01 
+
+Hi,
+ 	How do you link to external C libraries when calling camlp4?  When 
+calling ocamlc, we can use the -custom and -cclib flags in order to 
+statically link a library.  However, the camlp4 executable seems to ignore 
+these flags when called.  As an example, given the files:
+
+-----------------
+
+$ cat Makefile
+all:
+         gcc -c myadd.c
+         ocamlc -c myadd.ml
+         ocamlmktop -custom -cclib myadd.o -o mytop myadd.cmo
+         ocamlc -c -I +camlp4 -I +camlp4/Camlp4Parsers -pp camlp4of 
+myquot.ml
+
+clean:
+         rm *.cmo
+         rm *.cmi
+         rm *.o
+
+$ cat myadd.c
+int add1(int x){
+         return x+1;
+}
+
+$ cat myadd.ml
+external add1 : int->int = "add1";;
+
+$ cat myquot.ml
+module CamlSyntax = Camlp4OCamlParser.Make(
+     Camlp4OCamlRevisedParser.Make(Camlp4.PreCast.Syntax));;
+
+open Camlp4.PreCast;;
+
+let expr_of_string = CamlSyntax.Gram.parse_string CamlSyntax.expr_eoi;;
+module MyGram = Camlp4.PreCast.MakeGram(Camlp4.PreCast.Lexer);;
+
+let term = MyGram.Entry.mk "term";;
+let term_eoi = MyGram.Entry.mk "term quotation";;
+
+
+EXTEND MyGram
+     GLOBAL: term term_eoi;
+     term:
+     [  "simple"
+         [  `INT(i,_)  -> <:expr< $`int:Myadd.add1 i$ >> ]
+     ];
+     term_eoi:
+     [[ t = term; `EOI -> t ]];
+END;;
+
+let expand_quot loc loc_opt s = MyGram.parse_string term_eoi loc s;;
+
+Syntax.Quotation.add "abc" Camlp4.PreCast.Syntax.Quotation.DynAst.expr_tag
+     expand_quot;;
+
+$ cat test.ml
+let x= <:abc< 4 >>;;
+
+-----------------
+
+If we call:
+
+-----------------
+$ ./mytop dynlink.cma camlp4of.cma myquot.cmo
+         Objective Caml version 3.11.2
+
+         Camlp4 Parsing version 3.11.2
+
+# let x= <:abc< 4 >>;;
+val x : int = 5
+#
+-----------------
+
+everything works fine since mytop has been compiled with the correct C 
+object file.  However, if we try the following call:
+
+-----------------
+$ camlp4of myadd.cmo myquot.cmo test.ml
+Camlp4: Uncaught exception: DynLoader.Error ("./myquot.cmo", "error while 
+linking ./myquot.cmo.\nThe external function `add1' is not available")
+-----------------
+
+we have an error since the C object file has not been linked.  How do we 
+correctly preprocess the file test.ml?
+
+Joe
+

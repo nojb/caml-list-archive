@@ -1,0 +1,90 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id ECA1DBB81
+	for <caml-list@yquem.inria.fr>; Wed, 28 Dec 2005 19:34:06 +0100 (CET)
+Received: from smtp3-g19.free.fr (smtp3-g19.free.fr [212.27.42.29])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jBSIY6dk016300
+	for <caml-list@yquem.inria.fr>; Wed, 28 Dec 2005 19:34:06 +0100
+Received: from [192.168.1.2] (che78-2-82-237-71-191.fbx.proxad.net [82.237.71.191])
+	by smtp3-g19.free.fr (Postfix) with ESMTP id F2EF643F62;
+	Wed, 28 Dec 2005 19:34:05 +0100 (CET)
+Message-ID: <43B2DA9D.9090907@inria.fr>
+Date: Wed, 28 Dec 2005 19:34:05 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050317)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Stephen Brackin <stephen.brackin@verizon.net>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Ask-if-continue wrapper?
+References: <0IS700AHX9M9TKT2@vms042.mailsrvcs.net>
+In-Reply-To: <0IS700AHX9M9TKT2@vms042.mailsrvcs.net>
+X-Enigmail-Version: 0.91.0.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 43B2DA9E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 inputs:01 inputs:01 denotes:01 ocaml:01 eintr:01 posix:01 stdout:01 svr:98 unix:01 unix:01 exception:01 computation:01 computation:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+> I'd like an OCaml function, which I'll call continueq, with the property
+> that for any function f with argument(s) fargs,
+>
+> continueq f fargs tsecs defaultval
+>
+> starts evaluating f on fargs and lets this evaluation proceed for up to
+> tsecs seconds. If the computation of (f fargs) completes in this time,
+> then it returns the result of that computation. Otherwise, it asks the
+> user how many seconds to let the computation of (f fargs) proceed. If
+> the user inputs a value less than or equal to 0, then it returns
+> defaultval. If the user inputs a value tsecs' greater than 0, then it
+> evaluates
+>
+> continueq f' fargs' tsecs' defaultval
+>
+> where (f' fargs') denotes the computation state of (f fargs) at the time
+> it was interrupted.
+
+The latter ("the computation state of ...") is not something you can
+manipulate programmatically in OCaml.  However, there is no need to:
+Unix timer signals are sufficient to do what you want.  (If you're on
+Windows, there's nothing I can do for you, in this particular instance
+and in general.)  See below for the code.
+
+A word of caution: if your function f performs I/O operations, be
+prepared for them to fail with a EINTR Unix error.  That's the Unix
+(SVR4 / POSIX) way of being unhelpful...
+
+- Xavier Leroy
+
+----------------------------------------------------------------------
+
+let set_timer tsecs =
+  ignore (Unix.setitimer Unix.ITIMER_REAL
+                         { Unix.it_interval = 0.0; Unix.it_value = tsecs })
+
+exception Timeout
+
+let handle_sigalrm signo =
+  print_string "Continue for how long? "; flush stdout;
+  let f = read_float() in
+  if f <= 0.0
+  then raise Timeout
+  else set_timer f
+
+let continueq f arg tsecs defaultval =
+  let oldsig = Sys.signal Sys.sigalrm (Sys.Signal_handle handle_sigalrm) in
+  try
+    set_timer tsecs;
+    let res = f arg in
+    set_timer 0.0;
+    Sys.set_signal Sys.sigalrm oldsig;
+    res
+  with Timeout ->
+    Sys.set_signal Sys.sigalrm oldsig;
+    defaultval
+

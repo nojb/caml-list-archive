@@ -1,0 +1,150 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p66I75IB013263
+	for <caml-list@sympa-roc.inria.fr>; Wed, 6 Jul 2011 20:07:05 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApUBACqjFE7U4xEJkGdsb2JhbABTEIQyo0YUAQEBAQkJDQcUAyKIfLJRkHQCgSmDf4ENBItVi2aLDDk
+X-IronPort-AV: E=Sophos;i="4.65,488,1304287200"; 
+   d="scan'208";a="112675894"
+Received: from moutng.kundenserver.de ([212.227.17.9])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 06 Jul 2011 20:07:00 +0200
+Received: from office1.lan.sumadev.de (dslb-094-219-221-171.pools.arcor-ip.net [94.219.221.171])
+	by mrelayeu.kundenserver.de (node=mreu2) with ESMTP (Nemesis)
+	id 0Lyh3D-1RZMG42ocB-0164Z1; Wed, 06 Jul 2011 20:06:59 +0200
+Received: from [192.168.5.106] (dslb-094-219-221-171.pools.arcor-ip.net [94.219.221.171])
+	by office1.lan.sumadev.de (Postfix) with ESMTPA id 71E135F701;
+	Wed,  6 Jul 2011 20:06:59 +0200 (CEST)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Khoo Yit Phang <khooyp@cs.umd.edu>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <102E6342-F199-4A3C-B651-06795D14EB89@cs.umd.edu>
+References: <102E6342-F199-4A3C-B651-06795D14EB89@cs.umd.edu>
+Content-Type: text/plain; charset="UTF-8"
+Date: Wed, 06 Jul 2011 20:06:59 +0200
+Message-ID: <1309975619.22800.2568.camel@thinkpad>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.28.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:YGlDcnw3rHt4Iwezprb8oLTr1u6l63L6bpOwQjoA/Px
+ +fk24rRrp5XH5J932aSODxNGgTXSUBcBa5q+xhT8MR5l/wjYKb
+ sDYH136ZuMKhBFP36Qq6Sah6GA+mGwYaD6Tn5CTYwkI5gX0X5G
+ vwxh2Xqn2uoW0uVSHKbqE6GH0zQUcULPOr902Zf+9szO3kn7kk
+ ZPtQ8mMdaUnTTuOpVA1aA==
+Subject: Re: [Caml-list] Race conditions with asynchronous exceptions in
+ standard library
+
+I think this is not very surprising, at least for imperative programs.
+After all, interrupting with a signal just means to leave the current
+execution flow in an inconsistent state. I don't think you can
+systematically do much against this.
+
+Signals are simply a bad mechanism for limiting the runtime of an
+algorithm (except you do it the "soft" way - the handler only sets a
+flag, which is regularly consulted by the algorithm at safe exit
+points).
+
+Gerd
+
+Am Dienstag, den 05.07.2011, 23:26 -0400 schrieb Khoo Yit Phang:
+> Hi all,
+> 
+> 
+> I recently discovered a race condition when asynchronous exceptions,
+> i.e., exceptions raised by signal handlers, are used with the DelimCC
+> library. After consulting with Oleg Kiselyov, he realized that the
+> problem with asynchronous exceptions is far more pervasive than I had
+> originally thought. For example, the following program, using only the
+> standard OCaml library, leads to a segfault:
+> 
+> 
+> > let q = Queue.create ();;
+> > 
+> > let () =
+> >     let en = ref false in
+> >     Sys.set_signal Sys.sigalrm (Sys.Signal_handle (fun _ -> if !en
+> > then raise Exit));
+> >     ignore (Unix.setitimer Unix.ITIMER_REAL { Unix.it_interval=1e-6;
+> > Unix.it_value=1e-3 });
+> >     while true do
+> >         try
+> >             en := true;
+> >             Queue.add "a" q;
+> >             en := false;
+> >             ignore (Queue.pop q)
+> >         with Exit ->
+> >             en := false;
+> >             if Queue.length q > 0 then prerr_endline "Non-empty";
+> >             assert (let len = Queue.length q in len = 0 || len = 1);
+> >             Queue.iter print_string q;
+> >             Queue.clear q;
+> >     done
+> 
+> 
+> The problem occurs in Queue.ml:
+> 
+> 
+> > let create () = {
+> >   length = 0;
+> >   tail = Obj.magic None
+> > }
+> > 
+> > let add x q =
+> >   q.length <- q.length + 1;
+> >   (* asynchronous exception occurs here *)
+> >   ...
+> 
+> 
+> 
+> When Queue.add is interrupted by an exception immediately after the
+> length is updated, the length becomes inconsistent with the tail, and
+> subsequent operations such as Queue.iter will attempt to operate
+> on Obj.magic None, leading to the segfault.
+> 
+> 
+> Probably much of the standard library is similarly susceptible to such
+> races, particularly the parts that operate on mutable data.
+> These mostly lead to less dramatic consequences than segfaults, but
+> are still seemingly random errors such as corrupted data or violated
+> invariants.
+> 
+> 
+> For DelimCC, my solution was to provide a pair of C functions,
+> mask_signals and unmask_signals, to bracket operations that are unsafe
+> under asynchronous exceptions, using sigprocmask to suppress signal
+> handling between them. However, since this requires access to OCaml's
+> signal handling internals (caml_process_pending_signals
+> and caml_signals_are_pending) to flush pending signals, it would be
+> great to have mask_signals and unmask_signals or something similar in
+> the standard library, so as to make it easier to develop libraries
+> that are safe under asynchronous exceptions. (For reference, Haskell
+> has seen this and other issues with asynchronous exception and
+> implemented a similar solution, see
+> http://hackage.haskell.org/trac/ghc/ticket/1036.)
+> 
+> 
+> Another option would be to simply warn against or disallow signal
+> handlers that raise exceptions, but that seems less useful, e.g., it
+> would make it hard to interrupt a long-running library function with a
+> timeout.
+> 
+> 
+> We look forward to hearing what the official fix or guideline for
+> handling asynchronous exception will be, for the standard library,
+> third-party libraries, as well as applications.
+> 
+> 
+> 
+> 
+> Thank you,
+> 
+> 
+> Yit
+> July 5, 2011
+
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Bad Nauheimer Str.3, 64289 Darmstadt,Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

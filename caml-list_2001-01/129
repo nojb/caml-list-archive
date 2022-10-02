@@ -1,0 +1,124 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA20442 for caml-red; Fri, 12 Jan 2001 20:03:44 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA21307 for <caml-list@pauillac.inria.fr>; Fri, 12 Jan 2001 13:35:16 +0100 (MET)
+Received: from mrwall.kal.com (mrwall.kal.com [194.193.14.236])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with SMTP id f0CCZFL01091;
+	Fri, 12 Jan 2001 13:35:15 +0100 (MET)
+Received: from mrwall.kal.com [194.193.14.236]
+	(HELO localhost)
+	by mrwall.kal.com (AltaVista Mail V2.0J/2.0J BL25J listener)
+	id 0000_0045_3a5e_fa3d_c440;
+	Fri, 12 Jan 2001 12:36:13 +0000
+Received: from somewhere by smtpxd
+Message-ID: <3145774E67D8D111BE6E00C0DF418B663AF87C@nt.kal.com>
+From: Dave Berry <dave@kal.com>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>,
+        Norman Ramsey
+  <nr@eecs.harvard.edu>
+Cc: caml-list@inria.fr
+Subject: RE: questions about costs of nativeint vs int
+Date: Fri, 12 Jan 2001 12:39:06 -0000
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.0.1460.8)
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Sender: weis@pauillac.inria.fr
+
+Do you have any plans to implement unboxed native integers?
+
+We had such a plan during the development of MLWorks, but never implemented
+it.  The register allocation code recognised a set of GC-able registers and
+a set of non-GC registers.  (Since we never implemented unboxed native ints,
+the set of non-GC registers was always 0 in practice).  We were planning to
+change the heap layout so that the header word would encode the number of
+untagged words.  The GC scan routine would skip the unboxed words, and
+continue scanning the tagged words.  Obviously the compiler would have to
+change to emit the correct data structures.
+
+There were various complications.  One arose from our omission of header
+words on pairs (which saved a large amount of space), but a little trickery
+handled this.  I think there were some potential complications to make sure
+the compiler always had enough information about data layout, but that
+should be easier in OCaml than SML  (with the possible exception of objects,
+which I've never implemented).
+
+I would really have liked to see this happen, because it would have made
+integration with C both easier and more efficient.
+
+Dave.
+
+-----Original Message-----
+From: Xavier Leroy [mailto:Xavier.Leroy@inria.fr]
+Sent: Thursday, January 11, 2001 18:34
+To: Norman Ramsey
+Cc: caml-list@inria.fr
+Subject: Re: questions about costs of nativeint vs int
+
+
+Dear Norman,
+
+> We're designing interfaces for tools that will sometimes have to
+> manipulate 32-bit integers, but will often be able to make do with the
+> limited precision provided by the int type.  I would love to get some
+> information about the relative cost of int vs nativeint in both
+> parameter passing and datatype representation.
+
+Values of type "nativeint", "int32" and "int64" are boxed
+(heap-allocated and handled through a pointer), while values of type
+"int" are unboxed.  So, in terms of space, we have:
+        nativeint       1 word for the pointer + 2 words for the heap block
+        int32           same
+        int64           same on 64-bit machines, add 1 word for a 32-bitter
+        int             1 word for the data
+In terms of speed, operations on boxed integers are more expensive due
+to the extra loads (on operands) and heap allocations (on results).
+ocamlopt can avoid loads and allocations that cancel each other in
+simple cases, but the fact remains that nativeint arithmetic is more
+expensive than int arithmetic.
+
+> For example, what are the relative costs (e.g., memory requirements)
+> of these two definitions?
+> 
+>   type loc = Cell of char * int * width
+>            | Slice of ...
+> 
+>   type loc' = Cell of char * nativeint * width
+>             | Slice of ...
+
+A "Cell" requires two more memory words in the latter case.
+
+> As another example, what are the costs of calling these functions:
+> 
+>   type t
+>   val add  : rd:int       -> rs1:int       -> rs2:int       -> t
+>   val add' : rd:nativeint -> rs1:nativeint -> rs2:nativeint -> t
+
+Assuming the nativeints are already available, the cost is exactly the
+same: a pointer is passed instead of an unboxed integer.  However,
+computing the nativeint arguments in the first place can be more expensive
+if arithmetic operations are involved.
+
+> To extend the question, what happens if I use int32 or int64 in place
+> of nativeint?
+
+No major differences.  On a 32-bit processor, int64 requires one more
+memory word than the other two.  And of course 64-bit arithmetic is
+slower than 32-bit arithmetic on a 32-bit processor.
+
+Actually, "nativeint" is isomorphic to "int32" on a 32-bit platform
+and to "int64" on a 64-bit platform.  The reason for having all three
+types is that some applications require 32-bit integers (no more, no
+less, regardless of the platform), some require 64-bit integers, and
+some just want to get at the natural word size for the architecture.
+
+> Finally, a procedural question: should I be posting these sorts of
+> questions to comp.lang.ml instead of sending them to
+> caml-list@inria.fr?
+
+For technical questions about the Caml implementation, I think you get
+a better chance of a reply here on caml-list.
+
+All the best,
+
+- Xavier
+
+

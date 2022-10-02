@@ -1,0 +1,72 @@
+Return-Path: <Didier.Remy@inria.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 4BE637F7C2
+	for <caml-list@sympa.inria.fr>; Wed,  5 Feb 2014 19:22:18 +0100 (CET)
+X-IronPort-AV: E=Sophos;i="4.95,787,1384297200"; 
+   d="scan'208";a="57025518"
+Received: from ras75-4-82-229-153-115.fbx.proxad.net (HELO MP-41194.local) ([82.229.153.115])
+  by mail2-relais-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-CAMELLIA256-SHA; 05 Feb 2014 19:22:18 +0100
+Message-ID: <52F28159.3050507@inria.fr>
+Date: Wed, 05 Feb 2014 19:22:17 +0100
+From: remy <Didier.Remy@inria.fr>
+Reply-To: Didier.Remy@inria.fr
+Organization: INRIA
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.9; rv:24.0) Gecko/20100101 Thunderbird/24.2.0
+MIME-Version: 1.0
+To: caml-list@inria.fr
+References: <CABooLwN_1vpyQAfA53cAiTk_5zACny1YZBt+dLd7h6WYyQiXQw@mail.gmail.com>
+In-Reply-To: <CABooLwN_1vpyQAfA53cAiTk_5zACny1YZBt+dLd7h6WYyQiXQw@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Question about objects and method overriding
+
+Tom,
+
+I am afraid that what you would like to do is unsafe. Consider the following
+example:
+
+     class a  = object method a = 1 end
+     class ac = object (self : 'a) method a = 1 method c = 3 end
+     class ab = object method a = 1 method b = new a end
+
+     class abc = object (self : 'a)
+       method a  = (self # b) # c
+       method b = self
+       method c = 2
+     end
+
+     let bug =
+       let abc = new abc in
+       let ab = (abc :> ab) in
+       let ab' : ab = (ab with b = new a)
+       ab' # a
+
+This is typable in OCaml if you replace the penultimate line by let ab' = ab
+According to your proposal, the penultimate line should typecheck as well
+because we change method b of type a by a method of the same type.
+
+However, the evaluation of bug creates a new object ab' with methods a, b,
+and c but where b returns an object a' with a single method a.  Therefore,
+the evaluation of ab' # a will reduce to ab' # b # c then to a' # c which
+will break.
+
+----------------
+
+The problem is that methods may receive self as argument, but this is not
+traced in the object types---only in the class types.
+
+If you replace method override by field override with a val call_b
+and a method set_b as suggested, typechecking will break because
+the type of self will then appear contra-variantly in method set_b which
+will prevent subtyping (abc : ab).
+
+In order to typecheck method overriding safely, one has to prevent the use
+of subtyping altogether or track it field by field, but this quickly becomes
+very tricky.
+
+See for instance "From classes to objects via subtyping"
+http://cristal.inria.fr/~remy/publications_abstracts.html#Remy/classes-to-objects/esop
+
+         Didier

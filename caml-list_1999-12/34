@@ -1,0 +1,225 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA25917 for caml-redistribution; Tue, 7 Dec 1999 13:32:43 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA08604 for <caml-list@pauillac.inria.fr>; Tue, 7 Dec 1999 01:52:59 +0100 (MET)
+Received: from beach.frankfurt.netsurf.de ([194.64.181.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id BAA27738
+	for <caml-list@inria.fr>; Tue, 7 Dec 1999 01:52:56 +0100 (MET)
+Received: from ice.darmstadt.netsurf.de (board-99.darmstadt.netsurf.de [194.163.86.227])
+	by beach.frankfurt.netsurf.de (8.8.5/8.8.5) with ESMTP id BAA13377;
+	Tue, 7 Dec 1999 01:52:49 +0100 (MET)
+Received: from localhost (localhost [[UNIX: localhost]])
+	by ice.darmstadt.netsurf.de (8.9.3/8.9.3) id BAA13727;
+	Tue, 7 Dec 1999 01:50:42 +0100
+From: Gerd Stolpmann <Gerd.Stolpmann@darmstadt.netsurf.de>
+Reply-To: Gerd.Stolpmann@darmstadt.netsurf.de
+Organization: privat
+To: John Prevost <prevost@maya.com>
+Subject: Re: Module hierarchy revisited
+Date: Tue, 7 Dec 1999 00:19:31 +0100
+X-Mailer: KMail [version 1.0.21]
+Content-Type: text/plain
+References: <87bt876w6f.fsf@isil.maya.com>
+Cc: caml-list@inria.fr
+MIME-Version: 1.0
+Message-Id: <99120701504200.13076@ice>
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+On Sat, 04 Dec 1999, John Prevost wrote:
+>I just came up with what seems like a reasonable way to package my
+>modules hierarchically (to avoid namespace collisions) in a reasonable
+>way.
+
+I used to give modules of a package common prefixes, e.g. Mypackage_foo,
+Mypackage_bar, Mypackage_baz. This is not too inconvenient because I often
+program in an object-oriented way, and thus the most frequent names are method
+names which need not to be qualified.
+
+But I agree: There is a problem.
+
+>The idea:
+>
+>For each "package" of stuff, the various modules (individual object
+>files) have short names, like "Foo", "Bar", and "Baz".  The danger, of
+>course, is that other packages from other sources will have names like
+>Foo Bar and Baz, because they're so short.
+>
+>My current working solution is to add as the last object file
+>something like this:
+>
+>===mypackage.ml===
+>module Foo = Foo
+>module Bar = Bar
+>module Baz = Baz
+>==================
+
+An interesting idea, but I think it is only a workaround. As you refer to Perl,
+I can imagine what you really want: Defining toplevel modules in subordinated
+namespaces. Currently, a toplevel module such as foo.ml is implicitly
+surrounded by a module parenthesis:
+
+module Foo = struct "all in foo.ml" end
+
+This could be improved by allowing that several files, now called
+"mypackage.foo.ml", "mypackage.bar.ml", "mypackage.baz.ml" are implicitly
+extended as in
+
+module Mypackage =
+  struct
+     module Foo = struct "all in foo.ml" end
+     module Bar = struct "all in bar.ml" end
+     module Baz = struct "all in baz.ml" end
+  end
+
+>From outside, you MUST access the members of the modules by the full path
+Mypackage.Foo.some_symbol, and this enforces that it is always clear which
+module is actually referred to. For convenient people, it is possible to open
+the namespace: open Mypackage - or even open Mypackage.Foo. From inside, you
+can always refer to the modules by their simple names (e.g. Foo.some_symbol).
+
+There are of course some open questions:
+1) What happens if there is also mypackage.ml?
+2) What is the order of the modules? 
+3) How is the namespace management integrated into the compilation process?
+
+Perhaps this could work as follows:
+
+- Add a -namespace option to ocamlc telling that the toplevel module is located
+  inside another module.
+ 
+  E.g. ocamlc -namespace Mypackage -c foo.ml
+  This generates an object Mypackage.Foo, and sets a flag that Mypackage is
+  "mergeable".
+
+  This could also be implicitly done by using file names with dots, e.g. 
+  "mypackage.foo.ml".
+
+  When ocamlc searches module interfaces, the dot notation is respected.
+
+- The rest is done by the linker. The linker can now merge namespaces which are
+  flagged as mergeable. This simply means that it is allowed that there are
+  archive objects  with names "Mypackage.Foo", and so on, inside the archive,
+  but that it is forbidden that a real module "Mypackage" exists at the same
+  time (the logic: Either there are several mergeable modules with the same
+  name, or there is a single non-mergeable module). 
+
+- If such an archive is accessed, an archive object with name "Mypackage.Foo" is
+  treated as if there were a module "Mypackage" containing the module "Foo".
+
+- Mypackage is an implicit module, only intended to serve as namespace. Because
+  of this it does not have an explicit signature; the signature is only known
+  after all members have been compiled. This is not a big problem, but an
+  additional restriction is necessary:
+
+  module M = Mypackage
+
+  This can be read as renaming Mypackage into M. Because Mypackage does not
+  have an explicit signature, M does not have either. It is not allowed that
+  M's signature becomes public (part of an interface).
+
+  I think there is no other way of referring to the signature of implicit
+  modules. 
+
+>What adding the extra module at the end of the library does for me as
+>a library author is arrange for an "automatic" binding like this to
+>take place.  Mypackage.Foo Mypackage.Bar and Mypackage.Baz will always
+>be the modules from Mypackage unless Mypackage is shadowed.  And the
+>namespace of packages tends to be nicer and cleaner than the namespace
+>of individual modules in those packages.  (Say, Text.Parser for
+>low-level Unicode parsers vs XML.Parser for a module that does XML
+>parsing.)  One could extend this further by having super-packages
+>which provide namespace to a number of other packages:
+>
+>module Apollo =
+>  struct
+>    module XML =
+>      struct
+>        module Parser = ...
+>        ...
+>      end
+>    module Text =
+>      struct
+>        module Parser = ...
+>        ...
+>      end
+>  end
+>
+>or
+>
+>module Apollo =
+>  struct
+>    module XML = XML
+>    module Text = Text
+>  end
+>
+
+We can go one step further. Currently we have only relative module paths, more
+exactly, relative to one of the parent modules. I think it would be nice to
+also have an absolute path:
+
+Let Universe be a reserved module name, denoting the *single* toplevel
+(namespace) module. If I define a module M outside any other module, it becomes
+implicitly a member of Universe. As Universe is reserved, it is not allowed to
+call any other module Universe, too. Then I can refer to every module in any
+circumstances by beginning the module path with Universe (e.g.
+Universe.M.N...)
+
+>So the question I have is whether people think that organizing things
+>in this manner is a Good Thing, and if people have opinions on whether
+>there's a Right Way to go about doing this and choosing names for
+>things.  As an example, I have a package I call "text" which has a
+>text.cma containing a module Text which points at the other modules by
+>name.  But the name "Text" is pretty broad, and could collide easily
+>with other people, even when both packages would be useful.
+
+I think package names should be less generic. For example, a short identifier
+for the project, or the author's initials could be one part of the name, as in
+jp_text. This makes it much more unlikely that name clashes occur.
+
+>A second question is whether anyone has recommendations for hiding the
+>"other" bindings of modules (i.e. I don't want Iso_10646 to appear in
+>the top-level namespace, I only want Text to appear, containing
+>Text.Iso_10646) to keep people from referring to the modules in less
+>safe ways.
+
+See above.
+
+>
+>I'm thinking about this because I'd like to put some modules out there
+>for people to use, and the community-driven standards in the world of
+>Perl, for example, allow huge numbers of modules from all over to be
+>mixed and matched at will.  O'Caml stuff, on the other hand, tends to
+>be much more willy-nilly, making me think of the world of C libraries,
+>where people are much more likely to write their own library to do
+>something than to use someone else's, just because hooking things
+>together and finding libraries and the like is so painful.
+
+I agree, and that was my motivation to write findlib.
+
+>findlib provides some nice features along these lines (though I think
+>it'd be nice if some of this functionality were folded into the
+>standard ocaml distribution, to encourage people to use it), but
+>without a discipline (community-driven, of course) for managing the
+>published module namespace, I don't think library development is
+>likely to grow like it has in Perl and Java-land--even with more
+>people developing.
+
+Yes, findlib would better be part of the ocaml distribution. It currently has a
+very liberal license (allowing almost everything), and it is no problem to
+integrate it. Of course, I would like to see a notice that I contributed it to
+the distribution.
+
+A simple way would be that I put it into the "usercontribs" tree of the CVS
+repository, and that this tree is distributed, too. Note that there is already
+software in the distribution not written by INRIA, namely the GNU regex library.
+
+Gerd
+--
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   Gerd.Stolpmann@darmstadt.netsurf.de (privat)
+Germany                     
+----------------------------------------------------------------------------
+
+
+

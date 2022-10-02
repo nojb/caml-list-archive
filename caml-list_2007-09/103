@@ -1,0 +1,153 @@
+Return-Path: <dave@ramenlabs.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id F373ABC69
+	for <caml-list@yquem.inria.fr>; Fri, 14 Sep 2007 09:33:06 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAAvW6UbAXQImn2dsb2JhbACOEgEBAQEHBAYHCBg
+X-IronPort-AV: E=Sophos;i="4.20,253,1186351200"; 
+   d="scan'208";a="752984"
+Received: from discorde.inria.fr ([192.93.2.38])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 14 Sep 2007 09:33:37 +0200
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l8E7XHXd027947
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Fri, 14 Sep 2007 09:33:20 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao8CAAvW6UZA9hw0/2dsb2JhbAA
+X-IronPort-AV: E=Sophos;i="4.20,253,1186351200"; 
+   d="scan'208";a="2691610"
+Received: from tenhost.net ([64.246.28.52])
+  by mail3-smtp-sop.national.inria.fr with SMTP; 14 Sep 2007 09:33:34 +0200
+Received: (qmail 16773 invoked from network); 14 Sep 2007 02:05:04 -0500
+Received: from ip72-208-52-84.ph.ph.cox.net (HELO ?192.168.1.99?) (72.208.52.84)
+  by tenhost.net with SMTP; 14 Sep 2007 02:05:04 -0500
+Message-ID: <46EA38FA.8010201@ramenlabs.com>
+Date: Fri, 14 Sep 2007 00:32:10 -0700
+From: Dave Benjamin <dave@ramenlabs.com>
+User-Agent: Mozilla-Thunderbird 2.0.0.4 (X11/20070828)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Closing all open file descriptors
+References: <Pine.LNX.4.63.0709131754020.24521@tenhost.net>	<20070914110403.f1ffe94b.mle+ocaml@mega-nerd.com>	<46EA2BC8.7040508@ramenlabs.com> <20070914164810.39a4dcda.mle+ocaml@mega-nerd.com>
+In-Reply-To: <20070914164810.39a4dcda.mle+ocaml@mega-nerd.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 46EA393D.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; descriptors:01 stdin:01 stdout:01 descriptors:01 forks:01 endline:01 syslog:01 ocaml:01 ocaml:01 topfind:01 syslog:01 printf:01 umask:01 chdir:01 rdwr:01 
+
+Erik de Castro Lopo wrote:
+> Dave Benjamin wrote:
+> 
+>> Did your program "daemonize" at all, then? Or did you use daemontools?
+> 
+> Yes, it called Unix.fork and then in the child called Unix.setsid.
+> 
+> Err, what's daemontools?
+
+daemontools is a service management framework by D. J. Bernstein which 
+those pages you linked were partially in reference to. The basic 
+philosophy is that you don't write daemons at all; you write regular 
+programs that read from stdin and write to stdout. You don't fork, you 
+don't setsid, you don't worry about the environment and you don't keep 
+track of PID files.
+
+(IMHO, that's why they're so worked up about closing file descriptors. 
+They're trying to get daemons to stop being daemons so they can be 
+controlled by daemontools, and this is one of the sticking points.)
+
+The daemontools style is actually a little bit like functional 
+programming in its use of wrapper programs. A typical daemontools 
+solution to the file descriptor closing problem would be to write a tiny 
+C program that closes the file descriptors and then forks and execs its 
+argument, like this:
+
+closefds mydaemon arg1 arg2 ...
+
+where "closefds" closes the file descriptors and then runs "mydaemon" 
+with the supplied arguments. This way, "closefds" would just be another 
+reusable tool.
+
+Incidentally, Linux comes with a "setsid" program that does the same 
+think with fork and setsid. It doesn't seem to be available for BSD, 
+though (though "nohup" is, which is similar as well).
+
+> My program has passes around a logging function of type "string -> unit".
+> If it not a daemon it uses print_endline for logging and if it is a daemon 
+> it uses a wrapper around syslog (via the debian/ubuntu libsyslog-ocaml-dev)
+> package.
+
+Makes sense to me.
+
+>> Yeah, the whole operation could be done in a C function too, and 
+>> probably wouldn't be much more code to write.
+> 
+> My daemon is only tiny, but I'm, still glad its in Ocaml.
+
+I agree, overall the Unix module is pretty nice to use.
+
+Here's a port of the "daemonize" C function described in APUE to OCaml, 
+and it's where my earlier code example came from:
+
+(* Based on Adv. Programming in the UNIX Environment, 2nd Ed. *)
+
+#use "topfind";;
+#require "unix";;
+#require "syslog";;
+
+open Printf
+
+let daemonize cmd =
+   (* Clear file creation mask. *)
+   ignore (Unix.umask 0);
+
+   (* Become a session leader to lose controlling TTY. *)
+   if Unix.fork () > 0 then exit 0;
+   ignore (Unix.setsid ());
+
+   (* Ensure future opens won't allocate controlling TTYs. *)
+   Sys.set_signal Sys.sighup Sys.Signal_ignore;
+   if Unix.fork () > 0 then exit 0;
+
+   (* Change the current working directory to the root so
+      we won't prevent file systems from being unmounted. *)
+   Unix.chdir "/";
+
+   (* Close all open file descriptors. *)
+   for fd = 0 to 1024 do
+     try Unix.close (Obj.magic fd : Unix.file_descr)
+     with Unix.Unix_error _ -> ()
+   done;
+
+   (* Attach file descriptors 0, 1, and 2 to /dev/null. *)
+   let fd0 = Unix.openfile "/dev/null" [Unix.O_RDWR] 0o666 in
+   let fd1 = Unix.dup fd0 in
+   let fd2 = Unix.dup fd0 in
+
+   (* Initialize the log file. *)
+   let log = Syslog.openlog cmd in
+   if fd0 <> Unix.stdin || fd1 <> Unix.stdout || fd2 <> U
+     begin
+       Syslog.syslog log `LOG_ERR
+         (sprintf "unexpected file descriptors %d %d %d"
+            (Obj.magic fd0 : int)
+            (Obj.magic fd1 : int)
+            (Obj.magic fd2 : int));
+       exit 1
+     end;
+   log
+
+let () =
+   let log = daemonize "daemonize" in
+   Syslog.syslog log `LOG_INFO "Starting daemon";
+   Unix.sleep 10;
+   Syslog.syslog log `LOG_INFO "Farewell"
+
+Cheers,
+Dave
+

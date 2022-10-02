@@ -1,0 +1,194 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA09686 for caml-redistribution; Fri, 15 Jan 1999 20:21:12 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA18415 for <caml-list@pauillac.inria.fr>; Fri, 15 Jan 1999 18:38:04 +0100 (MET)
+Received: from miss.wu-wien.ac.at ([137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id SAA16295;
+	Fri, 15 Jan 1999 18:38:01 +0100 (MET)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id SAA21368;
+	Fri, 15 Jan 1999 18:37:26 +0100 (MET)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <199901151737.SAA21368@miss.wu-wien.ac.at>
+Subject: Re: subtyping and inheritance
+To: Jerome.Vouillon@inria.fr (Jerome Vouillon)
+Date: Fri, 15 Jan 1999 18:37:26 +0100 (MET)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <19990115160242.08046@pauillac.inria.fr> from "Jerome Vouillon" at Jan 15, 99 04:02:42 pm
+X-Mailer: ELM [version 2.4 PL21]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+Hello,
+
+> I think the method "compare" in class "ord" need not be a binary method: its
+> argument type can probably instead be a type parameter of the class.
+>     class virtual ['a] ord = object
+>       method virtual compare : 'a -> bool
+>       (* ... *)
+>     end;;
+> Then, the method "compare" can be given the type "symbol -> bool" in
+> class "symbol" (and its subclasses) :
+>     class symbol = object (self)
+>       inherit [symbol] ord
+>       method x = "x"
+>       method compare other = self#x = other#x
+>     end;;
+>     class terminal = object
+>       inherit symbol
+>       method x = "a"
+>       method y = "y"
+>     end;;
+> This way, you can compare objects from the class "symbol" and any of
+> its subclasses.
+>     # new terminal#compare new symbol;; 
+>     - : bool = false
+>     # new terminal#compare (new terminal :> symbol);;
+>     - : bool = true
+
+I am really sorry - I have probably not explained the problem well enough:
+
+What I want to do is:
+
+Compare terminals to terminals:
+  Via a method "compare", which is naturally defined in class "terminal"
+  This method calls methods in "other", which are only found in terminals
+
+Compare nonterminal to nonterminal:
+  Via a method "compare", which is naturally defined in class "nonterminal"
+  This method calls methods in "other", which are only found in
+  nonterminals
+
+Compare symbols to symbols:
+  Via a method "compare", which is naturally defined in class "symbol"
+  This method calls methods in "other", which are found in nonterminals
+  and terminals the like
+
+The base class "ord" has some useful functions like "leq", "gt", etc...
+I would like to use them without having to redefine them in every class.
+
+If I change your example into the direction I want, I would change class
+"terminal" e.g. as follows:
+
+  class terminal = object (self)
+    inherit symbol
+    method x = "a"
+    method y = "y"
+    method compare (other : terminal) = self#y = other#y (* line 15 *)
+  end
+
+Here, I compare terminals to each other with a totally different
+comparison method than the one found in "symbol".  Unfortunately, your
+example won't type check correctly anymore: the compiler generates the
+(certainly not correct) message:
+
+  File "bla.ml", line 15, characters 47-52:
+  This expression has type terminal
+  It has no method y
+
+But "terminal" *has* a method "y"!!! The problem is that "compare" has
+been instantiated in "symbol" with "symbol" as type parameter to "ord".
+Thus, the method "compare" has type "symbol -> bool".  The compiler still
+believes that "compare" should have this type, but wrongly takes the
+type information provided in the declaration of "compare" in "terminal",
+which declares "compare" to be of type "terminal -> bool". This results
+in the incorrect error message that "terminal" has no method "y".
+
+What the compiler actually should flag is the (here) incorrect
+redefinition, or better *redeclaration* (due to other type) of "compare".
+
+My proposition for the resolution of this conflict (I have no idea
+whether this might result in inconsistencies - I am sure you can judge
+this better):
+
+  If an object that has inherited from another class is coerced to this
+  class, then the definition *and* the type of all methods should be
+  taken from this ancestor. Because the object *must* have all the data
+  defined in its ancestor (it has inherited all of it), the use of the
+  ancestor's methods should not lead to any inconsistencies.
+
+  E.g.
+
+    class virtual ord = object (self:'self)
+      method virtual compare : 'self -> bool
+    end
+    
+    class symbol = object (self)
+      inherit ord
+    
+      val mutable symbol_order = 0
+      method symbol_order = symbol_order
+    
+      method compare other = self#symbol_order = other#symbol_order
+    end
+    
+    class terminal = object (self)
+      inherit symbol
+    
+      val mutable terminal_order = 0
+      method terminal_order = terminal_order
+    
+      method compare other = self#terminal_order = other#terminal_order
+    
+      initializer symbol_order <- 1
+    end
+    ;;
+    
+    (new terminal :> symbol)#compare new symbol
+
+
+  The last line should be resolved as follows:
+
+  "new terminal :> symbol" should be allowed to be coerced to "symbol"
+  (although the type of "compare" is not the same). The method "compare"
+  is taken from "symbol" - this is intuitive and should lead to no
+  inconsistencies (I hope so ;-)
+
+  With this definition we arrive at:
+    self#symbol_order = other#symbol_order
+
+  equals "false" (0 = 1), because "symbol_order" has been initialized
+  (overwritten) in "terminal" with "1".
+
+Actually, the error message of the compiler for this example code is
+(in my eyes) also misleading. It says:
+
+  File "bla.ml", line 26, characters 1-13:
+  This expression cannot be coerced to type
+    symbol = < compare : symbol -> bool; symbol_order : int >;
+  it has type
+    terminal =
+      < compare : terminal -> bool; symbol_order : int; terminal_order : int >
+  but is here used with type
+    < compare : symbol -> bool; symbol_order : int; terminal_order : int >
+  Type
+    terminal =
+      < compare : terminal -> bool; symbol_order : int; terminal_order : int >
+  is not compatible with type
+    symbol = < compare : symbol -> bool; symbol_order : int >
+  Only the first object type has a method terminal_order
+
+Although it is correct that types "terminal" and "symbol" are
+incompatible, the reason is *not* that "only the first object type has a
+method terminal_order". An additional method in the object to be coerced
+does not harm coercion.  Coercion is only impossible if the object lacks
+some methods or has methods of another type. The latter is the case
+in this example: "compare" in "terminal" does not match "compare" in
+"symbol". My proposition would change this mismatch, because the method
+(including its type) is then taken from symbol.
+
+It took me quite some time to figure out what this error message really
+meant when I began to play around with the class system...
+
+I hope that my explanations are not hopelessly incomprehensible or
+unuseful and would like to know, whether my proposition would make any
+sense in the object calculus of OCAML.
+
+Best regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

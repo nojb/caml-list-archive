@@ -1,0 +1,116 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 5B840BBFA
+	for <caml-list@yquem.inria.fr>; Mon, 20 Jun 2005 22:22:26 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5KKMP34002422
+	for <caml-list@yquem.inria.fr>; Mon, 20 Jun 2005 22:22:25 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA18610 for <caml-list@pauillac.inria.fr>; Mon, 20 Jun 2005 22:22:25 +0200 (MET DST)
+Received: from cgpsrv2.cis.mcmaster.ca (univmail.CIS.McMaster.CA [130.113.64.46])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j5KKMO9Q001679
+	for <caml-list@inria.fr>; Mon, 20 Jun 2005 22:22:25 +0200
+Received: from [130.113.68.27] (account carette@univmail.cis.mcmaster.ca HELO pccarettej)
+  by cgpsrv2.cis.mcmaster.ca (CommuniGate Pro SMTP 4.1.8)
+  with ESMTP id 96125185; Mon, 20 Jun 2005 16:22:23 -0400
+Reply-To: <carette@mcmaster.ca>
+From: "Jacques Carette" <carette@mcmaster.ca>
+To: <caml-list@inria.fr>
+Cc: <oleg@pobox.com>
+Subject: Unexplained infinite loop
+Date: Mon, 20 Jun 2005 16:22:23 -0400
+Organization: McMaster University
+Message-ID: <002c01c575d5$c463b600$1b447182@cas.mcmaster.ca>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+X-Priority: 3 (Normal)
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook, Build 10.0.6626
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2900.2180
+Importance: Normal
+X-Miltered: at nez-perce with ID 42B72581.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 42B72580.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; encountering:01 gaussian:01 metaocaml:01 debugger:01 monadic:01 combinators:01 struct:01 struct:01 printf:01 printf:01 retn:98 idx:98 retn:98 idx:98 jacques:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Hello,
+
+I am writing some stateful code in continuation-passing-style, and am
+encountering an infinite loop that I cannot explain. =20
+
+The code below is extracted from a larger piece of code (which performs
+Gaussian Elimination).  All that is left is a loop on a 1 cell vector, =
+and
+that does not work :-(
+
+The real mystery (to me) is that if I annotate this code with lots of .< =
+>.
+and .~ for MetaOCaml, then not only does the code work, the generated =
+code
+works too.  I am somewhat at a loss to explain the infinite loop below.
+
+Using the debugger, I can see that the while loop condition is only =
+fully
+evaluated once, and then on subsequent passes through, only the 2nd and =
+3rd
+parameters are evaluated, the first (which is the one that changes!) is =
+not
+re-evaluated.  I don't understand why not. Could someone from this list =
+shed
+some light on this issue for me?
+
+Jacques
+
+(* Base monad type, to be used throughout *)
+type ('v,'s,'w) monad =3D 's -> ('s -> 'v -> 'w) -> 'w
+
+let ret a =3D fun s k -> k s a
+let retN a =3D fun s k -> let t =3D a in k s t
+let bind a f =3D fun s k -> a s (fun s' b -> f b s' k)
+let k0 s v =3D v  (* Initial continuation -- for `reset' and `run' *)
+let runM m =3D m [] k0 (* running our monad *)
+let liftGet x =3D ! x
+let liftRef x =3D ref x
+
+let l1 f x =3D bind x (fun t -> f t)
+
+let seqM a b =3D fun s k -> k s (begin a s k0 ; b s k0 end)
+
+(* while ``loops'' do not naturally bind a value *)
+let retWhileM cond body =3D fun s k ->=20
+    k s (while cond s k0 do body s k0 done)
+
+(* monadic logic combinators *)
+module LogicCode =3D struct
+  let and_ a b =3D ret (a && b)
+end
+
+(* operations on indices *)
+module Idx =3D struct
+  let zero =3D 0
+  let succ a =3D a+1
+  let less a b =3D a<b
+end
+
+(* code generators *)
+module Code =3D struct
+  let update a f =3D let b =3D f (liftGet a) in ret (a :=3D b)=20
+end
+
+let dogen a =3D=20
+  bind (retN (liftRef Idx.zero)) (fun c ->
+  bind (retN (Array.length a)) (fun m ->=20
+    (retWhileM (ret (Idx.less (liftGet c) m))
+       (bind (retN (liftGet c)) (fun cc ->
+       Printf.printf "%i %i\n" cc !c;
+       Code.update c Idx.succ ))))) ;;
+
+let gen a =3D runM (dogen a) ;;
+
+gen (Array.make 1 1.) ;;
+

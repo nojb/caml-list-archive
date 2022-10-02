@@ -1,0 +1,133 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA22149 for caml-red; Fri, 28 Jul 2000 16:49:35 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA22112 for <caml-list@pauillac.inria.fr>; Fri, 28 Jul 2000 16:46:28 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e6SEkKL25869;
+	Fri, 28 Jul 2000 16:46:20 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA22344; Fri, 28 Jul 2000 16:46:20 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200007281446.QAA22344@pauillac.inria.fr>
+Subject: Re: addressable_to_list
+In-Reply-To: <wx66ptyo6z.fsf@foo.iq.org> from Julian Assange at "Jul 27, 100 00:13:24 am"
+To: proff@iq.org (Julian Assange)
+Date: Fri, 28 Jul 2000 16:46:20 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis@pauillac.inria.fr
+
+> The following ocaml function converts a string to a list:
+> (which btw, I guess should be in the String module)
+
+This has been discussed many times in this list. We always ended up with
+the following conclusion:
+
+1) This function is trivial to implement
+2) This way of dealing with strings is inefficient and should not be
+encouraged in the core library.
+
+[...]
+
+> However, what I'd like to be able to do this for any countable thing.
+> 
+> e.g
+> 
+> let nthable_to_list s fnth flen =
+>   let len = flen s in
+>   let rec scan n =
+>     if n < len then
+>       fnth s n :: scan (n + 1)
+>     else
+>       []
+>   in
+>     scan len
+> 
+> Then one can of course simulate the first code snippit with:
+> 
+> let string_of_list s = nthable_to_list s (fun s n -> s.[n]) (fun s -> String.length s)
+> 
+> I know how this is done in Haskell, but how do something like it in O'caml?
+
+What's the problem with your code ? It looks pretty neat to me :)
+
+[...]
+> 
+>         While I'm on the subject of array initialisers, the
+>         new safe array creation could be improved. From memory,
+>         it takes a function which takes an int and 
+>         returns an initialisation element. It would be better
+>         if the counting was left upto the user supplied function
+>         and the output was fed back into the input. e.g like foldr.
+>         e.g
+> 
+>                ('a -> 'b * 'a) -> 'b array
+> 
+>         1.. initialisation would then look like
+> 
+>                 (fun x -> x, x+1)
+
+This has been discussed in a thread named reference initialization
+2 months ago. We ended up with a pretty general higher-order
+initialization function:
+
+(*
+ [initialize n f] returns a fresh array of length [n],
+ with elements initialized by function [f].
+ All the elements of the new array must be assigned once and only
+ once by the function [f]. [f] received two functions as arguments,
+ one to access elements of the new array, and the other to set the
+ elements of the new array. [f] can access to element [i] of the new
+ array provided [f] has already properly initialized element [i].
+ Raise [Not_yet_initialized i] if element [i] is accessed before being
+ assigned.
+ Raise [Already_initialized i] if element [i] is assigned twice.
+ Raise [Never_initialized i] if element [i] has never been assigned at
+ the end of initialization.
+ [Array.initialize n f] uses [2 n] words of heap space.
+*)
+
+exception Not_yet_initialized of int;;
+exception Already_initialized of int;;
+exception Never_initialized of int;;
+
+(*
+val initialize :
+ int -> ((int -> 'a) -> (int -> 'a -> unit) -> unit) -> 'a array
+*)
+let initialize n f =
+ if n = 0 then [||] else
+ let init_v = Array.make n false in
+ let v = ref [||] in
+ let get i = if init_v.(i) then !v.(i) else raise (Not_yet_initialized i) in
+ let set i ei =
+   if !v = [||] then v := Array.make n ei;
+   if not init_v.(i) then (!v.(i) <- ei; init_v.(i) <- true) else
+   raise (Already_initialized i) in
+ (f get set : unit);
+ for i = 0 to n - 1 do if not init_v.(i) then raise (Never_initialized i) done;
+ !v;;
+
+>From this initialization function, you can easily define your array
+initializer:
+
+let ja_initialize n f =
+ let ja_init get set =
+  let rec init i =
+    let e, j = f i in
+    set i e;
+    init j in
+  init 0 in
+ initialize n ja_init;;
+
+val ja_initialize : int -> (int -> 'a * int) -> 'a array = <fun>
+
+You'll still have the good properties of complete and unique
+initialization that initialize ensures.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+

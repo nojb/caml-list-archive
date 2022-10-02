@@ -1,0 +1,111 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id TAA27178 for caml-redistribution; Thu, 28 Mar 1996 19:02:27 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id PAA23165 for <caml-list@pauillac.inria.fr>; Thu, 28 Mar 1996 15:16:20 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.1/8.7.1) with ESMTP id PAA10556 for <caml-list@pauillac.inria.fr>; Thu, 28 Mar 1996 15:15:44 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.6.10/8.6.6) with ESMTP id PAA22616 for <caml-list@margaux.inria.fr>; Thu, 28 Mar 1996 15:16:18 +0100
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35]) by concorde.inria.fr (8.7.1/8.7.1) with ESMTP id PAA10552; Thu, 28 Mar 1996 15:15:42 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id PAA23161; Thu, 28 Mar 1996 15:16:16 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+Message-Id: <199603281416.PAA23161@pauillac.inria.fr>
+Subject: Re: One more question about the module system
+To: pbrisset@eis.enac.dgac.fr
+Date: Thu, 28 Mar 1996 15:16:16 +0100 (MET)
+Cc: caml-list@margaux.inria.fr
+In-Reply-To: <199603251721.SAA25211@concorde.inria.fr> from "pbrisset@eis.enac.dgac.fr" at Mar 25, 96 06:22:09 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+Status: O
+
+
+> I have a program implemented in several files (say m.ml, m1.ml and m2.ml).
+> This program depends on a module L and the dependency is expressed
+> using the .mli/open mechanism. So I have:
+> 
+> 	(* m.ml *)
+> 	open L
+> 	open M1
+> 	...
+> 
+> 	(* m1.ml *)
+> 	open L
+> 	open M2
+> 	...
+> 
+> 	(* m2.ml *)
+> 	open L
+> 	...
+> 
+> I want to transform this program in order to have a functor of argument L
+> (i.e. I want to use twice my program with two different module L's). So
+> I want to be able to write (in a main.ml):
+> 
+> 	module ML1 = M(L1)
+> 	module ML2 = M(L2)
+> 	...
+> 
+>  where M is the functor.
+> 
+> I use the following idea: because my different (implicit) modules
+> depend on L, I have to translate them into (explicit) functors. Then, I
+> apply the functors for m1.ml and m2.ml in the main module defined in m.ml.
+> The m1.ml module can no longer include an "open M2" since M2 is a functor:
+> m1.ml have to speak about M2 through the instantiation of M2 done in M.
+
+No, but M1.Make can take L as a parameter, apply M2.Make to it, bind
+the result with a "module" binding, and "open" the result. E.g.
+
+(* m1.ml *)
+        module Make(L: MTYPE_L) = struct
+          module M2L = M2.Make(L)
+          open L
+          open M2L
+          ...
+        end
+(* m.ml *)
+        module Make(L: MTYPE_L) = struct
+          module M1L = M1.Make(L)
+          open L
+          open M1L
+          ...
+        end
+
+However, it's often more flexible to avoid applying functors inside
+functors. Instead, just pass extra parameters to your functors:
+
+(* m1.ml *)
+        module Make(L: MTYPE_L)(Some_M2: MTYPE_M2) = struct
+          open L
+          open Some_M2
+          ...
+        end
+(* m.ml *)
+        module Make(L: MTYPE_L)(Some_M1: MTYPE_M1) = struct
+          open L
+          open Some_M1
+          ...
+        end
+
+(You will probably need to express sharing constraints between type
+components of the parameters. Express them with "with type" or
+"with module", e.g.
+        module Make(L: MTYPE_L)(Some_M2: MTYPE_M2 with type t = L.t) ...
+)
+
+Then do all the functor applications in a "main" file:
+
+        module L = L1 (* or L2 *)
+        module M2 = M2.Make(L)
+        module M1 = M1.Make(L)(M2)
+        module M = M.Make(L)(M1)
+
+The advantage of this approach is that you can also provide
+"hand-made" M1 or M2 modules (not produced by application of M1.Make
+or M2.Make), so you get more flexibility. The disadvantage is
+increased verbosity and number of declarations needed.
+
+- Xavier Leroy
+
+
+
+

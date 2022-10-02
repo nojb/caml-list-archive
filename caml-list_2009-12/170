@@ -1,0 +1,179 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 2EF71BBAF
+	for <caml-list@yquem.inria.fr>; Mon, 21 Dec 2009 19:39:41 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Aq4AABRQL0vUnwckkGdsb2JhbACCGZk1AQEBAQkJDAcTBLp2hC4E
+X-IronPort-AV: E=Sophos;i="4.47,432,1257116400"; 
+   d="scan'208";a="52611993"
+Received: from relay.ptn-ipout02.plus.net ([212.159.7.36])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 21 Dec 2009 19:39:20 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtsEAGpPL0tUXebi/2dsb2JhbACCGdRuhC4E
+Received: from relay03.plus.net ([84.93.230.226])
+  by relay.ptn-ipout02.plus.net with ESMTP; 21 Dec 2009 18:39:19 +0000
+Received: from [87.114.35.173] (helo=leper.local)
+	 by relay03.plus.net with esmtp (Exim) id 1NMnA6-0004UX-S1
+	for caml-list@yquem.inria.fr; Mon, 21 Dec 2009 18:39:19 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: multicore wish [Was: Re: [Caml-list] Re: OCaml is broken]
+Date: Mon, 21 Dec 2009 19:53:23 +0000
+User-Agent: KMail/1.9.9
+References: <4B2D2BC1.6020204@msu.edu> <200912200443.57698.jon@ffconsultancy.com> <874onko3mp.fsf_-_@frosties.localdomain>
+In-Reply-To: <874onko3mp.fsf_-_@frosties.localdomain>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200912211953.23880.jon@ffconsultancy.com>
+X-Plusnet-Relay: e4e454923658f5a223f93fcaee41d705
+X-Spam: no; 0.00; ocaml:01 parallelism:01 algebra:01 partitions:01 twiddling:01 chunks:01 deques:01 deque:01 deque:01 locality:01 speedups:01 combinator:01 ocaml:01 locality:01 speedup:01 
+
+On Monday 21 December 2009 13:31:10 Goswin von Brederlow wrote:
+> Jon Harrop <jon@ffconsultancy.com> writes:
+> > We've discussed the problems with that before. Writing a parallel generic
+> > quicksort seems to be a good test of a decent multicore capable language
+> > implementation. Currently, F# is a *long* way ahead of everything open
+> > source.
+>
+> How do you implement it?
+>
+> 1) divide at the top and then let each core sort its smaller array
+>
+> Say you have 2^n cores then the first n splits in merge sort would
+> first sort the values into the 2 regions and then start a thread for
+> each region (start a new one, do the other part in this thread). After
+> n splits you would switch to a uni-core quicksort.
+>
+> For this you need to split well so each core ends up with a roughly
+> equal sized chunk.
+
+That is basically what is now being called "nested data parallelism". You 
+precompute a parallel strategy, partition the work upfront and then execute 
+embarassingly parallel tasks. This worked well decades ago for sparse linear 
+algebra on supercomputers but it sucks on multicores because load is variable 
+and there is no load balancing. So one of those "equal-sized" partitions is 
+likely to take 10x longer than the others due to competing processes, 
+scheduling or cache issues and all cores end up twiddling their thumbs 
+waiting for that one to complete.
+
+> 2) factory/worker approach
+>
+> Each core runs a factory/worker thread waiting on a job queue. You
+> start by dumping the full array into the job queue. Some random core
+> picks it up, splits it into 2 regions and dumps one into the job
+> queue. If the job gets too small (PAGE_SIZE? cache line size? total
+> size / cores^2?) the factory/worker switches to normal uni-core
+> quicksort and sorts the whole chunk.
+>
+> The job queue should probably be priority based so larger chunks are
+> sorted before smaller.
+>
+> Here the quality of each split is not so important. If a chunk is
+> smaller, and therefore faster, the core just picks up the next job in
+> the queue. But you need more syncronization between the cores for the
+> job queue. On the other hand you aren't limited to 2^n cores. Any
+> number will do.
+
+This is a work sharing queue which is better because it is dynamically load 
+balanced but still bad because you have global contention for a shared 
+resource: the shared queue.
+
+Cilk pioneered wait-free work-stealing task deques and Microsoft's Task 
+Parallel Library (which will be part of .NET 4 in March 2010) copied the 
+idea. You have a separate deque of tasks for each core. A core tries to pop a 
+task off its deque. If there are no tasks on its deque then it tries to pop 
+off a randomly-chosen other deque. If there is a task then the core begins 
+executing that task and any child tasks are pushed back onto the local deque 
+(and might get stolen before they are executed).
+
+An important characteristic of this design is that child tasks are likely to 
+be executed on the same core as their parent and, therefore, locality between 
+related tasks is valuable. Consequently, many algorithms that recursively 
+subdivide a large dataset (like quicksort) attain superlinear speedups 
+because they make effective use of the sum of all L2 caches rather than just 
+a single L2 cache. So this works extremely well with the multi-level 
+hierarchical caches with interconnects that are the hallmark of multicore 
+architecture.
+
+You can then implement quicksort (and many other parallel divide and conquer 
+algorithms) something like this:
+
+  let rec serial_qsort cmp a i0 i3  =
+    if i3 - i0 > 1 then
+      let i1, i2 = partition cmp a i0 i3 in
+      serial_qsort i0 i1;
+      serial_qsort i2 i3
+
+  let rec parallel_qsort cmp a i0 i3  =
+    if i3 - i0 > 1 then
+      if i3 - i0 < threshold then
+        serial_qsort cmp a i0 i3
+      else
+        let i1, i2 = partition cmp a i0 i3 in
+        let future = invoke (parallel_qsort cmp i0) i1 in
+        parallel_qsort i2 i3
+        future()
+
+where the "invoke" combinator pushes a task onto the local task deque and 
+returns a closure that, when applied, waits for that task to complete and 
+returns its (unit) result. The "threshold" value protects against the 
+function spending more time spawning tasks that doing actual work.
+
+You can implement this in OCaml and F# but there are some important 
+differences:
+
+1. The array "a" is just an ordinary array of any type of values on the shared 
+heap in F# but, for generality in OCaml, this must be both the underlying 
+ordinary data and a manually-managed shared big array of indices into the 
+ordinary data where the indices get sorted while the original data remain in 
+place until they are permuted at the end.
+
+2. The sorted subarrays are contiguous in memory and, at some subdivision, 
+will fit into L2 cache. So F# offers optimal locality. In contrast, there is 
+no locality whatsoever in the OCaml code and most accesses into the unsorted 
+original array will incur cache misses right up to main memory. So the OCaml 
+approach does not scale as well and will never see superlinear speedup 
+because it cannot be cache friendly.
+
+3. Child tasks are likely to be executed on the same core as their parent and 
+use a subset of their parent's data in F#, so they offer the best possible 
+locality. In contrast, child processes are likely to be executed on another 
+core in OCaml and offer the worst possible locality.
+
+4. Task deques can handle an arbitrary number of tasks limited only by memory 
+whereas processes are a scarce resource and forking is likely to fail, 
+whereupon the "invoke" combinator will simply execute sequentially. So it is 
+much easier to write reliable and performant code in F# than OCaml.
+
+5. OCaml's fork-based "invoke" combinator is many orders of magnitude slower 
+than pushing a closure onto a concurrent task deque in F#.
+
+6. The "threshold" value is a magic number derived from measurements on a 
+given machine in my OCaml code but is dynamically adjusted in a 
+machine-independent way by the "invoke" combinator in my F# code using atomic 
+operations and real time profiling of the proportion of time spent spawning 
+tasks vs doing actual work.
+
+The same basic principles apply to many algorithms. Although it can sometimes 
+be tricky to figure out how best to use this technology to parallelize a 
+given algorithm (e.g. successive over relaxation), I have found that a great 
+many algorithms can be parallelized effectively using this approach when you 
+have a suitable foundation in place (like the TPL). Moreover, the ability to 
+use ordinary constructs in F# instead of hacks like type-specific shared 
+memory big arrays in OCaml makes it a lot easier to parallelize programs. My 
+parallel Burrows-Wheeler Transform (BWT), for example, took 30 minutes to 
+develop in F# and 2 days in OCaml.
+
+Hopefully, HLVM will bring these kinds of benefits to OCaml, albeit in the 
+form of a DSL for high performance parallel programming.
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/?e
+

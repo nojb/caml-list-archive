@@ -1,0 +1,111 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA04376; Sat, 15 Jun 2002 18:08:40 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA04483 for <caml-list@pauillac.inria.fr>; Sat, 15 Jun 2002 18:08:37 +0200 (MET DST)
+Received: from laurelin.dementia.org ([208.167.88.73])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g5FG8W521737
+	for <caml-list@inria.fr>; Sat, 15 Jun 2002 18:08:33 +0200 (MET DST)
+Received: by laurelin.dementia.org (Postfix, from userid 1001)
+	id BA19170B9; Sat, 15 Jun 2002 12:14:09 -0400 (EDT)
+To: Max Kirillov <max630@mail.ru>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] static variables in a function
+References: <20020614170830.28193.qmail@web10705.mail.yahoo.com>
+	<vfiznxxagiy.fsf@harp.is.s.u-tokyo.ac.jp>
+	<20020615114201.B1425@max.home> <864rg5oxpo.fsf@laurelin.dementia.org>
+	<20020615215124.C1425@max.home>
+From: John Prevost <j.prevost@cs.cmu.edu>
+Date: 15 Jun 2002 12:14:09 -0400
+In-Reply-To: <20020615215124.C1425@max.home>
+Message-ID: <86y9dgo6y6.fsf@laurelin.dementia.org>
+Lines: 80
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>>>>> "mk" == Max Kirillov <max630@mail.ru> writes:
+
+    mk> Oh, thank you for clarification. I'm very new to functional
+    mk> programming, and didn't know yet about tricks like this. As I
+    mk> understand, the point was to call 'ref' at initialization
+    mk> stage. I thought about using 'lazy' for that, but still placed
+    mk> it inside a full function definition, so it didn't help.
+
+    mk> This makes a possibility to write very funny functions. For
+    mk> example:
+
+# let acc v =
+    let vR = ref v in
+    fun f -> 
+            let newV = f !vR in
+          vR := newV;
+          newV  ;;
+
+    mk> I'm not sure if this style of coding better than placing the
+    mk> mutable values to be hidden inside modules or classes. Even
+    mk> when possible (in other languages), I prefer to use latter way
+    mk> to do. Well it's a matter of taste.
+
+It also depends precisely what you're trying to do.  In the case we
+first saw (we have a specific function that wants to have an input
+buffer, essentially), I'm not sure it makes a great amount of sense.
+The problem is that using a variable in the closure doesn't help do
+anything except hide the value from the rest of the module.  And,
+well, we'd probably be better off leaving it open to the module and
+using the module interface to hide it from other modules.
+
+If we change our focus, howeverm the technique becomes more
+interesting.  Take a look at this, for example:
+
+type 'a memoval =
+  | Val of 'a
+  | Exn of exn
+
+let memoize f =
+  let stow = Hashtbl.create 20 in
+  fun x -> begin
+    if not (Hashtbl.mem stow x) then begin
+      try (let v = f x in Hashtbl.replace stow x (Val v))
+        with e -> Hashtbl.replace stow x (Exn e)
+     end;
+    match Hashtbl.find stow x with
+      | Val x -> x
+      | Exn e -> raise e
+  end
+
+(* this is the fibonacci sequence, but we delaying "binding" the
+   recursion until later. *)
+let fib' fib' =
+  function
+    | 0 -> 1
+    | 1 -> 1
+    | n -> fib' (n-1) + fib' (n-2);;
+
+(* example of how to bind the recursion in a simple way *)
+let rec fib_r1 x =
+  fib' fib_r1 x
+
+(* and now binding it "through" the memoize function *)
+let rec fib_r2 x =
+  memoize (fib' fib_r2) x
+
+In this case, the whole point of the function is that it produces a
+function identical in every way to the original function, except that
+it memoizes its work so as not to repeat.  There's no convenient
+"object" to stuff the value into, because the function *is* our
+object.  The only way we can store the data correctly is to have the
+information somehow attached to the function we're creating.
+
+There are a number of places where this is useful.  The key insight is
+that in a functional language, the primary objects in the system are
+functions, and this mechanism we're using above is simply what happens
+when a variable goes out of scope for everything except the function
+in question.
+
+JOhn.
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

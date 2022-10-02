@@ -1,0 +1,72 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 8BB49BBAF
+	for <caml-list@yquem.inria.fr>; Tue,  2 Feb 2010 15:19:38 +0100 (CET)
+X-IronPort-AV: E=Sophos;i="4.49,390,1262559600"; 
+   d="scan'208";a="42694792"
+Received: from estephe.inria.fr ([128.93.11.95])
+  by mail2-relais-roc.national.inria.fr with ESMTP; 02 Feb 2010 15:19:38 +0100
+Message-ID: <4B683479.40908@inria.fr>
+Date: Tue, 02 Feb 2010 15:19:37 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Thunderbird 2.0.0.17 (X11/20080929)
+MIME-Version: 1.0
+To: yminsky@gmail.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Inside the mind of the inliner
+References: <891bd3391001281631j5bee86e1h501aae874d06c1bc@mail.gmail.com>
+In-Reply-To: <891bd3391001281631j5bee86e1h501aae874d06c1bc@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 inlining:01 trivial:01 -inline:01 inlined:01 run-time:01 compile-time:01 inlined:01 foo:01 infix:01 ...,:98 ...,:98 constants:01 rec:01 inline:01 
+
+> I've been doing some experiments with the OCaml inliner, and have
+> walked away from the process very confused.  It seems like inlining
+> can be prevented by very simple changes to the code of a function.
+> The main surprise for me is that adding a quite trivial allocation of
+> a list or a string literal defeats the inliner.
+> 
+> Does anyone have a better understanding of what's going on here?  I
+> feel like my intuition for this stuff is terrible.
+
+The algorithm is very simple: a function is inlinable if
+
+1- its code size (approximate) is below a certain threshold
+    (governed by the -inline option)
+2- and its body doesn't contain a function definition
+    (fun x -> ..., let rec f x = ..., etc) nor a structured constant
+    (string literal, [1;2;3], etc).
+
+The reason for 2- is that the inliner is too stupid to inline a
+function without duplicating the function definitions/structured
+constants contained within.  Such a duplication can be very wasteful
+in code and static data size.  (Cue the replies "but not if small
+enough!" in 3...2...1...now.)
+
+For your specific examples:
+
+> (* Add in allocation of a list, not inlined *)
+> let f x = ignore [1]; x + x
+> let g x = f x + f x
+
+"[1]" is not a run-time allocation: its a structured constant, built
+at compile-time.  Hence you run into case 2 above.
+
+> (* allocate a string, not inlined *)
+> let f x = ignore "foo"; x + x
+> let g x = f x + f x
+
+Likewise (no allocation, but case 2).
+
+> (* Call a function that includes an infix operator in prefix form,
+>    not inlined. *)
+> let list = [1;2;3]
+> let f x = x * List.fold_left (+) 0 list
+> let g x = f x + f x
+
+Because (+) is really fun x y -> x + y, therefore case 2 again.
+
+- Xavier Leroy
+

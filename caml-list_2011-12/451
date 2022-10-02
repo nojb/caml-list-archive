@@ -1,0 +1,110 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id pBUGiDws025395
+	for <caml-list@sympa-roc.inria.fr>; Fri, 30 Dec 2011 17:44:13 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjMBAH/p/U7U4367kWdsb2JhbABDhQ+nQiIBAQEBCQsLBxQDIoF3GgtCSQImAnIJh3MGljiOApFNgS+JSoEWBI0ajTeMZg
+X-IronPort-AV: E=Sophos;i="4.71,432,1320620400"; 
+   d="scan'208";a="125088639"
+Received: from moutng.kundenserver.de ([212.227.126.187])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 30 Dec 2011 17:44:08 +0100
+Received: from office1.lan.sumadev.de (dslb-094-219-218-084.pools.arcor-ip.net [94.219.218.84])
+	by mrelayeu.kundenserver.de (node=mreu3) with ESMTP (Nemesis)
+	id 0MOpN4-1RbjsH2jh8-006Me3; Fri, 30 Dec 2011 17:44:07 +0100
+Received: from [192.168.178.30] (546BF816.cm-12-4d.dynamic.ziggo.nl [84.107.248.22])
+	by office1.lan.sumadev.de (Postfix) with ESMTPSA id 5C5A3C00C7
+	for <caml-list@inria.fr>; Fri, 30 Dec 2011 17:44:07 +0100 (CET)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset="UTF-8"
+Date: Fri, 30 Dec 2011 17:44:06 +0100
+Message-ID: <1325263446.5036.104.camel@samsung>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.32.2 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:64n1rWlDtZjpTprnmfgb0jRNB4RaobMNH6BV6fLg2PU
+ UPDQ4a423+nOHTnSRCQgY2opq9AfjF56slbj2ryvsPwtOe5lTV
+ Rbnt3wJBQRl2shMrBdQvNRDQrV4sGMVISd4/Yr1Xq+LyLTt5zt
+ /cPfgb7/jwFEjVA6m0+EDuMEjfbS3ZGb56kjCViDziYF/HlaPT
+ UBECnSwR8847RAUAA3BPhPVzBvjUcB4nugNASqjamEON3dlOfF
+ iepu+FxJXaSiD8YCQMlc8M00Hf8sY9dUj2Gb5JYGmFFPQabZyE
+ VP37zGfBIosp+UnWbejZPhB5t07ZOTk+IVI6jg5DLPfgtq50ZR
+ hneUAe8LMh6ueHBu6Pj4pHg8Z100J/X5f6ZZcudZj
+Subject: [Caml-list] Hashtbl and security
+
+Hi,
+
+there was recently a security alert for web services that use hash
+tables to store web form parameters sent via POST (so that millions of
+such parameters can be sent in a single request). It is possible to keep
+the web service busy for hours with such a DoS (denial of service)
+attack. The type of attack boils down to a problem in most hash table
+implementations, namely that the hash functions are invertible, and it
+is possible for a malicious user to construct lots of keys that all map
+to the same bucket of the hash table, creating a mass collision.
+
+The text of the alert: 
+http://www.nruns.com/_downloads/advisory28122011.pdf
+
+I'd like to discuss this issue, because it is not restricted to the
+processing of web requests, but may also occur for all other data coming
+from untrusted sources. The web is only the most exposed area where this
+issue exists.
+
+So how is Ocaml affected? The hash functions used in recent Ocaml
+releases are also insecure in the above mentioned sense (currently
+MurmurHash3, and even a simpler hash function in previous releases). A
+quick survey of the Internet revealed at least one site that tries to
+break it. Probably a good cryptographer could do it in minutes. 
+
+A pure Hashtbl.add of the constructed keys does not yet lead to the
+performance degradation, but a Hashtbl.replace, and of course
+Hashtbl.find after the table is built up will. So it depends very much
+of the details of the programs whether they are affected or not.
+
+I've just checked that Ocamlnet uses only Hashtbl.add to collect POST
+parameters, so it is not directly vulnerable. But if the crafted request
+is actually served by a handler, the handler would get a degraded table,
+and could show in turn bad performance (again leading to DoS).
+
+What are possible fixes?
+
+1) Avoid hash tables in contexts where security is relevant. The
+alternative is Set (actually a balanced binary tree), which does not
+show this problem.
+
+2) Use cryptographically secure hash functions.
+
+3) Use "randomized" hash tables. The trick here is that there is not a
+single hash function h anymore, but a family h(1)...h(n). When the hash
+table is created, one of the functions is picked randomly. This makes it
+impossible to craft an attack request, because you cannot predict the
+function.
+
+I don't think 1) is viable - hash tables are too wide spread, and are
+loved by programmers because of their good performance. 2) would be good
+in extremely critical contexts - although it is then again questionable,
+because it is likely to have worse performance than 1).
+
+So, the question is how to do 3). I see two problems here:
+
+a) how to define the family of hash functions. Is it e.g. sufficient to
+introduce an initialization vector for the Murmurhash algorithm, and
+fill it randomly? How to get a random number that is good enough?
+
+b) the Hashtbl in the standard library does not allow it to set the hash
+function dynamically. Maybe one can get this effect by using first-class
+modules (haven't checked).
+
+Anyway, I think these problems are difficult enough to deserve some
+discussion here. At least I cannot solve them immediately, and this
+problem may exist for lots of Ocaml applications.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Darmstadt, Germany    gerd@gerd-stolpmann.de
+Creator of GODI and camlcity.org.
+Contact details:        http://www.camlcity.org/contact.html
+Company homepage:       http://www.gerd-stolpmann.de
+------------------------------------------------------------
+

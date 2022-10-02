@@ -1,0 +1,77 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA23176 for caml-redistribution; Fri, 12 Mar 1999 18:07:57 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA23280 for <caml-list@pauillac.inria.fr>; Fri, 12 Mar 1999 16:00:20 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id QAA09524;
+	Fri, 12 Mar 1999 16:00:17 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA22833; Fri, 12 Mar 1999 16:00:17 +0100 (MET)
+Message-ID: <19990312160017.60444@pauillac.inria.fr>
+Date: Fri, 12 Mar 1999 16:00:17 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: William Chesters <williamc@dai.ed.ac.uk>, caml-list@inria.fr
+Subject: Re: ocaml 2.02 bug: curried printf
+References: <199903060138.BAA13133@toy.william.bogus>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <199903060138.BAA13133@toy.william.bogus>; from William Chesters on Sat, Mar 06, 1999 at 01:38:18AM +0000
+Sender: weis
+
+> This used to work in 2.01, but 2.02 outputs the wrong thing:
+
+You're right that sprintf in 2.02 is broken w.r.t. partial application.
+However, even after fixing the obvious bug, it might not do what you want.
+
+The behavior of the *printf functions when partially applied
+has always been a bit strange even before 2.02: sprintf did "the right
+thing", but printf prints as much as it can without needing the
+omitted arguments, then resumes printing when more arguments are
+provided.  In your examples:
+
+> 	let udt = [1; 2; 3] ;;
+> 	iter (printf "foo%d") udt; print_newline () ;;
+
+This prints "foo123" because the printing of "foo" was ``factored out''.
+
+> 	iter (fun s -> printf "foo%d" s) udt; print_newline ()
+
+This prints "foo1foo2foo3" because printf is no longer partially applied.
+
+For sprintf, the old implementation was purely functional (a list of
+string fragments is built, then concatenated), hence partial
+application made no difference:
+
+> 	map (sprintf "foo%d") udt
+>       map (fun s -> sprintf "foo%d" s) udt
+
+both return ["foo1"; "foo2"; "foo3"].
+
+The new implementation of sprintf is based on an internal extensible
+buffer, hence works by side-effects (just like printf, actually).
+Hence, after fixing the obvious bug, we'd get the same "print as much
+as possible" behavior that printf displays, thus
+
+        let f = sprintf "foo%d" in
+        let r1 = f 1 in
+        let r2 = f 2 in
+        (r1, r2)
+
+would return ("foo1", "2"), while
+
+        (sprintf "foo%d" 1, sprint "foo%d" 2)
+
+still returns ("foo1", "foo2").
+
+We can go back to the 2.01 implementation of sprintf, of course, but
+it's less efficient than the one based on extensible buffers, and also
+prevents interesting code sharing between sprintf and bprintf.
+
+The alternative is to keep a buffer-based sprintf that is efficient
+and consistent with printf ("consistent" in the sense of "as weird as"),
+but is not really usable in partial application contexts.
+
+Any opinions?
+
+- Xavier Leroy
+
+
+

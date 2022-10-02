@@ -1,0 +1,282 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 1DB45BBB7
+	for <caml-list@yquem.inria.fr>; Wed, 26 Jul 2006 08:48:32 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k6Q6mVU5024160
+	for <caml-list@yquem.inria.fr>; Wed, 26 Jul 2006 08:48:31 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA28942 for <caml-list@pauillac.inria.fr>; Wed, 26 Jul 2006 08:48:30 +0200 (MET DST)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k6Q6mSDY023571
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Wed, 26 Jul 2006 08:48:29 +0200
+Received: (qmail 13246 invoked by uid 107); 26 Jul 2006 06:48:23 -0000
+Received: from vwmetnet.metnet.navy.mil (192.16.167.21)
+  by selenite.metnet.navy.mil with SMTP; 26 Jul 2006 06:48:23 -0000
+Received: from Adric.metnet.fnmoc.navy.mil ([10.100.105.102])
+ by vwmetnet.metnet.navy.mil (NAVGW 2.5.2.9) with SMTP id M2006072607000719813
+ for <caml-list@inria.fr>; Wed, 26 Jul 2006 07:00:07 GMT
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id B99A5A9B1; Tue, 25 Jul 2006 23:45:58 -0700 (PDT)
+To: caml-list@inria.fr
+Subject: Variance problem in higher-order Functors?
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20060726064558.B99A5A9B1@Adric.metnet.fnmoc.navy.mil>
+Date: Tue, 25 Jul 2006 23:45:58 -0700 (PDT)
+X-Miltered: at nez-perce with ID 44C7103F.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 44C7103C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; variance:01 higher-order:01 functors:01 oleg:01 sig:01 struct:01 struct:01 functor:01 functor:01 sig:01 typecheck:01 implements:01 higher-order:01 functors:01 restricting:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.0.3
+
+
+Jacques Carette posed the problem: given
+
+> module type DOMAIN = sig type kind end
+> type domain_is_field
+> type domain_is_ring
+> module Rational = struct type kind = domain_is_field end
+> module Integer = struct type kind = domain_is_ring end
+>
+> module DivisionUpdate(D:DOMAIN with type kind = domain_is_field) = struct
+>   (* something only valid with D a field*)
+> end
+>
+> module GeneralUpdate(D:DOMAIN) = struct
+>    (* something that always works, for rings and fields *)
+> end
+
+how to write a functor of the type
+> module type Trans = functor(U:UPDATE) ->  functor(D:DOMAIN) -> sig
+> ... end
+
+so that we can instantiate it with DivisionUpdate and Rational,
+GeneralUpdate and Rational, GeneralUpdate and Integer but not
+DivisionUpdate and Integer.
+
+The second argument of the functor has the signature DOMAIN -- as it
+should so we can accept both Rational and Integer as
+structures. However, that means that the formal parameter D has type
+that abstracts over `domain_is_field' and `domain_is_ring' -- thus
+removing the very distinction we need to typecheck the application of
+UPDATE.
+
+There seem to be three solutions, the last of which precisely
+implements the signature of Trans. 
+
+The first solution avoids higher-order functors altogether. That is,
+rather than instantiating Trans with an UPDATE structure and then with
+a DOMAIN structure, we instantiate it with a DUPDATE structure (which
+has a DOMAIN structure as one of the components). The end result is
+essentially the same. That DUPDATE structure can only be produced in
+certain ways (e.g., by DivisionUpdate functor), which will make sure
+that the concrete domain is indeed a field. So, we emulate `dependent
+typing' by restricting the production of the values of desired types.
+
+
+(* A bit of infrastructure *)
+module type KIND  = sig type kind end
+type domain_is_field
+type domain_is_ring
+module KindF      = struct type kind = domain_is_field end
+module KindR      = struct type kind = domain_is_ring  end
+module type DOMAIN = sig include KIND type v val zero : v end
+module type DOMAINR = DOMAIN with type kind = domain_is_ring
+module type DOMAINF = DOMAIN with type kind = domain_is_field
+
+module Float : DOMAINF = struct
+  include KindF
+  type v = float
+  let zero = 0.0
+end;;
+module Integer  : DOMAINR = struct 
+  include KindR
+  type v = int
+  let zero = 0
+end;;
+
+
+(* The field D has a general DOMAIN type, abstracted over `kind' *)
+module type DUPDATE = sig module D: DOMAIN val update : unit -> unit end;;
+
+(* But the structures of the type DUPDATE can only produced by the
+   following two functors. And DivisionUpdate will require the
+   _specific_ field DOMAINF rather than general domain.
+*)
+module DivisionUpdate(D: DOMAINF) : DUPDATE = struct
+  module D = D
+  let update () = print_endline "division update"
+end;;
+
+module GeneralUpdate(D: DOMAIN) : DUPDATE = struct
+  module D = D
+  let update () = print_endline "general update"
+end;;
+
+module Trans (U:DUPDATE) : sig
+  val zero : U.D.v
+  val update : unit -> unit
+end = struct
+  let zero = U.D.zero
+  let update = U.update
+end;;
+
+(* the following three work *)
+module A = Trans(DivisionUpdate(Float));;
+module B = Trans(GeneralUpdate(Float));;
+module C = Trans(GeneralUpdate(Integer));;
+
+(* But this gives an error -- a field is not a ring. Just as we wanted. *)
+module D = Trans(DivisionUpdate(Integer));;
+
+
+The second solution is based in re-writing the type
+
+> module type Trans = functor(U:UPDATE) ->  functor(D:DOMAIN) -> sig ... end
+
+into something more refined:
+
+> module type Trans = functor(K:KIND) -> functor(U:UPDATE with type
+> kind ...) ->  functor(D:DOMAIN with type kind ...) -> sig ... end
+
+so now we can explicitly deal with the distinction between different
+kinds. Basically, we lifted the parameterization over kind. More
+concretely, given the above KIND infrastructure, we continue.
+
+module type UPDATE2 = sig
+  type kind
+  module F : functor (D: DOMAIN with type kind = kind) ->
+              sig val update : unit -> unit end
+end;;
+
+(* This module has a specific Kind: a field *)
+module DivisionUpdate2  = struct
+ include KindF
+ module F(D: DOMAINF) =
+   struct
+     let update () = print_endline "division update"
+   end
+end;;
+
+(* This module is essentially universally quantified over KIND. It
+   accepts any KIND *)
+module GeneralUpdate2(K:KIND) = struct
+ type kind = K.kind
+ module F(D: DOMAIN with type kind = kind) =
+   struct
+     let update () = print_endline "general update"
+   end
+end;;
+
+module Trans2 (K:KIND)(U:UPDATE2 with type kind = K.kind)
+    (D:DOMAIN with type kind = K.kind) : sig
+  val zero : D.v
+  val update : unit -> unit
+end = struct
+  module U = U.F(D)
+  let zero = D.zero
+  let update = U.update
+end;;
+
+(* the following three work: *)
+
+module A = Trans2(KindF)(DivisionUpdate2)(Float);;
+
+(* We have to specifically instantiate a universally quantified
+   structure GeneralUpdate2 *)
+module B = Trans2(KindF)(GeneralUpdate2(KindF))(Float);;
+
+module C = Trans2(KindR)(GeneralUpdate2(KindR))(Integer);;
+
+(* But the following two don't work -- just as we wanted them not to.
+   The last line shows that we can't lie about the kind of Integer *)
+module D = Trans2(KindR)(DivisionUpdate2)(Integer);;
+module D' = Trans2(KindF)(DivisionUpdate2)(Integer);;
+
+
+The third solution seems closer to the desired one, although it has a
+drawback in being simplified. We need a bounded quantification
+over module types rather than just quantification. We start with a new
+infrastructure, which should make the lattice of module types and
+structures apparent. It would be great if we did not have to repeat
+the same thing at the type and module levels.
+
+module type KIND  = sig end
+module type KINDR = sig include KIND type domain_is_ring end
+module type KINDF = sig include KINDR type domain_is_field end
+
+module KindR = struct type domain_is_ring end
+module KindF = struct include KindR type domain_is_field end
+
+module type DOMAIN = sig type v val zero : v end
+module type DOMAINR = sig include DOMAIN include KINDR end
+module type DOMAINF = sig include DOMAIN include KINDF end
+
+(* define two domains as before *)
+module Float : DOMAINF = struct
+  include KindF
+  type v = float
+  let zero = 0.0
+end;;
+module Integer  : DOMAINR = struct 
+  include KindR
+  type v = int
+  let zero = 0
+end;;
+
+(* Here's the main part. Alas, it should actually say that ReqDomain
+  is a subtype of a DOMAIN... We need to fiddle with `include' to
+  factor out the main DOMAIN part and thus to achieve the bounded
+  quantification. But it is too late for today, and it works for
+  a simple example. *)
+
+module type UPDATE2 = sig
+  module type ReqDomain
+  module F : functor (D: ReqDomain) ->
+              sig val update : unit -> unit end
+end;;
+
+(* Two sample update modules *)
+
+module DivisionUpdate2  = struct
+ module type ReqDomain = DOMAINF
+ module F(D: DOMAINF) =
+   struct
+     let update () = print_endline "division update"
+   end
+end;;
+
+module GeneralUpdate2 = struct
+ module type ReqDomain = DOMAIN
+ module F(D: DOMAIN) =
+   struct
+     let update () = print_endline "general update"
+   end
+end;;
+
+(* And finally, our functor *)
+
+module Trans2 (U:UPDATE2) (D:U.ReqDomain) : sig
+  val update : unit -> unit
+end = struct
+  module U = U.F(D)
+  let update = U.update
+end;;
+
+
+(* These three tests typecheck *)
+module A = Trans2(DivisionUpdate2)(Float);;
+module B = Trans2(GeneralUpdate2)(Float);;
+module C = Trans2(GeneralUpdate2)(Integer);;
+
+(* This reports the error that DivisionUpdate2.ReqDomain
+   requires the field `domain_is_field' but Integer fails to provide it.
+   This is the clearest error message *)
+module D = Trans2(DivisionUpdate2)(Integer);;
+

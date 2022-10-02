@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA17317; Tue, 25 Mar 2003 19:39:38 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA18124 for <caml-list@pauillac.inria.fr>; Tue, 25 Mar 2003 19:39:37 +0100 (MET)
+Received: from inria.fr (macaque.inria.fr [128.93.8.158])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h2PIdSf28735;
+	Tue, 25 Mar 2003 19:39:28 +0100 (MET)
+Date: Tue, 25 Mar 2003 19:39:42 +0100
+Subject: Re: [Caml-list] Problem with GC and custom blocks
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+Mime-Version: 1.0 (Apple Message framework v551)
+Cc: <caml-list@inria.fr>
+To: Falk Hueffner <falk.hueffner@student.uni-tuebingen.de>
+From: Damien Doligez <Damien.Doligez@inria.fr>
+In-Reply-To: <Pine.LNX.4.30.0303251124100.29167-100000@linux17.zdv.uni-tuebingen.de>
+Message-Id: <246AE82A-5EF1-11D7-B838-0003930FCE12@inria.fr>
+Content-Transfer-Encoding: 7bit
+X-Mailer: Apple Mail (2.551)
+X-Spam: no; 0.00; damien:01 caml-list:01 falk:01 hueffner:01 camlparam:01 camllocal:01 pointers:01 alloc:01 struct:01 bug:01 val:01 32,:01 clone:01 const:01 char:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tuesday, March 25, 2003, at 11:31 AM, Falk Hueffner wrote:
+
+> I'm having trouble with the GC destroying my custom blocks, although
+> it looks like I have properly protected them. Unfortunately, I cannot
+> reproduce it with a small testcase.
+
+You seem to misunderstand the purpose of the CAMLparam and CAMLlocal
+macros.  The GC is not destroying your custom blocks, it is moving
+them.  Because it is moving them, it has to update all pointers
+to them.  Hence, it is the *pointers* (in fact, the local variables
+that contain these pointers) that need to be "protected".
+
+
+> static inline value alloc_graph(unsigned n,
+> 				unsigned vertex_bits, unsigned edge_bits)
+> {
+>     value r = alloc_custom((struct custom_operations *) &graph_ops,
+> 			   1 << 16, // huge value to trigger bug earlier
+> 			   0, 1);
+>     long *l = Data_custom_val(r);
+>     for (int i = 0; i < 32/4; ++i)
+> 	l[i] = 0xefbeadde;
+>     dumpbytes(r, 32, __PRETTY_FUNCTION__);
+>     return r;
+> }
+
+No problem here.  Note that alloc_graph calls an allocation function,
+and thus may move blocks around.
+
+> static inline value clone_graph(const struct graph *g)  {
+>     dumpbytes(((char*) g)  - 4, 32, __PRETTY_FUNCTION__ " in");
+>
+>     value gv = alloc_graph(g->n, g->vertex_bits, g->edge_bits);
+>     dumpbytes(((char*) g)  - 4, 32, __PRETTY_FUNCTION__ " post");
+>
+>     make_copy(Data_custom_val(gv), g);
+>     dumpbytes(gv, 32, __PRETTY_FUNCTION__ " out");
+>     return gv;
+> }
+
+Here, you have a problem if g is a pointer into the heap, because you
+call alloc_graph, which may move heap blocks.
+
+> // set_connected: graph -> int -> int -> graph
+> value set_connected_c(value gv, value iv, value jv) {
+>     fprintf(stderr, "protecting %p\n", gv);
+>     CAMLparam3(gv, iv, jv);
+>     dumpbytes(gv, 32, __PRETTY_FUNCTION__);
+>
+>     const struct graph *gin = Data_custom_val(gv);
+>     ulong i = Long_val(iv);
+>     ulong j = Long_val(jv);
+>     CAMLlocal1(goutv);
+>     goutv = clone_graph(gin);
+>     struct graph *gout = Data_custom_val(goutv);
+>
+>     set_connected(gout, i, j);
+>     dumpbytes(goutv, 32, __PRETTY_FUNCTION__ " out");
+>
+>     CAMLreturn(goutv);
+> }
+
+And here you trigger the problem by passing Data_custom_val(gv)
+as argument to clone_graph.
+
+What you should do is:
+1. modify clone_graph to take a parameter of type "value"
+2. protect this parameter with CAMLparam1
+
+Even if another copy of the same address is protected in
+"set_connected_c" under the name of "gv", you still need to protect
+it under its new name in clone_graph, so the GC will be able to
+update both copies when it moves the data.
+
+Also, note that you cannot protect an infix pointer (a pointer
+that points inside a block instead of pointing to its head).
+That makes Data_custom_val rather error-prone and you should
+avoid storing its result in a variable or passing it as argument
+to functions that can allocate in the Caml heap.
+
+> So 0x400c8fec gets mangled, although I protected it. Did I do
+> something obvious wrong? Or are there any known bugs in the GC? Any
+> other suggestions how to track this down? I'd be really grateful even 
+> for
+> a workaround...
+
+Please let me know if this helps.
+
+-- Damien
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,135 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA02833; Sun, 27 Jan 2002 13:37:08 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA02706 for <caml-list@pauillac.inria.fr>; Sun, 27 Jan 2002 13:37:03 +0100 (MET)
+Received: from moutng0.schlund.de (moutng0.kundenserver.de [212.227.126.170])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g0RCb3f02076
+	for <caml-list@inria.fr>; Sun, 27 Jan 2002 13:37:03 +0100 (MET)
+Received: from [212.227.126.160] (helo=mrelayng0.kundenserver.de)
+	by moutng0.schlund.de with esmtp (Exim 3.22 #2)
+	id 16UoYJ-0006oo-00; Sun, 27 Jan 2002 13:36:55 +0100
+Received: from [80.129.101.202] (helo=ice.gerd-stolpmann.de)
+	by mrelayng0.kundenserver.de with asmtp (Exim 3.22 #2)
+	id 16UoYJ-0002ND-00; Sun, 27 Jan 2002 13:36:55 +0100
+Received: from ice (gerd@localhost [127.0.0.1])
+	by ice.gerd-stolpmann.de (8.12.1/8.12.1) with ESMTP id g0RCank7008543;
+	Sun, 27 Jan 2002 13:36:49 +0100
+Date: Sun, 27 Jan 2002 13:36:48 +0100
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Tomasz Zielonka <zielony@cs.net.pl>
+Cc: CAML list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Problem with using oo in dynamically loaded bytecode ocaml runtime
+Message-ID: <20020127133648.A1247@ice.gerd-stolpmann.de>
+References: <20020127013519.GA20780@cs.net.pl>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <20020127013519.GA20780@cs.net.pl>; from zielony@cs.net.pl on Sun, Jan 27, 2002 at 02:35:19 +0100
+X-Mailer: Balsa 1.2.1
+Lines: 100
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On 2002.01.27 02:35 Tomasz Zielonka wrote:
+> Hi
+> 
+> Situation: 
+> 
+> I'm doing some integration of OCaml and PostgreSQL. PostgreSQL loads a
+> DSO which implements so called "procedural language call handler". 
+> 
+> I've built this DSO by ld-shared'ing libcamlrun.a with some additional C
+> .o files, .o with wrappers for callback'ed ocaml funs, .o with new
+> primitives and .o with ocaml bytecode. I also removed main.o from
+> libcamlrun.
+> 
+> I linked bytecode files into .o with following command:
+> 
+>   ocamlc -g -custom -output-obj -o plocamlb_bytecode.o plocamlb_spi.cmo \
+>   plocamlb_mlfuns.cmo
+> 
+> Problem: Everything worked fine until I wanted to define a class.
+
+I did this kind of linking, too, but I did not have any problems. (I am
+not loading into Postgresql, but into a Perl interpreter, but I think
+this does not make any difference.) I have used -output-obj for a long
+time, but recently (with the availability of O'Caml 3.04) I switched
+to loading the bytecode directly. The debug sections are not lost, 
+and the Dynlink library works.
+
+I can quickly describe what I am doing:
+
+- build libocamlrun.so by compiling the code in the "byterun"
+  directory with -fPIC, and linking everything with ld -shared
+  (but not main.o)
+
+- build some special libraries as DSOs. With O'Caml 3.04, you
+  can load them dynamically. 
+
+- build stubs.so. This is the entry point, i.e. the Perl interpreter
+  does ldopen("stubs.so"), and it depends on some libraries:
+  libocamlrun.so, and the libraries of the embedding application
+  so their symbols are visible here.
+
+  The entry point creates the argv array, and puts into argv[0] the
+  absolute path of the bytecode file. (argv[1] is NULL.) Finally,
+  I am calling caml_main(argv). This will load the bytecode file,
+  and start executing it.
+
+  In O'Caml I only initialize everything, and register a lot of
+  callbacks, so that caml_main will quickly return to its caller.
+
+- Compiling the ocaml part is tricky:
+  * Create a bytecode executable
+  * Name all required libraries
+  ==> ocamlc -o bytecode lib1.cma lib2.cma ... main.cma
+
+  This will fail, because ocamlc looks up all primitives of the
+  libraries, but the symbols of the embedding application are missing!
+  (IMHO, there should be a command-line switch for ocamlc turning
+  this off.) As a workaround, I create a fake library libfake.so
+  containing all missing symbols, and I call ocamlc this way:
+  LD_PRELOAD=libfake.so ocamlc ...
+
+> When I define a class with _no methods_, it works, but there is little
+> use of such class.
+> 
+> When I define any method in this class (but still don't use a single
+> instance of the class) it stops working. After loading the DSO, ocaml
+> raises Not_found exception and quits.
+> 
+> I wanted to use CAMLRUNPARAM b (stack backtrace) option, but apparently
+> it doesn't work with such a library/DSO (Program not linked with -g,
+> cannot print stack backtrace).
+> 
+> I couldn't force ocamlc to keep DBUG section. I'm not sure it would
+> help, because read_debug_info tries to open executable file, not the
+> loaded DSO. I tried several caml_main_param[0] (different files), no
+> luck.
+> 
+> When I make native/opt library _and_ define a method, I get corrupted
+> memory in the postgresql backend.
+
+The generated code is not PIC, so it won't work.
+ 
+> So:
+> 1) There is a bug, but where? In my program, in OCaml?
+
+It is more likely that the bug is in your program.
+
+> 2) How to get stack backtrace in this situation?
+
+See my method. Stack backtraces work, even the debugger works if
+you name the socket explicitly.
+
+Gerd
+-- 
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 45             
+64293 Darmstadt     EMail:   gerd@gerd-stolpmann.de
+Germany                     
+----------------------------------------------------------------------------
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

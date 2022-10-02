@@ -1,0 +1,158 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 2F20CBC37
+	for <caml-list@yquem.inria.fr>; Fri, 19 Jun 2009 19:46:40 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiIEAC9sO0pV2gB5gWdsb2JhbACYbAEBFiS3FYQJBQ
+X-IronPort-AV: E=Sophos;i="4.42,254,1243807200"; 
+   d="scan'208";a="31596975"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 19 Jun 2009 19:46:39 +0200
+Received: from localhost (emailfrontal2.citycable.ch [127.0.0.1])
+	by emailfrontal2.citycable.ch (Postfix) with ESMTP id 8BBE18345E7;
+	Fri, 19 Jun 2009 19:46:37 +0200 (CEST)
+Received: from [192.168.0.11] (85-218-60-97.dclient.lsne.ch [85.218.60.97])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id 7477D8345E6;
+	Fri, 19 Jun 2009 19:46:15 +0200 (CEST)
+Message-ID: <4A3BCE1A.3010403@citycable.ch>
+Date: Fri, 19 Jun 2009 19:42:50 +0200
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.19 (X11/20090103)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Cc: =?UTF-8?B?RGFuaWVsIELDvG56bGk=?= <daniel.buenzli@erratique.ch>
+Subject: Obj.magic and existential types.
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; guillaume:01 guillaume:01 existential:01 computations:01 val:01 abstr:01 val:01 abstr:01 existential:01 sig:01 struct:01 dependencies:01 iter:01 dependencies:01 iter:01 
+
+Hello.
+
+Please don't scream: I've been using Obj.magic...
+
+But the result is rather interesting. It can record a flow of 
+computations, and recompute them only when upstream data has been modified:
+
+> # let (n', n) = Dependent.encapsulate 1;;
+> val n' : int Dependent.data = <abstr>
+> val n : int Dependent.t = <abstr>
+> # let (_, next) = Dependent.encapsulate (fun x -> x + 1);;
+> val next : (int -> int) Dependent.t = <abstr>
+> # let m = Dependent.apply next n;;
+> val m : int Dependent.t = <abstr>
+> # Dependent.access m;;
+> - : int = 2
+> # Dependent.set n' 3;;
+> - : unit = ()
+> # Dependent.access m;;
+> - : int = 4
+
+The piece of code responsible for this behaviour is at the end of the 
+message.
+
+I learnt that I could perhaps overcome the use of Obj.magic by using 
+existential types. I was advised to read the following post on this topic:
+
+http://caml.inria.fr/pub/ml-archives/caml-list/2004/01/52732867110697f55650778d883ae5e9.en.html
+
+However, I do not really understand how Daniel implemented existential 
+types there, and I do not really see how it can be adapted to my code. 
+Suggestions welcomed.
+
+Here's the code, rather disorganised at the moment.
+
+All the best,
+
+Guillaume Yziquel.
+
+
+> type read;;
+> type write;;
+> 
+> type 'a computation = (Obj.t -> 'a) t * Obj.t t
+> 
+> and ('a, 'b) aux_t = Dependent of
+>   ( 'a option ref *
+>     'a computation option *
+>     Obj.t t list ref)
+> 
+> and 'a data = ('a, write) aux_t
+> and 'a t    = ('a, read)  aux_t;;
+> 
+> let encapsulate (x : 'a) : ('a data) * ('a t) =
+>   let z = Dependent ((ref (Some x)), None, (ref [])) in (z, z);;
+> 
+> let add_dependency (alpha : 'a t) (beta : 'b t) =
+>   let Dependent (_, _, dep) = alpha in
+>   dep := ((Obj.magic beta) : Obj.t t)::!dep;;
+> 
+> let apply (f : ('b -> 'a) t) (x : 'b t) : 'a t =
+>   let computation : 'a computation =
+>     ((Obj.magic f) : (Obj.t -> 'a) t),
+>     ((Obj.magic x) : Obj.t         t) in
+>   let f_x : 'a t = Dependent (
+>     ((ref None)         : 'a option ref),
+>     ((Some computation) : 'a computation option),
+>     ((ref [])           : Obj.t t list ref)) in
+>   add_dependency f f_x;
+>   add_dependency x f_x;
+>   f_x;;
+> 
+> exception Undefined;;
+> 
+> module rec Aux :
+> sig
+> 
+>   val access : 'a t -> 'a
+>   val update : 'a t -> ('b -> 'a) t -> 'b t -> 'a
+>   val reset  : 'a t -> unit
+> 
+> end = struct
+> 
+>   let rec access y =
+>     let Dependent (opt_ref_x, comp_opt, _) = y in
+>     match !opt_ref_x with | Some x -> x | None ->
+>     begin match comp_opt with
+>       | None -> raise Undefined
+>       | Some (fun_t, arg_t) -> Aux.update y fun_t arg_t
+>     end
+> 
+>   and update y fun_t arg_t =
+>     let Dependent (opt_ref_x, _, dependencies) = y in
+>     List.iter Aux.reset !dependencies;
+>     let result = (Aux.access fun_t) (Aux.access arg_t) in
+>     opt_ref_x := Some result; result
+> 
+>   and reset z =
+>     let Dependent (opt_ref_x, _, dependencies) = z in
+>     match !opt_ref_x with
+>     | None -> () | Some _ -> begin
+>         opt_ref_x := None;
+>         List.iter Aux.reset !dependencies
+>     end;;
+> 
+> end;;
+> 
+> include Aux;;
+> 
+> exception Flawed_implementation;;
+> 
+> let set (x : 'a data) (v : 'a) : unit =
+>   let Dependent (opt_ref_x, comp_opt, dependencies) = x in
+>   match comp_opt with | Some _ -> raise Flawed_implementation | None ->
+>   begin List.iter Aux.reset !dependencies;
+>         opt_ref_x := Some v
+>   end;;
+
+-- 
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

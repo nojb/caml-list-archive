@@ -1,0 +1,201 @@
+Return-Path: <hmf@inescporto.pt>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.5 required=5.0 tests=AWL,SPF_SOFTFAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 4C0ABBC37
+	for <caml-list@yquem.inria.fr>; Thu, 14 May 2009 13:41:27 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ah8CAPGfC0rVhjEYkGdsb2JhbACXHAEBAQEJCQwHEQO4OYQCBQ
+X-IronPort-AV: E=Sophos;i="4.41,194,1241388000"; 
+   d="scan'208";a="27721343"
+Received: from ihsmtp02voda.lis.interhost.com (HELO ihsmtp02cons.lis.interhost.com) ([213.134.49.24])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 14 May 2009 13:41:26 +0200
+Received: from [192.168.1.64] ([77.54.249.136]) by ihsmtp02cons.lis.interhost.com with Microsoft SMTPSVC(6.0.3790.3959);
+	 Thu, 14 May 2009 12:38:22 +0100
+Message-ID: <4A0C0364.7000408@inescporto.pt>
+Date: Thu, 14 May 2009 12:41:24 +0100
+From: Hugo Ferreira <hmf@inescporto.pt>
+User-Agent: Thunderbird 2.0.0.21 (X11/20090318)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Shared types: circular dependency in modules with polymorphic type
+References: <4A0B1B81.8090700@inescporto.pt> <4A0B2218.2050305@mcmaster.ca>
+In-Reply-To: <4A0B2218.2050305@mcmaster.ca>
+Content-Type: text/plain; charset=ISO-8859-15; format=flowed
+Content-Transfer-Encoding: 7bit
+X-OriginalArrivalTime: 14 May 2009 11:38:22.0354 (UTC) FILETIME=[7C57CF20:01C9D488]
+X-Spam: no; 0.00; struct:01 sig:01 val:01 val:01 struct:01 sig:01 polymorphic:01 polymorphic:01 dependency:01 dependency:01 short:01 int:01 int:01 interfaces:01 expression:02 
+
+Hello,
+
+I have again encountered a problem with sharing types.
+However this time I really have a set of interfaces
+which need to be "stitched" together via type sharing.
+
+Problem is I am dealing with a circular polymorphic
+type dependency. Or at least seems so. I have added the
+very simple code for testing at the end. But the short
+of it is: with the code below
+
+module Make_P (VI : VB)
+               (UI : U)
+               (RI : R with type t = UI.t )
+= struct
+
+   type instance = UI.instance
+   type t = UI.t
+
+   let do_something_nice null =
+     let vb0 = VI.empty in
+     let vb1 = VI.add vb0 UI.zero in
+     RI.do_something_else vb1 UI.one
+
+end
+
+I get the error:
+
+This expression (vb1) has type UI.instance VI.t but is here used with type
+   RI.t = UI.t
+vb1: UI.instance VI.t
+
+
+The problem is that VI.t is polymorphic.
+And UI uses VI.t setting the polymorphic
+type in the process.
+I want to make it "UI.instance VI.t."
+How can I do that. I have tried:
+
+
+module Make_P (VI : VB)
+               (UI : U with type t = U.instance VI.t)
+               (RI : R with type t = UI.t )
+and
+
+module Make_P (UI : U)
+               (VI : VB with type 'a t = UI.t)
+               (RI : R with type t = UI.t )
+
+with no success.
+
+
+
+--------------------- Code ---------------
+
+
+
+module type VB = sig
+
+   type 'a t
+
+   val empty : 'a t
+   val add : 'a t -> 'a -> 'a t
+end
+
+
+module VB1 : VB
+= struct
+
+   type 'a t = 'a list
+
+   let empty = []
+   let add l e = e :: l
+end
+
+
+module type U =
+   sig
+
+     type instance = int
+     type t
+
+     val zero : instance
+     val one : instance
+
+     val empty : t
+     val do_something : t -> instance -> t
+end
+
+
+module Make_U (Vb : VB)
+= struct
+
+   type instance = int
+   type t = instance Vb.t
+
+   let zero = 0
+   let one = 1
+
+   let empty = Vb.empty
+   let do_something ts inst = Vb.add ts inst
+
+end
+
+
+module U1 = Make_U ( VB1 )
+
+let _ =
+
+   let vb0 = VB1.empty in
+   let vb1 = VB1.add vb0 U1.zero in
+   let vb2 = U1.do_something vb1 U1.one in
+   let _ = VB1.add vb2 U1.zero in
+   ()
+
+
+module type R =
+   sig
+
+     type instance = int
+     type t
+
+     val do_something_else : t -> instance -> t
+end
+
+module Make_R (VI : VB)
+               (UI : U)
+= struct
+
+   type instance = UI.instance
+   type t = UI.t
+
+   let do_something_else ts inst = UI.do_something ts inst
+
+end
+
+module R1 = Make_R ( VB1 ) ( U1 )
+
+
+let _ =
+
+   let vb0 = VB1.empty in
+   let vb1 = VB1.add vb0 U1.zero in
+   let vb2 = R1.do_something_else vb1 U1.one in
+   let _ = VB1.add vb2 U1.zero in
+   ()
+
+
+module Make_P (VI : VB)
+               (UI : U)
+               (RI : R with type t = UI.t )
+= struct
+
+   type instance = UI.instance
+   type t = UI.t
+
+   let do_something_nice null =
+     let vb0 = VI.empty in
+     let vb1 = VI.add vb0 UI.zero in
+     RI.do_something_else vb1 UI.one
+
+end
+
+module P1 = Make_P ( U1 ) ( VB1 ) ( R1 )
+
+or
+
+module P1 = Make_P ( VB1 ) ( U1 ) ( R1 )
+

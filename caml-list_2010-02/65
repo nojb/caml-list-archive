@@ -1,0 +1,492 @@
+Return-Path: <guillaume.yziquel@citycable.ch>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id BB3FEBC37
+	for <caml-list@yquem.inria.fr>; Mon,  8 Feb 2010 13:38:29 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArgDALKUb0tV2gB5f2dsb2JhbACDMpgOAQELCwkIE6xbjnCBL4JKWwSDK4Yx
+X-IronPort-AV: E=Sophos;i="4.49,429,1262559600"; 
+   d="scan'208";a="44072538"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail3-smtp-sop.national.inria.fr with SMTP; 08 Feb 2010 13:38:29 +0100
+Received: from [192.168.0.12] (unknown [85.218.92.99])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id 47468B1063C;
+	Mon,  8 Feb 2010 13:38:05 +0100 (CET)
+Message-ID: <4B7005C6.6030201@citycable.ch>
+Date: Mon, 08 Feb 2010 13:38:30 +0100
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Reply-To: guillaume.yziquel@citycable.ch
+User-Agent: Mozilla-Thunderbird 2.0.0.22 (X11/20090707)
+MIME-Version: 1.0
+To: Luca de Alfaro <luca@dealfaro.org>
+Cc: Inria Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] How to wrap around C++?
+References: <28fa90931002071813k7330ad34s7a2ec8b4cf1c3d11@mail.gmail.com>
+In-Reply-To: <28fa90931002071813k7330ad34s7a2ec8b4cf1c3d11@mail.gmail.com>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: quoted-printable
+X-Spam: no; 0.00; guillaume:01 guillaume:01 ocaml:01 ocaml:01 implements:01 swig:01 bindings:01 runtime:01 swig:01 bindings:01 statically:01 stub:01 extern:01 finalisers:01 makefile:01 
+
+Luca de Alfaro a =C3=A9crit :
+> I need to be able to call some C++ functions from my Ocaml code.
+> Can someone point me to some examples on how this is done?  Is it an is=
+sue
+> if what I need to wrap is C++, rather than the more standard C?
+>=20
+> I also would like to know if I can do something more complex... namely,=
+ I
+> would like to create a C++ object, and return it to Ocaml.
+> Ocaml then needs to be able to call methods of that object.  The object=
+ does
+> not need to be directly accessible from Ocaml, but it needs to be
+> persistent, so that all Ocaml calls refer to the same object.
+>=20
+> Essentially, the C++ object implements access to a file via some
+> compression, etc, mechanism.  In C++, one creates the object, calls wri=
+te
+> and read methods, calls the method for closing the file, and deletes th=
+e
+> object.
+>=20
+> How can I wrap around such an object in Ocaml?  Is it possible?  Any
+> advice?
+>=20
+> Many thanks,
+>=20
+> Luca
+
+As mentioned earlier there are Swig bindings from Art Yerkes that do=20
+work with OCaml. Unfortunately the documentation is rather terse, and=20
+you have code that believes somehow that OCaml is dynamically typed: You=20
+pass list as arguments, there is some runtime type checking done at the=20
+interface, and you may have to use Obj.magic on OCaml side.
+
+I have started rewritting Swig bindings to make them static and=20
+hopefully more efficient. I nevertheless stopped (and I hope to come=20
+back to it) for two reasons: lack of time, and a major shortcoming on=20
+Swig side: typemaps do not allow to construct OCaml polymorphic type.=20
+This means that you have to declare an intlist type instead of an int=20
+list type. To amend that, you have to dig into Swig's internals. While=20
+possible, it is rather painful to do. And you really feel that Swig is=20
+more aimed at dynamically typed languages wishing to interface with C++=20
+than at statically typed languages.
+
+You can find my bitroting Swig module here:
+
+http://swig.svn.sourceforge.net/viewvc/swig/branches/yziquel-ocaml/
+
+(If someone feels like pursuing this Swig endeavour, I'll gladly help=20
+out...)
+
+Here's an example of what you can obtain with Swig (but if I were you,=20
+I'd definitely do the bindings manually). You can go directly at the=20
+bottom of the email for the stub code per se. As you can see, you have=20
+to use extern "C" to be able to interface C++ with the C interface of=20
+OCaml. Concerning C++ objects, things depends. For instance, if the=20
+object is allocated on the stack, there's no way you can bring it back=20
+to OCaml. If it's allocated with new, you can indeed bring it back to=20
+OCaml. You simply have to register finalisers that trigger the=20
+destructor of the object once the OCaml GC reclaims it. (Assuming that=20
+no other OCaml values holds the object, that is...)
+
+For the sake of exhaustivity, my Makefile was
+
+> all: freeling.cma
+>=20
+> freeling.cma: dllfreeling_stubs.so freeling.cmo freeling.cmo
+>         ocamlc -a -dllib dllfreeling_stubs.so -dllib libmorfo.so -dllib=
+ libfries.so -dllib libpcre.so -dllib libomlet.so -dllib libdb_cxx.so -o =
+freeling.cma freeling.cmo freeling.cmo
+>=20
+> freeling.cmo: freeling.ml
+>         ocamlc -c freeling.ml
+>=20
+> freeling.cmo: freeling_wrap.cxx freeling.mli freeling.ml
+>         ocamlc -c freeling.mli
+>         ocamlc -c freeling.ml
+>=20
+> dllfreeling_stubs.so: libfreeling_stubs.a freeling_wrap.cxx.o
+>         ocamlmklib -o freeling_stubs freeling_wrap.cxx.o
+>=20
+> libfreeling_stubs.a: freeling_wrap.cxx.o
+>         ar rcs libfreeling_stubs.a freeling_wrap.cxx.o
+>=20
+> freeling_wrap.cxx.o: freeling_wrap.cxx.c
+>         gcc -fPIC -O2 -c -xc++ freeling_wrap.cxx.c
+>=20
+> freeling_wrap.cxx.c: freeling_wrap.cxx
+>         cp freeling_wrap.cxx freeling_wrap.cxx.c
+>=20
+> freeling_wrap.cxx:
+>         swig -ocaml -c++ freeling.i
+>=20
+> clean:
+>         rm -f freeling.ml
+>         rm -f freeling.mli
+>         rm -f freeling_wrap.cxx
+>         rm -f freeling_wrap.cxx.c
+>         rm -f freeling.cmi
+>         rm -f freeling.cmo
+>         rm -f freeling_wrap.cxx.o
+
+
+The Swig interface file, freeling.i:
+
+> %module freeling
+> %{
+>   #include "freeling.h"
+> %}
+>=20
+> %include <std_string.i>
+> %include <std_list.i>
+>=20
+> %nodefaultdtor;
+>=20
+> %template() std::list<word>;
+>=20
+> class tokenizer {
+>    public:
+>        /// Constructor
+>        tokenizer(const std::string &);
+>=20
+>        /// tokenize string with default options
+>        std::list<word> tokenize(const std::string &);
+>        /// tokenize string with default options, tracking offset in giv=
+en int param.
+>        //std::list<word> tokenize(const std::string &, unsigned long &)=
+;
+> };
+
+Was generating the following on the OCaml side:
+
+> module Swig =3D struct
+>=20
+>   (* The Swig module contains raw accessors to C functions,
+>      as well as type declarations enforcing sound typing. *)
+>=20
+>   type tokenizer
+>   external _wrap_new_tokenizer : string -> tokenizer =3D "_wrap_new_tok=
+enizer"
+>   external _wrap_tokenizer_tokenize : tokenizer -> string -> ocaml_type=
+parm[word] list =3D "_wrap_tokenizer_tokenize"
+>=20
+> end;;
+>=20
+> class virtual _opaque_tokenizer =3D object(self)
+>   val virtual underlying_cpp_object : Swig.tokenizer
+>   method tokenize =3D Swig._wrap_tokenizer_tokenize underlying_cpp_obje=
+ct
+> end;;
+>=20
+> class type tokenizer =3D object
+>   method tokenize : string -> ocaml_typeparm[word] list
+> end;;
+>=20
+> class tokenizer_0 arg0 =3D object(self)
+>   inherit _opaque_tokenizer
+>   val underlying_cpp_object =3D Swig._wrap_new_tokenizer arg0
+> end;;
+
+with the following .mli file:
+
+> class type tokenizer =3D object
+>   method tokenize : string -> ocaml_typeparm[word] list
+> end
+>=20
+> class tokenizer_0 : string -> tokenizer
+
+and the following C stub code:
+
+> #ifdef __cplusplus
+> /* SwigValueWrapper is described in swig.swg */
+> template<typename T> class SwigValueWrapper {
+>   struct SwigMovePointer {
+>     T *ptr;
+>     SwigMovePointer(T *p) : ptr(p) { }
+>     ~SwigMovePointer() { delete ptr; }
+>     SwigMovePointer& operator=3D(SwigMovePointer& rhs) { T* oldptr =3D =
+ptr; ptr =3D 0; delete oldptr; ptr =3D rhs.ptr; rhs.ptr =3D 0; return *th=
+is; }
+>   } pointer;
+>   SwigValueWrapper& operator=3D(const SwigValueWrapper<T>& rhs);
+>   SwigValueWrapper(const SwigValueWrapper<T>& rhs);
+> public:
+>   SwigValueWrapper() : pointer(0) { }
+>   SwigValueWrapper& operator=3D(const T& t) { SwigMovePointer tmp(new T=
+(t)); pointer =3D tmp; return *this; }
+>   operator T&() const { return *pointer.ptr; }
+>   T *operator&() { return pointer.ptr; }
+> };
+>=20
+> template <typename T> T SwigValueInit() {
+>   return T();
+> }
+> #endif
+>=20
+> /* --------------------------------------------------------------------=
+---------
+>  *  This section contains generic SWIG labels for method/variable
+>  *  declarations/attributes, and other compiler dependent labels.
+>  * --------------------------------------------------------------------=
+--------- */
+>=20
+> /* template workaround for compilers that cannot correctly implement th=
+e C++ standard */
+> #ifndef SWIGTEMPLATEDISAMBIGUATOR
+> # if defined(__SUNPRO_CC) && (__SUNPRO_CC <=3D 0x560)
+> #  define SWIGTEMPLATEDISAMBIGUATOR template
+> # elif defined(__HP_aCC)
+> /* Needed even with `aCC -AA' when `aCC -V' reports HP ANSI C++ B3910B =
+A.03.55 */
+> /* If we find a maximum version that requires this, the test would be _=
+_HP_aCC <=3D 35500 for A.03.55 */
+> #  define SWIGTEMPLATEDISAMBIGUATOR template
+> # else
+> #  define SWIGTEMPLATEDISAMBIGUATOR
+> # endif
+> #endif
+>=20
+> /* inline attribute */
+> #ifndef SWIGINLINE
+> # if defined(__cplusplus) || (defined(__GNUC__) && !defined(__STRICT_AN=
+SI__))
+> #   define SWIGINLINE inline
+> # else
+> #   define SWIGINLINE
+> # endif
+> #endif
+>=20
+> /* attribute recognised by some compilers to avoid 'unused' warnings */
+> #ifndef SWIGUNUSED
+> # if defined(__GNUC__)
+> #   if !(defined(__cplusplus)) || (__GNUC__ > 3 || (__GNUC__ =3D=3D 3 &=
+& __GNUC_MINOR__ >=3D 4))
+> #     define SWIGUNUSED __attribute__ ((__unused__))=20
+> #   else
+> #     define SWIGUNUSED
+> #   endif
+> # elif defined(__ICC)
+> #   define SWIGUNUSED __attribute__ ((__unused__))=20
+> # else
+> #   define SWIGUNUSED=20
+> # endif
+> #endif
+>=20
+> #ifndef SWIG_MSC_UNSUPPRESS_4505
+> # if defined(_MSC_VER)
+> #   pragma warning(disable : 4505) /* unreferenced local function has b=
+een removed */
+> # endif=20
+> #endif
+>=20
+> #ifndef SWIGUNUSEDPARM
+> # ifdef __cplusplus
+> #   define SWIGUNUSEDPARM(p)
+> # else
+> #   define SWIGUNUSEDPARM(p) p SWIGUNUSED=20
+> # endif
+> #endif
+>=20
+> /* internal SWIG method */
+> #ifndef SWIGINTERN
+> # define SWIGINTERN static SWIGUNUSED
+> #endif
+>=20
+> /* internal inline SWIG method */
+> #ifndef SWIGINTERNINLINE
+> # define SWIGINTERNINLINE SWIGINTERN SWIGINLINE
+> #endif
+>=20
+> /* exporting methods */
+> #if (__GNUC__ >=3D 4) || (__GNUC__ =3D=3D 3 && __GNUC_MINOR__ >=3D 4)
+> #  ifndef GCC_HASCLASSVISIBILITY
+> #    define GCC_HASCLASSVISIBILITY
+> #  endif
+> #endif
+>=20
+> #ifndef SWIGEXPORT
+> # if defined(_WIN32) || defined(__WIN32__) || defined(__CYGWIN__)
+> #   if defined(STATIC_LINKED)
+> #     define SWIGEXPORT
+> #   else
+> #     define SWIGEXPORT __declspec(dllexport)
+> #   endif
+> # else
+> #   if defined(__GNUC__) && defined(GCC_HASCLASSVISIBILITY)
+> #     define SWIGEXPORT __attribute__ ((visibility("default")))
+> #   else
+> #     define SWIGEXPORT
+> #   endif
+> # endif
+> #endif
+>=20
+> /* calling conventions for Windows */
+> #ifndef SWIGSTDCALL
+> # if defined(_WIN32) || defined(__WIN32__) || defined(__CYGWIN__)
+> #   define SWIGSTDCALL __stdcall
+> # else
+> #   define SWIGSTDCALL
+> # endif=20
+> #endif
+>=20
+> /* Deal with Microsoft's attempt at deprecating C standard runtime func=
+tions */
+> #if !defined(SWIG_NO_CRT_SECURE_NO_DEPRECATE) && defined(_MSC_VER) && !=
+defined(_CRT_SECURE_NO_DEPRECATE)
+> # define _CRT_SECURE_NO_DEPRECATE
+> #endif
+>=20
+> /* Deal with Microsoft's attempt at deprecating methods in the standard=
+ C++ library */
+> #if !defined(SWIG_NO_SCL_SECURE_NO_DEPRECATE) && defined(_MSC_VER) && !=
+defined(_SCL_SECURE_NO_DEPRECATE)
+> # define _SCL_SECURE_NO_DEPRECATE
+> #endif
+>=20
+>=20
+>=20
+>   #include <stdlib.h>
+>   #include <string.h>
+>   #include <stdio.h>
+>=20
+>   /* Including OCaml system. */
+>   #define CAML_VALUE value
+>   extern "C" {
+>     #include <caml/alloc.h>
+>     #include <caml/custom.h>
+>     #include <caml/mlvalues.h>
+>     #include <caml/memory.h>
+>     #include <caml/callback.h>
+>     #include <caml/fail.h>
+>     #include <caml/misc.h>
+>   }
+>=20
+>   #define SWIG_CAMLlocal1(x) \
+>     CAML_VALUE x =3D 0; \
+>     CAMLxparam1 (x)
+>=20
+>   #define SWIG_CAMLlocal2(x, y) \
+>     CAML_VALUE x =3D 0, y =3D 0; \
+>     CAMLxparam2 (x, y)
+>=20
+>   #define SWIG_CAMLlocal3(x, y, z) \
+>     CAML_VALUE x =3D 0, y =3D 0, z =3D 0; \
+>     CAMLxparam3 (x, y, z)
+>=20
+>   #define SWIG_CAMLlocal4(x, y, z, t) \
+>     CAML_VALUE x =3D 0, y =3D 0, z =3D 0, t =3D 0; \
+>     CAMLxparam4 (x, y, z, t)
+>=20
+>   #define SWIG_CAMLlocal5(x, y, z, t, u) \
+>     CAML_VALUE x =3D 0, y =3D 0, z =3D 0, t =3D 0, u =3D 0; \
+>     CAMLxparam5 (x, y, z, t, u)
+>=20
+>   #define SWIG_CAMLlocalN(x, size) \
+>     CAML_VALUE x [(size)] =3D { 0, /* 0, 0, ... */ }; \
+>     CAMLxparamN (x, (size))
+>=20
+>=20
+>=20
+>   /* Declarations for custom block operations. */
+>=20
+>   /* For more information of Objective Caml custom blocks,
+>    * consult the Objective Caml manual, section 18.9. */
+>=20
+>   static struct custom_operations custom_swigtype_ocaml_operations =3D =
+{
+>     "org.homelinux.yziquel.ocaml.swig",
+>     custom_finalize_default,
+>     custom_compare_default,
+>     custom_hash_default,
+>     custom_serialize_default,
+>     custom_deserialize_default
+>   };
+>=20
+>=20
+>=20
+> #define SWIGVERSION 0x010340=20
+> #define SWIG_VERSION SWIGVERSION
+>=20
+>=20
+> #define SWIG_as_voidptr(a) (void *)((const void *)(a))=20
+> #define SWIG_as_voidptrptr(a) ((void)SWIG_as_voidptr(*a),(void**)(a))=20
+>=20
+>=20
+>   #include "freeling.h"
+>=20
+>=20
+> #include <stdexcept>
+>=20
+>=20
+> #if defined(__GNUC__)
+> #  if __GNUC__ =3D=3D 2 && __GNUC_MINOR <=3D 96
+> #     define SWIG_STD_NOMODERN_STL
+> #  endif
+> #endif
+>=20
+>=20
+> #include <string>
+> #include <stdexcept>
+>=20
+>=20
+>   #include <string>
+>=20
+>=20
+>   #include <list>
+>=20
+> extern "C" CAML_VALUE _wrap_new_tokenizer (CAML_VALUE ocaml_arg1)
+> {
+>   CAMLparam0();
+>   SWIG_CAMLlocal1(caml_result);
+>   std::string *arg1 =3D 0 ;
+>   CAMLxparam1(ocaml_arg1);
+>   tokenizer *result =3D 0 ;
+>  =20
+>   {
+>     std::string arg1_str(String_val(ocaml_arg1), caml_string_length(oca=
+ml_arg1));
+>     arg1 =3D &arg1_str;
+>   }
+>   result =3D (tokenizer *)new tokenizer((std::string const &)*arg1);
+>   {
+>     caml_result =3D caml_alloc_custom(&custom_swigtype_ocaml_operations=
+, sizeof (void *), 0, 1);
+>     *((void **) Data_custom_val(caml_result)) =3D (void *)result;
+>   }
+>   CAMLreturn(caml_result);
+> }
+>=20
+> extern "C" CAML_VALUE _wrap_tokenizer_tokenize (CAML_VALUE ocaml_arg1, =
+CAML_VALUE ocaml_arg2)
+> {
+>   CAMLparam0();
+>   SWIG_CAMLlocal1(caml_result);
+>   tokenizer *arg1 =3D (tokenizer *) 0 ;
+>   std::string *arg2 =3D 0 ;
+>   CAMLxparam1(ocaml_arg1);
+>   CAMLxparam1(ocaml_arg2);
+>   std::list< word > result;
+>  =20
+>   arg1 =3D *((tokenizer * *) Data_custom_val(ocaml_arg1));=20
+>   {
+>     std::string arg2_str(String_val(ocaml_arg2), caml_string_length(oca=
+ml_arg2));
+>     arg2 =3D &arg2_str;
+>   }
+>   result =3D (arg1)->tokenize((std::string const &)*arg2);
+>   {
+>     caml_result =3D caml_alloc_custom(&custom_swigtype_ocaml_operations=
+, sizeof (void *), 0 ,1);
+>     *((void **) Data_custom_val(caml_result)) =3D new std::list< word >=
+((const std::list< word > &)result);
+>   }
+>   CAMLreturn(caml_result);
+> }
+>=20
+
+--=20
+      Guillaume Yziquel
+http://yziquel.homelinux.org/
+

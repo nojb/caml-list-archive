@@ -1,0 +1,179 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA07221; Mon, 19 Nov 2001 20:29:07 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA13640 for <caml-list@pauillac.inria.fr>; Mon, 19 Nov 2001 20:29:05 +0100 (MET)
+Received: from smtp.uc3m.es (smtp01.uc3m.es [163.117.136.121])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id fAJJT4126180
+	for <caml-list@inria.fr>; Mon, 19 Nov 2001 20:29:04 +0100 (MET)
+Received: from smtp01.uc3m.es (localhost [127.0.0.1])
+	by smtp.uc3m.es (Postfix) with ESMTP id 1FB034313F
+	for <caml-list@inria.fr>; Mon, 19 Nov 2001 20:29:04 +0100 (CET)
+Received: from alcaudon.tsc.uc3m.es (alcaudon.tsc.uc3m.es [163.117.145.35])
+	by smtp01.uc3m.es (Postfix) with ESMTP id 0F47099E5E
+	for <caml-list@inria.fr>; Mon, 19 Nov 2001 20:29:04 +0100 (CET)
+Received: from tsc.uc3m.es ([163.117.145.241]) by
+          alcaudon.tsc.uc3m.es (Netscape Messaging Server 4.15) with ESMTP
+          id GN2BGL00.GTM; Mon, 19 Nov 2001 20:29:09 +0100 
+Message-ID: <3BF95E0A.37F7F079@tsc.uc3m.es>
+Date: Mon, 19 Nov 2001 20:31:22 +0100
+From: "Francisco Valverde Albacete" <fva@tsc.uc3m.es>
+X-Mailer: Mozilla 4.78 [en] (Windows NT 5.0; U)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: William Harold Newman <william.newman@airmail.net>,
+        Caml List <caml-list@inria.fr>
+Subject: Re: [Caml-list] functors with style?
+References: <20011119103234.A2147@rootless>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi, please read on,
+
+William Harold Newman wrote:
+
+> I have some questions about functorial programming style.
+>
+> First, a general question. I've used the ocaml-3.02 source as an
+> example when I couldn't guess something about normal style, but it
+> doesn't seem to use functors much. Since it looks like a great deal of
+> work has been done on functors, I expect that there are applications
+>
+
+> which depend on them. Is there any publicly available Ocaml code which
+> someone could recommend as an example of good functorial style?
+
+But I think functors are about SW reuse, and most of the solutions in the
+distribution should be handcrafted...
+
+|Then, some specific questions about this toy confidence_interval.mli:
+
+>
+> module type ORDERING =
+>   sig
+>     type t
+>     val are_ordered: t -> t -> bool
+>   end
+
+I suggest you adopted a total ordering like the one in Pervasives.compare here...
+It's more useful...
+module type TOTAL =
+    sig
+        type t
+        val compare : t -> t -> int
+        (* See the conventions in the manual *)
+    end
+
+
+> module F:
+> functor (Ordering: ORDERING) ->
+>   sig
+>     type t
+>     val new_t: Ordering.t -> Ordering.t -> t
+>     val lo: t -> Ordering.t
+>     val hi: t -> Ordering.t
+>   end
+>
+> module Int:
+>     sig
+>       type t
+>       val new_t: int -> int -> t
+>       val lo: t -> int
+>       val hi: t -> int
+>     end
+>
+> module Float:
+>     sig
+>       type t
+>       val new_t: float -> float -> t
+>       val lo: t -> float
+>     end
+>
+> As you can see from this example, my impulse is to give names to
+> modules like $Confidence_interval.Int$ and $Confidence_interval.Float$
+> (which are defined in confidence_interval.ml as $F(Int_ordering)$ and
+> $F(Float_ordering)$), but that leads to annoyances:
+>  * It's annoying to have to specify the redundant signatures for
+>    $Int_confidence_interval$ and $Float_confidence_interval$.
+>    They're exactly parallel by intent, so I'd like to
+>    construct the signatures with a functor-like thing, but from the
+>    syntax in section 6.10 of the manual, I'm pretty sure that I can't.
+
+You should make use of signatures in defining and constraining these modules as
+well:
+module type INTERVAL =
+    sig
+        type bound
+        type t
+        val new_t : bound -> bound -> t
+        val hi : t -> bound
+        val lo : t -> bound
+    end
+
+then build the functor like:
+
+module F:
+    functor (Order : TOTAL) ->
+    sig
+        include INTERVAL with type bound = Order.t
+        (* you can constrain further here
+    end
+
+module Int : INTERVAL with type bound = int
+
+module Float : INTERVAL with type bound = float
+    (* there's a spurious fun "hi" here, but you could take that away as well *)
+
+>  * I can't find a way to use the $F$ to define anything
+>    in the top level namespace, e.g. $Int_confidence_interval$
+>    or $My_custom_type_confidence_interval$, so I end up
+>    with  $Confidence_interval.Int$ here and then, when I use $F$
+>    later for other things, $My_custom_type.Confidence_interval$,
+>    and the slightly-baroque and not-at-all-parallel names are annoying.
+
+SUpposing:
+module TotalInt = struct type t = int let compare = (-) end
+module TotalFloat = struct type t = float let compare = (Pervasives.compare: float
+-> float -> int)
+
+exist then you shoul be able to make:
+
+module IntInterval = Confidence_interval.F (TotalInt)
+module FloatInterval = Confidence_interval.F (TotalFloat)
+
+> It occurs to me that these annoyances could be avoided by keeping the
+> functor-constructed modules anonymous, using explicit functor
+> expressions (e.g. $Confidence_interval.F(Int_order)$ and
+> $Confidence_interval.F(My_custom_type)$) in any code which uses the
+> modules. Would that be a good way to do it? Or is there some other
+> good way?
+
+If you wnat to re-use any of these XXIntervals, then provide them in a library
+module of their own like
+interval_basics (this is where I create and export heavily used instantiations of
+functors). Otherwise just
+use, abuse and dispose of them in an application.
+
+> If I did use explicit functor expressions everywhere, it'd be readable
+> enough: if my intent is make the things exactly parallel, then using
+> the explicit functor expressions everywhere would make that obvious,
+> so I'd be happy. But because my previous closest approach to functors
+> was using templates in g++, I'm predisposed to worry about the
+> compiler emitting multiple copies of the functor expansion if I don't
+> give the functor expansion a home in a particular file. Is that an
+> issue in Ocaml?
+
+Hum!! Functor application, I guess, is not to be used casually, as functions
+applications. It incurs in heavy costs in my experience... Better instantiate
+modules in libraries, and then reuse... You can make some nice initialisation of
+objects by mixing module instantiation and object creation within them...
+
+Regards,
+
+            Francisco Valverde
+
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

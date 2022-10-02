@@ -1,0 +1,92 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA14240 for caml-redistribution; Thu, 28 Jan 1999 20:59:13 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA07500 for <caml-list@pauillac.inria.fr>; Thu, 28 Jan 1999 18:36:04 +0100 (MET)
+Received: from kronstadt.transbay.net (ip55240.transbay.net [209.133.55.240])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id SAA15809
+	for <caml-list@inria.fr>; Thu, 28 Jan 1999 18:36:00 +0100 (MET)
+Received: (from itz@localhost)
+	by kronstadt.transbay.net (8.8.6/8.8.6) id JAA05913;
+	Thu, 28 Jan 1999 09:33:20 -0800
+Date: Thu, 28 Jan 1999 09:33:20 -0800
+Message-Id: <199901281733.JAA05913@kronstadt.transbay.net>
+From: Ian T Zimmerman <itz@transbay.net>
+To: caml-list@inria.fr
+In-reply-to: <19990128121411.00837@pauillac.inria.fr> (message from Xavier
+	Leroy on Thu, 28 Jan 1999 12:14:11 +0100)
+Subject: Re: Catching Break?
+Sender: weis
+
+> Date: Thu, 28 Jan 1999 12:14:11 +0100
+> From: Xavier Leroy <Xavier.Leroy@inria.fr>
+> X-Gnus-Article-Number: 122   Thu Jan 28 07:47:34 1999
+> 
+> >  let suicide() =
+> >     begin Unix.kill (Unix.getpid()) Sys.sigint; 1 end
+> >  let id x = x
+> >  let suicidal = try
+> >     (suicide(), id 0)
+> > with Sys.break -> (0, 0)
+
+>  First of all, that should be Sys.Break (an exception constructor),
+> not Sys.break.  It doesn't work because of the right-to-left
+> evaluation order (id 0 is evaluated before suicide()).
+>
+> > let suicidal = try
+> >     id (suicide())
+> > with Sys.break -> 0
+>  Works fine here (with Sys.Break of course).
+>
+>  One more comment: rather than sending yourself a signal, then turn
+> the signal into an exception via the signal handler (as
+> Sys.catch_break does), why not throw the exception directly?
+> E.g. just raise Sys.Break when your program wishes to commit
+> suicide.  Exceptions are much nicer for synchronous notification;
+> signals are a pain and only required for asynchronous notification
+> (such as the user pressing ctrl-C).
+
+Ok, I see that I'll have to start posting my real code, because I
+still can't make it work despite (imperfect) analogy with the example.
+
+let remove_pair prefix pid = 
+  let spid = string_of_int pid in
+  let iname = prefix ^ spid ^ ".i"
+  and oname = prefix ^ spid ^ ".o" in
+  Sys.remove iname; Sys.remove oname
+
+let open_pair prefix pid respond =
+  let spid = string_of_int pid in
+  let iname = prefix ^ spid ^ ".i"
+  and oname = prefix ^ spid ^ ".o" 
+  and iflags = [Unix.O_RDONLY ; Unix.O_NONBLOCK]
+  and oflags = [Unix.O_WRONLY] in
+  let id x = x in
+  Sys.catch_break true;
+  let (ind, outd) = try if respond then
+    let outd = Unix.openfile iname oflags 0 in
+    let ind = Unix.openfile oname iflags 0 in
+    id (ind, outd)
+  else
+    let ind = Unix.openfile iname iflags 0 in
+    let outd = Unix.openfile oname oflags 0 in   (* HERE! *)
+    id (ind, outd)
+  with Sys.Break ->
+    if not respond then remove_pair prefix pid;
+    Sys.catch_break false; exit 0;
+    assert false in
+  Sys.catch_break false; (ind, outd)
+
+
+The files referred to by [io]name are named pipes; the write open
+hangs until the other side is opened, which may never happen.  So as
+to have a chance to clean up (namely remove the pipes), I must allow
+_and_ catch Control-C as I'm trying to.  But it doesn't work; if I hit
+Control-C while blocked in the open marked, I never get into the with
+handler.
+
+-- 
+Ian T Zimmerman                        <itz@transbay.net>
+I came to the conclusion that what was wrong about the guillotine
+was that the condemned man had no chance at all, absolutely none.
+Albert Camus, _The Outsider_
+
+
+

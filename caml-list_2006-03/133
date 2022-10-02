@@ -1,0 +1,215 @@
+Return-Path: <dmentre@linux-france.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 5AC8FBB81
+	for <caml-list@yquem.inria.fr>; Sat, 11 Mar 2006 20:42:32 +0100 (CET)
+Received: from smtp13.wanadoo.fr (smtp13.wanadoo.fr [193.252.22.54])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2BJgVLl017744
+	for <caml-list@yquem.inria.fr>; Sat, 11 Mar 2006 20:42:32 +0100
+Received: from me-wanadoo.net (localhost [127.0.0.1])
+	by mwinf1312.wanadoo.fr (SMTP Server) with ESMTP id D7BCC700009A
+	for <caml-list@yquem.inria.fr>; Sat, 11 Mar 2006 20:42:31 +0100 (CET)
+Received: from morgana (ARennes-257-1-19-201.w81-53.abo.wanadoo.fr [81.53.2.201])
+	by mwinf1312.wanadoo.fr (SMTP Server) with ESMTP id 69A357000098;
+	Sat, 11 Mar 2006 20:42:31 +0100 (CET)
+X-ME-UUID: 20060311194231432.69A357000098@mwinf1312.wanadoo.fr
+Received: from david by morgana with local (Exim 4.50)
+	id 1FI9zZ-0001GX-CP; Sat, 11 Mar 2006 20:43:09 +0100
+To: caml-list@yquem.inria.fr
+Cc: Michael Hicks <mwh@cs.umd.edu>
+Subject: Deadlock free locking scheme (was: Re: [Caml-list] STM support in
+ OCaml)
+References: <OFFCBEEA81.F894A3C6-ONC125712A.005ACA6C-C125712A.005C9961@philips.com>
+	<81CF6C03-B3F4-4962-9918-E80CDCE8D254@cs.umd.edu>
+From: David MENTRE <dmentre@linux-france.org>
+Organization: none
+Date: Sat, 11 Mar 2006 20:43:09 +0100
+In-Reply-To: <81CF6C03-B3F4-4962-9918-E80CDCE8D254@cs.umd.edu> (Michael
+ Hicks's message of "Tue, 7 Mar 2006 12:44:57 -0500")
+Message-ID: <87psksbwdu.fsf_-_@linux-france.org>
+User-Agent: Gnus/5.1006 (Gnus v5.10.6) Emacs/21.4 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Miltered: at concorde with ID 44132828.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 byte:01 ocaml:01 hash:01 pref:01 pref:01 tar:01 protects:98 caml-list:01 caml-list:01 writes:01 structures:01 functions:01 short:01 define:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Hello,
+
+Michael Hicks <mwh@cs.umd.edu> writes:
+
+> There's a longer answer, but one short answer is: check out AtomCaml  at
+> http://www.cs.washington.edu/homes/miker/atomcaml/
+
+Thank you for the interesting paper, I did not know about that work. Was
+there an announcement on caml-list?
+
+
+
+By the way, as a reply to initial Asfand Yar Quazi's question, there is
+a simple way to implement deadlock free locking scheme, both for byte
+and native code: call a locking routine that always try to lock the
+needed locks *in the same order*. By using the high-order properties of
+OCaml, this is very easy for the programmer to use it.
+
+Such a locking scheme can be used in the following way (imagine you have
+four bases, named like "participant" or "position", each one protected
+with a multiple-reader/single-writer lock):
+
+let do_atomic_work () =
+  let unlock =
+     lock_bases { no_locks with participant = Read_lock; 
+                                position = Read_lock; } in
+  let result = do_processing () in
+  unlock ();
+  result
+
+Compared to AtomCaml approach, it is like if the do_processing code is
+executed in a Commit phase.
+
+Please find below the code that imlements this scheme (using Reader and
+Writer mutex[1]). It could probably be optimized for speed (using
+precomputed locking and unlocking functions stored in a hash table) or
+improved to support more locks (using an ordered set as input to lock
+function), but the general scheme is there.
+
+
+
+
+\chapter{Control of data bases access}
+
+Module [[Basesctrl]] controls the locks to access the data bases. 
+
+Each of the four data bases (Participants, Classification, Delegation,
+Position) can be accessed for reading or for writing. A reader/writer
+lock (see chapter \ref{module:rwmutex}) protects each one of them.
+
+All locking and unlocking of those bases are done through this
+module. We can thus control the locking and unlocking order and thus
+guarantee the absence of deadlocks.
+
+The locking of the bases is done through the [[lock]] function. It locks
+bases as desired and then return an unlocking function that should be
+called to cancel locking.
+
+\section{Data structures}
+
+Each lock can either be taken for reading ([[Read_lock]]), for writing
+([[Write_lock]]) or not taken at all ([[No_lock]]).
+
+<<basesctrl.ml>>=
+type lock_type =
+  | Read_lock
+  | Write_lock
+  | No_lock
+@ 
+
+We define a data structure [[t]] that indicates, for each action on the
+database, the desired (un)locking for each base.
+
+<<basesctrl.ml>>=
+type t = {
+    participant : lock_type;
+    classification : lock_type;
+    delegation : lock_type;
+    position : lock_type;
+  }
+@ 
+
+We define a default lock state [[no_locks]] where no locks are taken.
+
+<<basesctrl.ml>>=
+let no_locks = {
+  participant = No_lock;
+  classification = No_lock;
+  delegation = No_lock;
+  position = No_lock;
+}
+@ 
+
+We also define the actual set of locks that protect bases. We chose a
+[[Writer_preference]] to give priority to data base modifications that
+should be less frequent that data base reading.
+
+\nextchunklabel{code:basesctrl:locks}
+<<basesctrl.ml>>=
+let pref = Rwmutex.Writer_preference
+
+let participant_lock = Rwmutex.create pref
+let classification_lock = Rwmutex.create pref
+let delegation_lock = Rwmutex.create pref
+let position_lock = Rwmutex.create pref
+@ 
+
+\section{Base unlocking}
+
+
+Helper function [[unlock_a_base]] is used to unlock [[lock]] with
+[[desired]] unlocking.
+
+<<basesctrl.ml>>=
+let unlock_a_base desired lock =
+  match desired with
+  | Read_lock -> Rwmutex.read_unlock lock
+  | Write_lock -> Rwmutex.write_unlock lock
+  | No_lock -> ()
+@ 
+
+Function [[create_unlock]] returns a function that, when called,
+unlocks the bases as specified in the [[what]] argument.
+
+\nextchunklabel{code:create_unlock}
+<<basesctrl.ml>>=
+let create_unlock what =
+  fun () -> 
+    unlock_a_base what.position position_lock;
+    unlock_a_base what.delegation delegation_lock;
+    unlock_a_base what.classification classification_lock;
+    unlock_a_base what.participant participant_lock
+@ 
+
+\section{Base locking}
+
+Helper function [[lock_a_base]] is used to lock [[lock]] with
+[[desired]] locking.
+
+<<basesctrl.ml>>=
+let lock_a_base desired lock =
+  match desired with
+  | Read_lock -> Rwmutex.read_lock lock
+  | Write_lock -> Rwmutex.write_lock lock
+  | No_lock -> ()
+@ 
+
+Function [[lock_bases]] is called to lock bases. The [[what]] argument
+gives for each base the desired locking. This function returns a
+function that should be called to unlock the bases.
+
+To avoid deadlocks, the locking order is the reverse as used in the
+unlocking procedure (see \codechunkref{code:create_unlock}).
+
+<<basesctrl.ml>>=
+let lock_bases what =
+  lock_a_base what.participant participant_lock;
+  lock_a_base what.classification classification_lock;
+  lock_a_base what.delegation delegation_lock;
+  lock_a_base what.position position_lock;
+  create_unlock what
+@ 
+
+
+
+Best wishes,
+david
+
+Footnotes: 
+[1]  http://www.linux-france.org/~dmentre/code/ocaml_thread_synchro.tar.gz
+
+-- 
+pub  1024D/A3AD7A2A 2004-10-03 David MENTRE <dmentre@linux-france.org>
+ 5996 CC46 4612 9CA4 3562  D7AC 6C67 9E96 A3AD 7A2A
+

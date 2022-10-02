@@ -1,0 +1,143 @@
+Return-Path: <ferferse@telefonica.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.8 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id AC8D4BC6C
+	for <caml-list@yquem.inria.fr>; Wed,  1 Aug 2007 01:55:18 +0200 (CEST)
+Received: from ctsmtpout2.frontal.correo (smtp.telefonica.net [213.4.149.66])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l6VNtIOF020476
+	for <caml-list@inria.fr>; Wed, 1 Aug 2007 01:55:18 +0200
+Received: from tux-chan (88.6.11.46) by ctsmtpout2.frontal.correo (7.2.056.6) (authenticated as ferferse$telefonica.net)
+        id 46AE33E60002F0C7 for caml-list@inria.fr; Wed, 1 Aug 2007 01:55:15 +0200
+Received: from batsman by tux-chan with local (Exim 3.36 #1 (Debian))
+	id 1IG1YY-0003yQ-00
+	for <caml-list@inria.fr>; Wed, 01 Aug 2007 01:55:14 +0200
+Date: Wed, 1 Aug 2007 01:55:14 +0200
+From: Mauricio Fernandez <mfp@acm.org>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Ropes and rope-like functional extensible vectors with O(1) prepend/append.
+Message-ID: <20070731235514.GA31718@tux-chan>
+Mail-Followup-To: caml-list@inria.fr
+References: <20070728233305.GB28879@tux-chan> <200707300146.20940.jon@ffconsultancy.com> <20070730115129.GD28879@tux-chan> <200707301447.24010.jon@ffconsultancy.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <200707301447.24010.jon@ffconsultancy.com>
+User-Agent: Mutt/1.5.11
+Sender: =?iso-8859-1?Q?Mauricio_Julio_Fern=E1ndez_Pradier?= <ferferse@telefonica.net>
+X-Miltered: at discorde with ID 46AFCBE6.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; vectors:01 prepend:01 0100,:01 node:01 nodes:01 bounded:01 functor:01 functor:01 node:01 run-time:01 associative:01 bool:01 recursion:01 abstraction:01 reimplement:01 
+
+On Mon, Jul 30, 2007 at 02:47:23PM +0100, Jon Harrop wrote:
+> On Monday 30 July 2007 12:51:29 Mauricio Fernandez wrote:
+> > > I'd like metadata in every node, so I can provide a constructor that
+> > > combines the metadata of child nodes and a cull function to accelerate
+> > > searches.
+> >
+> > If I understand it correctly, that scheme could in the limit turn some O(n)
+> > searches into O(log n)?), right?
+> 
+> Something like that, yes.
+> 
+> > Unlike Vec, Vect uses "compact" leaves (Leaf of 'a array) of bounded size
+> > (leaf_size, typically 16-64), which might not fit very well.
+> 
+> I can think of two solutions:
+> 
+> 1. Linear search.
+> 
+> 2. Store an array of metadata corresponding to a binary search of the array of 
+> elements in a leaf.
+> 
+> The latter sounds sexy but the former would probably suffice. :-)
+
+Yes, linear search over <100 elements should be acceptable if the
+structure is to hold several orders of magnitude more...
+
+> > something like this maybe?
+> >
+[...]
+> >       | Leaf of ('meta -> 'meta -> meta) * 'meta array * 'a array
+> >
+> > 		(* maybe also  * 'meta  to cache the last computation? *)
+> >
+> > or even without the ('meta -> 'meta -> 'meta) part, forcing the user to
+> > pass the function on each modification?  Just thinking out loud.
+> 
+> I would use a functor to pass it the "combine" and "cull" functions, rather 
+> than putting them in the tree itself. This is analogous to the Set.Make 
+> functor accepting a comparison function.
+
+You're very right, a functor makes so much more sense here: it saves one word
+per node and allows stronger typing (the alternative would be ugly, lots
+of  if mycombine != hiscombine then invalid_arg "operation" and errors found at
+run-time).
+
+So combine would be  combine : 'meta -> 'meta -> 'meta; commutative and
+associative, so that it can be used in leaves as  
+  Array.fold_left combine arr default
+which shows that a default value for the metadata would have to be provided
+too.
+
+What about cull? a  control_cull : 'meta -> bool  that tells the vect whether
+the search goes on recursively for each node (so the search is carried out by
+a function in Vect) , or a function that handles recursion itself, using some
+get_metadata : ('a, 'meta) t -> 'meta ? It seems the latter could lead to a
+leaky abstraction though. Which type would it have anyway? Both
+('a, 'meta) t -> 'a  and say  ('a, 'meta) t -> 'a list  could be useful (the
+former can be used for find and the latter e.g. for select).
+
+> > At any rate, it'd be better to provide it as a separate structure, any
+> > suggestions for the name?.
+> 
+> You could just call it Tree and try to make it as generic as possible.
+> 
+> You could then reimplement the Set module on top of your data structure by 
+> searching for the index of the given element and inserting it if it is new. 
+
+For the sake of better space efficiency? Set uses 5 words per element, but it
+could be brought down to 3.5 words by adding a new constructor. Still, Vect's
+~1.125 to ~2.0 would remain considerably better.
+It'd be great to find a way to make good use of the O(1) append to improve
+on Set's logarithmic bounds, but I can't see how right now (again, it's late :)
+
+> > > The usual HOFs, like map.
+> >
+> > I just pushed a patch with filter and map. The former is trivially
+> > implemented with fold + append (thanks to the O(1) append). I was going to
+> > code map the same way but I ended up making one that returns an isomorphic
+> > vect and is faster (since there's no need to rebalance).
+> 
+> Yes. You could also use recursive subdivision to create a perfectly balanced 
+> result.
+
+The problem is that the obvious implementation, using Array, would run against
+the max_array_length limit. Avoiding it is pretty easy but there are still 
+a few more interesting things to be done :)
+
+> > So Vect currently has iter, iteri, rangeiter, fold, map and filter. I'm
+> > considering renaming fold to fold_left and providing fold_right too.
+> 
+> I'd definitely provide both folds, yes.
+> 
+> I'd also like specialized rewrite functions that avoid allocations when the 
+> outputs are the same as the inputs. So I'd make the set function bail via an 
+> exception when the element is left unchanged, returning the original Vect and 
+> doing no allocation in this case. I'd also like an id_map function that did a 
+> map but reused old branches whenever they were left unchanged.
+
+I've renamed fold to fold_left and added fold_right as well as 
+id_map : ('a -> 'a) -> 'a t -> 'a t.
+
+Last but not least, I've added destructive_set : int -> 'a -> 'a t -> unit.
+It's evil but so much faster...
+http://eigenclass.org/repos/oropes/head/set-balanced.png
+It brings Vect one order of magnitude closer to Array for ephemeral usage.
+
+-- 
+Mauricio Fernandez  -   http://eigenclass.org
+

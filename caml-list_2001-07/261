@@ -1,0 +1,98 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA06277; Mon, 23 Jul 2001 17:27:58 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA06141 for <caml-list@pauillac.inria.fr>; Mon, 23 Jul 2001 17:27:57 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f6NFRtL08024;
+	Mon, 23 Jul 2001 17:27:55 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA06125; Mon, 23 Jul 2001 17:27:55 +0200 (MET DST)
+Date: Mon, 23 Jul 2001 17:27:55 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Markus Mottl <markus@mail4.ai.univie.ac.at>
+Cc: OCAML <caml-list@inria.fr>
+Subject: Re: [Caml-list] illegal permutation of structure fields?
+Message-ID: <20010723172755.A5259@pauillac.inria.fr>
+References: <20010723150428.B12189@chopin.ai.univie.ac.at>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20010723150428.B12189@chopin.ai.univie.ac.at>; from markus@mail4.ai.univie.ac.at on Mon, Jul 23, 2001 at 03:04:28PM +0200
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> I've just found out to my surprise that the following does not work:
+> 
+> file: bla.ml
+> ---------------------------------------------------------------------------
+> module type FOO = sig
+>   val x : int
+>   val y : int
+> end
+> ---------------------------------------------------------------------------
+> 
+> file: bla.mli
+> ---------------------------------------------------------------------------
+> module type FOO = sig
+>   val y : int
+>   val x : int
+> end
+> ---------------------------------------------------------------------------
+> 
+> This yields the following error:
+>   Illegal permutation of structure fields
+> 
+> Why is this illegal? Wouldn't it be very straightforward to normalize
+> the signatures (e.g. sort elements by name) before matching them?
+
+That's more or less what old versions of OCaml did, but it's
+incorrect.  The reason is that a module signature determine the layout
+of the corresponding structure: if
+
+  module A : sig val x : int val y : int end
+
+then A is represented as the tuple (value_of_x, value_of_y), while
+
+  module B : sig val y : int val x : int end
+
+is represented as the tuple (value_of_y, value_of_x).
+
+When you perform signature matching, the compiler recomputes the
+structure representation to match the new signature.  For instance:
+
+  module C : sig val y : int val x : int end = A
+
+causes the compiler to generate roughly the following code
+
+  let C = (snd A, fst A)
+
+so that the representation of C matches what clients of C expect from
+its signature.
+
+If we were to allow module type equivalence up to permutation, this
+strategy would be invalid.  Consider:
+
+file bla.ml
+
+  module type FOO = sig val x : int val y : int end
+  module A : FOO = ...
+
+file bla.mli
+
+  module type FOO = sig val y : int val x : int end
+  module A : FOO
+
+Since the implementation of A and its declaration in the signature
+have the same module type FOO, no field rearrangement is performed.
+Yet, A is represented as (val_x, val_y), while clients of A expect
+(val_y, val_x).
+
+On this example, expanding the FOO module type before generating the
+coercion code (that rearranges fields) would suffice.  However, I
+believe there are more complex examples involving abstract module types
+(e.g. as functor parameters) where expanding module type names would
+not suffice.  So, let's keep it simple: no permutation!
+
+- Xavier Leroy
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

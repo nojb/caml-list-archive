@@ -1,0 +1,186 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA03821 for caml-red; Mon, 25 Sep 2000 19:21:59 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA04005 for <caml-list@pauillac.inria.fr>; Mon, 25 Sep 2000 12:23:52 +0200 (MET DST)
+Received: from mx1.informatik.uni-tuebingen.de (mx1.Informatik.Uni-Tuebingen.De [134.2.12.5])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e8PANp503716
+	for <caml-list@inria.fr>; Mon, 25 Sep 2000 12:23:51 +0200 (MET DST)
+Received: from neuromancer.informatik.uni-tuebingen.de (neuromancer [134.2.12.58])
+	by mx1.informatik.uni-tuebingen.de (Postfix) with ESMTP id 219AE43A
+	for <caml-list@inria.fr>; Mon, 25 Sep 2000 12:23:50 +0200 (MST)
+Received: (from leypold@localhost)
+	by neuromancer.informatik.uni-tuebingen.de (8.9.3/8.8.7) id KAA21436;
+	Mon, 25 Sep 2000 10:23:31 GMT
+Date: Mon, 25 Sep 2000 10:23:31 GMT
+Message-Id: <200009251023.KAA21436@neuromancer.informatik.uni-tuebingen.de>
+X-Authentication-Warning: neuromancer.informatik.uni-tuebingen.de: leypold set sender to leypold@informatik.uni-tuebingen.de using -f
+From: Markus Leypold <leypold@informatik.uni-tuebingen.de>
+To: caml-list@inria.fr
+Subject: ocamlyacc: Bug ? Meaning of $end ?
+Sender: weis@pauillac.inria.fr
+
+
+
+
+Dear Friends,
+
+I have found some points in the implementation of ocamlyacc,
+which I'm not quite sure, wether I understand right, or wether
+this behaviour might even be called a bug.
+
+Let me show my example first: There are 3 modules: The Lexer Cword, 
+the parser Cword2imf and the test driver tcw. I have stripped the
+sample code down to the bare minimum which seems to be necessary to
+demonstrate the effect which puzzles me.
+
+
+The Lexer divides the stream of input characters into convenient
+words, runs or white space and newline and end-of-file-marks.
+
+cword.mll:
+-----------------------------------
+{
+open Cwords2imf
+}
+
+let  newline    = '\n'
+let  normalchar = [^ '\n' '/' '*' ' ' '\t']
+let  space      = [' ' '\t']
+let  word       = normalchar+
+
+rule nextword = parse
+       word      {WORD(Lexing.lexeme lexbuf)}
+     | space     {SPACE(Lexing.lexeme lexbuf)}
+     | newline   {NEWLINE}
+     | eof       {END}
+     | _         {WORD(Lexing.lexeme lexbuf)}
+
+----------------------------------
+
+
+The parser is supposed to collect the tokens into lines and newline marks.
+
+
+cwords2imf.mly:
+-----------------------------------
+
+%token          NEWLINE END
+%token <string> WORD 
+%token <string> SPACE
+%start          main
+%type  <string> main 
+%%
+
+main
+    : END       {"X\n"}
+    | NEWLINE   {"N\n"}
+    | linefrag  {"L "^$1^"\n"};
+
+linefrag
+    : SPACE linefrag {$1^$2}
+    | WORD           {$1}
+    |                {"**"};
+
+--------------------------------------
+
+
+The Testdriver invokes the parser on stdin just once (reading one semantic
+value).
+
+tcw.ml:
+--------------------------------------
+open Cwords2imf;;
+
+let lexbuf = (Lexing.from_channel stdin);;
+print_string (Cwords2imf.main 
+               Cwords.nextword
+               lexbuf);;
+--------------------------------------
+
+
+
+Now I call tcw and feed the some input like the following to it
+
+bla bla foobar[newline]
+blubb hello[newline]
+[eof]
+
+where the text in [] is to be interpreted (not to be taken as
+verbatim).
+
+
+So far this works and I can even call the parser+lexer repeatedly on
+the input streams, thus reading a 'sentence' from the input every time
+and obtaining it's semantic value.  But if I replace the rule about
+linefrag with
+
+linefrag
+    : SPACE linefrag {$1^$2}
+    | WORD  linefrag {$1^$2}
+    |                {"**"};
+
+
+everything goes down the drain, and I get a parse error, even if I call
+parser+lexer only once. 
+
+
+So I started to look into the generated statemachine in the .output file,
+but things became even more confusing to me:
+
+In both variants of the grammar, the only place, where the parser action
+is 'accept', is the following:
+
+state 2
+        $accept : %entry% . $end  (0)
+
+        $end  accept
+
+
+It's a bit irritating, that ist doesn't say '. error' also, but never mind.
+Ah, then, I thought, that is the problem: 'accept' is only done, if the
+matched phrase is followed by the end of the input. $end, I thought,
+is a pseudotoken, which signifies the end of input from the lexer
+(the original yacc behaves like this, I think). 
+
+-> But than i cannot explain, why in the first case, I get a match,
+   which ist not obtained in the second case. Is the generation
+   of parse tables erronous ? 
+
+-> What is the meaning of $end ? It cannot be the end of input,
+   since from the example in the manual I understand, that a
+   parser/lexer-combination might be called on an input stream 
+   repeatedly. 
+   
+   On the other side, to match just the longest prefix sentence 
+   in the input, I'd more expect a state with '. accept'  after
+   entries, which check all the tokens, wether it is possible to 
+   continue parsing ie 'WORD shift 17'.
+
+-> My original idea was to collect the tokens to larger tokens, and to
+   pass them to another parser, ie letting the parser act as part of a
+   (handwritten) lexer to another parser.  Now I read something about
+   'the parsers not being reentrant' ? Is that true ? Does that mean
+   the calling sequence
+
+   parser1 -> function1 (as lexer to parser1)
+           -> parser2
+           -> lexer2
+
+   will not work ?
+
+
+Can anyone comment on this, possibly showing me THE LIGHT :-) ?
+
+
+Regards -- Markus
+
+
+
+
+
+
+
+
+
+
+
+
+

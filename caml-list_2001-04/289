@@ -1,0 +1,171 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA22353; Tue, 24 Apr 2001 09:11:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA22325 for caml-list@pauillac.inria.fr; Tue, 24 Apr 2001 09:11:22 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA16157 for <caml-list@pauillac.inria.fr>; Mon, 23 Apr 2001 21:37:11 +0200 (MET DST)
+Received: from moutvdom01.kundenserver.de (moutvdom01.kundenserver.de [195.20.224.200])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f3NJbAf13999
+	for <caml-list@inria.fr>; Mon, 23 Apr 2001 21:37:10 +0200 (MET DST)
+Received: from [195.20.224.209] (helo=mrvdom02.schlund.de)
+	by moutvdom01.kundenserver.de with esmtp (Exim 2.12 #2)
+	id 14rm91-0000S7-00; Mon, 23 Apr 2001 21:37:11 +0200
+Received: from drms-3e3653b8.pool.mediaways.net ([62.54.83.184] helo=ice.gerd-stolpmann.de)
+	by mrvdom02.schlund.de with esmtp (Exim 2.12 #2)
+	id 14rm8r-0006fq-00; Mon, 23 Apr 2001 21:37:01 +0200
+Received: from localhost (localhost [[UNIX: localhost]])
+	by ice.gerd-stolpmann.de (8.9.3/8.9.3) id VAA27782;
+	Mon, 23 Apr 2001 21:36:25 +0200
+From: Gerd Stolpmann <gerd@gerd-stolpmann.de>
+Reply-To: gerd@gerd-stolpmann.de
+Organization: privat
+To: Gregoire Sutre <sutre@eecs.berkeley.edu>, caml-list@inria.fr
+Subject: Re: [Caml-list] Open class type definition ?
+Date: Mon, 23 Apr 2001 20:21:56 +0200
+X-Mailer: KMail [version 1.0.28]
+Content-Type: text/plain
+References: <3AE2538F.83A03652@eecs.berkeley.edu>
+In-Reply-To: <3AE2538F.83A03652@eecs.berkeley.edu>
+MIME-Version: 1.0
+Message-Id: <01042321362504.02753@ice>
+Content-Transfer-Encoding: 8bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 22 Apr 2001, Gregoire Sutre wrote:
+>Hi,
+>
+>I'm trying to use the Object model of OCaml and I'm having trouble with the
+>class types.
+>
+>My goal is to have datatypes that can be easily converted into strings for
+>debugging purposes.  So instead of enclosing each datatype inside a
+>dedicated module with a to-string() function (that would lead to a huge
+>number of modules), I thought that I could use an object type instead,
+>saying that there is *at least* a method to_string(), and define my
+>datatypes as classes with *at least* a to_string() method inside each class.
+>
+>For instance, I could specify an ordered type this way:
+>
+>module type ORDERED_TYPE =
+>  sig
+>    type t = < to_string : unit -> string >
+>    val compare : t -> t -> int
+>  end
+
+This module type is already problematic. The O'Caml types are very strict, and
+this definition of 'compare' means that the function can only call the
+to_string method, and nothing more.
+
+[...]
+>module Funct(A : ORDERED_TYPE) =
+>  struct
+>    let display_cmp x y = x#to_string() ^ " cmp " ^ x#to_string() ^
+>                          " = " ^ (string_of_int (A.compare x y))
+>  end
+[...]
+>
+>module Foo =
+>  struct
+>    class my_int x =
+>      object
+>        val mutable v = x
+>        method to_string () = "Int(" ^ (string_of_int v) ^")"
+>        method get_v = v
+>        method set_v new_v = v <- new_v
+>      end
+>
+>    type t = my_int
+>    let compare (x:t) (y:t) = compare x#get_v y#get_v
+>  end
+>
+>In this module, the compare function reads the integer value stored in the
+>objects to perform its job.  But then, the type t of the Foo module does not
+>correspond to the type t of the ORDERED_TYPE signature and I can not apply
+>the functor to Foo:
+>
+>[...]
+>Type declarations do not match:
+>  type t = my_int
+>is not included in
+>  type t = < to_string : unit -> string >
+
+The problem is that subtyping is not allowed when the compiler checks whether
+an implementation matches a signature. (Can somebody of the experts explain
+this?) Declaring t with an ellipsis ("..") does change nothing, because even
+if the compiler accepted t =  to_string : unit -> string; ..> it would be still
+necessary that the subtyping relation t :> my_int holds.
+
+So the consequences for program design are:
+ - Use classes when subclassing and/or subtyping is needed
+ - Use functors when information hiding is more important
+ - Do not mix both concepts in the sense that applying a functor bases on a
+   subtyping relation
+
+The possible solutions for your concrete problem:
+
+(1) Prefer classes:
+
+module type ORDERED_TYPE =  sig
+  class type t = 
+    object 
+       method to_string : unit -> string 
+       method compare : t -> int
+    end
+end
+
+(2) Accept that the class t is only a "vehicle" for a certain effect, and make
+the method get_v accessible:
+
+module type ORDERED_TYPE =  sig
+  class type ['a] t = 
+    object 
+       method to_string : unit -> string 
+       method get_v : 'a
+    end
+end
+
+(3) Consider also the following solution without classes: (similar to (2))
+
+module type ORDERED_TYPE =  sig
+  type t_base
+  type t = { to_string : unit -> string; v : t_base }
+  val compare : t -> t -> int
+end
+
+module Foo =  struct
+  type t_base = int
+  type t = { to_string : unit -> string; v : t_base }
+  let make n = 
+    { to_string = (fun () -> "Int(" ^ string_of_int n ^ ")");
+      v = n;
+    }
+  let compare (x:t) (y:t) = compare x.v y.v
+end
+
+module Funct(A : ORDERED_TYPE) =
+struct
+  let display_cmp x y = x.A.to_string() ^ " cmp " ^ y.A.to_string() ^
+  " = " ^ (string_of_int (A.compare x y))
+end
+
+I have also a fourth solution, but I do not recommend it: Misuse polymorphic
+variants to tag the type explicitly, and use a central to_string like
+
+let to_string x =
+  match Obj.magic x with
+    `Int n -> Int(" ^ string_of_int n ^ ")"
+   | ... other cases ...
+
+This is unsafe, and you will get segfaults if type passed to to_string is not
+any of the enumerated variants. 
+
+Gerd
+-- 
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   gerd@gerd-stolpmann.de
+Germany                     
+----------------------------------------------------------------------------
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

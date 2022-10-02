@@ -1,0 +1,165 @@
+Return-Path: <hmf@inescporto.pt>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.6 required=5.0 tests=AWL,SPF_SOFTFAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 4A986BBAF
+	for <caml-list@yquem.inria.fr>; Tue, 20 Jan 2009 11:09:33 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: At8AAFExdUnVhjEYkWdsb2JhbACUBQEBAQEJCwoHEQO3DYVz
+X-IronPort-AV: E=Sophos;i="4.37,294,1231110000"; 
+   d="scan'208";a="21757256"
+Received: from ihsmtp02voda.lis.interhost.com (HELO ihsmtp02cons.lis.interhost.com) ([213.134.49.24])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 20 Jan 2009 11:09:32 +0100
+Received: from [192.168.1.64] ([77.54.249.136]) by ihsmtp02cons.lis.interhost.com with Microsoft SMTPSVC(6.0.3790.3959);
+	 Tue, 20 Jan 2009 10:06:54 +0000
+Message-ID: <4975A2DB.1070909@inescporto.pt>
+Date: Tue, 20 Jan 2009 10:09:31 +0000
+From: Hugo Ferreira <hmf@inescporto.pt>
+User-Agent: Thunderbird 2.0.0.19 (X11/20090105)
+MIME-Version: 1.0
+To: Thomas Gazagnaire <ocaml@gazagnaire.com>
+Cc: Jacques Carette <carette@mcmaster.ca>, caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Defining type that requires hashtables with recursive
+ definition
+References: <4974B7AA.9010004@inescporto.pt> <4974B98E.4020700@mcmaster.ca> <9722eaea0901191003j7bae9032r84e46ec0bb11ae3e@mail.gmail.com>
+In-Reply-To: <9722eaea0901191003j7bae9032r84e46ec0bb11ae3e@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-OriginalArrivalTime: 20 Jan 2009 10:06:54.0899 (UTC) FILETIME=[D2792030:01C97AE6]
+X-Spam: no; 0.00; hashtables:01 recursive:01 recursive:01 hashtbl:01 hashedtype:01 struct:01 node:01 node:01 hash:01 hashtbl:01 hash:01 val:01 abstr:01 val:01 abstr:01 
+
+Hello,
+
+Thomas Gazagnaire wrote:
+> or if you really want to define your own equality, you can use recursive 
+> modules:
+> 
+> module rec H : Hashtbl.HashedType =
+> struct
+>     type node =
+>         | Node of node J.t
+>         | Leaf of int
+> 
+>     type t = node
+>     let equal (e1:node) (e2:node) = (==) e1 e2
+>     let hash (e:node) = Hashtbl.hash e
+> end
+> 
+> and J : Hashtbl.S = Hashtbl.Make( H )
+
+
+Just to inform you, in case you are interested, that the definition
+above does not quite solve my problem. A small test shows that I still
+have the same issue I originally had with the hash-table keys:
+
+# open H ;;
+
+# let no_jumps = J.create 13 ;;
+val no_jumps : '_a J.t = <abstr>
+
+# let empty = Node(no_jumps) ;;
+val empty : H.node = Node <abstr>
+
+# let _ = J.add no_jumps empty empty ;;
+This expression has type H.node but is here used with type J.key
+
+To solve this we need to explicitly declare that
+Hashtbl.S.key = H.node. So I use:
+
+module rec H :
+   sig
+       type node =
+           | Node of node J.t
+           | Leaf of int
+
+      type t = node
+      val equal : t -> t -> bool
+     val hash : t -> int
+   end =
+   struct
+        type node =
+           | Node of node J.t
+           | Leaf of int
+
+       type t = node
+       let equal (e1:node) (e2:node) = (==) e1 e2
+       let hash (e:node) = Hashtbl.hash e
+   end
+
+and J : Hashtbl.S with type key = H.node = Hashtbl.Make( H )
+;;
+
+(Note: I made the type "t" of H visible to facilitate coding)
+And it now works as expected:
+
+# open H ;;
+# let no_jumps = J.create 13 ;;
+val no_jumps : '_a J.t = <abstr>
+
+# let empty = Node(no_jumps) ;;
+val empty : H.node = Node <abstr>
+
+# let _ = J.add no_jumps empty empty ;;
+- : unit = ()
+
+# let x = J.find no_jumps empty ;;
+val x : H.node = Node <abstr>
+
+# let r = x == empty ;;
+val r : bool = true
+
+Once again,
+Thank you,
+
+Hugo F.
+
+
+
+> 
+> 2009/1/19 Jacques Carette <carette@mcmaster.ca <mailto:carette@mcmaster.ca>>
+> 
+>     Hugo Ferreira wrote:
+> 
+>         I am attempting to define a type so:
+> 
+>         type node =
+>          | Node of links
+>          | Leaf of int
+> 
+>         And I want to implement links as a
+>         hashtable whose keys and values are
+>         also of type node.
+> 
+> 
+>     type node =
+>      | Node of links
+>      | Leaf of int
+>     and links = (node, node) Hashtbl.t
+> 
+>     should do it.
+> 
+>     Jacques
+> 
+> 
+>     _______________________________________________
+>     Caml-list mailing list. Subscription management:
+>     http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+>     Archives: http://caml.inria.fr
+>     Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>     Bug reports: http://caml.inria.fr/bin/caml-bugs
+> 
+> 
+> 
+> ------------------------------------------------------------------------
+> 
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+

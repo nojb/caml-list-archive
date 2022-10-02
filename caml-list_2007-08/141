@@ -1,0 +1,129 @@
+Return-Path: <erickt@dslextreme.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.5 required=5.0 tests=DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A4E13BC6B
+	for <caml-list@yquem.inria.fr>; Wed,  8 Aug 2007 10:48:36 +0200 (CEST)
+Received: from mail9.dslextreme.com (mail9.dslextreme.com [66.51.199.94])
+	by concorde.inria.fr (8.13.6/8.13.6) with SMTP id l788mZSI003840
+	for <caml-list@inria.fr>; Wed, 8 Aug 2007 10:48:35 +0200
+Received: (qmail 15656 invoked from network); 8 Aug 2007 08:48:32 -0000
+Received: from unknown (HELO dhcp-60-140.guest-wireless.pixar.com) (erickt@199.108.77.12)
+	by mail9.dslextreme.com with (RC4-MD5 encrypted) SMTP; Wed, 08 Aug 2007 01:48:32 -0700
+Message-ID: <46B9834A.3010307@dslextreme.com>
+Date: Wed, 08 Aug 2007 01:48:10 -0700
+From: Erick Tryzelaar <erickt@dslextreme.com>
+User-Agent: Thunderbird 2.0.0.6 (Macintosh/20070728)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] ocamlbuild and adding files to be sanitized
+References: <28ac8a6d75ea10266a97edca.20070806025049.revpxg@www.dslextreme.com>
+In-Reply-To: <28ac8a6d75ea10266a97edca.20070806025049.revpxg@www.dslextreme.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 46B98363.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; parser:01 mli:01 parser:01 mli:01 iter:01 printf:01 printf:01 iter:01 model:01 model:01 val:01 fda:98 fda:98 wrote:01 caml-list:01 
+
+erickt@dslextreme.com wrote:
+> I'm finishing up getting ocamlbuild to work with the dypgen parser, but I
+> can't yet figure out how to get ocamlbuild to automatically list the .ml
+> and .mli of the .dyp parser as microbes to be cleaned in sanitize.sh. It
+> doesn't look like the hygiene or fda modules are exposed in the plugin. Is
+> there any way to do it other than manually replicate the functionality in
+> the {Before,After}_hygiene dispatch hook?
+
+
+I was wrong, it looks like these modules are exposed, through 
+Ocamlbuild_pack. However, I cannot add sanitize rules to the already 
+existing set. I have to replicate the functionality with a dispatch 
+call, like this:
+
+myocamlbuild.ml:
+let laws =
+  [
+    { law_name = "Leftover dypgen-generated files";
+    law_rules = [Implies_not(".dyp",".ml"); Implies_not(".dyp",".mli")];
+    law_penalty = Fail }
+  ]
+;;
+dispatch begin function
+  | Before_rules ->
+      begin
+        let evil = ref false in
+        match !Options.entry with
+        | None -> ();
+        | Some entry ->
+            match check
+              ?sanitize:
+                begin
+                  if !Options.sanitize then
+                    Some(!Options.sanitization_script)
+                  else
+                    None
+                end
+              laws entry
+            with
+            | [] -> ()
+            | stuff ->
+                List.iter
+                begin fun (law, msgs) ->
+                  Printf.printf "%s: %s:\n"
+                  (match law.law_penalty with
+                  | Warn -> "Warning"
+                  | Fail ->
+                      if not !evil then
+                        begin
+                          Printf.printf "IMPORTANT: I cannot work with 
+leftover compiled files.\n%!";
+                          evil := true;
+                        end;
+                        "ERROR")
+                  law.law_name;
+                  List.iter (Printf.printf "  %s\n") msgs
+                end
+                stuff;
+                if !evil then raise Fda.Exit_hygiene_failed;
+      end
+  ...
+end;;
+
+
+This is copied almost exactly from fda.ml, but since it's not exposed, I 
+can't use it. It would be great if the Fda module could model after the 
+Tags model, and have an interface like this:
+
+
+fda.mli:
+...
+val law ?penalty:Hygiene.penalty -> string -> Hygiene.rule list
+...
+
+
+fda.ml:
+...
+let all_laws = ref [...]
+let law ?(penalty=Fail) name rules =
+  all_laws := { law_name = name; law_rules = rules; law_penalty = 
+penalty } :: !all_laws
+...
+
+
+Then, I could easily replace my code with this:
+
+myocamlbuild.ml:
+open Ocamlbuild_pack.Fda;;
+open Ocamlbuild_pack.Hygiene;;
+law "Leftover dypgen-generated files" [Implies_not(".dyp",".ml"); 
+Implies_not(".dyp",".mli")];;
+
+dispatch begin function
+...
+end;;
+
+
+Would this be useful for others?
+

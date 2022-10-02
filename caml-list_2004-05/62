@@ -1,0 +1,136 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA23016; Mon, 3 May 2004 10:58:15 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA23043 for <caml-list@pauillac.inria.fr>; Mon, 3 May 2004 10:58:14 +0200 (MET DST)
+Received: from qrnik.knm.org.pl (paf87.warszawa.sdi.tpnet.pl [217.96.225.87])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i438wBEV023933
+	for <caml-list@inria.fr>; Mon, 3 May 2004 10:58:12 +0200
+Received: from qrnik ([192.168.0.1] ident=qrczak)
+	by qrnik.knm.org.pl with esmtp (Exim 3.36 #1)
+	id 1BKZH9-0000tL-00
+	for caml-list@inria.fr; Mon, 03 May 2004 10:58:11 +0200
+Subject: Re: [Caml-list] [ANN] The Missing Library
+From: "Marcin 'Qrczak' Kowalczyk" <qrczak@knm.org.pl>
+To: caml-list@inria.fr
+In-Reply-To: <1083570883.20722.536.camel@pelican.wigram>
+References: <Pine.LNX.4.44.0404272326450.9460-100000@localhost.localdomain>
+	 <200404280613.19547.jdh30@cam.ac.uk>
+	 <1083141467.9537.845.camel@pelican.wigram>
+	 <200404281018.14913.jdh30@cam.ac.uk>
+	 <1083151482.9537.904.camel@pelican.wigram>
+	 <93ADD9EA-9936-11D8-BD03-000A958FF2FE@wetware.com>
+	 <1083173516.9537.1162.camel@pelican.wigram>
+	 <1083542538.9152.65.camel@qrnik>
+	 <1083570883.20722.536.camel@pelican.wigram>
+Content-Type: text/plain
+Message-Id: <1083574691.1643.55.camel@qrnik>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.5.7 
+Date: Mon, 03 May 2004 10:58:11 +0200
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 409609A4.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 marcin:01 'qrczak':01 kowalczyk:01 qrczak:01 extremes:99 reuse:01 glue:01 dynamically:01 compile-time:01 recursion:01 runtime:01 outputs:01 descend:01 trampoline:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hoping that they will not kill us for off-topic...
+
+> > Concerning the organization, my opinion is that we do want to separate
+> > it into several small phases, so each pass becomes easier to manage.
+> 
+> How small though?
+
+Of course extremes are bad; not *too* small.
+
+Actions which are mutually recursive should be done in one phase, unless
+the language requires very deep phase loops.
+
+(The primary example is C++ where evaluation of constant expressions
+can influence parsing of further parts, with name resolution and type
+checking and template instantiation sitting between so they are also all
+mutually recursive. I have no idea how to sanely organize a C++
+compiler.)
+
+> > Trying to do too much at once sometimes requires to recompute the same
+> > thing several times, because there is no convenient intermediate form
+> > to store it for reuse,
+> 
+> Oh, this is a perfect description of my horrible lookup algorithm!
+> 
+> Originally, it was decoupled, but it didn't work.
+> I've had to glue the whole thing together in a single operation
+> because everything is so mutually recursive.
+
+Hmm. This probably depends on the language. Mine doesn't have anything
+which requires far "phase lookahead". It's dynamically typed and there
+is no compile-time overloading, only dynamic dispatch.
+
+The only troublesome part wrt. the order was possible recursion among
+definitions in a block. All definitions are potentially mutually
+recursive, and using a name before its definition has been executed, in
+any other way than attaching it to a closure, is an error, by necessity
+sometimes detected only at runtime.
+
+I needed to know which names will be introduced before processing
+the contents of the definitions. This was done in the same phase as
+understanding arguments of "builtin macros", which were all parsed like
+normal applications. So I needed to recognize macro names and analyze
+their arguments twice: first to predict which names will be introduced,
+then to compile the definitions.
+
+The duplication was getting ugly. I considered moving the recognition
+of builtin macros to a separate phase, done before name resolution,
+but this would make user-defined macros impossible in future, because
+recognition of what is a macro should be done after name resolution.
+
+So my solution was to analyze each sequence of definitions in two
+mini-phases, with an explicit representation between them. The first
+mini-phase checks the syntax of arguments of builtin macros, creates
+objects representing properties of introduced names, updates the
+environment which maps source names to these name objects, and outputs
+the sequence of definitions represented in different types. Builtin
+macros have separate kinds of nodes and bound names already use name
+objects, but all subexpressions are still unanalyzed, in their source
+form. The second mini-phase doesn't change the environment and can
+finally descend into expressions.
+
+> Interested in how you handle tail calls in C.
+
+The portable variant uses the well-known trampoline style, where each C
+function returns a pointer to the next function to jump into. The stack
+is managed explicitly. But for x86 I process the assembler output of gcc
+and convert code which returns an address (marked with a comment in asm)
+with a jump. This increased performance by about 30%.
+
+If the compiler is ever used on other architectures, someone who knows
+other assemblers might extend the mangler to handle them. I only know
+the x86 assembly.
+
+This idea was not mine, GHC does a similar thing. But its mangler does
+many horrible things, like putting some data structures adjacent to code
+so they can be found at a known negative offset from the code pointer,
+and removing prologues and epilogues. Mine does less things, it only
+converts ret (and possibly loading of a return value) to a jump.
+
+It does require some work, for example gcc before version 3.4.0 liked
+to merge code of multiple exit points from a function. Often merged were
+code paths after loading different results. So I have to duplicate these
+code paths, so that each branch can have its own return value at the end
+(turning "movl $constant_label,%eax" and "ret" into "jmp constant_label"
+is particularly good for the CPU, but sometimes the same "ret"
+corresponds to multiple labels from merged exit paths). It happens that
+gcc-3.4.0 doesn't merge so much.
+
+The mangler is 94 lines of Perl (not counting comments and empty lines).
+
+-- 
+   __("<         Marcin Kowalczyk
+   \__/       qrczak@knm.org.pl
+    ^^     http://qrnik.knm.org.pl/~qrczak/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

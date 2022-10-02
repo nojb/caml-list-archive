@@ -1,0 +1,148 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 645E27EE6C
+	for <caml-list@sympa.inria.fr>; Thu, 28 Nov 2013 12:15:14 +0100 (CET)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAEAM8kl1JCJwNzY2dsb2JhbABZgz+5GYE2AxgHDgg8giUBAQQBJ1IFFjRpFBkFh2IGDcA1jRCBdweEMwOYEwGBMJQMPA
+X-IPAS-Result: AgAEAM8kl1JCJwNzY2dsb2JhbABZgz+5GYE2AxgHDgg8giUBAQQBJ1IFFjRpFBkFh2IGDcA1jRCBdweEMwOYEwGBMJQMPA
+X-IronPort-AV: E=Sophos;i="4.93,790,1378850400"; 
+   d="scan'208";a="45875715"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 28 Nov 2013 12:15:13 +0100
+Received: (qmail 38968 invoked by uid 9370); 28 Nov 2013 11:15:12 -0000
+Date: 28 Nov 2013 11:15:12 -0000
+Message-ID: <20131128111512.38967.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: gabriel@kerneis.info
+CC: caml-list@inria.fr
+In-reply-to: <20131128094859.GB4052@kerneis.info>
+Subject: Re: [Caml-list] ANN: improved BER MetaOCaml N101, for OCaml 4.01
+
+
+> I'm not sure I understand correctly the difference between 
+> open and close code,
+> and what is the challenge with effects.  Could you please give examples of:
+> (1) a pure generator for well-typed, well-scoped open code,
+> (2) a pure generator for well-typed, ill-scoped open code,
+> (3) an effectful generator for well-typed, ill-scoped open code.
+
+Let's consider the following function, often called 'the trick' in 
+partial evaluation community:
+
+        let eta f = .<fun x -> .~(f .<x>.)>.;;
+          val eta : ('a code -> 'b code) -> ('a -> 'b) code = <fun>
+
+The function 'f' is a generator transformer: it takes the _open_ code .<x>.
+(which is the `name' of a free variable, bound in context) and makes
+code, which typically contains that 'x' plus maybe more free
+variables. Here is an example:
+
+        let testeta = .<fun x y -> .~(eta (fun u -> .<.~u + x + y>.))>.;;
+          val testeta : (int -> int -> int -> int) code = .<
+             fun x_1  y_2  x_3  -> (x_3 + x_1) + y_2>. 
+
+The argument to eta is (fun u -> .<.~u + x + y>.) that took an open
+code (bound to 'u') and incorporated it in the code with two other
+free variables. One of those free variables was also called
+'x'. However, it was bound differently and so MetaOCaml distinguished 
+them. These examples hopefully showed how we can program with
+well-typed open code, such as .<x> or .<x + y>. I think this is an
+example of (1) in your list.
+
+Although we can program with open code, we can run only closed
+code. For example,
+        !. testeta 1 2 3;;
+        - : int = 6
+
+If we attempt to run open code, we get an error:
+        .<fun x -> .~(!. .<x>.; .<0>.)>.;;
+Exception:
+Failure
+ "The code built at Characters 14-15:
+          .<fun x -> .~(!. .<x>.; .<0>.)>.;;
+                ^
+ is not closed: identifier x_4 bound at Characters 14-15:
+          .<fun x -> .~(!. .<x>.; .<0>.)>.;;
+                ^
+ is free".
+
+In earlier versions of MetaOCaml (prior to N101), this was a type
+error. Now it is a run-time error in the generator. This is the
+example of (2) in your list.
+
+Here is how we can generate ill-scoped code, using a well-typed
+generator with effects, (3) on your list.
+
+        let r = ref .<0>. in
+        let _ = .<fun x -> .~(r := .<x+1>.; .<x>.)>. in
+        .<fun y -> .~(!r)>.;;
+
+Exception:
+Failure
+ "Scope extrusion detected at Characters 96-111:
+          .<fun y -> .~(!r)>.;;
+            ^^^^^^^^^^^^^^^
+ for code built at Characters 67-70:
+          let _ = .<fun x -> .~(r := .<x+1>.; .<x>.)>. in
+                                       ^^^
+ for the identifier x_5 bound at Characters 52-53:
+          let _ = .<fun x -> .~(r := .<x+1>.; .<x>.)>. in
+                        ^
+".
+
+
+Versions of MetaOCaml prior to N100 had no problems with the above
+expression and happily generated .<fun y -> x + 1>. with the unbound
+variable x. Thus in the presence of effects, a well-typed generator may
+generate ill-scoped code -- code with unbound variables. The
+problem could be worse: the generated code can be closed but the
+variables are bound in unexpected ways. For an example, see
+        http://okmij.org/ftp/ML/MetaOCaml.html#got-away
+
+
+Now, the generator stops before generating the bad code. It throws an
+exception with a fairly detailed and helpful error message, pointing
+out the variable that got away. Incidentally, since the error is an
+exception, we can obtain the exception stack backtrace and figure out
+exactly which generator caused that variable leak. Previously, you
+will discover the problem, in the best case, only when you compile the
+generated code and see that it fails to compile. It could be quite a
+challenge in figuring out which part of the generator caused the
+problem.
+
+Although it may seem that BER N101 is worse deal since it made the
+type error (emitted for the case (2) on your list) a run-time error, I
+should point out that such errors (attempting to run open code) are
+very rare. I haven't encountered them at all. Part of the reason is
+that previously the run operator had a really special type and was inconvenient
+to use. Essentially you would use it only at top level (and applied to
+a top-level bound identifier). Any code value produced by a pure
+generator and bound to a top-value identifier is closed by
+construction, so there is nothing to check. And in case of effects,
+the environment classifiers are of no help anyway. Therefore, N101 removed
+environment classifiers since they give good protection (a
+type error) against only an exceedingly rare error, while making life
+cumbersome in all other circumstances.
+

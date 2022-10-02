@@ -1,0 +1,133 @@
+Return-Path: <anders@fugmann.net>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 3915B7F75C
+	for <caml-list@sympa.inria.fr>; Wed, 13 Aug 2014 13:22:44 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  anders@fugmann.net) identity=pra; client-ip=90.184.182.235;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="anders@fugmann.net";
+  x-sender="anders@fugmann.net"; x-conformance=sidf_compatible
+Received-SPF: Pass (mail3-smtp-sop.national.inria.fr: domain of
+  anders@fugmann.net designates 90.184.182.235 as permitted
+  sender) identity=mailfrom; client-ip=90.184.182.235;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="anders@fugmann.net";
+  x-sender="anders@fugmann.net"; x-conformance=sidf_compatible;
+  x-record-type="v=spf1"
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@fw.fugmann.net) identity=helo;
+  client-ip=90.184.182.235;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="anders@fugmann.net";
+  x-sender="postmaster@fw.fugmann.net";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqIEAHRJ61NauLbr/2dsb2JhbABagmrTJIMbAYEpd4QDAQEEAScRQBELGAkWDwkDAgECAUUGAQwIAheIHwkDxX8Xjxk6hEwBBLE3gWMdgV4
+X-IPAS-Result: AqIEAHRJ61NauLbr/2dsb2JhbABagmrTJIMbAYEpd4QDAQEEAScRQBELGAkWDwkDAgECAUUGAQwIAheIHwkDxX8Xjxk6hEwBBLE3gWMdgV4
+X-IronPort-AV: E=Sophos;i="5.01,856,1400018400"; 
+   d="scan'208";a="74700521"
+Received: from 0405ds1-vaer.1.fullrate.dk (HELO fw.fugmann.net) ([90.184.182.235])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 13 Aug 2014 13:22:43 +0200
+Received: from [IPv6:2a01:3a0:1:601:cabc:c8ff:fe9f:e077] (unknown [IPv6:2a01:3a0:1:601:cabc:c8ff:fe9f:e077])
+	(using TLSv1 with cipher ECDHE-RSA-AES128-SHA (128/128 bits))
+	(No client certificate requested)
+	by fw.fugmann.net (Postfix) with ESMTPSA id DF94AF69107;
+	Wed, 13 Aug 2014 13:22:40 +0200 (CEST)
+Message-ID: <53EB4A7E.5080903@fugmann.net>
+Date: Wed, 13 Aug 2014 13:22:38 +0200
+From: Anders Fugmann <anders@fugmann.net>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:24.0) Gecko/20100101 Icedove/24.4.0
+MIME-Version: 1.0
+To: Edouard Evangelisti <edouardevangelisti@gmail.com>, 
+ caml-list@inria.fr
+References: <sympa.1407913958.2059.874@inria.fr>
+In-Reply-To: <sympa.1407913958.2059.874@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Validation-by: anders@fugmann.net
+Subject: Re: [Caml-list] Unix library and serial port
+
+Hi Edouard,
+
+Setting the nonblock flag on the socket specifies exactly that calls 
+will never wait but raise EGAGIN when no data is available. That is - no 
+operations on the socket will ever block.
+
+I would advice you to not open using the O_NONBLOCK flag, and instead
+read exactly the amount of bytes you expect. If, for example, the motor 
+returns data ending with newlines, I would read one char at a time until 
+the terminating char is encountered and then parse the message received.
+
+Another solution is to poll for data and then sleep a bit when EAGAIN is 
+raised. Or even use select.
+
+/Anders
+
+On 08/13/2014 09:23 AM, Edouard Evangelisti wrote:
+> Dear all,
+>
+> I encountered a problem while trying to exchange informations with a ZStepper
+> Motor connected to the computer through a serial/USB adapter. I can send
+> commands and move the motor, but I cannot retrieve the informations which are
+> sent by the motor directly after completion. For this I am using the Unix
+> library as follows.
+>
+> First of all, I get a read/write file descriptor :
+>
+> let usb0 = "/dev/ttyUSB0"
+> let flags = Unix.([O_RDWR; O_NOCTTY; O_NONBLOCK])
+> let perm = 0o666
+> let fd = Unix.openfile usb0 flags perm
+>
+> I then set the parameters using Unix.tcgetattr/Unix.tcsetattr (for instance
+> baud and parity check). Most of the default values are fine. Then I am able to
+> send commands :
+>
+> let write_serial () =
+>   let cmd = "/2P1000R\r\n" in (* one command as  an example. *)
+>   let len = String.length cmd in
+>   let ret = Unix.write fd cmd 0 len in
+>   assert (ret = len); (* not the real code here for error management *)
+>   Unix.tcdrain fd
+>
+> The call to write_serial triggers ZStepper motion as expected. Then, the motor
+> send back some data. I have tried to read them using :
+>
+> let read_serial () =
+>     let len = 10 in
+>     let buf = Buffer.create len in
+>     let str = String.create len in
+>     let rec loop () =
+>     let n = Unix.read fd str 0 len in
+>     if n > 0 then (
+>       Buffer.add_substring buf str 0 n;
+>       loop ()
+>     ) else Buffer.output_buffer stdout buf in
+>     try loop () with Unix.Unix_error (Unix.EAGAIN, _, _) -> ()
+
+>
+> I always got EAGAIN error and no data available. When using
+> Unix.in_channel_of_descr, I can retrieve some data but asynchronously.
+>
+> I have tried to launch simultaneously my program and GtkTerm configured with
+> the same settings and GtkTerm is able to retrieve the informations sent by the
+> motor after completion. The source code of GtkTerm looks very similar to mine.
+> I probably do something wrong but I cannot see where is the problem.
+>
+> Would you have an idea ?
+>
+> Many thanks in advance for your precious help.
+>
+>
+>
+>
+>
+>
+>
+>
+>
+

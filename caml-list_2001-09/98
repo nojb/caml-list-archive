@@ -1,0 +1,439 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA20974; Tue, 11 Sep 2001 01:19:24 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA20986 for <caml-list@pauillac.inria.fr>; Tue, 11 Sep 2001 01:19:23 +0200 (MET DST)
+Received: from shell5.ba.best.com (shell5.ba.best.com [206.184.139.136])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f8ANJK106468;
+	Tue, 11 Sep 2001 01:19:20 +0200 (MET DST)
+Received: from localhost (bpr@localhost)
+	by shell5.ba.best.com (8.9.3/8.9.2/best.sh) with ESMTP id QAA14855;
+	Mon, 10 Sep 2001 16:19:14 -0700 (PDT)
+Date: Mon, 10 Sep 2001 16:19:14 -0700 (PDT)
+From: Brian Rogoff <bpr@best.com>
+To: <caml-list@inria.fr>
+cc: Francois Pottier <Francois.Pottier@inria.fr>,
+        Charles Martin <joelisp@yahoo.com>
+Subject: Phantom types (very long) (Was Re: [Caml-list] opaque polymorphism)
+In-Reply-To: <20010910090225.A32394@pauillac.inria.fr>
+Message-ID: <20010910154559.O6031-100000@shell5.ba.best.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, 10 Sep 2001, Francois Pottier wrote:
+> So ``hiding the polymorphism in 'b'' can be done, but you have to tell
+> the compiler which internal type should be used instead of 'b, i.e. you
+> have to choose <some type>. I guess the unit type will do in most
+> situations.
+
+There's a sort of "dual" trick of parameterizing a type over a type
+variable which is not used in the definition, the so-called phantom types.
+This trick seems to be well known by ML experts, but its not mentioned in
+any ML programming texts, sort of like the parameterization trick for
+recursive types and modules. I'll show three examples of phantom types
+below; if you already know this trick you can skip my very long, rambling
+message.
+
+The easiest example to start with is the core of an untyped lambda calculus
+interpreter.
+
+type term =
+    Int of int
+  | Bool of bool
+  | Add of term * term
+  | App of term * term
+  | Lam of (term -> term);;
+
+As we know, since this is untyped we can have self applications.
+
+# let bug = Lam(fun x -> App(x,x));;
+val bug : term = Lam <fun>
+
+We'd like to forbid this, and one way is to implement a type checker.
+Here's how we can piggyback off of the OCaml one with phantom types.
+
+type 'a expr = Expr of term;; (* The phantom type *)
+let int : int -> int expr = fun i -> Expr (Int i);;
+let bool : bool -> bool expr = fun b -> Expr (Bool b);;
+
+let add : int expr -> int expr -> int expr =
+  fun (Expr e1) (Expr e2) -> Expr (Add(e1,e2));;
+
+let app : ('a -> 'b) expr -> ('a expr -> 'b expr) =
+  fun (Expr e1) (Expr e2) -> Expr (App(e1,e2));;
+
+let lam : ('a expr -> 'b expr) -> ('a -> 'b) expr =
+  fun f -> Expr (Lam(fun x -> let (Expr b) = f (Expr x) in b));;
+
+Now we use these functions instead of the raw constructors. So our buggy
+term becomes
+
+# let bug = lam (fun x -> app x x);;
+This expression has type 'a expr but is here used with type ('a -> 'b)
+expr
+
+Cool! Note that we have to use explicit types or use the module system
+here (.mli and .ml files) otherwise we have (assuming I omit the type
+declarations in int, bool, add, app, lam)
+
+# let bug = lam (fun x -> app x x);;
+val bug : '_a expr = Expr (Lam <fun>)
+
+The next example is based on a mail to this very Caml list
+
+	http://caml.inria.fr/archives/199912/msg00090.html
+
+One of the points of that example was to put the permissions (readable or
+writable) of an entity into it's type. Rather than just copy Vouillon's
+excellent approach with row types, I'll be infinitesimally creative and
+show a version with polymorphic variants. here's the .mli
+
+(* Vouillon's phantom type, which originally used row types but works
+   just fine with polymorphic variants. The idea is to make the permission
+   check only once, when the mapped file is created, and thereafter use
+   the type system to enforce read/write safety.
+*)
+
+type 'a perms
+type 'a t
+
+val read_only  : [ `Readable ] perms
+val write_only : [ `Writable ] perms
+val read_write : [> `Readable | `Writable ] perms
+
+val map_file : string -> 'a perms -> int -> 'a t
+val get : [> `Readable ] t -> int -> char
+val set : [> `Writable ] t -> int -> char -> unit
+
+(* Vouillon's original interface with row types
+val read_only : <read:unit> perms
+val write_only : <write:unit> perms
+val read_write : <read:unit;write:unit> perms
+
+val map_file : string -> 'a perms -> int -> 'a t
+val get : <read:unit;..> t -> int -> char
+val set : <write:unit;..> t -> int -> char -> unit
+*)
+
+and here's a sample .ml, which type checks but might now work ;-).
+
+open Unix
+open Bigarray
+
+type bytes = (int, int8_unsigned_elt, c_layout) Bigarray.Array1.t
+type 'a perms = int
+type 'a t = bytes
+
+let read_only = 1
+let write_only = 2
+let read_write = 3
+
+let openflags_of_perms n =
+  if      n = 1 then O_RDONLY, 0o400
+  else if n = 2 then O_WRONLY, 0o200
+  else if n = 3 then O_RDWR, 0o600
+  else invalid_arg "openflags_of_perms"
+
+let access_of_openflags = function
+    O_RDONLY -> [R_OK; F_OK]
+  | O_WRONLY -> [W_OK; F_OK]
+  | O_RDWR   -> [R_OK; W_OK; F_OK]
+  | _ -> invalid_arg "access_of_openflags"
+
+(* Check that "fd" permissions and "perms" matches *)
+
+let map_file filename perms sz =
+  let (oflags, fperm) = openflags_of_perms perms in
+  try
+    access filename (access_of_openflags oflags); (* Check... *)
+    let fd = Unix.openfile filename [oflags; O_CREAT] fperm in
+    Array1.map_file fd int8_unsigned c_layout false sz
+  with _ ->
+    invalid_arg "map_file: not even a valid permission!"
+
+let get a i = Char.chr (Array1.get a i)
+let set a i c = Array1.set a i (Char.code c)
+
+The final example is familiar to anyone who reads comp.lang.ml, where I
+mistakenly asserted that you couldn't have statically typed array
+dimensions in ML like you can in C++ or Ada. Matthias Blume then posted
+a solution which works (though it reminds me a bit of that proverb of the
+dancing bear). I've included a translation of the code into OCaml, with
+most of Blume's original comments.
+
+(* It is, surprisingly to some perhaps, actually possible to statically
+type
+   arrays with (statically) fixed bounds in ML (just like in C).
+
+   Here is the trick:
+
+   We build an infinite family of types together with value constructors
+   such that there is a 1-1 correspondence between non-negative integers
+   and types that have constructable values in this family.  We can use
+   the types in the family as "witness types" (aka "phantom types") that
+   statically track array dimensions:
+
+   In Ocaml:
+*)
+module DimArray : sig
+  type dec
+  type 'a d0 and 'a d1 and 'a d2 and 'a d3 and 'a d4
+  type 'a d5 and 'a d6 and 'a d7 and 'a d8 and 'a d9
+  type zero and nonzero
+  type ('a, 'z) dim0
+  type 'a dim = ('a, nonzero) dim0
+
+  val dec :            ((dec, zero) dim0 -> 'b) -> 'b
+
+  val d0 : 'a dim        -> ('a d0 dim -> 'b) -> 'b
+  val d1 : ('a, 'z) dim0 -> ('a d1 dim -> 'b) -> 'b
+  val d2 : ('a, 'z) dim0 -> ('a d2 dim -> 'b) -> 'b
+  val d3 : ('a, 'z) dim0 -> ('a d3 dim -> 'b) -> 'b
+  val d4 : ('a, 'z) dim0 -> ('a d4 dim -> 'b) -> 'b
+  val d5 : ('a, 'z) dim0 -> ('a d5 dim -> 'b) -> 'b
+  val d6 : ('a, 'z) dim0 -> ('a d6 dim -> 'b) -> 'b
+  val d7 : ('a, 'z) dim0 -> ('a d7 dim -> 'b) -> 'b
+  val d8 : ('a, 'z) dim0 -> ('a d8 dim -> 'b) -> 'b
+  val d9 : ('a, 'z) dim0 -> ('a d9 dim -> 'b) -> 'b
+
+  val dim : ('a, 'z) dim0 -> ('a, 'z) dim0
+
+  val to_int : ('a, 'z) dim0 -> int
+
+    (* arrays with static dimensions *)
+  type ('t, 'd) dim_array
+
+  val make : 'd dim -> 't -> ('t, 'd) dim_array
+  val init : 'd dim -> (int -> 'a) -> ('a, 'd) dim_array
+  val copy : ('a, 'd) dim_array -> ('a, 'd) dim_array
+  (* other array operations go here ... *)
+  val get : ('a, 'd) dim_array -> int -> 'a
+  val set : ('a, 'd) dim_array -> int -> 'a -> unit
+  val combine :
+      ('a, 'd) dim_array -> ('b, 'd) dim_array -> ('a -> 'b -> 'c) ->
+        ('c, 'd) dim_array
+  val length : ('a, 'd) dim_array -> int
+  val update : ('a, 'd) dim_array -> int -> 'a -> ('a, 'd) dim_array
+  val iter : f:('a -> unit) -> ('a, 'd) dim_array -> unit
+  val map : f:('a -> 'b) -> ('a, 'd) dim_array -> ('b, 'd) dim_array
+  val iteri : f:(int -> 'a -> unit) -> ('a, 'd) dim_array -> unit
+  val mapi : f:(int -> 'a -> 'b) -> ('a, 'd) dim_array ->
+     ('b, 'd) dim_array
+  val fold_left : f:('a -> 'b -> 'a) -> init:'a -> ('b,'d) dim_array -> 'a
+  val fold_right : f:('b -> 'a -> 'a) -> ('b, 'd) dim_array -> init:'a ->
+'a
+
+  val iter2 :
+      f:('a -> 'b -> unit) -> ('a,'d) dim_array -> ('b, 'd) dim_array ->
+unit
+  val map2 :
+      f:('a -> 'b -> 'c) -> ('a, 'd) dim_array -> ('b, 'd) dim_array ->
+('c, 'd) dim_array
+  val iteri2 :
+      f:(int -> 'a -> 'b -> unit) -> ('a,'d) dim_array -> ('b, 'd)
+dim_array ->
+	unit
+  val mapi2 :
+      f:(int -> 'a -> 'b -> 'c) -> ('a, 'd) dim_array -> ('b, 'd)
+dim_array ->
+	('c, 'd) dim_array
+  val fold_left2 :
+      f:('a -> 'b -> 'c -> 'a) -> init:'a -> ('b, 'd) dim_array -> ('c,
+'d) dim_array -> 'a
+  val fold_right2 :
+      f:('a -> 'b -> 'c -> 'c) -> ('a, 'd) dim_array -> ('b, 'd) dim_array
+-> init:'c -> 'c
+  val to_array : ('a, 'd) dim_array -> 'a array
+end = struct
+  type dec = unit
+  type 'a d0 = unit
+  type 'a d1 = unit
+  type 'a d2 = unit
+  type 'a d3 = unit
+  type 'a d4 = unit
+  type 'a d5 = unit
+  type 'a d6 = unit
+  type 'a d7 = unit
+  type 'a d8 = unit
+  type 'a d9 = unit
+  type zero = unit
+  type nonzero = unit
+
+  type ('a, 'z) dim0 = int (* Phantom type *)
+  type 'a dim = ('a, nonzero) dim0
+
+  let dec k = k 0
+
+  let d0 d k = k (10 * d + 0)
+  let d1 d k = k (10 * d + 1)
+  let d2 d k = k (10 * d + 2)
+  let d3 d k = k (10 * d + 3)
+  let d4 d k = k (10 * d + 4)
+  let d5 d k = k (10 * d + 5)
+  let d6 d k = k (10 * d + 6)
+  let d7 d k = k (10 * d + 7)
+  let d8 d k = k (10 * d + 8)
+  let d9 d k = k (10 * d + 9)
+
+  let dim d = d
+
+  let to_int d = d
+
+  type ('t, 'd) dim_array = 't array
+
+  let make d x = Array.make (to_int d) x
+  let init d f = Array.init (to_int d) f
+  let copy x = Array.copy  x
+  (* other array operations go here ... *)
+  let get : ('a, 'd) dim_array -> int -> 'a = fun a d ->
+    Array.get a d
+
+  let set : ('a, 'd) dim_array -> int -> 'a -> unit = fun a d v ->
+    Array.set a d v
+
+  let unsafe_get : ('a, 'd) dim_array -> int -> 'a = fun a d ->
+    Array.unsafe_get a d
+
+  let unsafe_set : ('a, 'd) dim_array -> int -> 'a -> unit = fun a d v ->
+    Array.unsafe_set a d v
+
+  let combine :
+      ('a, 'd) dim_array -> ('b, 'd) dim_array -> ('a -> 'b -> 'c) -> ('c,
+'d) dim_array =
+	fun a b f ->
+	  Array.init (Array.length a) (fun i -> f a.(i) b.(i))
+
+  let length : ('a, 'd) dim_array -> int = fun a -> Array.length a
+
+  let update : ('a, 'd) dim_array -> int -> 'a -> ('a, 'd) dim_array =
+    fun a d v -> let result = Array.copy a in (Array.set result d v;
+result)
+
+  let iter f a = Array.iter f a
+  let map f a = Array.map f a
+  let iteri f a = Array.iteri f a
+  let mapi f a = Array.mapi f a
+  let fold_left f x a = Array.fold_left f x a
+  let fold_right f a x = Array.fold_right f a x
+
+  let rec iter2 f a1 a2 =
+    for i = 0 to length a1 - 1 do
+      f (unsafe_get a1 i) (unsafe_get a2 i)
+    done
+
+  let rec map2 f a1 a2 =
+    let l = length a1 in
+    if l = 0 then [||] else
+    (let r = Array.make l (f (unsafe_get a1 0) (unsafe_get a2 0)) in
+     for i = 1 to l - 1 do
+       unsafe_set r i (f (unsafe_get a1 i) (unsafe_get a2 i))
+     done;
+     r)
+
+  let rec iteri2 f a1 a2 =
+    for i = 0 to length a1 - 1 do
+      f i (unsafe_get a1 i) (unsafe_get a2 i)
+    done
+
+  let mapi2 f a1 a2 =
+    let l = length a1 in
+    if l = 0 then [||] else
+    (let r = Array.make l (f 0 (unsafe_get a1 0) (unsafe_get a2 0)) in
+     for i = 1 to l - 1 do
+       unsafe_set r i (f i (unsafe_get a1 i) (unsafe_get a2 i))
+     done;
+     r)
+
+  let fold_left2 f accu a1 a2 =
+    let r = ref accu in
+    for i = 0 to length a1 - 1 do
+      r := f !r (unsafe_get a1 i) (unsafe_get a2 i)
+    done;
+    !r
+
+  let fold_right2 f a1 a2 accu =
+    let r = ref accu in
+    for i = length a1 - 1 downto 0 do
+      r := f (unsafe_get a1 i) (unsafe_get a2 i) !r
+    done;
+    !r
+
+  let to_array : ('a, 'd) dim_array -> 'a array = fun d -> d
+
+end;;
+
+(*
+Once all this is in place, you can say things like this
+
+ ...
+
+ open DimArray;;
+ let  d1230 = dec d1 d2 d3 d0 dim;;
+ let  a = make d1230 0.0;;
+ ...
+
+ open DimArray;;
+ let  d12 = dec d1 d2 dim;;
+ let  a = make d12 "bullshi";;
+ let  b = make d12 't';;
+ let  f s c = s ^ (Char.escaped c);;
+ let  abf = combine a b f;;
+ ...
+
+The type of d1230 is "dec d1 d2 d3 d0 dim" (work it out!).  By
+careful construction, this even happens to be textually the same as
+the expression that created d1230.  Moreover, the value behind d1230
+is 1230.  In general, you get the dim value for any number by writing
+the number in decimal, adding "d" to each digit, adding a few spaces,
+and surrounding the thing with "dec ... dim".
+
+With this, you can now declare a variable to be an array of some precisely
+specified length:
+
+   let a : (int, dec d1 d2 d3 d0) arr = ...
+
+The type checker will statically reject any attempt of making a an array
+of
+different size.  This is just like in C.
+
+Now, beyond C, you can write functions that require twe equal-sized arrays
+(but which make no other demands):
+
+  val dot_product : (real, 'd) arr * (real, 'd) arr -> real
+
+etc. It's easy to extend this to multidimensional arrays, where we can
+define a
+more type safe product
+
+ val ( * ) :
+   ('a, 'rows, 'cols) dim_array2 -> ('b, 'cols, 'rows) dim_array2 -> ('a
+-> 'b -> 'c) ->
+     ('c, 'rows, 'cols) dim_array2
+
+You might argue that the above construction is ugly and lengthy, but it
+can
+be packaged up and put into a library.  This is what I have done for my
+C interface, for example.  Usage is exceedingly easy because thanks to
+ML's
+type inference you rarely have to actually write these types.
+
+Notice also that the above construction is slightly more complicated than
+it
+needs to be:  I wrote the value constructors in CPS to get that cute
+type/expression equivalence.  The set of constructors would have less
+complicated types if we were content to write
+
+   let d1230 = d0 (d3 (d2 (d1 dec)))
+
+instead of the much cooler (:-)
+
+   let d1230 = dec d1 d2 d3 dim
+*)
+
+-- Brian
+
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

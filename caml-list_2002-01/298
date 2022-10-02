@@ -1,0 +1,104 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA12024; Thu, 31 Jan 2002 02:01:49 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA13110 for <caml-list@pauillac.inria.fr>; Thu, 31 Jan 2002 02:01:48 +0100 (MET)
+Received: from favie.faith.gr.jp (favie.faith.gr.jp [61.127.175.250])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g0V11kv24188
+	for <caml-list@inria.fr>; Thu, 31 Jan 2002 02:01:46 +0100 (MET)
+Received: from localhost (dhcp7.faith.gr.jp [192.168.1.17])
+	by favie.faith.gr.jp (8.9.3/8.9.3) with ESMTP id IAA24476;
+	Thu, 31 Jan 2002 08:52:45 +0900
+To: David.Monniaux@ens.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] module types and polymorphic variants
+In-Reply-To: <Pine.GSO.4.03.10201301743140.13661-100000@basilic.ens.fr>
+References: <Pine.GSO.4.03.10201301743140.13661-100000@basilic.ens.fr>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020131085201L.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 31 Jan 2002 08:52:01 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 74
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: David Monniaux <David.Monniaux@ens.fr>
+> I tried the following:
+> 
+> module type MT =
+> sig
+>   type t
+>   val f: t->int
+> end with type t = 'x constraint 'x = [> `A];;
+> 
+> ocaml gives me:
+> module type MT = sig type t = [> `A] val f : t -> int end
+
+This is already strange. Probably a bug: the definition of t should
+not be accepted. Or is it ok because this is only an abstract
+signature, not the signature of an actual module ?
+
+> but this latter definition is NOT accepted by OCaml:
+> "Unbound type parameter [..]"
+
+That seems more reasonable :-)
+
+> module N (M : MT) =
+> struct
+>   type t = [M.t | `B]
+>   let f: t->int = function
+>       `B -> 1
+>     | x -> M.f x
+> end;;
+> 
+> The functor definition is refused because
+> "The type M.t is not a polymorphic variant type"
+> 
+> Is there a workaround?
+
+Not that I know. Polymorphic variant extension only works for known
+closed variant types, otherwise it would not be sound.
+
+Note that all the above code would work if you defined type t = [ `A ]
+to begin with, but this is probably not what you want.
+
+# module type MT =
+  sig
+    type t = [ `A ]
+    val f: t->int
+  end;;
+module type MT = sig type t = [ `A] val f : t -> int end
+# module N (M : MT) =
+  struct
+    type t = [M.t | `B]
+    let f: t->int = function
+        `B -> 1
+      | #M.t as x -> M.f x
+  end;;
+module N : functor (M : MT) -> sig type t = [ `A | `B] val f : t -> int end
+
+For incremental extension of an unknown type, you must use a disjoint
+sum. The coalesced sum provided by polymorphic variant extension will
+not work.
+
+module type MT = sig type t val f : t -> int end;;
+module N (M : MT) =
+  struct
+    type t = [ `Inh of M.t | `B ]
+    let f: t->int = function
+        `B -> 1
+      | `Inh x -> M.f x
+  end;;
+
+Theoretical thought: some other frameworks based on extensible rows
+would allow what your write, but I'm starting to think that what they
+provide is not coalesced sum, but rather a flattened form of disjoint
+sum. Nice for some things, but harder to reason about for others.
+
+Jacques Garrigue
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

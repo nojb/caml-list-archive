@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA22892; Thu, 12 Jul 2001 01:08:00 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA22886 for <caml-list@pauillac.inria.fr>; Thu, 12 Jul 2001 01:07:59 +0200 (MET DST)
+Received: from smtp1.cswv.com (smtp1.cswv.com [4.17.129.17])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f6BN7wX26753
+	for <caml-list@inria.fr>; Thu, 12 Jul 2001 01:07:58 +0200 (MET DST)
+Received: from smtp1.cswv.com ([4.17.129.17]) by smtp1.cswv.com  with Microsoft SMTPSVC(5.5.1877.197.19);
+	 Wed, 11 Jul 2001 19:08:14 -0400
+Received: FROM exchange1.cswv.com BY smtp1.cswv.com ; Wed Jul 11 19:08:13 2001 -0400
+Received: by exchange1.cswv.com with Internet Mail Service (5.5.2653.19)
+	id <NJMPJRPB>; Wed, 11 Jul 2001 19:10:49 -0400
+Message-ID: <B1E4D3274D57D411BE8400D0B783FF322E8657@exchange1.cswv.com>
+From: "Krishnaswami, Neel" <neelk@cswcasa.com>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] A G'Caml question" + additional info
+Date: Wed, 11 Jul 2001 19:10:47 -0400
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.5.2653.19)
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Brian Rogoff [mailto:bpr@best.com] wrote:
+> >
+> > For instance, I recently wrote yet another set 
+> > implementation, because the functorial interface to the Set module 
+> > in the standard library wouldn't let me use it in a fully polymorphic
+> > fashion. If the Set library had been written using OCaml's object
+> > system, then I would not have had to redo my own. 
+> 
+> That's odd. If the Set library had been implemented using the object
+> system, it seems that you would have less (parametric) polymorphism 
+> since OCaml doesn't (yet?) have polymorphic methods. 
+
+I don't know enough type theory to argue, except that in practice
+I seem to be getting more polymorphic types with objects than with 
+functors. I guess I'll go ahead and post the example -- it's possible
+that I just don't know enough yet! 
+
+So, let's take the example of a priority queue implemented using a
+binary search tree. The usual functorial approach to this looks like:
+
+module type ORD =
+  sig
+    type t
+    val cmp : t -> t -> bool
+  end
+
+module Queue(Elt : ORD) =
+  struct
+    type elt = Elt.t
+    type t = Nil | Tree of t * elt * t
+
+    let empty = Nil
+
+    let rec min = function
+        | Nil -> raise Not_found
+        | Tree(Nil, x, r) ->  x
+        | Tree(l, x, r) -> min l 
+
+    let rec add x = function
+      | Nil ->
+          Tree(Nil, x, Nil)
+      | Tree(l, y, r) as t ->
+          if Elt.cmp x y then
+            Tree(add x l, y, r)
+          else if Elt.cmp y x then
+            Tree(l, y, add x r)
+          else
+            Tree(l, x, r)
+  end
+
+To specialize this a structure satisfying the ORD signature is 
+applied to the functor. The obvious approach with classes looks 
+very similar, except that the Elt functor argument becomes a method 
+to be overridden: 
+
+type 'a tree = Nil | Tree of 'a tree * 'a * 'a tree
+
+class virtual ['a] q =
+  object(self)
+    val tree = Nil
+
+    method virtual cmp : 'a -> 'a -> bool
+
+    method min =
+      let (<) = self#cmp in
+      let rec loop = function
+        | Nil -> raise Not_found
+        | Tree(Nil, x, r) -> x
+        | Tree(l, x, r) -> loop l
+      in loop tree
+
+    method add x =
+      let (<) = self#cmp in
+      let rec loop = function
+        | Nil ->
+            Tree(Nil, x, Nil)
+        | Tree(l, y, r) as t ->
+            if x < y then
+              Tree(loop l, y, r)
+            else if y < x then
+              Tree(l, y, loop r)
+            else
+              Tree(l, x, r)
+      in
+      {< tree = loop tree >}
+  end
+
+To specialize this we just subclass and add a cmp method. So far
+so good.
+
+However, suppose I have a type 
+
+type 'a tag = int * 'a
+
+This is a value that has an integer priority plus some arbitrary 
+data, and I'd like to make a priority queue that stores tagged 
+values. Since the type 'a tag is polymorphic, AFAICT there's no 
+way of writing a structure that satisfies the ORD signature.
+
+However, writing a class that can accept this is easy --
+
+class ['a] taggedq =
+  object
+    inherit ['a] q
+    constraint 'a = 'b tag
+
+    method cmp = fun a b -> (fst a) < (fst b)
+  end
+
+will Just Work(tm). This is why I called the class "more polymorphic."
+If my terminology is wrong, corrections will be gratefully accepted. 
+
+
+--
+Neel Krishnaswami
+neelk@cswcasa.com
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

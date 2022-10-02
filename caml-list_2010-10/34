@@ -1,0 +1,149 @@
+Return-Path: <gclci-caml-list@m.gmane.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id B0FCDBC57
+	for <caml-list@yquem.inria.fr>; Fri,  8 Oct 2010 19:13:37 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AigFADfurkxQW+UMgWdsb2JhbACURY16FQEBFiIivhiFRwSKQA
+X-IronPort-AV: E=Sophos;i="4.57,303,1283724000"; 
+   d="scan'208";a="73043762"
+Received: from lo.gmane.org ([80.91.229.12])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 08 Oct 2010 19:13:37 +0200
+Received: from list by lo.gmane.org with local (Exim 4.69)
+	(envelope-from <gclci-caml-list@m.gmane.org>)
+	id 1P4GVj-0002Ed-PD
+	for caml-list@inria.fr; Fri, 08 Oct 2010 19:13:35 +0200
+Received: from avelizy-155-1-1-48.w83-199.abo.wanadoo.fr ([83.199.40.48])
+        by main.gmane.org with esmtp (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Fri, 08 Oct 2010 19:13:35 +0200
+Received: from sylvain by avelizy-155-1-1-48.w83-199.abo.wanadoo.fr with local (Gmexim 0.1 (Debian))
+        id 1AlnuQ-0007hv-00
+        for <caml-list@inria.fr>; Fri, 08 Oct 2010 19:13:35 +0200
+X-Injected-Via-Gmane: http://gmane.org/
+To: caml-list@inria.fr
+From: Sylvain Le Gall <sylvain@le-gall.net>
+Subject: Type constraint to explain that a polymorphic variants is included
+ into another
+Date: Fri, 8 Oct 2010 17:13:27 +0000 (UTC)
+Lines: 112
+Message-ID: <slrniauk9n.fmh.sylvain@gallu.homelinux.org>
+X-Complaints-To: usenet@dough.gmane.org
+X-Gmane-NNTP-Posting-Host: avelizy-155-1-1-48.w83-199.abo.wanadoo.fr
+User-Agent: slrn/pre1.0.0-18 (Linux)
+X-Spam: no; 0.00; le-gall:01 variants:01 struct:01 functor:01 sig:01 val:01 struct:01 prerr:01 endline:01 prerr:01 endline:01 polymorphic:01 camlc:01 compile:01 functions:01 
+
+Hello all,
+
+I would like to build an interface for plugins that allow to extract at the
+same time a very specific data for a plugin family and to extract
+general help for plugins.
+
+Here is an example:
+
+(** All the plugins I want to manage *)
+type plugin_kind = [`Build | `Install]
+
+(** Generic plugin *)
+type 'a plugin = 'a * string
+
+(** Help data for all plugin *)
+module MapPlugin = 
+  Map.Make
+    (struct
+       type t = plugin_kind plugin
+       let compare = compare
+     end)
+
+let all_help: string MapPlugin.t ref = 
+  ref MapPlugin.empty
+
+let help plg = 
+  MapPlugin.find plg !all_help
+
+(** Functor to build function related to one type of plugin *)
+module type PLUGIN_FAMILY = 
+sig
+  type act
+  type kind
+  val kind_default: kind
+end
+
+
+module Make (F: PLUGIN_FAMILY) = 
+struct
+
+  module MapPluginSelf = 
+    Map.Make
+      (struct 
+         type t = F.kind plugin
+         let compare = compare
+       end)
+
+  let all_act: F.act MapPluginSelf.t ref = 
+    ref MapPluginSelf.empty
+
+  let act (plg : F.kind plugin) =
+    MapPluginSelf.find plg !all_act
+
+  let create name help act = 
+    let id = 
+      F.kind_default, name
+    in
+      all_help := MapPlugin.add id help !all_help;
+      all_act  := MapPlugin.add id act !all_act;
+      id
+end
+
+(** Functions for build plugins *)
+module Build =
+  Make
+    (struct 
+       type act = unit -> unit 
+       type kind = [`Build]
+       let default = `Build
+     end)
+
+(** Functions for install plugins *)
+module Install = 
+  Make
+    (struct 
+       type act = string list -> unit
+       type kind = [`Install]
+       let default = `Install
+     end)
+
+type package = 
+    {
+      name: string;
+      plugin_build: [`Build] plugin;
+      plugin_install: [`Install] plugin;
+    }
+
+let run pkg = 
+  prerr_endline (help pkg.plugin_build);
+  prerr_endline (help pkg.plugin_install);
+  (Build.act pkg.plugin_build) ();
+  (Install.act pkg.plugin_install) ()
+
+
+This code doesn't compile because I see no way to explain that F.kind is
+included into plugin_kind. 
+
+Here is the precise error:
+camlc -o test test.ml
+File "test.ml", line 51, characters 32-34:
+Error: This expression has type F.kind * 'a
+       but an expression was expected of type
+         MapPlugin.key = plugin_kind * string
+       Type F.kind is not compatible with type
+         plugin_kind = [ `Build | `Install ] 
+make: *** [all] Erreur 2
+
+Does anyone know a good solution to this problem? Does anyone have a
+better solution to this problem? (different design?)
+
+Thank you for your answers,
+Sylvain Le Gall
+

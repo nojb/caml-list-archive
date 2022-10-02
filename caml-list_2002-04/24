@@ -1,0 +1,123 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA31404; Wed, 3 Apr 2002 22:59:46 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA30999 for <caml-list@pauillac.inria.fr>; Wed, 3 Apr 2002 22:59:45 +0200 (MET DST)
+Received: from moutng1.kundenserver.de (moutng1.kundenserver.de [212.227.126.171])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g33KxiD25418
+	for <caml-list@inria.fr>; Wed, 3 Apr 2002 22:59:44 +0200 (MET DST)
+Received: from [212.227.126.160] (helo=mrelayng0.kundenserver.de)
+	by moutng1.kundenserver.de with esmtp (Exim 3.22 #2)
+	id 16srqb-0002oF-00; Wed, 03 Apr 2002 22:59:13 +0200
+Received: from [80.129.104.41] (helo=ice.gerd-stolpmann.de)
+	by mrelayng0.kundenserver.de with asmtp (Exim 3.22 #2)
+	id 16srqb-0004F8-00; Wed, 03 Apr 2002 22:59:13 +0200
+Received: from ice (gerd@localhost [127.0.0.1])
+	by ice.gerd-stolpmann.de (8.12.1/8.12.1) with ESMTP id g33KxBXb029241;
+	Wed, 3 Apr 2002 22:59:12 +0200
+Date: Wed, 3 Apr 2002 22:59:11 +0200
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Artem Prisyaznuk <tema@sit.kiev.ua>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Typing trouble with PXP
+Message-ID: <20020403225911.Q4820@ice.gerd-stolpmann.de>
+References: <20020403130056.GA3524@sit.kiev.ua>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=KOI8-R
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <20020403130056.GA3524@sit.kiev.ua>; from tema@sit.kiev.ua on Wed, Apr 03, 2002 at 15:00:56 +0200
+X-Mailer: Balsa 1.2.1
+Lines: 87
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+On 2002.04.03 15:00 Artem Prisyaznuk wrote:
+> 
+> The problem is summarized in the following code:
+> 
+> 	open Pxp_yacc;;
+> 
+> 	let rec foo_fun node=
+> 		node#write (`Out_channel stderr) `Enc_koi8r;;
+> 	let  _ =
+> 		let doc = parse_wfdocument_entity default_config (from_file "my.xml") default_spec in
+> 		let root = doc#root in
+> 		begin
+> 				root#write (`Out_channel stderr) `Enc_koi8r;
+> 				foo_fun root    
+> 		end;;
+> 
+> This example doesn't compile and the compiler error message is:
+> 
+> 	File "tmp.ml", line 10, characters 11-15:
+> 	This expression has type
+> 	  (('a Pxp_document.node as 'b) Pxp_document.extension as 'a)
+> 	  Pxp_document.node =
+> 		< add_node : ?force:bool -> 'b -> unit;
+> 		  ........skip........
+> 		  write : ?prefixes:string list ->
+> 				  ?default:string ->
+> 				  Pxp_types.output_stream -> Pxp_types.encoding -> unit >
+> 	but is here used with type
+> 	  < add_node : ?force:bool -> 'b -> unit;
+> 		..........skip.............
+> 		write : [> `Out_channel of out_channel] -> [> `Enc_koi8r] -> 'c >
+> 
+
+The missing optional arguments cause the type incompatibility. The "node" argument
+of the "foo_fun" function gets a type that only depends on its usage, and I guess
+it is
+
+< write : [> `Out_channel of out_channel] -> [> `Enc_koi8r] -> 'c; ..> -> 'c
+
+On the other hand, the type of the variable "root" depends on the result of
+parse_wfdocument_entity, and thus is completely known. The method "write"
+is typed _with_ the two optional arguments, but "foo_fun" is not.
+
+The short form of this incompatibility is shown in the following example:
+
+# let write1 ?x y = ();;
+val write1 : ?x:'a -> 'b -> unit = <fun>
+# let write2 y = ();;
+val write2 : 'a -> unit = <fun>
+# let do_something (write,x) = write x;;
+val do_something : ('a -> 'b) * 'a -> 'b = <fun>
+# do_something (write2,5);;
+- : unit = ()
+# do_something (write1,5);;
+This expression has type (?x:'a -> 'b -> unit) * int
+but is here used with type ('c -> 'd) * 'c
+
+(The really interesting thing is that if I define do_something as
+  # let do_something write x = write x;;
+  val do_something : ('a -> 'b) -> 'a -> 'b = <fun>
+_both_ applications are allowed, i.e. both expressions
+do_something write1 5 and do_something write2 5 can be typed. I suppose
+this case is handled by the type checker in a special way to simplify
+the usage of labels.)
+
+The solution: Change foo_fun such that there are the missing optional
+arguments. You could do it by writing
+
+let rec foo_fun node=
+  node#write ?prefixes:None ?default:None (`Out_channel stderr) `Enc_koi8r;;
+
+or, better, by
+
+let rec foo_fun (node : 'ext Pxp_document.node) =
+  node#write (`Out_channel stderr) `Enc_koi8r;;
+
+I hope this helps,
+
+Gerd
+-- 
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 45             
+64293 Darmstadt     EMail:   gerd@gerd-stolpmann.de
+Germany                     
+----------------------------------------------------------------------------
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

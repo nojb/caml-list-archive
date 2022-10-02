@@ -1,0 +1,206 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 7514FBB91
+	for <caml-list@yquem.inria.fr>; Sun, 16 Jan 2005 03:28:58 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j0G2Svx6029647
+	for <caml-list@yquem.inria.fr>; Sun, 16 Jan 2005 03:28:58 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA28348 for <caml-list@pauillac.inria.fr>; Sun, 16 Jan 2005 03:28:57 +0100 (MET)
+Received: from wproxy.gmail.com (wproxy.gmail.com [64.233.184.196])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j0G2SuJe029644
+	for <caml-list@inria.fr>; Sun, 16 Jan 2005 03:28:57 +0100
+Received: by wproxy.gmail.com with SMTP id 68so628145wri
+        for <caml-list@inria.fr>; Sat, 15 Jan 2005 18:28:56 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:references;
+        b=tZvTstOKn0WgQ9zLlyke7Regsp8MTaQWRwyeSUH4fOLUOCeh2XCxbACPIzAWsE9XDtlnV0SlyjLAjhdlKP2fyGOcSfUOjZONetE5Hf0fFF6tYWGB4eqz2r+FfuxawtAwEr/WfkgutRxGp4J0xTleubQbMM08C0KNrwiptLbjHlY=
+Received: by 10.54.51.17 with SMTP id y17mr251921wry;
+        Sat, 15 Jan 2005 18:28:56 -0800 (PST)
+Received: by 10.54.22.70 with HTTP; Sat, 15 Jan 2005 18:28:56 -0800 (PST)
+Message-ID: <d849ad2a0501151828533a957a@mail.gmail.com>
+Date: Sat, 15 Jan 2005 21:28:56 -0500
+From: John Prevost <j.prevost@gmail.com>
+Reply-To: John Prevost <j.prevost@gmail.com>
+To: =?ISO-8859-1?Q?Daniel_B=FCnzli?= <daniel.buenzli@epfl.ch>
+Subject: Re: [Caml-list] Bigarrays and temporar C pointers
+Cc: caml-list caml-list <caml-list@inria.fr>
+In-Reply-To: <D788BB9C-674E-11D9-9C0A-000393DBC266@epfl.ch>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <D788BB9C-674E-11D9-9C0A-000393DBC266@epfl.ch>
+X-Miltered: at nez-perce with ID 41E9D169.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 41E9D168.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 bigarrays:01 pointers:01 struct:01 bigarray:01 exn:01 exn:01 sig:01 val:01 api:01 val:01 struct:01 sig:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+Well, assuming you really need to work in this strange way, I have a
+couple of thoughts how to do it.  Note that it's going to be rather
+unsound to work with this in any case, but at least you will get
+exceptions instead of core dumps or worse.  The heart of the matter is
+that you should *not* allow the user to manipulate the data array
+directly.
+
+module Scary_map_thingy_1 =
+ (struct
+    exception Scary_map_unmapped
+    exception Scary_map_conflict
+    type ('a, 'b) t = ('a, 'b, c_layout) Bigarray.Array1.t ref
+    let dim a = match a with None -> raise Scary_map_unmapped
+                           | Some a' -> Array1.dim a'
+    (* replicate other functionality from Array1 below *)
+
+    let already_mapped = ref false
+    let map k f =
+      if !already_mapped then raise Scary_map_conflict else
+      let a = ref (Some (_map_ptr k)) in
+        try
+          already_mapped := true;
+          f a;
+          _unmap_ptr k;
+          a := None;
+          already_mapped := false
+        with exn -> begin
+          _unmap_ptr k;
+          a := None;
+          already_mapped := false;
+          raise exn
+        end
+  end : sig
+    type ('a, 'b) t
+    exception Scary_map_unmapped (* It escaped scope *)
+    exception Scary_map_conflict (* Tried to map inside map *)
+    val dim : ('a, 'b) t -> int
+    (* rest of replicated API *)
+    val map : ('a, 'b) kind -> (('a, 'b) t -> unit) -> unit
+  end)
+
+So the approach here is to wrap the value in such a way that it
+doesn't matter if it escape the scope.  This is not really any better
+than what you have now.  You still have to warn the user *not* to
+allow it to escape scope, since it won't work.  But the benefit is
+that it is guaranteed to fail if the user tries it.
+
+The second approach is to prevent the user from accessing the data directly:
+
+module Scary_map_thingy_2 =
+ (struct
+    exception Scary_map_conflict
+    let already_mapped = ref false
+    let map k f =
+      if !already_mapped then raise Scary_map_conflict else
+      try
+        let a = _map_ptr k in begin
+          already_mapped := true;
+          for i = 0 to Array1.dim a do
+            f a.{i}
+          done;
+          _unmap_ptr a;
+          already_mapped := false
+        end
+      with exn -> begin
+        _unmap_ptr k;
+        already_mapped := false;
+        raise exn
+      end
+  end : sig
+    exception Scary_map_conflict (* Tried to map inside map *)
+    val map : ('a, 'b) kind -> (int -> 'a -> unit) -> unit
+  end)
+
+In this second case, the approach is to prevent the caller from ever
+getting a handle on the actual data array.  Instead, the map is made,
+the caller is handed every (index, value) pair from the array in turn,
+and then the map is unmade.  This is much more restrictive, but also
+much safer.
+
+Finally, this kind of approach might be best if mapping and unmapping
+is not particularly expensive, and you trust the user to act better:
+
+module Scary_map_thing =
+ (struct
+    val data = (ref None : (some, specific, c_layout) Array1.t ref)
+    val hold_count = ref 0
+    let hold () =
+      begin
+        incr hold_count;
+        match !data with
+          | Some _ -> ()
+          | None -> data := _map_ptr some_specific_kind
+        end
+    let unhold () =
+      begin
+        decr holding;
+        match !holding with
+          | 0 -> _unmap_ptr some_specific_kind
+          | _ -> ()
+      end
+    let work f =
+      begin
+        hold ();
+        try
+          let result = f () in
+          unhold ();
+          result
+        with exn -> (unhold (); raise exn)
+      end
+    let dim () = work (fun () -> Array1.dim !data)
+    (* rest of modified Array1 calls here *)
+  end : sig
+    val work : (unit -> 'a) -> 'a
+    val dim : unit -> int
+    (* rest of modified Array1 calls *)
+  end)
+
+In this last approach, instead of wrapping that array up in a data
+structure, we wrap it up in a module.  The module either has a
+currently mapped copy of the data, or it doesn't.  If you call
+Scary_map_thing.dim (), you get the dimensions of the data, no matter
+what.  If the data was unmapped when you called dim, it is mapped, the
+value is gotten, then it is unmapped.  If you have a *lot* of work to
+do and wish to avoid mapping and unmapping constantly, you can wrap
+your function up in work like this:
+
+  let myfunc () =
+    Scary_map_thing.work (fun () ->
+      for i = 0 to Scary_map_thing.dim () do
+        Scary_map_thing.set i (Scary_map_thing.get i + 1)
+      done)
+
+Which will map it once, then use it a lot, then unmap it at the end. 
+This version also doesn't throw up if you call a function that tries
+to map while mapped--it just increments a counter.
+
+This third solution may be the best one over all--especially because
+there are a number of ways it can be improved.  For example:
+
+  * If you need to be able to map as multiple different kinds, then
+    you can provide more useful state in the code, so that you track
+    what kind it is currently mapped as, and adjust the mapping as
+    needed in order to work safely.  In this case, Scary_map_thing.dim
+    would have the type ('a, 'b) kind -> int, and likewise all of the
+    modified Array1 calls would take kinds instead of unit or actual
+    arrays.
+
+  * If you want to avoid mapping and unmapping in a more general way, and
+    use threads, you could start up a worker thread in the module that
+    keeps track of the last time the data was used, and unmaps it if
+    it hasn't been used in a certain amount of time.
+
+Finally, please note that none of the skeletal solutions I describe
+above are thread-safe.  If more than one thread can be working at a
+time (like with the unmap-on-timeout extension), you need to be more
+careful about modifying the internal state.  Note that I think
+solution 3 is the only one that can cleanly handle threads at all,
+since it's the only one that can handle multiple people wanting to
+work with the data all at once.
+
+Hope these ideas were useful,
+
+John.
+

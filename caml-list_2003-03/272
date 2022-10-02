@@ -1,0 +1,345 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA10996; Wed, 19 Mar 2003 07:49:36 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA10944 for <caml-list@pauillac.inria.fr>; Wed, 19 Mar 2003 07:49:35 +0100 (MET)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from giynz (vp191026.reshsg.uci.edu [128.195.191.26])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h2J6nYf22188
+	for <caml-list@inria.fr>; Wed, 19 Mar 2003 07:49:34 +0100 (MET)
+Received: from albro by giynz with local (Exim 3.36 #1 (Debian))
+	id 18vXNP-000612-00; Tue, 18 Mar 2003 22:48:39 -0800
+Subject: Re: [Caml-list] Loop times
+From: "Daniel M. Albro" <albro@humnet.ucla.edu>
+To: Oliver Bandel <oliver@first.in-berlin.de>
+Cc: caml-list@inria.fr
+In-Reply-To: <20030318085232.GB372@first.in-berlin.de>
+References: <20030318085232.GB372@first.in-berlin.de>
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+Message-Id: <1048056519.1744.38.camel@giynz>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 
+Date: 18 Mar 2003 22:48:39 -0800
+X-Spam: no; 0.00; ucla:99 caml-list:01 figuring:01 0.010:01 pre-built:01 0.040:01 incr:01 0.000:01 struct:01 0.280:99 oliver:01 bandel:01 helper:01 bug:01 faq:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+OK, as requested here's a summary email.  I think someone already
+answered you about the input loop (recap -- Input-Output routines
+are so slow that the speed of the loop around them fades into
+insignificance by comparison).
+
+	I was trying to illustrate a point that a "break" statement
+would be a nice addition to the language, but I got distracted a bit
+into figuring out what is the fastest way to break out of a loop as
+things stand now (as opposed to the best way, which might be different
+from the fastest...).  I did 8 different timing tests, which I will
+present from fastest to slowest:
+
+(1) Tail-recursive function, top-level defined (slightly
+    faster than (2), possibly because the variable ary is
+    more local)
+---------------------------------------------------
+let rec loop ary j =
+  if j = 10 then 
+    ()
+  else if ary.(j) = 5 then
+    ()
+  else
+    loop ary (j + 1)
+
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+    for i = 1 to 1_000_000_000 do
+      loop ary 0
+    done
+
+real    0m26.787s
+user    0m26.770s
+sys     0m0.010s
+---------------------------------------------
+
+(2) Tail-recursive auxilliary function
+---------------------------------------------
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+  let rec loop j =
+    if j = 10 then 
+      ()
+    else if ary.(j) = 5 then
+      ()
+    else
+      loop (j + 1)
+  in
+    for i = 1 to 1_000_000_000 do
+      loop 0
+    done
+
+real    0m26.823s
+user    0m26.780s
+sys     0m0.020s
+-----------------------------------------------------
+
+(3) For loop with exception pre-built:
+-----------------------------------------------------
+exception Break
+ 
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+  let exn = Break in
+    for i = 1 to 1_000_000_000 do
+      try
+        for j = 0 to 9 do
+          if ary.(j) = 5 then
+            raise exn
+        done
+      with Break -> ()
+    done 
+
+real    0m28.095s
+user    0m28.070s
+sys     0m0.030s
+------------------------------------------------------
+
+(4) Continuation-passing style
+------------------------------------------------------
+let _ =
+  let ary = [| 1; 2; 3; 4; 5; 6; 7; 8; 9; 10; 11; 12 |] in
+  let rec loop f j =
+    if j = 10 || ary.(j) = 5 then f ()
+    else loop f (j + 1)
+  in
+    let rec outer i =
+      if i <= 1_000_000_000 then
+        loop (fun _ -> outer (i + 1)) 0
+    in
+      outer 1
+
+real    0m29.999s
+user    0m29.890s
+sys     0m0.010s
+------------------------------------------------------------
+
+(5) For loop with exception
+------------------------------------------------------------
+exception Break
+
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+    for i = 1 to 1_000_000_000 do
+      try
+        for j = 0 to 9 do
+          if ary.(j) = 5 then
+            raise Break
+        done
+      with Break -> ()
+    done
+
+real    0m34.245s
+user    0m34.080s
+sys     0m0.010s
+-----------------------------------------------------
+
+(6) Tail recursive auxilliary function defined inside
+    the outer loop (sometimes, in more complicated cases,
+    this might be an option, I suppose, for example, if
+    the inner loop needs to be a separate function)
+-----------------------------------------------------
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+    for i = 1 to 1_000_000_000 do
+      let rec loop j =
+        if j = 10 then 
+          ()
+        else if ary.(j) = 5 then
+          ()
+        else
+          loop (j + 1)
+      in
+      loop 0
+    done
+
+real    0m35.188s
+user    0m35.140s
+sys     0m0.040s
+------------------------------------------------------
+
+(7) while loop with references
+------------------------------------------------------
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+  let j = ref 0 in
+    for i = 1 to 1_000_000_000 do
+      j := 0;
+      while !j < 10 do
+        if ary.(!j) = 5 then
+          j := 10
+        else
+          incr j
+      done
+    done
+
+real    0m39.458s
+user    0m39.440s
+sys     0m0.000s
+------------------------------------------------------
+
+(8) "Higher order functions".  This style is nifty because
+    it's like a break statement that can return a value.
+------------------------------------------------------
+let escape body =
+  let module Fail = struct exception T end in
+  let datum = ref None in
+  let throw v =
+    begin
+      datum := Some v;
+      raise Fail.T
+    end
+  in
+    try
+      body throw
+    with
+        Fail.T -> (match !datum with Some v -> v | None -> assert false)
+
+
+let _ =
+  let ary = [|1;2;3;4;5;6;7;8;9;10;11;12|] in
+    for i = 1 to 1_000_000_000 do
+      escape (fun exit ->
+                for j = 0 to 9 do
+                  if ary.(j) = 5 then exit()
+                done)
+    done
+
+
+real    1m49.178s
+user    1m48.900s
+sys     0m0.280s
+------------------------------------------------------
+
+The main surprise to me was that number (7) was so slow.  Anyway,
+as matters currently stand it looks like tail recursive loops are
+the way to go if you have to have a fast inner loop that can break
+out early.  HOWEVER, I would like to argue that for cases where
+you really want to optimize a loop like this (and where you can't
+radically change the algorithm or data structures, of course), it
+would be really great if the language added a genuine break
+statement (plus some sort of step value for for loops).  As usual,
+my argument is in terms of a timing test.  If you have an inner
+loop that *doesn't* have to break out in the middle, the for loop
+is much faster than a tail recursive loop.  Here are the
+tests:
+
+(1) for loop
+------------------------------------
+let _ =
+  let k = ref 0 in
+    for i = 1 to 1_000_000_000 do
+      k := 0;
+      for j = 1 to 10 do
+        incr k
+      done
+    done
+
+real    0m22.867s
+user    0m22.850s
+sys     0m0.010s
+------------------------------------
+
+(2) tail recursive loop
+------------------------------------
+let _ =
+  let k = ref 0 in
+  let rec loop j =
+    incr k;
+    if j = 10 then () else loop (j + 1)
+  in
+    for i = 1 to 1_000_000_000 do
+      k := 0;
+      loop 1
+    done
+
+real    0m37.105s
+user    0m36.870s
+sys     0m0.200s
+------------------------------------
+
+On Tue, 2003-03-18 at 00:52, Oliver Bandel wrote:
+> On Mon, Mar 17, 2003 at 02:01:21PM -0800, Daniel M. Albro wrote:
+> > 
+> > 	Sorry, I just meant that the version that puts the
+> > exception into a variable outside of the loop is a win over
+> > the one that creates the exception inside the loop.
+> 
+> What does this mean for such a version of reading a file
+> linewise into a list of strings?
+> 
+> 
+> let input_lines chan =
+>   let rec input_lines_helper res =
+>     let sl = 
+>        try
+>          Some (input_line chan) 
+>        with
+>          End_of_file -> None in
+>     match sl with
+>        None -> List.rev res
+>      | Some l -> input_lines_helper (l :: res) in
+>   input_lines_helper []
+> 
+> There is a try-with inside the reacursive function.
+> But is there a way to avoid it?
+> 
+> 
+> Well... I may re-read all the mails and put them together to
+> one mail or may produce a little paper on that topic?
+> 
+> I have to sort the many new things in FPL-programming
+> for better understanding....
+> 
+> Or maybe you are interested in collecting all results together
+> into one conclusion-mail?
+> (Would be nice. :))
+> 
+> 
+> > The
+> > fastest loop routine overall was the tail recursive loop,
+> > i.e. the functional/recursive.
+> 
+> BTW: This is new to me. Even OCaml-people told me, that
+> the imperative version of loops will be faster than
+> recursive/functional.
+> 
+> That's good news for FP-programming, but that's also 
+> bad news for people, who want to optimize their
+> functional programs in speed.
+> 
+> 
+> > However, this latest
+> > imperative version has timing that's very close -- the
+> > imperative version that pre-builds the exception takes
+> > just over 28 seconds, and the tail-recursive version
+> > takes just under 27 seconds.
+> 
+> OK.
+> 
+> Can you give me a short advice on the recursive
+> Input-function, mantioned above?
+> 
+> Thanks.
+> 
+> 
+> Ciao,
+>    Oliver
+> 
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+-- 
+Daniel M. Albro <albro@humnet.ucla.edu>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

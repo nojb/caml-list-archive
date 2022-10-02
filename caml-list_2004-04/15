@@ -1,0 +1,124 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA07328; Thu, 1 Apr 2004 15:32:24 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA08150 for <caml-list@pauillac.inria.fr>; Thu, 1 Apr 2004 15:32:23 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i31DX7jq032391;
+	Thu, 1 Apr 2004 15:33:08 +0200
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA06931; Thu, 1 Apr 2004 15:32:21 +0200 (MET DST)
+Date: Thu, 1 Apr 2004 15:32:21 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Christophe TROESTLER <debian00@tiscali.be>
+Cc: "O'Caml Mailing List" <caml-list@inria.fr>
+Subject: Re: [Caml-list] What's wrong with win32?
+Message-ID: <20040401153221.A6842@pauillac.inria.fr>
+References: <20040330.124942.118545865.debian00@tiscali.be> <20040330.190949.63823938.debian00@tiscali.be>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20040330.190949.63823938.debian00@tiscali.be>; from debian00@tiscali.be on Tue, Mar 30, 2004 at 07:09:49PM +0200
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 descriptor:01 3.06.:01 stupid:01 bug:01 3.07:01 otherlibs:01 otherlibs:01 2004:99 alloc:01 sizeof:01 struct:01 filedescr:01 val:01 val:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 15
+
+> >   let (ic, oc) = Unix.open_connection (Unix.ADDR_INET(addr, port)) in
+> >
+> > However, when I try to run it under windows 98 [...]
+> >   Fatal error: exception Sys_error("Bad file descriptor")
+> 
+> Ok, the trouble comes from the fact that Unix.open_connection uses
+> in_channel_of_descr of which the manual says
+> 
+>   in_channel_of_descr  does not work on sockets under Windows 95, 98, ME;
+>                        works fine under NT and 2000
+> 
+> Well, I tried the program under Win 2000 Professional and got the same
+> error...
+
+As Loïc Correnson said, Unix.open_connection is broken under Windows
+(all versions) in OCaml 3.07, while it works under NT/2000/XP in
+earlier versions of 3.06.  This is a stupid coding error while fixing
+another bug :-(  The patch against 3.07 sources is simply:
+
+Index: csl/otherlibs/win32unix/unixsupport.c
+diff -c csl/otherlibs/win32unix/unixsupport.c:1.18 csl/otherlibs/win32unix/unixsupport.c:1.19
+*** csl/otherlibs/win32unix/unixsupport.c:1.18  Mon Jan  6 15:52:57 2003
+--- csl/otherlibs/win32unix/unixsupport.c       Thu Apr  1 15:12:36 2004
+***************
+*** 61,66 ****
+--- 61,67 ----
+    value res = alloc_custom(&win_handle_ops, sizeof(struct filedescr), 0, 1);
+    Socket_val(res) = s;
+    Descr_kind_val(res) = KIND_SOCKET;
++   CRT_fd_val(res) = NO_CRT_FD;
+    return res;
+  }
+
+> Anyway, it would be nice that (1) open_connection be
+> mentionend in the manual as not working under win 9* 
+
+Will do.
+
+> or, even much better, to make that (2) Unix.open_connection actually
+> works under win32!  IMHO it is quite unfortunate that
+> in_channel_of_descr does not work under windows for sockets since it
+> basically forces the programmer to reimplement input/output
+> functions for these.
+
+It does work (modulo the 3.07 bug) for the NT/2000/XP lineage of Windows.
+Making it work under Windows 9x as well would require significant work
+(see below), and I don't think it is worth it given that 9x is at
+end-of-line.
+
+> Is the current situation made for efficiency reasons (it is costly for
+> in/out channels to carry their type with them) or is there a deeper
+> problem with Win$ platforms?
+
+It's not a question of efficiency, but rather of not reimplementing a
+chunk of the C standard library.  More precisely:
+
+- The buffered I/O channels of OCaml are implemented on top of the
+Unix "file descriptor" abstraction and the Unix system calls open(),
+read(), write(), lseek(), close().
+
+- Under Windows, the C library provides an emulation of these Unix
+idioms that encapsulate Win32 file handles as a Unix-style file
+descriptor.  This emulation handles CRLF <-> LF conversion for files
+opened in text modes, so it's not 100% trivial.
+
+- In Windows NT/2000/XP, just like under Unix, socket handles (type
+SOCKET) are compatible with file handles (type HANDLE), and basic
+system calls that operate on the latter (ReadFile, etc) also work on
+sockets.  Hence, wrapping a socket as a Unix-style file descriptor
+(through the C lib API), then as a buffered I/O channel just works fine.
+
+- In Windows 9x, socket handles are *not* compatible with file handles,
+and ReadFile on a socket handle fails.  Therefore, the wrapping of
+socket handles described above doesn't work.
+
+- The Win32 implementation of the Unix library already maintains the
+information "socket or file" on its file descriptors (type
+Unix.filedescr), and arranges so that e.g. Unix.read calls ReadFile()
+or recv() as appropriate.  However, to exploit this information at the
+level of buffered I/O channels obtained with in_channel_of_descr
+would require to throw away the C library emulation of read() et al,
+and implement our own.  That's not completely trivial due to text mode
+handling, and is in my opinion too much work for the purpose of
+supporting Windows 9x, which is an horrible piece of software that
+should die as quickly as possible.
+
+Hope this answers your question.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

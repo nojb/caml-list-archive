@@ -1,0 +1,127 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA08662 for caml-redistribution; Tue, 6 Jan 1998 19:56:21 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA19936 for <caml-list@pauillac.inria.fr>; Tue, 6 Jan 1998 01:03:26 +0100 (MET)
+Received: from crotus.sc.intel.com (root@crotus.sc.intel.com [143.183.152.26])
+	by nez-perce.inria.fr (8.8.7/8.8.5) with ESMTP id BAA15028;
+	Tue, 6 Jan 1998 01:03:23 +0100 (MET)
+Received: from mipos2.intel.com (mipos2-seg48.intel.com [143.183.48.42])
+	by crotus.sc.intel.com (8.8.6/8.8.5) with ESMTP id QAA04917;
+	Mon, 5 Jan 1998 16:03:06 -0800 (PST)
+Received: from zws197.sc.intel.com (zws197.sc.intel.com [143.183.45.141])
+	by mipos2.intel.com (8.8.5/8.8.5) with ESMTP id QAA26217;
+	Mon, 5 Jan 1998 16:03:05 -0800 (PST)
+Received: (from ctchou@localhost)
+	by zws197.sc.intel.com (8.8.5/8.8.5) id QAA25427;
+	Mon, 5 Jan 1998 16:03:04 -0800 (PST)
+Date: Mon, 5 Jan 1998 16:03:04 -0800 (PST)
+Message-Id: <199801060003.QAA25427@zws197.sc.intel.com>
+From: Ching-Tsun Chou <ctchou@mipos2.intel.com>
+To: caml-list@inria.fr
+CC: Damien.Doligez@inria.fr
+Subject: Re: What exactly can be GC'ed?
+Sender: weis
+
+
+Damien Doligez <Damien.Doligez@inria.fr> wrote:
+
+   ># let x = String.make 3 'a' ;;
+   >val x : string = "aaa"
+   ># let w = Weak.create 1 ;;
+   >val w : '_a Weak.t = <abstr>
+   ># Weak.set w 0 (Some (x)) ;;
+   >- : unit = ()
+   ># Weak.get w 0 ;;
+   >- : string option = Some "aaa"
+   ># let x = "bbb" ;;
+   >val x : string = "bbb"
+   ># Gc.full_major () ;;
+   >- : unit = ()
+   ># Weak.get w 0 ;;
+   >- : string option = Some "aaa"
+
+   >It seems to me that since x has been re-bound to "bbb", its old value
+   >"aaa" is no longer reachable and hence can be GC'ed.  But clearly I
+   >was wrong.  Where did I go wrong?  What exactly can be GC'ed?
+
+   Caml is a language with static binding.  The new definition of x does
+   not replace the old one in any way, except in the table that maps
+   names to slots in the table of globals.  When you define the second x,
+   the first one only loses its name.  It still exists as a global
+   variable.
+
+But an inaccessible global variable!  Indeed, since the new definition
+replaces the old one "in the table that maps names to slots in the
+table of globals", why is it difficult to figure out that the value
+object pointed to by the old definition is no longer reachable?
+
+   Assume that you insert "let f () = x;;" anywhere between the two
+   bindings of x.  Then the old value is still reachable through f.
+
+But not through x.  In fact, suppose that the definition of f is:
+
+        let f () = String.sub x 0 1 ;;
+
+The old value of x, "aaa", should still be garbage-collectible after
+the re-definition of x.
+
+It seems to me that the fact that O'Caml is a language with static
+binding (and eager evaluation), if anything, should enable more
+aggressive GC, not less.  This is important for the following reason.
+O'Caml is ideally suitable as a "meta language" (indeed, what does ML
+stand for?) for manipulating objects which themselves are not
+necessarily implemented in O'Caml.  These objects can be very large.
+Hence it is crucial that O'Caml does GC aggressively so that pointers
+from the O'Caml heap to those objects can be removed whenever possible
+to enable GC on those objects.  Many scientific applications of O'Caml
+can benefit from a more aggressive GC.
+
+There is another point that I'd like to make.  In O'Caml, GC *already*
+works as one (well, I anyway) would expect in most cases.  Consider
+the following two O'Caml sessions:
+
+----------------------------------------------------------------------------
+# let w = Weak.create 1 ;;
+val w : '_a Weak.t = <abstr>
+# Weak.set w 0 (Some (String.make 3 'a')) ;;
+- : unit = ()
+# Weak.get w 0 ;;
+- : string option = Some "aaa"
+# Gc.full_major () ;;
+- : unit = ()
+# Weak.get w 0 ;;
+- : string option = None
+----------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+# let dummy () =
+    let x = String.make 3 'a' in
+    let w = Weak.create 1 in
+    let _ = Weak.set w 0 (Some (x)) in
+    w ;;
+val dummy : unit -> string Weak.t = <fun>
+# let w = dummy () ;;
+val w : string Weak.t = <abstr>
+# Weak.get w 0 ;;
+- : string option = Some "aaa"
+# Gc.full_major () ;;
+- : unit = ()
+# Weak.get w 0 ;;
+- : string option = None
+------------------------------------------------------------------------
+
+I really don't see why it would be hard to "fix" it for top-level
+variables.
+
+Thanks!
+- Ching Tsun
+
+========================================================================
+  Ching-Tsun Chou                       E-mail: ctchou@mipos2.intel.com 
+  Intel Corporation, RN6-16             Tel: (408) 765-5468             
+  2200 Mission College Blvd.            Fax: (408) 653-7933             
+  Santa Clara, CA 95052, U.S.A.         Sec: (408) 653-8849             
+========================================================================
+
+
+
+
+

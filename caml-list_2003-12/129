@@ -1,0 +1,94 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA17660; Thu, 11 Dec 2003 16:29:27 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA17649 for <caml-list@pauillac.inria.fr>; Thu, 11 Dec 2003 16:29:26 +0100 (MET)
+Received: from lri.lri.fr (lri.lri.fr [129.175.15.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBBFTP109774
+	for <caml-list@inria.fr>; Thu, 11 Dec 2003 16:29:25 +0100 (MET)
+Received: from lri.lri.fr (localhost [127.0.0.1])
+          by lri.lri.fr (8.12.10/jtpda-5.4) with ESMTP id hBBFEkUV010051
+          ; Thu, 11 Dec 2003 16:14:46 +0100 (MET)
+Received: (from filliatr@localhost)
+	by lri.lri.fr (8.12.10/8.12.8/Submit) id hBBFEjTg010048;
+	Thu, 11 Dec 2003 16:14:45 +0100 (MET)
+From: Jean-Christophe Filliatre <filliatr@lri.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16344.35301.538267.517515@gargle.gargle.HOWL>
+Date: Thu, 11 Dec 2003 16:14:45 +0100
+To: Richard Jones <rich@annexia.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Garbage collection and a reference counting library 
+In-Reply-To: <20031211143640.GA21082@redhat.com>
+References: <20031211143640.GA21082@redhat.com>
+X-Mailer: VM 6.93 under Emacs 20.7.1
+Reply-To: Jean-Christophe.Filliatre@lri.fr (Jean-Christophe Filliatre)
+X-MailScanner: Found to be clean
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; filliatre:01 filliatr:01 lri:01 caml-list:01 subroutine:01 val:01 alloc:01 camllocal:01 camlreturn:01 finalization:01 val:01 struct:01 hash:01 serialize:01 deserialize:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Richard Jones writes:
+ > 
+ > I wrote an interface to allow OCaml to call Perl code and libraries.
+ > (...)
+ > But I'm not really sure how to do this.  At present the code uses the
+ > following subroutine to wrap up Perl SVs (the void *ptr in this case)
+ > in OCaml objects with an ABSTRACT_TAG.  (Note also the XXX comment,
+ > since I'm not actually sure if this code itself is correct).
+ > 
+ > static value
+ > Val_voidptr (void *ptr)
+ > {
+ >   value rv = alloc (1, Abstract_tag); /* XXX Is this correct? */
+ >   Field(rv, 0) = (value) ptr;
+ >   return rv;
+ > }
+
+A first remark: to be GC-friendly you have to use CAMLlocal1 to
+declare rv and CAMLreturn instead of return.
+
+Then, to be able to add a finalization function, you should use custom
+blocks and not the Abstract_tag. The code then looks like
+
+======================================================================
+#define Perl_val(x) (*((void**)(Data_custom_val(x))))
+
+void ml_perl_finalize(value v) {
+  perlFree(Perl_val(v));
+}
+
+static struct custom_operations perl_custom_operations = {
+  "...",
+  ml_perl_finalize,
+  custom_compare_default,
+  custom_hash_default,
+  custom_serialize_default,
+  custom_deserialize_default
+};
+
+#define ALLOC_PERL(v) \
+  v = alloc_custom(&perl_custom_operations,sizeof(void*),0,1)
+
+static value
+Val_voidptr (void *ptr)
+{
+  CAMLlocal1(rv);
+  ALLOC_PERL(rv);
+  Perl_val(rv) = ptr;
+  CAMLreturn (rv);
+}
+
+======================================================================
+
+Hope this helps,
+-- 
+Jean-Christophe 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

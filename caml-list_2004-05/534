@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA13765; Fri, 28 May 2004 22:54:30 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA12964 for <caml-list@pauillac.inria.fr>; Fri, 28 May 2004 22:54:28 +0200 (MET DST)
+Received: from moby.atcorp.com (moby.atcorp.com [204.72.172.2])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i4SKsQEV019094
+	for <caml-list@inria.fr>; Fri, 28 May 2004 22:54:27 +0200
+Received: from [192.168.172.137] (conger.atcorp.com [204.72.172.102])
+	by moby.atcorp.com (8.11.6/8.11.2) with ESMTP id i4SKwOP17692;
+	Fri, 28 May 2004 15:58:24 -0500
+In-Reply-To: <1085773482.3036.81.camel@pelican.wigram>
+References: <003701c444d3$7163a340$1b447182@cas.mcmaster.ca> <1085773482.3036.81.camel@pelican.wigram>
+Mime-Version: 1.0 (Apple Message framework v618)
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+Message-Id: <3037847D-B0E9-11D8-AF42-000393914EAA@atcorp.com>
+Content-Transfer-Encoding: 7bit
+Cc: carette@mcmaster.ca, "'Richard Jones'" <rich@annexia.org>,
+        caml-list <caml-list@inria.fr>
+From: Eric Dahlman <edahlman@atcorp.com>
+Subject: Re: [Caml-list] Out_of_memory exception in output_value
+Date: Fri, 28 May 2004 15:54:19 -0500
+To: skaller@users.sourceforge.net
+X-Mailer: Apple Mail (2.618)
+X-Miltered: at nez-perce with ID 40B7A702.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 2004:99 jacques:01 allocates:01 marshalled:01 doubles:01 marshaled:01 marshaled:01 buffer:01 ocaml's:01 marshaling:01 quadratic:01 abstraction:01 buffer:01 amortized:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+On May 28, 2004, at 2:44 PM, skaller wrote:
+
+> On Sat, 2004-05-29 at 02:47, Jacques Carette wrote:
+>>> It turns out that during output_value, the OCaml code allocates a
+>>> block of memory to contain the marshalled representation of the data.
+>>> Each time it runs out of room, it doubles the size of that block 
+>>> using
+>>> realloc().
+>>
+>> Wouldn't it be more system-friendly to try successively factors *2, 
+>> *1.5,
+>> *1.1, and *1.05 before actually failing?
+
+I am not sure that it would have that much benefit for all of the 
+complexity it would introduce.  I expect the set of interesting things 
+with a marshaled representation which is too large for the present 
+approach but still small enough to work for a smaller factors is really 
+small.  Keep in mind that when the size is grown the assumption is that 
+you will have to copy the lower half of the already marshaled data into 
+the new object since it is almost guaranteed that it will not be 
+possible to grow the object in place as something else will almost 
+surely have been allocated after it.  A better approach would be to 
+have an output_really_big_object which allocated a huge buffer in a 
+single go or an approach which streamed the marshaled data so as not to 
+have to keep it in memory.  (I don't know if that approach is possible 
+using ocaml's marshaling, i didn't look.) At any rate this still 
+addresses what I believe to be a small class of useful situations, on 
+the whole I suspect that the data will be small enough to work with the 
+present approach or so big that the fractional approach will also fail.
+
+> I have a published book chapter part of which deals with
+> this issue in some detail, including some performance
+> measurements.
+>
+> The general solution is much cleaner -- to use
+> a user supplied allocation function something like:
+>
+> new_size = f old_size requested_size
+>
+> Doubling the size, or indeed even using a pure multiplier,
+> is only one possible option: simply adding a fixed amout
+> is another option, and an arbitrary function handles
+> both cases and many more. So a general solution is to make
+> the operation polymorphic by making the calculator function
+> an argument (in practice with a sensible default).
+
+Since you will have to copy the data on a realloc doubling has the nice 
+effect of giving us a constant bound on the costs of reallocation in a 
+calculation.  This does not hold for approaches like increasing in 
+fixed increments which will convert an algorithm which in linear in the 
+size of the data into one which is quadratic.  I think that doubling 
+might well be the best "guestimate" for a general library to make.
+
+> My experiments were with variable length arrays used
+> to hold big integers, so some operations produced
+> small increases (like addition) whereas other
+> produced increases much faster (like multiplication).
+
+In this domain specific case you have a wealth of information and you 
+can calculate a very tight bound on the size  of the resulting array so 
+you should never have to grow the result as you go.  Just allocate it 
+correctly in the beginning or am I missing something?
+
+> A quick and easy fix would be to use a global variable
+> containing the function which the client can reset.
+> Yeah, I hate global state but here the actual function
+> chosen has no semantic impact, it only affects performance
+> (unless you run out of memory .. of course). So this
+> time a global might be OK :)
+
+I don't know about this one, it really smacks of premature optimization 
+and abstraction inversion.  The present approach to buffer growing has 
+a constant amortized cost.  If one was in the position of being able to 
+significantly improve on that for a given problem domain by carefully 
+tweaking such an allocation function then I would almost guarantee that 
+it would be better to create a custom solution for that domain.  This 
+would allow explicitly using that information to create a better 
+algorithm rather than just tweaking a general mechanism.
+
+Just my two cents,
+-Eric
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

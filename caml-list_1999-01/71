@@ -1,0 +1,129 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA01790 for caml-redistribution; Thu, 21 Jan 1999 19:28:30 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA07985 for <caml-list@pauillac.inria.fr>; Thu, 21 Jan 1999 19:24:12 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id TAA01424;
+	Thu, 21 Jan 1999 19:24:10 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA14663; Thu, 21 Jan 1999 19:24:10 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199901211824.TAA14663@pauillac.inria.fr>
+Subject: Re: monomorphism is ... ?
+To: helsen@informatik.uni-tuebingen.de (Simon Helsen)
+Date: Thu, 21 Jan 1999 19:24:10 +0100 (MET)
+Cc: caml-list@inria.fr
+In-Reply-To: <Pine.A32.3.96.990121164248.57908C-100000@modas> from "Simon Helsen" at Jan 21, 99 04:45:53 pm
+X-Mailer: ELM [version 2.4 PL24 ME8]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> >Am I right in thinking that the following holds ?
+> >
+> >polymorphic  = has type 'a  = for all
+> >monomorphic  = has type '_a = exists
+> 
+> not in the type-theoretic sense of the word. Exists normally refers to
+> data abstraction, whereas the '_a here is a "hack" of the ocaml
+> interactive environment. As soon as it gets a type, you cannot
+> "re"-instantiate it.  SML doesn't have the '_a at all and returns a dummy
+> type-variable. I think (but I am not sure about this) that the batch
+> compiler doesn't deal with '_a at all. 
+> 
+> cheers,
+> 
+> 	Simon
+
+You are right, a '_a type variable cannot be reinstanciated since it
+is a type unknown. However, the unknown type variable may be
+incrementally refined, as in the following code:
+
+# let f = List.map (fun x -> x);;
+val f : '_a list -> '_a list = <fun>
+# f [[]];;
+- : '_a list list = [[]]
+# f;;
+- : '_a list list -> '_a list list = <fun>
+# f [[[]]];;
+- : '_a list list list = [[[]]]
+# f;;
+- : '_a list list list -> '_a list list list = <fun>
+
+Furthermore, the batch compiler's typechecker being the same as the
+toplevel's typechecker, it also handles type unknowns as examplified
+by the following module ``Unknowns'':
+
+(* File unknowns.mli (empty interface) *)
+
+(* File unknowns.ml *)
+let f = List.map (fun x -> x);;
+let g l = f [l];;
+let h = f;;
+let i l = f [[l]];;
+let j = f;;
+
+$ocamlc -i unknowns.ml 
+val f : '_a list list -> '_a list list
+val g : '_a list -> '_a list list
+val h : '_a list list -> '_a list list
+val i : '_a -> '_a list list
+val j : '_a list list -> '_a list list
+
+You may think that the batch compiler does not handle unknowns since
+it very often reports an error in case of unknowns: there is a
+restriction on unknowns in modules. It states that no unknown can
+escape the scope of the current module (since it is impossible to keep
+track of further instanciations). So the compiler reports on error if
+you try to define a global with unknowns.
+
+For instance if we export all the identifiers of the module Unknowns
+the compilation fails:
+
+$rm unknowns.mli
+$ocamlc unknowns.ml 
+File "unknowns.ml", line 1, characters 8-29:
+The type of this expression, '_a list list -> '_a list list,
+contains type variables that cannot be generalized
+
+This behavior of the Caml typechecker is along the lines of the value
+polymorphism restriction. When typing
+
+let ident = expr
+
+the type of expr is not generalized if expr is an application (no for
+all added for the type variables appearing in expr). In this case, the
+unknown type variables remain in the type of «ident». That's exactly
+what you see when using the toplevel system.
+
+We could have choosen to systematically report an error when some type
+unknown escapes in the type of a global ident. We chose instead to let
+unknown appear in types, since it is simpler and it is useful in some
+cases. For instance, you can now define a mutable value with an
+unknown type variable, and let the system infer the appropriate
+instanciation when updating the mutable value.
+
+Instead of 
+let x = (ref [] : int list ref);;
+
+You simply define a reference to the empty list and go on:
+
+let x = ref [];;
+val x : '_a list ref = {contents=[]}
+
+x := 1 :: !x;;
+- : unit = ()
+
+x;;
+- : int list ref = {contents=[1]}
+
+This is also usable in modules. It is provably safe, and in my opinion
+it is convenient.
+
+Best regards,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

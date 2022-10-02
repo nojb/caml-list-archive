@@ -1,0 +1,83 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA21218; Thu, 9 Aug 2001 11:33:16 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA21211 for <caml-list@pauillac.inria.fr>; Thu, 9 Aug 2001 11:33:15 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f799XCH19610;
+	Thu, 9 Aug 2001 11:33:12 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA21168; Thu, 9 Aug 2001 11:33:14 +0200 (MET DST)
+Date: Thu, 9 Aug 2001 11:33:14 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: David Mentre <David.Mentre@inria.fr>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Thread and sockets
+Message-ID: <20010809113314.B19406@pauillac.inria.fr>
+References: <qtl8zgtbr80.fsf@pochi.inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <qtl8zgtbr80.fsf@pochi.inria.fr>; from David.Mentre@inria.fr on Thu, Aug 09, 2001 at 09:57:35AM +0200
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Hello,
+> 
+> I'm building a Caml client/server program using posix threads and
+> sockets. Right now, I have 3 threads:
+> 
+>  1. normal thread for user computation
+> 
+>  2. a thread doing a blocking call to Unix.accept to setup new
+>     connections
+> 
+>  3. a thread doing a blocking call to Thread.select (with infinite
+>     timeout) to get messages on opened connections
+> 
+> I've observed that my design is bad and I have several race
+> conditions. Worse problems are when I open and close connections. For
+> example, if thread (3) is blocked and a new connection is opened by
+> thread (2), thread (3) won't read new messages. I have similar problems
+> when sockets are closed. How to do it properly?
+
+You could merge threads 2 and 3, by including the accepting socket in
+the "read" set of file descriptors given to select.  The accepting
+socket will generate a "ready for read" event when a connection
+attempt is pending; you can then do "accept" on the socket to pick the
+new connection.
+
+> I think I should open a dedicated thread for each new socket [1].
+> However I don't know how to stop a thread waiting inside a blocking
+> call. What happens if the remote part close the socket where a thread is
+> doing a select (or a read). Does this thread get an exception?
+
+It gets an "end of file" condition.  That is, "select" says that the
+socket is ready for reading, and "read" will return whatever data is
+left on this socket, then 0.  
+
+Generally speaking, there are three possible architectures for
+threaded servers:
+
+1- One thread per connection: the main thread calls "accept" and
+creates a new thread for each connection.  Easy to implement, but can
+lead to far too many threads.
+
+2- User-level multiplexing: one thread calls "select" to handle all
+connections (e.g. threads 2 + 3 in your example, modified as described
+above).  Very economical in system resources, but requires
+event-driven programming.
+
+3- Thread pool: one thread accepts connection requests and queues them
+somewhere.  A fixed number of worker threads pick connections from
+this queue and process them.  Excellent model when each connection can
+be handled quickly (e.g. a Web server), but if connection processing
+takes an unbounded amount of time, this can lead to starvation of the
+clients.  The number of worker threads can be adjusted dynamically
+based on the load (number of pending connections), but still an upper
+bound on the number of worker threads is needed.
+
+Hope this helps,
+
+- Xavier Leroy
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

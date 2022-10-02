@@ -1,0 +1,78 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 38DC5BB81
+	for <caml-list@yquem.inria.fr>; Mon, 20 Mar 2006 10:29:52 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k2K9TpkT013263
+	for <caml-list@yquem.inria.fr>; Mon, 20 Mar 2006 10:29:51 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA03581 for <caml-list@pauillac.inria.fr>; Mon, 20 Mar 2006 10:29:51 +0100 (MET)
+Received: from [128.93.11.95] (estephe.inria.fr [128.93.11.95])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k2K9TnJX013256
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Mon, 20 Mar 2006 10:29:50 +0100
+Message-ID: <441E760D.6010801@inria.fr>
+Date: Mon, 20 Mar 2006 10:29:49 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050322)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Markus Mottl <markus.mottl@gmail.com>
+Cc: ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Severe loss of performance due to new signal handling
+References: <f8560b80603171039o2a49a4du561a5726e34016bf@mail.gmail.com>
+In-Reply-To: <f8560b80603171039o2a49a4du561a5726e34016bf@mail.gmail.com>
+X-Enigmail-Version: 0.90.0.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 441E760F.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 441E760E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 3.08.4:01 threads:01 ocaml:01 well-meaning:01 posts:01 threads:01 ocaml's:01 threading:01 model:01 stdout:01 cvs:01 dog:98 acted:98 caml-list:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+ > It seems that changes to signal handling between OCaml 3.08.4 and 3.09.1
+ > can lead to a very significant loss of performance (up to several orders
+ > of magnitude!) in code that uses threads and performs I/O (tested on Linux).
+ > [...]
+ > Maybe some assembler guru can repeat this result and explain to us
+ > what's going on...
+
+Short explanation: atomic instructions are dog slow.
+
+Longer explanation:
+
+OCaml 3.09 fixed a number of long-standing bugs in signal handling
+that could cause signals to be "lost" (not acted upon).  The fixes,
+located mostly in the code that polls for pending signals
+(caml_process_pending_signals), rely on an atomic "read-and-clear"
+operation, implemented using atomic processor instructions on x86,
+x86-64 and PPC.  This makes signal handling correct (no signal can be
+lost) but I didn't realize that it has such an impact on performance,
+even on a uniprocessor machine.  Thanks for pointing this out.
+
+(To prevent a number of well-meaning but irrelevant posts, keep in
+mind that we're using atomic instructions in a single-threaded
+program, to get atomicity w.r.t. signals, not w.r.t. concurrent threads.
+We don't need the latter kind of atomicity given OCaml's threading model.)
+
+Now, you may wonder why the problem appears mainly with threaded
+programs.  The reason is that programs linked with the Thread library,
+even if they do not create threads, check for signals much more
+often, because they enter and leave blocking sections more often.  In
+your example, each call to "print_char" needs to lock and unlock the
+stdout channel, causing two signal polls each time.
+
+So, it's time to go back to the drawing board.  Fortunately, it
+appears that reliable polling of signals is possible without atomic
+processor instructions.  Expect a fix in 3.09.2 at the latest, and
+probably within a couple of weeks in the CVS.
+
+Regards,
+
+- Xavier Leroy
+

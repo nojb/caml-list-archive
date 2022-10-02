@@ -1,0 +1,113 @@
+Return-Path: <gares@fettunta.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 6B2EC7F6CC
+	for <caml-list@sympa.inria.fr>; Wed,  4 Feb 2015 17:47:04 +0100 (CET)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  enrico.tassi@inria.fr) identity=pra; client-ip=94.23.69.127;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="gares@fettunta.org";
+  x-sender="enrico.tassi@inria.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  gares@fettunta.org) identity=mailfrom;
+  client-ip=94.23.69.127;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="gares@fettunta.org";
+  x-sender="gares@fettunta.org"; x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@fettunta.org) identity=helo;
+  client-ip=94.23.69.127;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="gares@fettunta.org";
+  x-sender="postmaster@fettunta.org";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: A0A1AwAlTNJUdH9FF15ag1hOwkWHEkMBAQEBAREBDBUIQoQMAQEBAwE6RAsLGAklDwUoDQGISwgE11iKDoUSdYMAgRMFkmCFWAGBFzaFE4YJhXqBZwELgh6BcCSBHAEBAQ
+X-IPAS-Result: A0A1AwAlTNJUdH9FF15ag1hOwkWHEkMBAQEBAREBDBUIQoQMAQEBAwE6RAsLGAklDwUoDQGISwgE11iKDoUSdYMAgRMFkmCFWAGBFzaFE4YJhXqBZwELgh6BcCSBHAEBAQ
+X-IronPort-AV: E=Sophos;i="5.09,518,1418079600"; 
+   d="scan'208";a="98862239"
+Received: from fettunta.org ([94.23.69.127])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 04 Feb 2015 17:47:03 +0100
+Received: from birba.invalid (birba.inria.fr [138.96.192.36])
+	by fettunta.org (Postfix) with ESMTPSA id BC0D2D45A
+	for <caml-list@inria.fr>; Wed,  4 Feb 2015 17:47:03 +0100 (CET)
+Received: from gares by birba.invalid with local (Exim 4.84)
+	(envelope-from <gares@birba.invalid>)
+	id 1YJ36V-00044X-I2
+	for caml-list@inria.fr; Wed, 04 Feb 2015 17:47:03 +0100
+Date: Wed, 4 Feb 2015 17:47:03 +0100
+From: Enrico Tassi <enrico.tassi@inria.fr>
+To: caml-list@inria.fr
+Message-ID: <20150204164702.GA14942@birba.invalid>
+References: <20150202103256.GA30053@birba.invalid>
+ <CAPFanBFt_=URJLAj3vSo9bpKrgJt6=+fLdXA8HSik3ga8SpKdA@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <CAPFanBFt_=URJLAj3vSo9bpKrgJt6=+fLdXA8HSik3ga8SpKdA@mail.gmail.com>
+User-Agent: Mutt/1.5.23 (2014-03-12)
+Subject: Re: [Caml-list] unmarshaling large data from string on 32 bits
+
+On Mon, Feb 02, 2015 at 01:00:53PM +0100, Gabriel Scherer wrote:
+> If you don't mind going through a temporary file,
+> Marshal.{to,from}_channel should work fine.
+
+Thanks for the suggestion, if Windows is as smart as Linux than a
+tmpfile should work fine.  If not, well, better than nothing.
+
+> You should consider opening a problem report to OCaml upstream (
+> http://caml.inria.fr/mantis/ ) explaining the use-case and asking for
+> a large-string-safe API (eg. taking and returning lists of strings).
+
+The chain of workarounds that leads here is long an ugly :-/
+
+1. I have a problems with threads on Windows and (rarely) on Linux.
+   The model is simple, Coq sits between 1 user interface and many
+   (usually only 1) worker process.  Coq's main thread talks to the
+   UI via a socket and does blocking calls; worker manager
+   threads (1 per worker) do the same with their respective workers.
+   At some point all threads are blocked reading. Then
+   a worker process writes data but no thread is woken up.
+   On Linux I need at least 2 worker manager threads to see the problem,
+   on Windows 1 is enough.  All that using the channels API and Marshal.
+
+   OK, I say, let's go back to the old good Unix.select to read only when some
+   data is there.
+ 
+2. The Unix module lets you get the fd number associated to the channel
+   and you can use Unix.select with it.  And you can still use the channels
+   API to Marshal.from_channel.  Looks good but I still a problem.  I have
+   LARGE and small messages.  The small ones fit, largely, in the
+   channels buffer.  Result: you have 2 "values" in the buffers of the
+   OS.  Select tells you that you can read.  You Marshal.from_channel.
+   Both values are moved in the channel buffer, but clearly
+   "input_value" reads only the first one.  You select again, but this
+   time the OS buffers are empty.  So you wait until next message
+   arrives to discover the one forgotten in the channel buffer.
+
+   I can't bet all my money on the correctness of this diagnoses,
+   but that seemed the cause at the time.  Artificially inflating
+   messages was working, but this is not what you want.  There is no
+   API, at least in 3.12, to peek a channel and see if there is
+   data (and if so, don't call select).  I tried with non blocking
+   channels, but I could not succeed using input_value there (I don't
+   recall if input_value is always blocking or something else went
+   wrong).
+
+   OK, I say, let's not use the channels and do old good Unix select and
+   read.  Unfortunately the size of buffers, strings, is limited and the
+   LARGE messages I have do not fit.
+
+So yes, Marshal.from_string_list would be an option here.
+
+I still have around a simple example that locks up on Windows,
+I'll open a bug for that.
+
+Best,
+-- 
+Enrico Tassi

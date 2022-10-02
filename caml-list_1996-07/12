@@ -1,0 +1,161 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id SAA08142 for caml-redistribution; Fri, 19 Jul 1996 18:03:05 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id XAA22184 for <caml-list@pauillac.inria.fr>; Thu, 18 Jul 1996 23:23:16 +0200
+Received: from uu3.psi.com (uu3.psi.com [38.145.250.2]) by concorde.inria.fr (8.7.1/8.7.1) with SMTP id XAA23712 for <caml-list@pauillac.inria.fr>; Thu, 18 Jul 1996 23:23:13 +0200 (MET DST)
+Received: from flavors.com by uu3.psi.com (5.65b/4.0.940727-PSI/PSINet) via SMTP;
+        id AA23143 for caml-list@pauillac.inria.fr; Thu, 18 Jul 96 17:23:02 -0400
+Received: from [204.5.215.14] by flavors.com
+ with SMTP (Apple Internet Mail Server 1.1); Thu, 18 Jul 1996 17:23:00 -0400
+Message-Id: <v01540b0eae145593e08b@[204.5.215.14]>
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"
+Date: Thu, 18 Jul 1996 17:21:50 -0400
+To: Xavier Leroy <Xavier.Leroy@inria.fr>, e-posse@argos.uniandes.edu.co
+From: e@flavors.com (Doug Currie, Flavors Technology, Inc.)
+Subject: Re: ocamldep
+Cc: caml-list@pauillac.inria.fr
+Sender: weis
+Status: O
+
+
+At 3:33 PM 7/18/96, Xavier Leroy wrote:
+>> Hello everybody. I have been having a little trouble with the Dependency
+>> Generator ocamldep that comes in the Windows 95 version 1.01 of O'Caml.
+>> The reference manual says that the typical use of ocamldep should be
+>> something like this:
+>>
+>>       ocamldep *.mli *.ml > .depend
+>>
+>> The problem is that ocamldep doesn't seem to recognize the *.mli and
+>> *.ml arguments
+>
+>Well, the Objective Caml sources come from a Unix background, where
+>wildcards (*.ml) are expanded by the command shell and the commands
+>receive an already-expanded argument list. One day I may add
+>command-line expansion in the Objective Caml start-up code, but don't
+>hold your breath.
+
+I did something for the Mac version of Moscow ML to work around the lack of
+a UNIX make system. Since the Mac has no UNIX make command, it was
+difficult to build the system without it. The code is written in Standard
+ML and is available from the Moscow ML site
+<http://www.dina.kvl.dk/~sestoft/mosml.html> in the Mac source
+distribution, file Smltope.sml. It's about seven pages of code.
+
+Rather than specify the files to compile or link, I did the following
+(which works great for mosml, and should also work for O'Caml)...
+
+A new function "make" is given a directory as an argument, along with a
+list of other directories to include in the search/include path, and the
+library directory. It attempts to compile all the files in the directory
+with the right path suffix (.sig and .sml in my case), also checking along
+the way that .grm and .lex files have already been processed. It traces out
+the dependencies using mosmldep, constructs a dependency matrix, and
+computes the transitive closure using Floyd-Warshall. It sorts the files
+and compiles those files that need it.
+
+Given a sequence of directories in the right order (e.g., lib, compiler,
+linker, toplevel) it gets the whole job done.
+
+A new toplevel function link takes a single object file. It recursively
+traces out the file's load dependencies, and then shares code with make to
+compute the transitive closure and sort the files into load order, and then
+invokes the usual linker on the sorted list.
+
+Below is a clipping from the manual.
+
+e
+
+-=-
+
+make : string -> string -> string list -> string -> unit
+
+Evaluating:
+
+  make <oset> <stdlib> [<dir1>..<dirN>] <path>
+
+is equivalent to running mosmlc as follows:
+
+  mosmlc -P <oset> -stdlib <stdlib> -I <dir1> ..  -I <dirN> <files...>
+
+where <files...> is a subset of the files in directory <path> determined by
+tracing out the dependencies among the files and their need for compilation.
+
+-=-
+
+link : string -> bool * bool -> string -> string  \
+              -> string list -> string list -> unit
+
+Evaluating:
+
+  link <file> (<g>,<h>) <oset> <stdlib> [<dir1>..<dirN>] [<file1>..<fileN>]
+
+is equivalent to running mosmllnk as follows
+
+  mosmllnk -o <file> {-g} {-noheader} -P <oset> -stdlib <stdlib> \
+           -I <dir1> ..  -I <dirN> <file1>..<fileN>
+
+where -g is included if <g> is true, -noheader is included if <h> is true.
+
+If <oset> is "" then it is replaced by "default"
+If <oset> is "lorder" then link does the following:
+1- trace out all load dependencies of <file1>..<fileN>
+2- include in the list of files to be linked all other files depended upon
+   if they can be found in any of the specified paths
+3- construct a legal link order for the files
+4- then link this list as usual
+
+Typically, simply specifying your Main program to be linked will find all
+the required .uo files and put them in the right order.
+
+Examples
+--------
+
+To create a new mosml project, put all the source files in a new directory,
+"project." Don't put any incomplete or irrelevant sources in the same
+directory or they will be compiled, too. Assuming your project only depends
+on library files, evaluate:
+
+let val base = "pathname of the mosml directory"
+in
+  make "full" (base ^ "mosmllib") [] (base ^ "project")
+end;
+
+to compile all your files. Evaluate this each time you have made changes in
+your sources to keep the object files up to date.
+
+Here is a sample make and link script to build mosml.image:
+
+(* ********************************** *)
+
+val home = "pathname of the mosml directory";
+
+moolevel := 2;
+
+(* to compile the toplevel mosml image and the lexer *)
+
+let val base = home ^ ":mosml:src:"
+in
+  make "none" (base ^ "mosmllib") [] (base ^ "mosmllib");
+  make "none" (base ^ "mosmllib") [] (base ^ "compiler");
+  make "none" (base ^ "mosmllib") [(base ^ "compiler")] (base ^ "toolssrc");
+  make "none" (base ^ "mosmllib") [(base ^ "compiler")] (base ^ "lex")
+end;
+
+(* to build the toplevel mosml image into file "testtop.image" *)
+
+let val base = "home" ^ ":mosml:src:"
+in
+  chDir base; chDir "::";
+  link "testtop.image"
+       (true,true) (* -g -noheader *)
+       "lorder" (base ^ "mosmllib") [(base ^ "compiler"),(base ^ "toolssrc")]
+       ["Maine.uo"]
+end;
+
+-=-
+
+
+
+
+
+

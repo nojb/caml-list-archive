@@ -1,0 +1,112 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p79MGAqf007738
+	for <caml-list@sympa-roc.inria.fr>; Wed, 10 Aug 2011 00:16:10 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AogCAJywQU5BN3QrkWdsb2JhbABChEeTX45MTRQBAQEBCQsLBxQDIoFqBIEHAiYCb6cbjk+RG4EshAoxXwSYABEJi3U
+X-IronPort-AV: E=Sophos;i="4.67,345,1309730400"; 
+   d="scan'208";a="115433750"
+Received: from blu0-omc1-s32.blu0.hotmail.com ([65.55.116.43])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 10 Aug 2011 00:16:04 +0200
+Received: from BLU0-SMTP70 ([65.55.116.7]) by blu0-omc1-s32.blu0.hotmail.com with Microsoft SMTPSVC(6.0.3790.4675);
+	 Tue, 9 Aug 2011 15:16:03 -0700
+X-Originating-IP: [74.12.88.90]
+X-Originating-Email: [pjfrey@sympatico.ca]
+Message-ID: <BLU0-SMTP708816FED062E061E27493A3200@phx.gbl>
+Received: from [192.168.2.11] ([74.12.88.90]) by BLU0-SMTP70.phx.gbl over TLS secured channel with Microsoft SMTPSVC(6.0.3790.4675);
+	 Tue, 9 Aug 2011 15:16:03 -0700
+From: Peter Frey <pjfrey@sympatico.ca>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset="UTF-8"
+Date: Tue, 9 Aug 2011 18:16:00 -0400
+MIME-Version: 1.0
+X-Mailer: Evolution 2.28.1 
+Content-Transfer-Encoding: 7bit
+X-OriginalArrivalTime: 09 Aug 2011 22:16:03.0290 (UTC) FILETIME=[ED2113A0:01CC56E1]
+Subject: [Caml-list] Segmentation faults in unexpected places
+
+For some time I have been concerned about encountering "Segmentation
+fault".  Since I am writing an interpreter, making heavy use of
+continuations and streams, encountering these faults made be very
+uneasy.  These errors always depended on the (order of) size of the
+input and typically occurred for files larger then about 200 thousand,
+when the program was compiled with ocamlopt.  With ocamlc, oddly enough,
+errors rarely occur, and when they do, I usually get a stack error,
+rather them a Segmentation fault.
+After some serious digging I was able to construct a simple example that
+seems to reliably demonstrate the problem:
+
+open Unix
+open Printf 
+
+let stol len =          (* create some bogus int list of length len *)
+  let head = ref [] in for i = 0 to pred len do head := i :: !head
+done; !head
+
+let _ =    (* read some file via io channel as stream; creating list *)
+  let limit = (try (int_of_string (Sys.argv.(1))) with _ -> 300000 ) in
+  let str_list = stol limit in
+  let stupid_copy = List.fold_right (fun x l -> x :: l) str_list [] in
+  printf"List copied with fold_right; len:%i\n" (List.lengthstupid_copy)
+
+COMPILED WITH: ocamlfind ocamlopt -package unix -linkpkg dink.ml
+./a.out
+List copied with fold_right; len:300000
+real 0m0.228s
+user 0m0.150s
+sys 0m0.070s
+
+knoppix@ubuntu:~/ocaml/dink$ time ./a.out 1000000
+
+Segmentation fault                  ************************************
+
+real 0m0.216s
+user 0m0.150s
+sys 0m0.070s
+knoppix@ubuntu:~/ocaml/dink$ 
+
+when COMPILED with ocamlc
+knoppix@ubuntu:~/ocaml/dink$ time ./a.out 100000000
+Fatal error: exception Stack_overflow
+Raised by primitive operation at file "list.ml", line 79, characters
+16-37
+Called from file "list.ml", line 79, characters 16-37
+Called from file "list.ml", line 79, characters 16-37
+...
+
+Thus it seems that stack overflow is not always caught (in ocalopt).
+Usually it is possible to program around it; by ensuring most procedures
+are tail recursive; but when using continuations, this is not feasible.
+
+The reason for stumbling upon this sample is the module Stream.  It has
+a constructor:
+
+let of_list l =
+  {count = 0; data = List.fold_right (fun x l -> Scons (x, l)) l Sempty}
+
+This is not tail recursive; but I can get around it:
+
+  let streamed_list = ref str_list in
+  let stream = Stream.from (fun pos -> match !streamed_list with
+    | [] -> None
+    | h :: t -> streamed_list := t; Some h) in
+  
+  let rec all len accu = 
+    match Stream.peek stream with
+    | Some c -> Stream.junk stream;
+                all (succ len) ( c :: accu )
+    | None -> len, accu     
+  in let len, ul = all 0 [] in
+  printf"\ndone ul len:%i\n" (List.length ul)   
+
+Stream does not patch (append to) an empty stream; i.e.: to the end of
+the list after the constructor returns None; so this should be safe.
+(To be sure I will have to append while consuming ... )
+
+Peter Frey
+
+
+
+
+
+
+

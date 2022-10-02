@@ -1,0 +1,103 @@
+Return-Path: <jonathan.roewen@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 64381BB81
+	for <caml-list@yquem.inria.fr>; Sun, 18 Dec 2005 05:20:54 +0100 (CET)
+Received: from zproxy.gmail.com (zproxy.gmail.com [64.233.162.205])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jBI4KrL9019356
+	for <caml-list@yquem.inria.fr>; Sun, 18 Dec 2005 05:20:54 +0100
+Received: by zproxy.gmail.com with SMTP id z31so933228nzd
+        for <caml-list@yquem.inria.fr>; Sat, 17 Dec 2005 20:20:53 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=FTaXiOXBDzSMsOUQNNj2kCZLceANBYRbjZmq+K9QvAaudi6yUAefE7bttCzwl1FPl8jBs/YLxB5ZaOdQzKUdfjr3fl9PdXgQ9ogVyNLdLK1ODVrpc9WyUiH3KeeDJ88uP2tczz3LJ0rz6LQrI77joPterBlfDyrRHqEEqjkB+1c=
+Received: by 10.64.10.15 with SMTP id 15mr1437902qbj;
+        Sat, 17 Dec 2005 20:20:52 -0800 (PST)
+Received: by 10.65.22.12 with HTTP; Sat, 17 Dec 2005 20:20:52 -0800 (PST)
+Message-ID: <ad8cfe7e0512172020r4c32186cu8a03518dbe013321@mail.gmail.com>
+Date: Sun, 18 Dec 2005 17:20:52 +1300
+From: Jonathan Roewen <jonathan.roewen@gmail.com>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] caml_callback_depth : byterun + vmthreads
+In-Reply-To: <ad8cfe7e0512171911n648c17a5nb4ac79ff75bf2498@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+References: <ad8cfe7e0512171848g6e559458sc33bd6b08d09fa47@mail.gmail.com>
+	 <ad8cfe7e0512171911n648c17a5nb4ac79ff75bf2498@mail.gmail.com>
+X-Miltered: at nez-perce with ID 43A4E3A5.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 byterun:01 scheduler:01 byterun:01 handler:01 handler:01 exn:01 val:01 interprete:01 recv:01 iter:01 val:01 printexc:01 printexc:01 exn:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.3
+
+> So, now gives the problem of tracking which callback calls another
+> callback, that calls the scheduler, and doesn't end up doing anything
+> ;-)
+
+Well, I've tracked it down to byterun/signals.c I think:
+
+/* Execute a signal handler immediately */
+
+void caml_execute_signal(int signal_number, int in_signal_handler)
+{
+  value res;
+  res =3D caml_callback_exn(
+           Field(caml_signal_handlers, signal_number),
+           Val_int(signal_number));
+  /* do I need to add this? I think so... */
+  caml_pending_signals[signal_number] =3D 0;
+  if(signal_number < 16) {
+      if(signal_number > 7)
+        out8(0xa0,0x20);
+      out8(0x20,0x20);
+    }
+  if (Is_exception_result(res)) caml_raise(Extract_exception(res));
+}
+
+So, am I right that what is happening is that: caml_interprete
+processes signals, calls a callback (callback_depth now =3D=3D 2), that
+caml code tries to schedule another thread, and can't.
+
+Now field is one of these two functions:
+
+[vmthreads/thread.ml]
+(* Preemption *)
+
+let preempt _ =3D
+  if !critical_section then () else thread_request_reschedule()
+
+[kernel/interrupts.ml]
+let irq_handler irq =3D
+  if waiting.(irq) =3D [] then (
+    recv.(irq) <- true
+  ) else (
+    List.iter (fun t -> Thread.wakeup t) waiting.(irq);
+  );
+  waiting.(irq) <- [];;
+
+thread_request_reschedule doesn't do any callbacks, and neither does
+Thread.wakeup's C implementation part.
+
+Now I'm more confused than ever: this shouldn't be possible....
+
+Well, this is all valid results from `grep "callback" -R .':
+
+./byterun/finalise.c:#include "callback.h"
+./byterun/finalise.c:      caml_callback (f.fun, f.val);
+
+./byterun/printexc.c:#include "callback.h"
+./byterun/printexc.c:  if (at_exit !=3D NULL)
+caml_callback_exn(*at_exit, Val_unit);
+
+./byterun/signals.c:#include "callback.h"
+./byterun/signals.c:  res =3D caml_callback_exn(
+
+Any tips on tracking down this monster of a problem?
+
+Jonathan
+

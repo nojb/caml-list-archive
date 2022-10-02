@@ -1,0 +1,108 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA11591; Sat, 27 Oct 2001 00:17:06 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA11489 for <caml-list@pauillac.inria.fr>; Sat, 27 Oct 2001 00:17:05 +0200 (MET DST)
+Received: from gogol.zorgol (Mix-Montsouris-109-3-83.abo.wanadoo.fr [193.248.102.83])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with SMTP id f9QMH2r19324
+	for <caml-list@inria.fr>; Sat, 27 Oct 2001 00:17:02 +0200 (MET DST)
+Received: (qmail 2817 invoked by uid 1001); 26 Oct 2001 22:11:02 -0000
+Date: Sat, 27 Oct 2001 00:11:01 +0200
+From: Berke Durak <berke@altern.org>
+To: Ping Hu <ping.hu@st.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Symbolic expression sub?
+Message-ID: <20011027001101.B2536@gogol.zorgol>
+References: <3BD43D0D.1F7B0A90@st.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+In-Reply-To: <3BD43D0D.1F7B0A90@st.com>; from ping.hu@st.com on Mon, Oct 22, 2001 at 11:36:45AM -0400
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, Oct 22, 2001 at 11:36:45AM -0400, Ping Hu wrote:
+> Just wondering if someone has some smart enough approach in Caml (or
+> C/C++) to compute the difference between two symbolic expressions
+> described below,
+> 
+> term: x, xy, 3x, 3xyz, 23, ...
+> op: +, -
+> expr: term | expr op expr 
+>  
+> how about (expr1 - expr2) ?
+
+You can represent an arbitrary linear combination of terms
+using a Map from monomials to scalars.
+
+As monomials, you can take strings "x","xy" ("" for constant...).
+However, you must be sure that the letters in the string are sorted
+(assuming xy=yz), which can be done, for example, by ``pigeon-hole''
+(aka histogram) sorting since you most likely will have a small,
+bounded number of letters.
+
+Converting an expression represented by a tree to such a monomial is
+straightforward if you only have addition and substraction. Converting
+the monomial back to a tree is also easy ; further, as a side effect
+of the inner workings of the module Map, your terms will be nicely sorted.
+
+If you take care to actually remove terms with null coefficients from the
+map, you can use Map.equal to compare two terms.
+
+Take
+
+	type monomial = string
+	and scalar = int
+
+and assume the function
+
+	val canonize_monomial : monomial -> monomial
+
+that ``sorts the letters of a string'' is given (i.e. "xzyt" becomes "xyzt").
+Then the following code, although not optimal, seems to work :
+
+(* *)
+
+type monomial = string
+and scalar = int
+	  
+let canonize_monomial x = x (* dummy function *)
+
+module P = Map.Make(struct type t = monomial let compare = compare end)
+
+type expr = Zero
+			| Term of scalar * monomial
+			| Difference of expr * expr
+			| Sum of expr * expr
+
+let expr_of_map m =
+  P.fold (fun x k e ->
+	if k = 0 then
+	  e
+	else
+	  match e with
+		Zero -> Term(k,x)
+	  | _ -> Sum(Term(k,x),e)) m Zero
+	
+let rec map_of_expr =
+	let binop f e1 e2 =
+		let m1 = map_of_expr e1
+		and m2 = map_of_expr e2
+		in
+		P.fold
+			(fun x k m ->
+				P.add x (f (try P.find x m with Not_found -> 0) k) m)
+			m1
+			m2
+	in
+	function
+	  Term(k,x) -> P.add (canonize_monomial x) k P.empty
+	| Zero -> P.empty
+	| Difference(e1,e2) -> binop (-) e1 e2
+	| Sum(e1,e2) -> binop (+) e1 e2
+
+--
+Berke
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

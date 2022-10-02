@@ -1,0 +1,150 @@
+Return-Path: <H.Tews@cs.ru.nl>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 5139DBC69
+	for <caml-list@yquem.inria.fr>; Thu, 29 Mar 2007 00:10:02 +0200 (CEST)
+Received: from smeltpunt.science.ru.nl (smeltpunt.science.ru.nl [131.174.16.145])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l2SMA0H8020557
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Thu, 29 Mar 2007 00:10:01 +0200
+Received: from tandem.cs.ru.nl [131.174.142.18]  (helo=tandem.cs.ru.nl)
+	by smeltpunt.science.ru.nl (8.13.7/5.11) with ESMTP id l2SM9xXJ005190
+	for <caml-list@inria.fr>; Thu, 29 Mar 2007 00:09:59 +0200 (MEST)
+Received: from tews by tandem.cs.ru.nl with local (Exim 4.63)
+	(envelope-from <tews@tandem.cs.ru.nl>)
+	id 1HWgLA-0004bC-4B
+	for caml-list@inria.fr; Thu, 29 Mar 2007 00:10:00 +0200
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <17930.59320.89370.348737@tandem.cs.ru.nl>
+Date: Thu, 29 Mar 2007 00:10:00 +0200
+To: caml-list@inria.fr
+Subject: HOWTO create and install a new printer with camlp4 3.10
+X-Mailer: VM 7.19 under Emacs 21.4.1
+From: Hendrik Tews <H.Tews@cs.ru.nl>
+X-Scanned-By: MIMEDefang 2.56 on 131.174.16.145
+X-Miltered: at discorde with ID 460AE7B8.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; howto:01 camlp:01 hendrik:01 tews:01 tews:01 camlp:01 pcaml:01 defines:01 functor:01 defines:01 struct:01 functor:01 higher-order:01 functors:01 invocation:01 
+
+
+Posted in the hope to save somebody's time before the new camlp4
+documentation gets out.
+
+
+First a word on side effects: I mean those side effects that
+newly loaded modules perform inside camlp4 to register their
+functions in the camlp4 engine.
+
+In the good old times one simply used assignments for that, for
+instance 
+	Pcaml.print_implem := f
+has always been used to install f as printer for a .ml file.
+
+In the new camlp4 (some of) these side effects are performed not
+by the user but by camlp4 itself. The user only supplies the
+structure. It works the following way: The user defines a 
+functor Make that maps some structure to a structure that defines
+the entities that camlp4 should use:
+
+    module Make (some arg) = struct
+      let important_fun ...
+    end
+
+The user then uses Make in a functor application with a
+higher-order, registering functor from camlp4:
+
+   module IgnoreResult = Camlp4.Register.Purpose(Make)
+
+where Purpose is one of the functors that Camlp4.Register
+provides. On invocation Purpose applies the user supplied Make to
+the right arguments, obtains a structure with important_fun and,
+finally, performs the side effect to register important_fun in
+the right hook. Actually the story is a bit more complicated,
+because the side effects are delayed: First Make is registered as
+a loaded module inside camlp4 together with a function that will
+perform the necessary side effects some time later. See for
+example functor Printer in camlp4/Camlp4/Register.ml line 73.
+
+
+In order to install a new camlp4 printer we only have to find the
+right registering functor and apply it to our arguments, put
+everything into some file and compile it into a .cmo.
+
+To install a new printer I chose Register.Printer, which takes
+two arguments: an identification module and a Make functor with
+my new printer functions inside. 
+
+Here is the complete code:
+
+  (* identification module *)
+module Id = struct
+    (* name is printed with the -loaded-modules switch *)
+  let name = "Printer HOWTO"
+    (* cvs id's seem to be the preferred version string *)
+  let version = "$Id: howto verion 1 $"
+end
+
+
+  (* the real thing containing the real functions *)
+module Make (Syntax : Camlp4.Sig.Syntax) : 
+  Camlp4.Sig.Printer with module Ast = Syntax.Ast = 
+struct
+  module Ast = Syntax.Ast
+  
+  let opt_string = function
+    | None -> "<None>"
+    | Some s -> s
+
+  let info ?input_file ?output_file name =
+    Printf.eprintf 
+      "printer on %s\n input : %s\n output : %s\n"
+      name
+      (opt_string input_file)
+      (opt_string output_file)
+
+    (* print_interf shall be called on .mli files *)
+  let print_interf ?input_file ?output_file ast = 
+    info ?input_file ?output_file "signature"
+
+    (* print_implem shall be called on .ml files *)
+  let print_implem ?input_file ?output_file ast =
+    info ?input_file ?output_file "structure"
+end
+
+  (* apply everything to register the new printer *)
+module M = Camlp4.Register.Printer(Id)(Make)
+
+(* end of source *)
+
+Put the source into a file printer.ml and compile with 
+
+   ocamlc -c -I `camlp4 -where` printer.ml
+
+Use examples:
+
+    gromit otags 7> camlp4o printer.cmo printer.ml
+    printer on structure
+     input : printer.ml
+     output : <None>
+
+    gromit otags 8> camlp4o -o output_file printer.cmo printer.ml
+    printer on structure
+     input : printer.ml
+     output : output_file
+
+    gromit otags 9> ocamlc -pp 'camlp4o printer.cmo' printer.ml
+    printer on structure
+     input : printer.ml
+     output : <None>
+
+
+Happy printing,
+
+Hendrik
+

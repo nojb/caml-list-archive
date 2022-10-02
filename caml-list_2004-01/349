@@ -1,0 +1,134 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA30081; Sun, 4 Jan 2004 20:47:26 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA30361 for <caml-list@pauillac.inria.fr>; Sun, 4 Jan 2004 20:47:25 +0100 (MET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id i04JlOb19125;
+	Sun, 4 Jan 2004 20:47:24 +0100 (MET)
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id i04JlJZ01332;
+	Sun, 4 Jan 2004 13:47:20 -0600 (CST)
+Date: Sun, 4 Jan 2004 14:49:02 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Xavier Leroy <xavier.leroy@inria.fr>
+cc: dolfi@zkm.de, <caml-list@inria.fr>
+Subject: Re: [Caml-list] novice puzzled by speed tests
+In-Reply-To: <20040104174920.A20953@pauillac.inria.fr>
+Message-ID: <Pine.LNX.4.44.0401041403150.4373-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 toying:01 ocamlopt:01 -unsafe:01 mandrake:01 slower:01 ocamlopt:01 gcc:01 slower:01 -unsafe:01 long-time:01 miracles:01 inverted:01 segv:01 speedup:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 4 Jan 2004, Xavier Leroy wrote:
+
+> > Toying around with 3.07, I found that ocamlopt.opt -unsafe (on Mandrake
+> > 9.1, Pentium 4, 2.4 GHz) actually produces slower code than ocamlopt.opt.
+> > On my box, the corresponding C program (gcc -O3) is slightly slower than
+> > the ocamlopt.opt compiled O'Caml program, but about 25-30% faster than the
+> > -unsafe one:
+> > Of course it's good that range checking increases the speed of programs,
+> > but, being a long-time C user, I'm a little bit puzzled by miracles like
+> > this. I suspected that the sense of the -unsafe flag was inverted, but it
+> > isn't: the -unsafe program dies with SEGV when I deliberately introduce a
+> > range overflow, the safe one gets an exception.
+> 
+> Welcome to the wonderful world of modern processors.  It's not
+> uncommon to observe "absurd" speed differences of up to 20%.  By
+> "absurd" I mean for instance adding or removing dead code (never
+> executed) and observing a slowdown, or executing more code and
+> observing a speedup.
+> 
+> As far as I can guess, this is due to two processor features:
+> 
+> - Lots of instruction-level parallelism is available.  Thus, if your
+> main code doesn't use all of the computational units, adding extra code
+> (such as array bound checks) that can execute in parallel doesn't
+> reduce execution speed.
+
+Modern processors also do fairly aggressive branch prediction.  Bounds 
+checking doesn't *normally* fail, so the processor very quickly starts 
+predicting the branch with a very high degree of accuracy.  A correctly 
+predicted branch is not exactly no cost, but very near to it.  A 
+mispredicted branch is expensive- dozens of clock cycles.  
+
+Hmm.  Actually, as I understand it, all array accesses call the same code
+in Ocaml- that code then does the bounds checking.  This means that every
+ocaml program has only one branch instruction which is the bounds checking
+branch.  Thinking about it, in modern processors this may be better than
+hoisting the bounds checking- even in situations where the most bounds
+checking can be eliminated in hoisting.  This is because processors only
+keep/"cache" information for branch prediction for so many branches-
+generally about 4K branches IIRC.  So, program A doesn't hoist it's branch
+checking, and branch checking uses the exact same branch.  This means that
+only one entry in the branch history cache is used by bounds checking.  
+But it executes that branch a lot.  Program B does hoist it's branch
+checking- now there are a thousand different branch instructions in the
+program to do branch checking.  Now 25% of the branch history cache is for 
+bounds checking branches- all of which should be trivially predictable, 
+but are pushing other branches out of the branch history.  Boom, the code 
+runs slower.
+
+This isn't what this programmer is hitting.  But it demonstrates that 
+performance optimization is trickier than it might seem.
+
+> 
+> - Performance is very sensitive to code placement.  Things like code
+> cache conflicts, (mis-) alignment of branch targets, and oddities in the
+> instruction decoding logic can cause insertion *or deletion* of a few
+> instructions to have significant impact on execution speed.
+
+Cache conflicts especially.  Modern processors have 100-350 or more clock 
+cycle latencies to go to main memory.  Very expensive- to the point where 
+I'd argue that the run time of a program is mainly determined by the 
+number of cache misses the program has, and not the number of instructions 
+executed.  If I had to guess, he's hitting some weird cache behavior.  
+Generally, instruction decode weirdness, branch target alignment, etc. 
+only cost dozens of clock cycles and don't make that big of a change on 
+the performance of code.  It's cache effects that can make surprisingly 
+big swings.
+
+You can have poor cache behavior even with working sets much smaller than
+cache, due to the way cache works.  Say you have a 2-way set associative
+cache of size C.  This means if you're heavily accessing locations X and
+X+C, you're okay- but if you're heavily accessing locations X, X+C, and
+X+2C, you're screwed.  Your cache can only hold two of those in memory at
+once- accessing the third one pushes one of the original two out of cache.  
+You make a "minor" change, and suddenly you're accessing locations X, X+C,
+and X+2C+L (where L is the cache line size- generally 16-64 bytes), and
+boom- all three address lines fit into cache now.  And suddenly your code
+is 100 times faster.  This can happen with both data and code.  I've seen 
+this happen in real code.
+
+Here's an interesting paper for two reasons- first, it shows just how 
+expensive minor changes can get due to cache effects, and second of all it 
+has a solution (skew associative caches) that I'd like to see implemented, 
+but it has a NIH problem:
+http://citeseer.nj.nec.com/bodin94cache.html
+
+Thinking about it, I'd love to see Ocaml do, as it's final linking stage, 
+just a quick depth-first traversal sorting of the known-call graph of the 
+functions.  I'd be this would do good things to Ocaml's performance.
+
+> 
+> These are just wild guesses.  The bottom line is that processors have
+> become so complex that explaining observed performances (let alone
+> predicting performances) has become nearly impossible, at least for
+> small performance variations (say, less than a factor of 1.5).  
+
+Easily.  I've seen performance swings of 100x due to simple changes.
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

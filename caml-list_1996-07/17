@@ -1,0 +1,143 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id LAA06301 for caml-redistribution; Tue, 23 Jul 1996 11:58:22 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id LAA05650 for <caml-list@pauillac.inria.fr>; Tue, 23 Jul 1996 11:16:51 +0200
+Received: from cherub.hd.ibm.de (cherub.hd.ibm.de [192.101.197.10]) by concorde.inria.fr (8.7.1/8.7.1) with SMTP id LAA03568 for <caml-list@pauillac.inria.fr>; Tue, 23 Jul 1996 11:16:20 +0200 (MET DST)
+Received: from kaa.heidelbg.ibm.com by cherub.hd.ibm.de (AIX 3.2/UCB 5.64/4.03/chkV1.0)
+          id AA43479; Tue, 23 Jul 1996 11:15:54 +0200
+Received: from idse.heidelbg.ibm.com by kaa.heidelbg.ibm.com (AIX 3.2/UCB 5.64/4.03)
+          id AA49921; Tue, 23 Jul 1996 11:15:40 +0200
+Received: by idse.heidelbg.ibm.com (AIX 3.2/UCB 5.64/4.03)
+          id AA35149; Tue, 23 Jul 1996 11:15:39 +0200
+Message-Id: <9607230915.AA35149@idse.heidelbg.ibm.com>
+To: fva@ing.uc3m.es
+Cc: caml-list@pauillac.inria.fr
+Subject: Re: Some questions about the module system... 
+In-Reply-To: (Your message of Mon, 22 Jul 96 17:19:49 EST.)
+             <9607221531.AA06681@elrond.uc3m.es> 
+Date: Tue, 23 Jul 96 11:15:38 +0100
+From: Wolfgang Lux <lux@heidelbg.ibm.com>
+Sender: weis
+Status: O
+
+
+Hello
+
+[This is the correct version of the mail I posted 5 minutes ago. It
+just had hit the send key to early on that post :-)]
+
+> 
+> Hello mailing list,
+> 
+> here are some questions I would like to pose the system implementors
+> concerning the module system in O'Caml. The mail is quite lengthy, and I
+> apologise in case somebody else has asked the same... (I have been unable t=
+> o
+> look up the question in the mailing archives).
+> 
+> 1) is there any reason (unclear semantics, scope-holing, etc.) why the O'Ca=
+> ml
+> module system won't allow an "include <signature>" feature? I keep bumping
+> into it when I try to write module hyerarchies (or adapt ML code from texts=
+>  ;) ).
+> [Sample deleted]
+
+Interesting question. In Caml Special Light 1.15 this feature was
+working. So why isn't it included in O'Caml?
+
+> 
+> b) My second question concerns module coercion by means of module signature=
+> s.
+> Sharing constraints between module types is really necessary for code
+> abstraction, but I found "value aliasing" really useful as well (I don't
+> know the exact term for the feature so I will describe it).
+> 
+> Suppose you have this priority queue functor requesting an ORDER on values =
+> of
+> the type shown above:
+> 
+> module MakePQueue =3D (struct ... end: (O: ORDER) -> PQUEUE);;
+> 
+> and a module implementing NODEs in a graph with data about the distance fro=
+> m
+> the node to a "root" and an accumulated value describing another distance
+> measure:
+> 
+> module NODE =3D
+> sig
+>   type node =3D{ depth: int; dist: int; ...}
+>   ..
+> end;;
+> 
+> Now, I would like to implement 2 different searching strategies namely
+> DepthFirst and heuristic search ( "A" strategy someone would say), for
+> which I need to consider two different orders (take my word for it):
+> 
+> value less_depth: node -> node -> bool=09(* depthFirst order *)
+> value less_dist: node -> node -> bool=09(* A* search order *)
+> 
+> How could I view NODE as these two different orders so that MakePQueue does=
+> n't
+> complain? Answer: *alias* any of the orders to the order defined in ORDER:
+> 
+> (* this won't work in O'Caml 1.01 *)
+> module DepthFirstPQueue =3D
+>   MakePQueue (Node: NODE with t =3D node (* and val leq =3D less_depth *));=
+> ;
+> 
+> module BestFirstPQueue =3D
+>   MakePQueue (Node: NODE with t =3D node (* and val leq =3D less_dist *));;
+> 
+> Unless I got it wrong all you can do for now is write TWO module signatures=
+> , say
+> NODE1 and NODE2, in which you define the required order with the adequate n=
+> ame,
+> that is to say "leq". *You* have to keep consistency between the rest of th=
+> e primitives
+> on your own, and this is really... burdensome!
+> 
+You don't need to write any new signature for this case, but you
+simply can use a functor for achieving this name aliasing by rewriting
+your code as follows:
+
+module MakePQueue(O: ORDER)(Leq: sig val leq : O.t -> O.t -> bool end): PQUEUE ->
+  struct
+    ...
+  end
+  
+and then you can apply this functor as follows:
+
+module DepthFirstPQueue =
+  MakePQueue(Node : NODE with t = node)(struct let leq = Node.less_depth end)
+
+module BestFirstPQueue =
+  MakePQueue(Node : NODE with t = node)(struct let leq = Node.less_dist end)
+
+You might even write down a functor to convert your NODE module
+together with its ordering function into an ORDER module:
+
+module OrderOfNode(Node : NODE)(Leq : sig value leq : O.t -> O.t -> bool end) : ORDER =
+  struct
+    type t = Node.node
+    let format = Node.format
+    let leq = Leq.leq
+  end
+
+and then use your original definition of MakePQueue as follows:
+
+module DepthFirstPQueue =
+  MakePQueue(OrderOfNode(Node)(struct let leq = Node.less_depth end))
+module BestFirstPQueue =
+  MakePQueue(OrderOfNode(Node)(struct let leq = Node.less_dist end))
+
+
+Regards
+Wolfgang
+
+----
+Wolfgang Lux
+WZH Heidelberg, IBM Germany             Internet: lux@heidelbg.ibm.com
++49-6221-59-4546                        VNET:     LUX at HEIDELBG
++49-6221-59-3500 (fax)	                EARN:     LUX at DHDIBMIP
+
+
+
+

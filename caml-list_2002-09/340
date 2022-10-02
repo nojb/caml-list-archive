@@ -1,0 +1,145 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA05770; Wed, 25 Sep 2002 09:09:04 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA06174 for caml-list@pauillac.inria.fr; Wed, 25 Sep 2002 09:09:03 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA20191 for <caml-list@pauillac.inria.fr>; Tue, 24 Sep 2002 18:23:48 +0200 (MET DST)
+Received: from julie.univ-savoie.fr (univax.univ-savoie.fr [193.48.120.32])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g8OGNm501758
+	for <caml-list@inria.fr>; Tue, 24 Sep 2002 18:23:48 +0200 (MET DST)
+Received: from post.bourget.univ-savoie.fr (post.bourget.univ-savoie.fr [193.48.120.73])
+          by julie.univ-savoie.fr (8.9.3/jtpda-5.3.3) with ESMTP id SAA16484
+          for <caml-list@inria.fr>; Tue, 24 Sep 2002 18:23:46 +0200 (CEST)
+Received: from univ-savoie.fr (d85.lama.univ-savoie.fr [193.48.123.85])
+          by post.bourget.univ-savoie.fr (8.12.3/jtpda-5.4) with ESMTP id g8OGNfiA010622
+          for <caml-list@inria.fr>; Tue, 24 Sep 2002 18:23:41 +0200
+Message-ID: <3D909196.50102@univ-savoie.fr>
+Date: Tue, 24 Sep 2002 18:23:50 +0200
+From: Christophe Raffalli <raffalli@univ-savoie.fr>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.0rc2) Gecko/00200205
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: [Caml-list] Recursive types (Was  Cyclic ?!)
+References: <000301c24468$6cb5b350$6601a8c0@hicks> <200208151725.NAA12685@dewberry.cc.columbia.edu>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Note: there is a nice exercise at the end of the mail ...
+
+There is a better solution then -rectypes that the developper could 
+implement :
+
+Let the us write recursive type annotation in programs, but
+when doing the loop detection in the unification used by the 
+type-checker, each loop should go
+through a type variable that has been created by one of these type 
+anotation.
+
+So the only thing you have to add to the type-checker is a marker on 
+type variables introduced by the user: if the user write (e : ... as 'a) 
+then 'a is marked.
+
+This mark is propagated by unification and the loop detection is 
+modified as I suggested.
+
+Therefore, the type-checker will not introduce recursive types by itself 
+and the cost is not to much (I have in mind a unification algorithm 
+using graph unification followed by loop detection, I do not know if 
+this is what OCaml uses, but I guess it is).
+
+--
+
+By the way, here is a nice program using recursive types:
+run l n where l is a list of functions from positive int to positive int 
+and n is a nat will produce a list of int of size n such that all the 
+functions in l are increasing on that list ...
+
+The program prints the lists it tries before finding the good one.
+
+Exercise: try to remove the need for -rectypes ... keeping the same 
+algorithm.
+
+--
+(* an algorithm extracted (by hand) from the proof of Dickson's lemma *)
+(* by C. Raffalli *)
+(* compile with ocamlc -rectypes *)
+
+let lem1 f e k =
+   let rec k' x q = k (x : int) ((f,k')::q) in
+   e k'
+
+let lem2 f u x = lem1 f (u (x : int))
+
+let rec dickson lf =
+   match lf with
+     [] -> (fun x k -> k x [])
+   | f::lf -> lem2 f (dickson lf)
+
+let rec extract n u k =
+   match n with
+     0 -> k []
+   | x ->
+     let k' l =
+       match l with
+	[] -> u 0 (fun x lx -> k [x,lx])
+       |	(y, ly)::_ -> u (y+1) (fun z lz -> k ((z,lz)::l))
+     in
+     extract (x - 1) u k'
+
+let weak_dickson lf n = extract n (dickson lf)
+
+let rec decidable' acc = function
+     (y, (ly : (((int -> int) * (int -> 'a -> 'c)) list as 'a)))::l ->
+       match l with
+	[] -> y::acc
+       |	(x,(lx : 'a))::_ ->
+	  let rec test lx' ly' =
+	    match lx', ly' with
+               [], [] -> decidable' (y::acc) l
+	    | (((fx : int -> int),( kx : int -> 'a -> 'c))::lx'), (((fy : int -> 
+int), (ky : int -> 'a -> 'c))::ly') ->
+		if not (fx == fy) then failwith "bug: the function should be the same !";
+		if fx x < fx y then
+		  ky x lx' else test lx' ly'
+	  in test lx ly
+
+let print_list f l =
+   List.iter (fun x -> print_int (f x); print_string ", ") l;
+   print_newline ()
+
+let count = ref 0
+
+let reset () =
+   print_string "Number of tries:"; print_int !count; print_newline ();
+   count := 0
+
+let decidable l =
+   print_list fst l;
+   incr count;
+   decidable' [] l;
+
+
+let run l n =
+   let r = weak_dickson l n decidable in
+   reset ();
+   r
+--
+
+
+
+-- 
+Christophe Raffalli
+Université de Savoie
+Batiment Le Chablais, bureau 21
+73376 Le Bourget-du-Lac Cedex
+
+tél: (33) 4 79 75 81 03
+fax: (33) 4 79 75 87 42
+mail: Christophe.Raffalli@univ-savoie.fr
+www: http://www.lama.univ-savoie.fr/~RAFFALLI
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

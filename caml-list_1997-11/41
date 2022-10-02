@@ -1,0 +1,189 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA14189 for caml-redistribution; Wed, 26 Nov 1997 10:46:17 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA22196 for <caml-list@pauillac.inria.fr>; Tue, 25 Nov 1997 11:10:23 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.5) with ESMTP id LAA10840;
+	Tue, 25 Nov 1997 11:09:06 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA22148; Tue, 25 Nov 1997 11:09:04 +0100 (MET)
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+Message-Id: <199711251009.LAA22148@pauillac.inria.fr>
+Subject: Re: recursive types
+In-Reply-To: <199711250440.XAA25085@cloyd.cs.cornell.edu> from Jason Hickey at "Nov 24, 97 11:40:54 pm"
+To: jyh@cs.cornell.edu (Jason Hickey)
+Date: Tue, 25 Nov 1997 11:09:04 +0100 (MET)
+Cc: caml-list@inria.fr, crary@cs.cornell.edu, hayden@cs.cornell.edu
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+Here is the straight dope (or my view of it, anyway) about recursive
+types, or more precisely, the fact that all recursive type expressions
+are no longer allowed in OCaml 1.06:
+
+1- It is true that recursive (infinite) type expressions such as
+
+        'a where 'a = 'a list (standing for the infinite type
+         ... list list list list
+
+can be added to the ML type system without causing major theoretical
+difficulties.  In particular, unification and type inference work just
+as well on recursive types (infinite terms) than on regular types
+(finite terms).
+
+2- "Classic" ML does not have recursive types, just finite terms as
+type expressions.  Except some versions of Objective Caml, you won't
+find any implementation of ML that accepts them.
+
+3- The reason Objective Caml supports recursive types is that they are
+absolutely needed by the object stuff.  More precisely, recursive
+types naturally arise when doing type inference for objects (without
+prior declarations of object types).  Hence, Objective Caml performs
+type inference using full recursive types (cyclic terms) internally.
+
+4- Still (and now comes the language design issue), one may decide to
+impose extra restrictions on type expressions, such as "all cycles in
+a type must go through an object type", thus prohibiting recursive
+types that don't involve object types, such as ... list list list above.
+In OCaml, we have experimented with several such restrictions.  I
+think early releases (up to 1.04) had restrictions, though I don't
+remember which; 1.05 had no restrictions at all, and was strongly
+criticized for that (see below); 1.06 has the "all cycles must go
+through an object type" restriction.
+
+5- The main problem with unrestricted recursive types is that they
+allow type inference to give nonsensical types to clearly wrong code,
+instead of issuing a type error immediately.  For instance, consider
+the function
+
+        let f x y = if ... then x @ y else x
+
+Assume I make a typo and type "@" instead of "::" :
+
+        let f x y = if ... then x :: y else x
+
+Any sane ML implementation reports a type error.  But OCaml 1.05 (the
+one with unrestricted types) would accept the definition above, and
+infer the deeply obscure type:
+
+val f : ('a list as 'a) -> ('b list as 'b) list -> ('c list as 'c)
+
+Calls to the function f will probably be ill-typed, so the error will
+eventually be caught, but possibly very far from the actual error (the
+definition of f).
+
+Some users of OCaml 1.05 loudly complained that unrestricted recursive
+types make the language much harder to use for beginners and
+intermediate programmers.  We agreed that they had a strong point
+here.  You don't want types such as the above for f.  Really.  Trust me.
+
+So we and decided to go back to recursive types restricted to objects
+only --- the reasoning being that this does not reject any "classic"
+ML code (which type-checks without recursive types already), but still
+lets the right types for objects being inferred.
+
+6- Of course, we forgot that users would exploit the "unrestricted
+recursive types" bug of OCaml 1.05, and come back at us claiming it's
+a useful feature.  So, let's see how useful are recursive types that
+are not objects.  I'm taking Jason Hickey's examples here.
+
+>     type x = x option
+> the type "x" should probably be isomorphic to the natural numbers
+
+Such a type can be written more clearly as type x = Z | S of x
+(or even better type x = int, but that's a different story).
+
+> Consider an unlabeled abstract binary tree:
+> 
+>         type 'a t = ('a option) * ('a option)    (* abstract *)
+>         ...
+>         type node = X of node t
+
+Again, I don't see the point of the 'a t type.  A much clearer way to
+describe unlabeled binary trees is:
+
+        type node = Empty | Node of node * node
+
+Notice: no extra boxing here.
+
+The point I'm trying to make here is that pretty much all the time, 
+recursive types can be avoided ad clarity of the code can be improved
+by using the right concrete types (sums or records) to hide the
+recursion, rather than using generic sum or product types such as
+"option" and "*", then obtain the desired recursive structure by using
+recursive type expressions.
+
+I know of only one or two cool examples where recursive type
+expressions come in handy and avoid code duplication that the regular
+ML type system forces you to do otherwise.
+
+Now, in reply to Jason Hickey's points:
+
+> 1.  The interpretation of the general recursive type has a
+>     well-defined type theoretic meaning.
+
+Yes, but this doesn't imply it's a desirable feature in a programming
+language.
+
+> Why not issue a warning rather than forbidding the construction?
+
+That's one option, though issuing meaningful warnings is probably
+harder than just rejecting the program.  Another option we discussed
+is a command-line flag that changes the behavior of the type-checker
+w.r.t. recursive types.
+
+>    For instance, the following code is
+>    not forbidden:
+>        let flag = (match List.length [] with 0 -> true)
+>    even though constructions of this form are "prone to error,"
+>    and generate warning messages.
+
+Right.  Some of us think all warnings should be errors, though.  In
+this particular case, upward compatibility with the "classic ML" way
+leads to accepting the program and just issue a warning.  For
+recursive types, the same argument argues in favor of rejecting the
+program.
+
+> 2.  The policy imposes a needless efficiency penalty on type
+>     abstraction.
+
+Only if you don't hide the recursion inside the abstraction, and
+insist on taking fixpoints outside the abstraction.  As I've shown
+before, the penalty can almost always be avoided by writing your
+concrete types in a "natural" style.  Anyway (warning--silly joke
+ahead), since when type theorists are worried about efficiency? (end
+of silly joke).
+
+> 3.  If the type system can be bypassed with an extraneous boxing,
+>         type x = x t   ----->   type x = X of x t
+>     then what is the point?
+
+The programmers write the "X" constructor explicitely in the program,
+thus making their intentions clear.  It's completely different from an
+inferred recursive type, which is more often than not an unintended
+consequence of a coding error.
+
+> 4.  (Joke) All significant programs are "prone to error."  Perhaps the
+>     OCaml compiler should forbid them all!
+
+This is an old Usenet-style argument.  Another (joke) conclusion is
+that for the same reasons, we should turn off all type-checking and
+error checking in the compiler.
+
+>     I use this construction extensively in Nuprl (theorem proving)
+>     and Ensemble (communications) applications; do I really need
+>     to change my code?
+
+We should have released 1.06 earlier; this would have left you less
+time to exploit 1.05's bugs so thoroughly...  At any rate, I'd
+certainly encourage you to think about the data structures you use,
+and whether you couldn't rewrite them in a clearer way by getting rid
+of recursive types and using Caml's concrete datatypes (sums and
+records) instead.  Of course, if you come up with convincing real-life
+examples (not just type-theoretic examples) of why recursive types are
+useful, we'll reconsider.
+
+- Xavier Leroy
+
+
+
+

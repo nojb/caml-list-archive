@@ -1,0 +1,140 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 11E23BC69
+	for <caml-list@yquem.inria.fr>; Sat,  5 Jan 2008 20:44:46 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmYmAEdtf0fUnw7XYmdsb2JhbACCNY1ZFQQGEBmZEg
+X-IronPort-AV: E=Sophos;i="4.24,249,1196636400"; 
+   d="scan'208";a="20931828"
+Received: from fhw-relay07.plus.net ([212.159.14.215])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 05 Jan 2008 20:44:45 +0100
+Received: from [80.229.56.224] (helo=beast.local)
+	 by fhw-relay07.plus.net with esmtp (Exim) id 1JBEwm-0004ce-LC
+	for caml-list@yquem.inria.fr; Sat, 05 Jan 2008 19:44:44 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Performance questions, -inline, ...
+Date: Sat, 5 Jan 2008 19:36:23 +0000
+User-Agent: KMail/1.9.7
+References: <200801031128.30183.ober.14@osu.edu>
+In-Reply-To: <200801031128.30183.ober.14@osu.edu>
+MIME-Version: 1.0
+Content-Disposition: inline
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Message-Id: <200801051936.23521.jon@ffconsultancy.com>
+X-Spam: no; 0.00; -inline:01 ocaml:01 hofs:01 polymorphism:01 avoided:01 ocamlopt:01 -inline:01 -unsafe:01 command-line:01 -unsafe:01 vectors:01 inlining:01 cheers:01 mips:01 mips:01 
+
+
+Optimizing numerical code is discussed in detail in my book OCaml for 
+Scientists. You may also be interested in a very similar thread where I 
+optimized someone's almost identical code on the beginners list recently. 
+There is also this relevant blog post of mine:
+
+  http://ocamlnews.blogspot.com/2007/09/spectral-norm.html
+
+Essentially, your benchmark has rediscovered the fact that abstractions (HOFs, 
+polymorphism etc.) are prohibitively slow for high-performance numerics and 
+must be avoided. There are also some minor boxing issues at play.
+
+On Thursday 03 January 2008 16:28:30 Kuba Ober wrote:
+> I haven't looked at assembly output yet, but I've run into some unexpected
+> behavior in my benchmarks.
+
+Your benchmarks aren't sufficiently well defined to convey information about 
+anything specific, so you're highly likely to misinterpret what you see.
+
+> This was compiled by ocamlopt -inline 100 -unsafe,
+
+You should use Array.unsafe_get and _set rather than the command-line 
+option -unsafe because the latter breaks correct code.
+
+> What I wonder is why vector-to-vector add is so much faster than (constant)
+> scalar to vector add. Vectors are preinitialized each time with a 1.0000,
+> 1.0001, ... sequence.
+
+This is also highly likely to be platform and architecture dependent.
+
+> Also, the very bad performance from generic vector-to-vector *with*
+> inlining is another puzzler, whereas generic add of scalar-to-scalar
+> performs similarly to straight-coded one.
+>
+> Cheers, Kuba
+>
+> * add1: add scalar to scalar   120 MIPS
+> * add3: add scalar to vector   250 MIPS
+> * add5: add vector to vector   320 MIPS
+> * add2: generic add scalar to scalar   100 MIPS
+> * add4: generic add vector to vector   38 MIPS
+>
+> let start = 1.3
+>
+> (* generic scalar operation *)
+> let op1 op const nloop =
+> 	let accum = ref start in
+> 	for i = 1 to nloop do
+> 		accum := op !accum const
+> 	done
+
+You probably meant to return "!accum".
+
+> (* generic vector operation *)
+> let op2 op const a b (nloop : int) =
+> 	let len = Array.length a in
+> 	for j = 0 to len-1 do
+> 		for i = 0 to len-1 do
+> 			b.(i) <- op a.(i) b.(i)
+> 		done;
+> 	done
+>
+> (** addition **)
+> let add1 nloop =
+> 	let accum = ref start in
+> 	for i = 1 to nloop do
+> 		accum := !accum +. addconst
+> 	done
+
+Again, should probably return "!accum". However, you can encourage OCaml to 
+unbox the float by returning "!accum + 0.0" instead.
+
+> let add2 = op1 ( +. ) addconst
+
+This should be slower than "add1".
+
+> let add3 a b nloop =
+> 	let len = Array.length a in
+> 	for j = 0 to len-1 do
+> 		for i = 0 to len-1 do
+> 			b.(i) <- a.(i) +. addconst
+> 		done;
+> 	done
+
+The loop over "j" can be removed.
+
+> let add4 = op2 ( +. ) addconst
+
+This will be slow because "op2" is polymorphic and "+." will not be inlined.
+
+> let add5 a b nloop =
+> 	let len = Array.length a in
+> 	for j = 0 to len-1 do
+> 		for i = 0 to len-1 do
+> 			b.(i) <- a.(i) +. b.(i)
+> 		done;
+> 	done
+
+This increments "b" by "a" many times. Replace the repeated adds with a single 
+multiply for each element.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/products/?e
+

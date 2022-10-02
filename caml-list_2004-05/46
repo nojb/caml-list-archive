@@ -1,0 +1,96 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA31272; Sun, 2 May 2004 16:59:20 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA31409 for <caml-list@pauillac.inria.fr>; Sun, 2 May 2004 16:59:19 +0200 (MET DST)
+Received: from rabelais.socialtools.net (rabelais.socialtools.net [81.2.94.243])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i42ExHEV016842
+	for <caml-list@inria.fr>; Sun, 2 May 2004 16:59:18 +0200
+Received: by rabelais.socialtools.net (Postfix, from userid 108)
+	id 9D833232DF; Sun,  2 May 2004 15:59:17 +0100 (BST)
+Received: from socialtools.net (chaucer.socialtools.net [81.2.94.242])
+	by rabelais.socialtools.net (Postfix) with ESMTP
+	id 7AC11232DD; Sun,  2 May 2004 15:59:16 +0100 (BST)
+Message-ID: <40950CC4.6050907@socialtools.net>
+Date: Sun, 02 May 2004 15:59:16 +0100
+From: Benjamin Geer <ben@socialtools.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.6) Gecko/20040113
+X-Accept-Language: en-gb, en, fr, it
+MIME-Version: 1.0
+To: skaller@users.sourceforge.net
+Cc: The Caml Trade <caml-list@inria.fr>
+Subject: Re: [Caml-list] transactions?
+References: <1083468950.20722.189.camel@pelican.wigram> <4094F956.3060206@socialtools.net>
+In-Reply-To: <4094F956.3060206@socialtools.net>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Checker-Version: SpamAssassin 2.63 (2004-01-11) on 
+	rabelais.socialtools.net
+X-Spam-Status: No, hits=-4.9 required=5.0 tests=BAYES_00 autolearn=ham 
+	version=2.63
+X-Miltered: at nez-perce with ID 40950CC5.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 threads:01 compiles:01 camlp:01 threads:01 unlocking:01 realised:01 camlp:01 ifdef:01 ifdef:01 implements:01 cmo:01 cmo:01 ocaml:01 caml:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Benjamin Geer wrote:
+>> Is there an Ocaml eqivalent of begin/end blocking section?
+>> I.e. something that sets the global lock if threads
+>> are enabled (but still compiles if they're not)?
+> 
+> You can use camlp4's pa_ifdef.cmo to create a global mutex only if 
+> threads are enabled.  The utility functions below take care of this, as 
+> well as unlocking the mutex if an exception is thrown.
+
+Actually I've just realised that pa_ifdef.cmo seems to be deprecated 
+(it's not mentioned in the camlp4 docs anymore), but you can use 
+pa_macro.cmo[1].  Here's a revised version:
+
+------------------------------------------------------------------------
+(* Implements try-with-finally. *)
+let try_with_finally ~(f : unit -> 'a) ~(finally: unit -> unit) =
+   let res =
+     try
+       f ()
+     with e ->
+       finally ();
+       raise e
+   in
+     finally ();
+     res ;;
+
+(* Locks a mutex, calls a function, then unlocks the mutex.  The mutex
+    is also unlocked if the function throws an exception. *)
+IFDEF THREADS THEN
+   let call_in_mutex ~f ~(mutex : Mutex.t) =
+     Mutex.lock mutex;
+     try_with_finally ~f ~finally:(function () -> Mutex.unlock mutex) END ;;
+
+(* If threads are enabled, creates a mutex, otherwise returns unit. *)
+let create_optional_mutex () =
+   (IFDEF THREADS THEN
+      Mutex.create ()
+    ELSE
+      () END) ;;
+
+(* This function's arguments are a function to be called, and a value
+    returned by create_optional_mutex.  If threads are enabled, it
+    calls the function in a mutex.  If threads are disabled, it
+    just calls the function. *)
+let call_in_optional_mutex ~f ~mutex =
+   (IFDEF THREADS THEN
+      call_in_mutex ~f ~mutex
+    ELSE
+      f () END) ;;
+------------------------------------------------------------------------
+
+Note that you have to take care of defining the THREADS symbol.
+
+Ben
+
+[1] http://caml.inria.fr/camlp4/manual/manual002.html#toc1
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

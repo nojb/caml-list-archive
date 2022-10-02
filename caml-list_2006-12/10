@@ -1,0 +1,101 @@
+Return-Path: <neal.wang@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id E806ABC0A
+	for <caml-list@yquem.inria.fr>; Fri,  1 Dec 2006 19:53:12 +0100 (CET)
+Received: from py-out-1112.google.com (py-out-1112.google.com [64.233.166.180])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id kB1IrBaX020932
+	for <caml-list@inria.fr>; Fri, 1 Dec 2006 19:53:12 +0100
+Received: by py-out-1112.google.com with SMTP id b50so2011514pyh
+        for <caml-list@inria.fr>; Fri, 01 Dec 2006 10:53:09 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=qHkyNte5FfkaE2iSgVsK/ZDn0mLAz4I1IDSMbaBT3OsH2nyTTZEaqChRLPLHGm9VdVzNflM5eIHdOMh+QWbwMVk6/TzmNC4wnhufAwJOck2uQVkkMKFMhGstUc8YV79jO1OZRAOX+rj/4YS/WJ3mGIjY6zW3pZQDcpeD41zctNE=
+Received: by 10.78.127.2 with SMTP id z2mr5193884huc.1164999188578;
+        Fri, 01 Dec 2006 10:53:08 -0800 (PST)
+Received: by 10.78.14.7 with HTTP; Fri, 1 Dec 2006 10:53:08 -0800 (PST)
+Message-ID: <1965df800612011053x1c442d31if3ef14c5f87ba76d@mail.gmail.com>
+Date: Fri, 1 Dec 2006 10:53:08 -0800
+From: "Neal Wang" <neal.wang@gmail.com>
+To: "The Caml Trade" <caml-list@inria.fr>
+Subject: Re: [Caml-list] Can GC be BLOCKed?
+In-Reply-To: <20061201091932.GA29517@furbychan.cocan.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+References: <1965df800611291633q4f615df5qaa43dc967ba87d56@mail.gmail.com>
+	 <1FB91514-18D1-4502-AF67-C1003EB8636B@mac.com>
+	 <1965df800611301607g330f5517saeba25d40c3321ca@mail.gmail.com>
+	 <20061201091932.GA29517@furbychan.cocan.org>
+X-j-chkmail-Score: MSGID : 45707A18.000 on discorde : j-chkmail score : X : 0/20 1
+X-Miltered: at discorde with ID 45707A18.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; mutable:01 marshaled:01 allocates:01 blog:98 blog:98 heap:01 heap:01 garbage:01 wrote:01 wrote:01 minor:01 minor:01 imho:01 caml-list:01 exception:01 
+
+The problem is not caused by real-time requirement.
+Let me explain it in more details:
+
+1. a sqlite3 database is used store mutable objects (objects are
+marshaled as strings and stored as BLOB in DB. The objects are very
+large and have variant sizes)
+
+2. Weak module is used to cache these objects.
+
+3. Finalise function is used to write back the change of these in
+memory objects into the sqlite3 database when GC is called.
+
+The scheme follows  the example in section "Garbage collection" of
+ocaml-tutorial.org.
+
+The problem is that:
+ When an object is being loaded through an "sql" select stmt, GC is
+then invoked to reclaim memory which will in turn call finalise
+functions to store some objects into db.  At this moment, the db has
+been locked by the select stmt, and the storing procedure fails.  The
+problem is due to sqlite3 doesn't provide row level locks.  A simple
+solution is to prevent GC from calling finalise functions whenever we
+are loading an object into memory.
+
+IMHO, providing a way to disable GC will help a lot in variant
+situations.  The only side effect of misuse such a feature is out of
+memory exception which does happen even GC is always enabled.
+
+Neal
+
+On 12/1/06, Richard Jones <rich@annexia.org> wrote:
+> On Thu, Nov 30, 2006 at 04:07:51PM -0800, Neal Wang wrote:
+> > Thanks for your help.  But your solution only work for a function
+> > which allocates
+> >  memory of fixed size. Unfortunately, the atomic function, which
+> > cannot be interrupted by GC, read input data from external channels
+> > and the memory needed to store the input data is not determined ahead.
+> > The official interface of GC doesn't not provide a  way to stop GC. Is
+> > there a backdoor such that we can use to stop GC?
+>
+> I can't see how this would work.  The minor heap is a fixed size (32K
+> or something) and when this is used up, you _have_ to do a minor
+> collection.
+>
+> Can you tell us what the problem is that you're trying to solve?
+>
+> I've only seen two cases where I'd want to stop the GC from running:
+> (1) During quasi real-time operations (eg. a single frame in a game) --
+> this can be solved by making the heap large enough and running the GC
+> at scheduled points.  (2) When the heap is larger than physical RAM --
+> this is solved using our 'Ancient' module.
+>
+> Rich.
+>
+> --
+> Richard Jones, CTO Merjis Ltd.
+> Merjis - web marketing and technology - http://merjis.com
+> Internet Marketing and AdWords courses - http://merjis.com/courses - NEW!
+> Merjis blog - http://blog.merjis.com - NEW!
+>
+

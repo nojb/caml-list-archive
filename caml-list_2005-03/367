@@ -1,0 +1,191 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id ACECBBC48
+	for <caml-list@yquem.inria.fr>; Mon, 28 Mar 2005 04:31:31 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j2S2VUVO024280
+	for <caml-list@yquem.inria.fr>; Mon, 28 Mar 2005 04:31:30 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA15589 for <caml-list@pauillac.inria.fr>; Mon, 28 Mar 2005 04:31:30 +0200 (MET DST)
+Received: from cgpsrv2.cis.mcmaster.ca (cgpsrv2.CIS.McMaster.CA [130.113.64.62])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j2S2VT5n026190
+	for <caml-list@inria.fr>; Mon, 28 Mar 2005 04:31:29 +0200
+Received: from [24.43.193.126] (account carette@univmail.cis.mcmaster.ca)
+  by cgpsrv2.cis.mcmaster.ca (CommuniGate Pro WebUser 4.1.8)
+  with HTTP id 87157087; Sun, 27 Mar 2005 21:31:27 -0500
+From: "Jacques Carette" <carette@mcmaster.ca>
+Subject: Monads, monadic notation and OCaml
+To: caml-list@inria.fr
+Cc: metaocaml-users@cs.rice.edu
+X-Mailer: CommuniGate Pro WebUser Interface v.4.1.8
+Date: Sun, 27 Mar 2005 21:31:27 -0500
+Message-ID: <web-87157087@cgpsrv2.cis.mcmaster.ca>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="_===87157087====cgpsrv2.cis.mcmaster.ca===_"
+X-Miltered: at concorde with ID 42476C82.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 42476C81.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; monads:01 monadic:01 notation:01 ocaml:01 syntax:01 ocaml:01 haskell's:01 syntax:01 oleg:01 monads:01 haskell's:01 disjunction:01 rec:01 rec:01 let':01 
+X-Attachments: type="application/octet-stream" name="pa_monad.ml" 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+This is a multi-part MIME message
+
+--_===87157087====cgpsrv2.cis.mcmaster.ca===_
+Content-Type: text/plain; charset="ISO-8859-1"; format="flowed"
+Content-Transfer-Encoding: 8bit
+
+Attached is a camlp4 syntax extension for a 'monadic do notation' for OCaml, much like Haskell's.  The syntax 
+extension is joint work with Oleg Kiselyov, and is loosely based on previous work of Lydia van Dijk on a similar 
+syntax extension.
+
+Naturally, in OCaml certain monads (like State and IO) are unnecessary.  But other monads (List, option, etc) can be 
+quite convenient.
+
+But monads can be much more than convenient.  Below is some code written in a non-deterministic monad of streams.
+This example is particularly interesting in that it cannot be (naively) done in either Prolog or in Haskell's
+MonadPlus monad, both of which would go into an infinite loop on this example.
+
+(* test non-determinism monad, the simplest possible implementation *)
+type 'a stream = Nil | Cons of 'a * (unit -> 'a stream) 
+                      | InC of (unit -> 'a stream)
+let test_nondet () =
+   let mfail = fun () -> Nil in
+   let ret a = fun () -> Cons (a,mfail) in
+   (* actually, interleave: a fair disjunction with breadth-first search*)
+   let rec mplus a b = fun () -> match a () with
+                   | Nil -> InC b
+		  | InC a -> (match b () with
+		    | Nil -> InC a
+		    | InC b -> InC (mplus a b)
+		    | Cons (b1,b2) -> Cons (b1, (mplus a b2)))
+                   | Cons (a1,a2) -> Cons (a1,(mplus b a2)) in
+   (* a fair conjunction *)
+   let rec bind m f = fun () -> match m () with
+                   | Nil -> mfail ()
+		  | InC a -> InC (bind a f)
+                   | Cons (a,b) -> mplus (f a) (bind b f) () in
+   let guard be = if be then ret () else mfail in
+   let rec run n m = if n = 0 then [] else
+                 match m () with
+		| Nil -> []
+		| InC a -> run n a
+		| Cons (a,b) -> (a::run (n-1) b)
+   in
+   let rec numb () = InC (mplus (ret 0) (mdo { n <-- numb; ret (n+1) })) in
+   (* Don't try this in Prolog or in Haskell's MonadPlus! *)
+   let tst = mdo {
+                   i <-- numb;
+                   guard (i>0);
+                   j <-- numb;
+                   guard (j>0);
+                   k <-- numb;
+                   guard (k>0);
+                   (* Just to illustrate the `let' form within mdo *)
+                   let test x = x*x = j*j + k*k in;
+                   guard (test i);
+		  ret (i,j,k)
+                 } 
+   in run 7 tst
+;;
+
+We ourselves have been experimenting with a combined state-passing, continuation-passing monad, where the values 
+returned and manipulated are code fragments (in MetaOCaml).  This allows for considerably simpler, typed code 
+combinators.  Details of this work will be reported elsewhere.  
+
+Jacques
+
+--_===87157087====cgpsrv2.cis.mcmaster.ca===_
+Content-Type: application/octet-stream
+Content-Disposition: attachment;
+ filename="pa_monad.ml"
+Content-Transfer-Encoding: base64
+
+KCogbmFtZTogICAgICAgICAgcGFfbW9uYWQubWwKICogc3lub3BzaXM6ICAgICAgSGFza2Vs
+bC1saWtlICJkbyIgZm9yIG1vbmFkcwogKiBhdXRob3JzOiAgICAgICBKYWNxdWVzIENhcmV0
+dGUgYW5kIE9sZWcgS2lzZWx5b3YsIAogKiAgICAgICAgICAgICAgICBiYXNlZCBpbiBwYXJ0
+IG9mIHdvcmsgb2YgTHlkaWEgRS4gVmFuIERpamsKICogbGFzdCByZXZpc2lvbjogU3VuIE1h
+ciAyNyAyMDA1CiAqIG9jYW1sIHZlcnNpb246IDMuMDguMCAqKQoKCigqKiBDb252ZXJzaW9u
+IFJ1bGVzCgpHcmFtbWFyIGluZm9ybWFsbHk6CiAgICAgICAgICAgICAgICAgbWRvIHsgZXhw
+IH0KICAgICAgICAgICAgICAgICBtZG8geyBleHAxOyBleHAyIH0KICAgICAgICAgICAgICAg
+ICBtZG8geyB4IDwtLSBleHA7IGV4cCB9CiAgICAgICAgICAgICAgICAgbWRvIHsgbGV0IHgg
+PSBmb28gaW47IGV4cCB9CndoaWNoIGlzIGFsbW9zdCBsaXRlcmFsbHkgdGhlIGdyYW1tYXIg
+b2YgSGFza2VsbCBgZG8nIG5vdGF0aW9uLAptb2R1bG8gYGRvJy9gbWRvJyBhbmQgYDwtJy9g
+PC0tJy4KCkdyYW1tYXIgZm9ybWFsbHk6CgogICAgICAgIG1kbyB7IDxkby1ib2R5PiB9CiAg
+ICAgICAgPGRvLWJvZHk+IDo6ID0KICAgICAgICAgICAgICAgICJsZXQiIHZhciA9IEVYUCAo
+ImFuZCIgdmFyID0gRVhQKSogImluIiAiOyIgPGRvLWJvZHk+CiAgICAgICAgICAgICAgICBF
+WFAKICAgICAgICAgICAgICAgIChwYXQgPC0tKT8gRVhQICI7IiA8ZG8tYm9keT4KClNlbWFu
+dGljcyAoYXMgcmUtd3JpdGluZyBpbnRvIHRoZSBjb3JlIGxhbmd1YWdlKQoKICAgICAgICBt
+ZG8geyBleHAgfSA9PT0+IGV4cAogICAgICAgIG1kbyB7IHBhdCA8LS0gZXhwOyByZXN0IH0g
+PT09PiBiaW5kIGV4cCAoZnVuIHBhdCAtPiBtZG8geyByZXN0IH0pCiAgICAgICAgbWRvIHsg
+ZXhwOyByZXN0IH0gPT09PiBiaW5kIGV4cCAoZnVuIF8gLT4gbWRvIHsgcmVzdCB9KQogICAg
+ICAgIG1kbyB7IGxldCBwYXQgPSBleHAgaW47IHJlc3QgfSA9PT0+IGxldCBwYXQgPSBleHAg
+aW4gbWRvIHsgcmVzdCB9CgpBY3R1YWxseSwgaW4gYGxldCBwYXQgPSBleHAnIG9uZSBjYW4g
+dXNlIGFueXRoaW5nIHRoYXQgaXMgYWxsb3dlZAppbiBhIGBsZXQnIGV4cHJlc3Npb24sIGUu
+Zy4sIGBsZXQgcGF0MSA9IGV4cDEgYW5kIHBhdDIgPSBleHAyIC4uLicuClRoZSByZWFzb24g
+d2UgY2FuJ3QgdGVybWluYXRlIHRoZSBgbGV0JyBleHByZXNzaW9uIHdpdGgganVzdCBhIHNl
+bWktY29sb24KaXMgYmVjYXVzZSBzZW1pLWNvbG9uIGNhbiBiZSBhIHBhcnQgb2YgYW4gZXhw
+cmVzc2lvbiB0aGF0IGlzIGJvdW5kIHRvCnRoZSBwYXR0ZXJuLgoKSXQgaXMgcG9zc2libGUg
+dG8gdXNlIGA8LScgaW5zdGVhZCBvZiBgPC0tJy4gSW4gdGhhdCBjYXNlLAp0aGUgc2ltaWxh
+cml0eSB0byB0aGUgYGRvJyBub3RhdGlvbiBvZiBIYXNrZWxsIHdpbGwgYmUgY29tcGxldGUu
+IEhvd2V2ZXIsCmR1ZSB0byB0aGUgcGFyc2luZyBydWxlcyBvZiBDYW1scDQsIHdlIHdvdWxk
+IGhhdmUgdG8gYWNjZXB0IGA6PScgYXMKYW4gYWxpYXMgZm9yIGA8LScuIFNvLCBtZG8geyBw
+YXQgOj0gZXhwMTsgZXhwMiB9IHdvdWxkIGJlIGFsbG93ZWQgdG9vLgpQZXJoYXBzIHRoYXQg
+aXMgdG9vIG11Y2guCgpUaGUgbWFqb3IgZGlmZmljdWx0eSB3aXRoIHRoZSBgZG8nIG5vdGF0
+aW9uIGlzIHRoYXQgaXQgY2FuJ3QgdHJ1bHkgYmUKcGFyc2VkIGJ5IGFuIExSLWdyYW1tYXIu
+IEluZGVlZCwgdG8gZmlndXJlIG91dCBpZiB3ZSBzaG91bGQgc3RhcnQKcGFyc2luZyA8ZG8t
+Ym9keT4gYXMgYW4gZXhwcmVzc2lvbiBvciBhIHBhdHRlcm4sIHdlIGhhdmUgdG8gcGFyc2Ug
+aXQKYXMgYSBwYXR0ZXJuIGFuZCBjaGVjayB0aGUgIjwtLSIgZGVsaW1pdGVyLiBJZiBpdCBp
+c24ndCB0aGVyZSwgd2Ugc2hvdWxkCl9iYWNrdHJhY2tfIGFuZCBwYXJzZSBpdCBhZ2FpbiBh
+cyBhbiBleHByZXNzaW9uLiBGdXJ0aGVybW9yZSwgImEgPC0tIGIiCihvciAiYSA8LSBiIikg
+Y2FuIGFsc28gYmUgcGFyc2VkIGFzIGFuIGV4cHJlc3Npb24uIEhvd2V2ZXIsIGZvciBzb21l
+IHBhdHRlcm5zLAplLmcuIChgXyA8LS0gZXhwJyksIHRoYXQgY2Fubm90IGJlIHBhcnNlZCBh
+cyBhbiBleHByZXNzaW9uLiAKCiAgICAqKQoKdHlwZSBtb25iaW5kID0gQmluZEwgb2YgKE1M
+YXN0LnBhdHQgKiBNTGFzdC5leHByKSBsaXN0CiAgICAgICAgICAgICB8IEJpbmRNIG9mIE1M
+YXN0LnBhdHQgKiBNTGFzdC5leHByCiAgICAgICAgICAgICB8IEV4cE0gIG9mIE1MYXN0LmV4
+cHIKKCogQ29udmVydCBNTGFzdC5leHByIGludG8gTUxhc3QucGF0dCwgaWYgd2UgYGFjY2lk
+ZW50YWxseScKICAgcGFyc2VkIGEgcGF0dGVybiBhcyBhbiBleHByZXNzaW9uLgogIFRoZSBj
+b2RlIGlzIGJhc2VkIG9uIHBhdHRlcm5fZXFfZXhwcmVzc2lvbiBpbiAKICAvY2FtbHA0L2V0
+Yy9wYV9mc3RyZWFtLm1sICopCgpsZXQgcmVjIGV4cF90b19wYXR0IGxvYyBlID0KICBtYXRj
+aCBlIHdpdGgKICAgIDw6ZXhwcjwgJGxpZDpiJCA+PiAtPiA8OnBhdHQ8ICRsaWQ6YiQgPj4K
+ICB8IDw6ZXhwcjwgJHVpZDpiJCA+PiAtPiA8OnBhdHQ8ICR1aWQ6YiQgPj4KICB8IDw6ZXhw
+cjwgJGUxJCAkZTIkID4+IC0+IAogICAgICBsZXQgcDEgPSBleHBfdG9fcGF0dCBsb2MgZTEg
+YW5kIHAyID0gZXhwX3RvX3BhdHQgbG9jIGUyIGluCiAgICAgIDw6cGF0dDwgJHAxJCAkcDIk
+ID4+CiAgfCA8OmV4cHI8ICgkbGlzdDplbCQpID4+IC0+CiAgICAgIGxldCBwbCA9IExpc3Qu
+bWFwIChleHBfdG9fcGF0dCBsb2MpIGVsIGluCiAgICAgIDw6cGF0dDwgKCRsaXN0OnBsJCkg
+Pj4KICB8IF8gLT4gZmFpbHdpdGggIlRoaXMgcGF0dGVybiBpc24ndCB5ZXQgc3VwcG9ydGVk
+IgoKKCogVGhlIG1haW4gc2VtYW50aWMgZnVuY3Rpb24gKikKbGV0IHByb2Nlc3MgbG9jIGIg
+PSAKICAgIGxldCBnbG9iYmluZDIgeCBwIGFjYyA9CiAgICAgICAgPDpleHByPCBiaW5kICR4
+JCAoZnVuICRwJCAtPiAkYWNjJCkgPj4KICAgIGFuZCBnbG9iYmluZDEgeCBhY2MgPQogICAg
+ICAgIDw6ZXhwcjwgYmluZCAkeCQgKGZ1biBfIC0+ICRhY2MkKSA+PgogICAgYW5kIHJldCBu
+ID0gPDpleHByPCAkbiQgPj4gaW4KICAgIGxldCBmb2xkZXIgPSBsZXQgKGEsYikgPSAoZ2xv
+YmJpbmQyLCBnbG9iYmluZDEpIGluCiAgICAgICAgKGZ1biBhY2N1bXVsYXRvciB5IC0+IAog
+ICAgICAgIG1hdGNoIHkgd2l0aAogICAgICAgIHwgQmluZE0ocCx4KSAtPiBhIHggcCBhY2N1
+bXVsYXRvcgogICAgICAgIHwgRXhwTSh4KSAtPiBiIHggYWNjdW11bGF0b3IKICAgICAgICB8
+IEJpbmRMKGwpIC0+IDw6ZXhwcjwgbGV0ICRsaXN0OmwkIGluICRhY2N1bXVsYXRvciQgPj4K
+ICAgICAgICApCiAgICBpbgogICAgbWF0Y2ggTGlzdC5yZXYgYiB3aXRoIAogICAgfCBbXSAt
+PiBmYWlsd2l0aCAic29tZWhvdyBnb3QgYW4gZW1wdHkgbGlzdCBmcm9tIGEgTElTVDEhIgog
+ICAgfCAoRXhwTShuKTo6dCkgLT4gTGlzdC5mb2xkX2xlZnQgZm9sZGVyIChyZXQgbikgdCAg
+CiAgICB8IF8gLT4gZmFpbHdpdGggIkRvZXMgbm90IGVuZCB3aXRoIGFuIGV4cHJlc3Npb24i
+CgpFWFRFTkQKICAgIEdMT0JBTDogUGNhbWwuZXhwcjsgCgogICAgUGNhbWwuZXhwcjogTEVW
+RUwgImV4cHIxIgogICAgWwogICAgICBbICJtZG8iOyAieyI7CiAgICAgICAgYmluZGluZ3Mg
+PSBMSVNUMSBtb25hZGljX2JpbmRpbmcgU0VQICI7IjsgIn0iIC0+CiAgICAgICAgICAgIHBy
+b2Nlc3MgbG9jIGJpbmRpbmdzCiAgICAgIF0gCiAgICBdIDsKCiAgICBQY2FtbC5leHByOiBC
+RUZPUkUgImFwcGx5IgogICAgWyBOT05BCgkgIFsgZTEgPSBTRUxGOyAiPC0tIjsgZTIgPSBQ
+Y2FtbC5leHByIExFVkVMICJleHByMSIgLT4KICAgICAgICAgIDw6ZXhwcjwgJGUxJCAkbGlk
+OiI8LS0iJCAkZTIkID4+CgkgIF0gCiAgICBdIDsKCiAgICBtb25hZGljX2JpbmRpbmc6CiAg
+ICBbIAogICAgICBbICJsZXQiOyBsID0gTElTVDEgUGNhbWwubGV0X2JpbmRpbmcgU0VQICJh
+bmQiOyAiaW4iIC0+CgkgICAgICBCaW5kTChsKSBdCiAgICB8IAogICAgICBbIHggPSBQY2Ft
+bC5leHByIExFVkVMICJleHByMSIgLT4KCSgqIEZvciBzb21lIHBhdHRlcm5zLCAicGF0dCA8
+LS0gZXhwIiBjYW4gcGFyc2UKCSAgIGFzIGFuIGV4cHJlc3Npb24gdG9vLiBTbyB3ZSBoYXZl
+IHRvIGZpZ3VyZSBvdXQgd2hpY2ggaXMgd2hpY2guICopCiAgICAgICAgbWF0Y2ggeCB3aXRo
+CiAgICAgICAgICAgICAgPDpleHByPCAkZTEkICAkbGlkOm9wJCAgJGUzJCAgPj4gd2hlbiBv
+cCA9ICI8LS0iIAogICAgICAgICAgICAgICAgICAtPiBCaW5kTSgoZXhwX3RvX3BhdHQgbG9j
+IGUxKSxlMykKICAgICAgICAgICAgfCBfIC0+IEV4cE0oeCkgXQogICAgfCAKICAgICAgWyBw
+ID0gUGNhbWwucGF0dCBMRVZFTCAic2ltcGxlIjsgIjwtLSI7IHggPSBQY2FtbC5leHByIExF
+VkVMICJleHByMSIgLT4KICAgICAgICBCaW5kTShwLHgpIF0KICAgIF0gOwpFTkQ7Cg==
+
+--_===87157087====cgpsrv2.cis.mcmaster.ca===_--
+

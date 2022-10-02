@@ -1,0 +1,93 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q3IMX2hr014838
+	for <caml-list@sympa-roc.inria.fr>; Thu, 19 Apr 2012 00:33:07 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ah8DAIdAj09KN1ZKnGdsb2JhbABEhWWrfgEBAQEBCAsmJ4IJAQEEASMEJysFCwsaAggQDgICMQwKEAYbFQSHaQUEp3aTFoEvjW41YwSbT41D
+X-IronPort-AV: E=Sophos;i="4.75,443,1330902000"; 
+   d="scan'208";a="154637867"
+Received: from mail6.webfaction.com (HELO smtp.webfaction.com) ([74.55.86.74])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 19 Apr 2012 00:33:06 +0200
+Received: from heyho.local (81-234.197-178.cust.bluewin.ch [178.197.234.81])
+	by smtp.webfaction.com (Postfix) with ESMTP id 9945E20C96A2;
+	Wed, 18 Apr 2012 17:33:04 -0500 (CDT)
+Date: Thu, 19 Apr 2012 00:32:58 +0200
+From: =?utf-8?Q?Daniel_B=C3=BCnzli?= <daniel.buenzli@erratique.ch>
+To: Satoshi Ogasawara <ogasawara@itpl.co.jp>
+Cc: caml-list@inria.fr
+Message-ID: <B6E07E1F07A048D1BE101C5F5D01C781@erratique.ch>
+In-Reply-To: <4F8EFC34.7080906@itpl.co.jp>
+References: <4F8D9D0E.1040007@itpl.co.jp>
+ <F7294E8F02FB474AA2373765B8BCAB57@erratique.ch>
+ <4F8E1FF4.5070702@itpl.co.jp>
+ <B2FE8DD50C9B4611809BC1F6B9CDD2E4@erratique.ch>
+ <4F8EA91C.3060001@itpl.co.jp>
+ <2B372C89CE4F408688B67B090FA5105C@erratique.ch>
+ <4F8EFC34.7080906@itpl.co.jp>
+X-Mailer: sparrow 1.5 (build 1043.1)
+MIME-Version: 1.0
+Content-Type: text/plain; charset="utf-8"
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q3IMX2hr014838
+Subject: Re: [Caml-list] [ANN] PEC ver. 1.1
+
+Le mercredi, 18 avril 2012 à 19:39, Satoshi Ogasawara a écrit :
+> Now I understand React can be
+> easily adapted to send a value during update cycle by using thunk. To forbid
+> sending events during update cycle in React is not restriction but design choice.
+
+
+Just to be precise. It *is* forbidden to use the sending function of a primitive event during an update cycle. It is of course not forbidden to store this call in a queue as a thunk and execute it later, after the update cycle ended, like PEC does.  
+  
+> But I'm not sure why only sending a value to event breaks functional and compos-
+> itional nature of FRP. I think all side-effects during update cycle are breaks
+> functional and compositional nature of FRP too, because the results of both programs
+> are depends on evaluation order of updates.
+>  
+> A:
+> let e' = E.map (fun x -> sender 1; x + 1) e in
+> let e'' = E.map (fun x -> sender 2; x + 1) e in
+>  
+> B:
+> let e' = E.map (fun x -> print_int 1; x + 1) e in
+> let e'' = E.map (fun x -> print_int 2; x + 1) e in
+>  
+> Are there any special problem in program A?  
+
+Yes because the semantics of [e] is violated, it has three values at the same time, the current value during the update cycle, the value 1 and the value 2. Now suppose I reason about the semantics of [e] in this program, it has a well-defined outcome *for [e] itself* if I send it a value [v]. However if you now add a new module that uses [e] and does :  
+
+let e''' = E.map (fun x -> sender 3; x + 1) e  
+
+then the semantics of [e] changes, sending the same [v] to [e] results in a different outcome *for [e] itself* and hence for all its dependents. That's what I mean when I say that you lost the functional and compositional nature of FRP. You are back into imperative programming. Note that this is also valid if the [sender] function sends to another primitive event e'.  
+  
+> In other word, program B keeps
+> functional and compositional nature of FRP?
+
+
+Yes because since you didn't play dirty tricks with [e], if you add a new module that uses [e] and does :  
+
+let e''' = E.map (fun x -> print_int 3; x + 1) e
+
+the semantics of [e] is still the same, sending the same value to [e] has the same outcome *for [e] itself* whether e''' is present or not. Of course this is not the case for stdout and its final state will depend on the evaluation order of the FRP system. But we never pretended that stdout was an event or a signal, stdout lives outside the FRP system.  
+  
+> So an event value itself is a nested variant instance which can be GCed freely
+> when user-level references are disappear. (There are no library level reference.)
+>  
+> When an event is subscribed, the argument function are set in source events of
+> subscribed event. This means subscribed events are never GCed until source events
+> are GCed.(or until unsubscribe.)
+
+> If one of source events are fired, dependent events marked with subscribe functions
+> are updated. Weak pointer does not needs in that algorithm.
+
+
+
+
+So if I understand correctly you are doing manual memory management via (un)subscribe of the leaves of the dependency tree and instead of having weak "forward" pointers from events to their dependents you have regular "backward" pointers from events to the events they depend on. Once these leaves are subscribed we can follow them backwards to find out what their primitive event set is and understand what needs to be updated along the way. It may be an interesting approach to avoid weak pointers but I'd need more thinking to convince me it can correctly handles all the dark sides of leaks, fixed point definitions, signal initialization and dynamically changing dependency graph. By the way you still need to update the events in the correct order/and or only once to prevent glitches, how do you achieve that ?
+
+Best,
+
+Daniel
+
+
+

@@ -1,0 +1,163 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 92F1DBC57
+	for <caml-list@yquem.inria.fr>; Fri,  5 Mar 2010 16:29:09 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtoDAM6xkEvZSMDdimdsb2JhbACbRRUBAQEKCQwHEQUftxCEfQQ
+X-IronPort-AV: E=Sophos;i="4.49,587,1262559600"; 
+   d="scan'208";a="58269324"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 05 Mar 2010 16:29:08 +0100
+Received: from smtp05.web.de (fmsmtp05.dlan.cinetic.de [172.20.4.166])
+	by fmmailgate01.web.de (Postfix) with ESMTP id D61D414B3CC67
+	for <caml-list@inria.fr>; Fri,  5 Mar 2010 16:27:53 +0100 (CET)
+Received: from [85.216.85.71] (helo=frosties.localdomain)
+	by smtp05.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #314)
+	id 1NnZRR-0003sI-00
+	for caml-list@inria.fr; Fri, 05 Mar 2010 16:27:53 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.71)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1NnZRM-0005Z8-1D
+	for caml-list@inria.fr; Fri, 05 Mar 2010 16:27:48 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Subject: Phantom types and polymorphic containers
+Date: Fri, 05 Mar 2010 16:27:47 +0100
+Message-ID: <87pr3i94b0.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX198VDcPu7ARH9JR5gPiLtMJwtxG5Gs0noQVGRol
+	T90gfrG1hPdybAetKDFh35pEd+0yVrvKmDxSSyAI1e/+q9qBOz
+	j7fNoGrXQ=
+X-Spam: no; 0.00; sig:01 val:01 val:01 const:01 const:01 struct:01 sig:01 struct:01 foo:01 foo:01 mfg:98 polymorphic:01 polymorphic:01 char:01 char:01 
+
+Hi,
+
+I'm wondering if one can create a polymorphic container with Phantom
+types that can store types that themself have phantom types and get the
+two to correlate. So far I've only been able to create a non-polymorphic
+container with phantom types and even that isn't perfect:
+
+Say I have my phantom typed string:
+
+module S : sig
+  type 'a t = private string
+  val make : string -> [`Read | `Write] t
+  val make_const : string -> [`Const | `Read] t
+  val read_only : [> `Read] t -> [`Read] t
+  val get : [> `Read | `Const] t -> int -> char
+  val set : [> `Write] t -> int -> char -> unit
+end = struct
+  type 'a t = string
+  let make x = x
+  let make_const x = String.copy x
+  let read_only x = x
+  let get x i = x.[i]
+  let set x i c = x.[i] <- c
+end
+
+And then my (non-polymorphic) Container:
+
+module C : sig
+  type ('a, 'b) t = private 'a S.t ref
+  val make : 'a S.t -> ('a, [`Read | `Write]) t
+  val read_only : ('a, [> `Read]) t -> ('a, [`Read]) t
+  val get : ('a, [> `Read]) t -> 'a S.t
+  val set : ('a, [> `Write]) t -> 'a S.t -> unit
+end = struct
+  type ('a, 'b) t = 'a S.t ref
+  let make x = ref x
+  let read_only x = x
+  let get x = !x
+  let set x y = x := y
+end
+
+Now to test this: (this is the expected behaviour)
+
+# let s = S.make "write";;
+val s : [ `Read | `Write ] S.t = "write"
+# let c = C.make s;;
+val c : [ `Read | `Write ] C.t = {contents = "write"}
+# C.set c s;;
+- : unit = ()
+# let s2 = C.get c;;
+val s2 : [ `Read | `Write ] S.t = "write"
+# S.set s2 0 'C';;
+- : unit = ()
+# let d = C.read_only c;;
+val d : ([ `Read | `Write ], [ `Read ]) C.t = {contents = "write"}
+# C.set d s;;
+        ^
+Error: This expression has type ([ `Read | `Write ], [ `Read ]) C.t
+       but an expression was expected of type
+         ([ `Read | `Write ], [> `Write ]) C.t
+       The first variant type does not allow tag(s) `Write
+# let s2 = C.get d;;
+val s2 : [ `Read | `Write ] S.t = "write"
+# S.set s2 0 'W';;
+- : unit = ()
+
+
+# let s = S.read_only (S.make "read");;
+val s : [ `Read ] S.t = "read"
+# let c = C.make s;;
+val c : [ `Read ] C.t = {contents = "read"}
+# C.set c s;;
+- : unit = ()
+# let s2 = C.get c;;
+val s2 : [ `Read ] S.t = "read"
+# S.set s2 0 'C';;
+        ^^
+Error: This expression has type [ `Read ] S.t
+       but an expression was expected of type [> `Write ] S.t
+       The first variant type does not allow tag(s) `Write
+
+
+
+But one thing doesn't quite work:
+
+# let s1 = S.make "foo";;
+val s1 : [ `Read | `Write ] S.t = "foo"
+# let s2 = S.read_only s1;;
+val s2 : [ `Read ] S.t = "foo"
+# let c = C.make s2;;
+val c : ([ `Read ], [ `Read | `Write ]) C.t = {contents = "foo"}
+# C.set c s1;;
+          ^^
+Error: This expression has type [ `Read | `Write ] S.t
+       but an expression was expected of type [ `Read ] S.t
+       The second variant type does not allow tag(s) `Write
+
+I would like c to accept [> `Read] strings. I want a signature like this:
+
+  val set : ('a, [> `Write]) t -> [> 'a] S.t -> unit
+
+and I think the get would have to change then to:
+
+  val get : ('a, [> `Read]) t -> [> 'a] S.t
+
+But [> type] only seems to work with specific polymorphic variant types
+and not with polymorphic types:
+
+# type 'a foo = [`A | `B];;
+type 'a foo = [ `A | `B ]
+# type ('a, 'b) f = ([> 'b] as 'a) -> unit;;
+                        ^^
+Error: The type 'a is not a polymorphic variant type
+# type ('a, 'b) f = ([> 'b foo] as 'a) -> unit;;
+type ('a, 'b) f = 'a -> unit constraint 'a = [> 'b foo ]
+
+At least I can't find how.
+
+
+Any ideas how to make the container polymorphic?
+
+MfG
+        Goswin
+

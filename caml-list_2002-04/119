@@ -1,0 +1,86 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA19072; Mon, 15 Apr 2002 16:55:01 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA21213 for <caml-list@pauillac.inria.fr>; Mon, 15 Apr 2002 16:55:00 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g3FEsvD10913;
+	Mon, 15 Apr 2002 16:54:57 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA18570; Mon, 15 Apr 2002 16:54:57 +0200 (MET DST)
+Date: Mon, 15 Apr 2002 16:54:57 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Harry Chomsky <harry@chomsky.net>
+Cc: Caml-list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Threads + Win32 API = crash
+Message-ID: <20020415165457.B18541@pauillac.inria.fr>
+References: <002d01c1e32c$56ebe190$0200a8c0@harry>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <002d01c1e32c$56ebe190$0200a8c0@harry>; from harry@chomsky.net on Sat, Apr 13, 2002 at 01:46:36PM -0700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> I'm having trouble incorporating multithreading support into my OCaml-Win32
+> library.  Basically, any program that uses OCaml threading and also invokes
+> a Win32 message loop will crash after a few seconds with an illegal attempt
+> to access memory at "0x00000001".  This behavior is demonstrated by the
+> enclosed sample program, which is very simple and does not require my
+> OCaml-Win32 library.
+> I don't really know how to investigate this problem further.  I've
+> determined that the problem goes away if I disable the tick thread
+
+Several users reported similar problems with threads under Windows in
+OCaml 3.04.  After investigation, I found that I managed to break the
+timer-based preemption while trying to work around another issue in
+the Windows port.  
+
+If you're willing to recompile from sources, here is the fix: in
+byterun/signals.c, replace
+
+  CAMLexport void leave_blocking_section(void)
+  {
+  #ifdef _WIN32
+    /* Under Win32, asynchronous signals such as ctrl-C are not processed
+       immediately (see ctrl_handler in win32.c), but simply set
+       pending_signal and let the system call run to completion.
+       Hence, test pending_signal here and act upon it, before we get
+       a chance to process the result of the system call. */
+    int signal_number = pending_signal;
+    pending_signal = 0;
+    if (signal_number) execute_signal(signal_number, 1);
+  #endif
+    if (leave_blocking_section_hook != NULL) leave_blocking_section_hook();
+    Assert(async_signal_mode);
+    async_signal_mode = 0;
+  }
+
+by
+
+  CAMLexport void leave_blocking_section(void)
+  {
+  #ifdef _WIN32
+    int signal_number;
+  #endif
+
+    if (leave_blocking_section_hook != NULL) leave_blocking_section_hook();
+  #ifdef _WIN32
+    /* Under Win32, asynchronous signals such as ctrl-C are not processed
+       immediately (see ctrl_handler in win32.c), but simply set
+       pending_signal and let the system call run to completion.
+       Hence, test pending_signal here and act upon it, before we get
+       a chance to process the result of the system call. */
+    signal_number = pending_signal;
+    pending_signal = 0;
+    if (signal_number) execute_signal(signal_number, 1);
+  #endif
+    Assert(async_signal_mode);
+    async_signal_mode = 0;
+  }
+
+Hope this helps,
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

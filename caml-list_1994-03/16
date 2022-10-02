@@ -1,0 +1,115 @@
+Received: by pauillac.inria.fr; Tue, 22 Mar 94 12:49:49 +0100
+Received: from concorde.inria.fr by pauillac.inria.fr; Sun, 20 Mar 94 02:38:57 +0100
+Received: from Tamuz.Stanford.EDU (Tamuz.Stanford.EDU [36.28.0.48]) by concorde.inria.fr (8.6.7/8.6.6) with SMTP id CAA10878 for <caml-list@pauillac.inria.fr>; Sun, 20 Mar 1994 02:38:53 +0100
+Received:  by Tamuz.Stanford.EDU (5.61/25-theory-eef) id AA02115; Sat, 19 Mar 94 17:38:49 -0800
+From: Xavier Leroy <xavier@Theory.Stanford.EDU>
+Message-Id: <9403200138.AA02115@Tamuz.Stanford.EDU>
+Subject: Re: polymorphic references [was: unsound typechecker]
+To: caml-list@pauillac.inria.fr
+Date: Sat, 19 Mar 1994 17:38:48 -0800 (PST)
+Content-Type: text
+Content-Length: 5078      
+Sender: weis@pauillac.inria.fr
+Status: O
+
+The Caml Light typechecker has never been advertised as type-safe.
+To quote the manual page:
+
+     BUGS
+          [...]
+          Polymorphic references, and more generally mutable concrete
+          types, are not safe: it is possible to create polymorphic refer-
+          ences through a functional encoding.
+
+Martin Elsman's example is an instance of these functional encoding.
+
+In addition to the problem with functional encodings of mutable data
+structures, there are also various sources of unsoundness in the
+module system: since .zi files are not timestamped/fingerprinted, the
+user can perfectly break the type system by renaming or modifying .zi
+files, or even just forgetting to recompile .mli files that have
+changed. Strange things can also happen if the program exceeds some of
+the unchecked limitations of the Caml Light compiler.
+
+As for the problem with polymorphic mutable structures, the approach
+followed in Caml Light relies on two mechanisms: dangerous type
+variables and closure typing (for more details, see the paper in POPL
+91, or my PhD thesis). Dangerous type variables catch 99% of the
+offending programs, do not modify the ML type algebra, and are easy to
+implement. Closure typing catches the remaining 1% (that is, the
+functional encodings of mutable structures), complicates the type
+algebra tremendously, and is not that easy to implement.
+
+At the time the Caml Light typechecker was written, the details of
+closure typing hadn't been worked out completely, and I chose to
+implement only the dangerous variables and see how this works in
+practice. I claimed at that time that no real programs would run into
+the hole in the type system, just like no normal user would run into
+the holes in the module system: only specially-designed examples would
+expose the problems. This is engineering, folks -- that's the same
+reason why .zi files are still unsafe as well: sure, we could make
+them safe by using cryptographically secure authentication techniques
+or whatever, but it wouldn't make sense to devote so much effort to a
+problem that never occurs in practice.
+
+Actually, no "normal" user complained about the polymorphic mutable
+structures for more than two years (one or two persons with strong
+background in type systems did notice, but again they were not
+programming, they were just playing with the type checker), and then
+we got several bug reports since the beginning of the year. (Maybe
+there's something in the position of the planets or something that
+suddenly urges Caml Light users to exercice the bug...)
+
+As for adding closure typing to the Caml Light type checker, I have
+decided against it. I did a quick and dirty implementation of closure
+typing a long time ago, as a proof of concept. The conclusions were
+that it works beautifully -- except when the user writes module
+interfaces by hand, which becomes almost impossible with closure
+typing, due to the excessive richness of type expressions. (See my
+thesis for discussion.)
+
+My conclusion (after having worked on the problem for quite a long
+time) is that there are no perfect solutions to the problem of
+polymorphic mutable structures. By "perfect", I mean
+        (1) sound,
+        (2) providing good support for imperative programming,
+        (3) with a sensible type algebra (where type expressions are
+            usable as partial specifications; in other terms, they
+            do not reflect purely operational properties of the functions),
+        (4) compatible with the purely applicative subset of ML.
+
+Imperative variables as in SML satisfy (1) and (4) but not (2) nor (3).
+Dangerous variables + closure typing satisfy (1), (2), (4) but not (3).
+The hack currently used in Caml Light satisfy (2), (3), (4) but not (1).
+
+Finally, an amazingly simple solution recently put forward by Andrew
+Wright satisfies (1), (2), (3) but not (4). The idea is to restrict
+type generalization to definitions that are syntactically values, that
+is, functions (fun x -> e), constants and identifiers. So, for
+instance,
+
+        let id x = x;;          is polymorphic (f: forall 'a. 'a -> 'a)
+                                since fun x -> x is a value
+
+        let x = [];;            is polymorphic, since [] is a constant
+
+        let f = map id;;        is *not* polymorphic ('a list -> 'a list
+                                for some 'a, not for all 'a), since
+                                map id is not syntactically a value.
+                                The definition will probably be rejected,
+                                as 'a is free but not generalizable in
+                                the type of f.
+
+Notice that there are some perfectly correct purely applicative
+programs (e.g. f above) that will get rejected. Wright's claim is that
+these program are uncommon in practice.
+
+The current trend is to adopt the latter solution, but again it's not
+a perfect solution, it's just the "less bad" solution, and it's bound
+to generate lots of complaints from baffled users 
+(``why can't I do "let f = map list_length;;" any longer?'').
+
+- Xavier Leroy
+
+
+

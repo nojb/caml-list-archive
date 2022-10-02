@@ -1,0 +1,124 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA30464 for caml-redist; Thu, 4 May 2000 18:35:44 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA01431 for <caml-list@pauillac.inria.fr>; Wed, 3 May 2000 12:49:21 +0200 (MET DST)
+Received: from pcrm.win.tue.nl (pcrm.win.tue.nl [131.155.69.41])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id MAA23732
+	for <caml-list@inria.fr>; Wed, 3 May 2000 12:49:21 +0200 (MET DST)
+Received: (from stephan@localhost)
+	by pcrm.win.tue.nl (8.9.3/8.9.3) id NAA20903
+	for caml-list@inria.fr; Sun, 28 May 2000 13:17:20 +0200
+Message-ID: <20000528131720.A20567@pcrm.win.tue.nl>
+Date: Sun, 28 May 2000 13:17:20 +0200
+From: Stephan Houben <stephan@pcrm.win.tue.nl>
+To: caml-list@inria.fr
+Subject: problems with classes and polymorphic recursion
+Mail-Followup-To: caml-list@inria.fr
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.93.1i
+Sender: weis
+
+Hello list,
+
+I'm trying to write a class for doing a finite mapping of "terms" 
+on some value 'a.
+A term is defined as:
+
+    type term = Term of term list | Atom
+
+The idea is to have a class term_map that maps terms on 'a (as said above)
+which uses another class termlist_map that maps "term list"'s on 'a.
+
+A term_map can contain a termlist_map; when it is given a Term <somelist>,
+then it asks its termlist_map to get the value for <somelist>.
+
+Similarly, a termlist_map contains a term_map, in which it looks up the
+head of the list (for a non-empty list). The result of this look-up should
+be another termlist_map, in which the tail of the list is looked up.
+
+(See for the complete code the end of this message.)
+
+The problem is that the type inferencing gives me a type that is too
+restrictive: according to ocaml, the expression "new term_map"
+has type:
+
+ ((Objtest.term list, 'a) Objtest.map as 'a) Objtest.term_map
+
+whereas I would expect (and want it to have) just "'_a Objtest.term_map". 
+
+It appears to me (after reading some older postings on the list) that
+the two classes have a polymorphic recursive relation. I.e.
+"'a term_map" contains a "'a termlist_map", which in turn contains
+a "('a termlist_map) term_map". Which leads the typechecker
+to identify "'a" with "'a termlist_map" (a synonym of which is
+"(term list, 'a) map". Which is not useful for me.
+
+Does anyone have any ideas for an elegant solution to work around this
+problem?
+
+Thanks,
+
+Stephan Houben
+
+-- begin code
+
+    
+    type term = Term of term list | Atom
+
+    let access opt =
+      match opt with
+	  None -> raise Not_found
+	| Some s -> s  
+
+    class type ['key, 'value] map =
+      object
+	method find : 'key -> 'value
+	method add : 'key -> 'value -> unit
+      end  
+
+    class ['value] term_map =
+      object
+	val mutable term : (term list, 'value) map option = None
+	val mutable atom : 'value option = None
+	 
+	method find (trm : term) : 'value =
+	  match trm with
+	      Term lst -> (access term)#find lst
+	    | Atom -> access atom
+
+	method add (trm : term) (value : 'value) : unit =
+	  match trm with
+	      Term lst ->
+		(if term = None then term <- Some (new termlist_map);
+		 (access term)#add lst value)
+	    | Atom -> atom <- Some value	     
+      end
+
+    and ['value] termlist_map =
+      object
+	val mutable nonempty : (term, (term list, 'value) map) map option = None
+	val mutable empty : 'value option = None
+
+	method find (lst : term list) : 'value =
+	  match lst with
+	      x :: xs -> ((access nonempty)#find x)#find xs
+	    | [] -> (access empty)
+
+	method add (lst : term list) (value : 'value) : unit =
+	  match lst with
+	      x :: xs ->
+		(if nonempty = None then nonempty <- Some (new term_map);
+		 let tailmap = 
+		   (try
+		      (access nonempty)#find x
+		    with Not_found ->
+		      let tailmap = new termlist_map
+		      in
+			(access nonempty)#add x tailmap; tailmap)
+		 in tailmap#add xs value)
+	    | [] -> empty <- Some value	     
+      end     
+
+-- end code
+
+
+

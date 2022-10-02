@@ -1,0 +1,152 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 96EC3BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 15:18:39 +0200 (CEST)
+Received: from ptb-relay01.plus.net (ptb-relay01.plus.net [212.159.14.212])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5RDIcp1025204
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 15:18:39 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay01.plus.net with esmtp (Exim) id 1I3XPp-0005d9-Vq
+	for caml-list@yquem.inria.fr; Wed, 27 Jun 2007 14:18:38 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] let rec and polymorphic functions
+Date: Wed, 27 Jun 2007 14:12:51 +0100
+User-Agent: KMail/1.9.7
+References: <20070627100004.9E0DABC73@yquem.inria.fr> <001801c7b8a5$672a2b80$6a7ba8c0@treble>
+In-Reply-To: <001801c7b8a5$672a2b80$6a7ba8c0@treble>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200706271412.51319.jon@ffconsultancy.com>
+X-Miltered: at concorde with ID 468263AE.003 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; type-checker:01 o'caml:01 bool:01 recursion:01 printf:01 printf:01 val:01 val:01 foo:01 foo:01 recursive:01 recursion:01 ocaml:01 recursive:01 ad-hoc:01 
+
+On Wednesday 27 June 2007 11:24:53 David Allsopp wrote:
+> The type-checker doesn't see that surely? Surely on that expression it sees
+> out : string -> int -> unit?? Note that changing the sequence to
+>
+> out "%b" true;
+> out "%d" 0;
+>
+> and removing the out "TEST" still causes problems - although O'Caml manages
+> to infer the [format4] first argument for [out], it fixes the first
+> parameter of the [format4] as being [bool -> unit] and so prevents [out]
+> from being used with anything other than a single "%b" argument and hence
+> gives a type error on the next application.
+
+Yes. This is the polymorphic recursion part of your problem. You cannot 
+call "f" polymorphically from inside the "let" binding.
+
+Look at this:
+
+# let rec f x = Printf.printf x and g() = f "%d" 3;;
+val f : (int -> unit, out_channel, unit) format -> int -> unit = <fun>
+val g : unit -> unit = <fun>
+
+Note how "f" has been made specific to the type "int" because of its call 
+inside "g".
+
+If you separate the calls (which you can do in this special case) you recover 
+the polymorphic "f":
+
+# let rec f x = Printf.printf x;;
+val f : ('a, out_channel, unit) format -> 'a = <fun>
+# let g() = f "%d" 3;;
+val g : unit -> unit = <fun>
+
+The critical difference is whether or not the call to "f" appears inside its 
+definition, and that includes inside the body of "g" when "g" is defined at 
+the same time as "f" using "let rec". If you want more details, read papers 
+about the implementation of non-generalized type variables in the 
+Hindley-Milner type system.
+
+I'll try to ossify this by example. You can do:
+
+# let f _ = () in f 0; f "foo";;
+- : unit = ()
+
+but not:
+
+# let rec f _ = () and g = f 0; f "foo";;
+This expression has type string but is here used with type int
+
+> > Also, recursive calls ossify the function to a monomorphic type, so you
+> > cannot do polymorphic recursion in OCaml. There are workaround using
+> > recursive modules or objects but I don't think this is what you want
+> > here.
+>
+> That does explain it - which I didn't know. Consider this which is also
+> broken (and simpler because it has nothing to do with the ad-hoc
+> polymorphism of printf)
+>
+> let rec id x = x
+> and _ = id 0
+> in
+>   id (); (* *** *)
+>   id 1;;
+
+Exactly, yes.
+
+> Gives a type error for *** because id is already inferred as int -> int
+> because of the monomorphic nature of the recursive definition. This is
+> over-guarded but I never got an answer on a previous post as to why. The
+> equivalent SML does type polymorphically:
+>
+> let fun id x = x
+> val _ = id 0
+> in
+>   id ();
+>   id 1
+> end;
+
+No, that is equivalent to the OCaml that does work:
+
+# let f _ = () in f 0; f "foo";;
+- : unit = ()
+
+> Incidentally, it's lucky that this is polymorphic in SML because all
+> function definitions are recursive IIRC.
+>
+> But no-one posted an explanation as to why there's this difference in the
+> let construct between the two flavours of ML :(
+
+SML does not support polymorphic recursion either:
+
+$ sml
+Standard ML of New Jersey v110.62 [built: Thu Feb 22 13:17:37 2007]
+- fun f x = f 1; f 1.0; ()
+val f = fn : int -> 'a
+stdIn:1.16-1.21 Error: operator and operand don't agree [tycon mismatch]
+  operator domain: int
+  operand:         real
+  in expression:
+    f 1.0
+
+The reason is basically that both OCaml and Standard ML were designed around 
+the Hindley-Milner type system, which made the deliberate design decision to 
+push the limits of a decideable type system as far as possible. So they were 
+designed to infer as much as possible whilst ensuring that type annotations 
+are never required. Polymorphic recursion oversteps this boundary.
+
+The designers of Haskell decided to ditch decideability in favour of (much) 
+more power in the type system. So Haskell sometimes requires you to write 
+explicit type annotations. Indeed, Haskell programmers almost always write 
+type annotations, which is one of the reasons why idiomatic Haskell is 
+comparatively verbose.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+The OCaml Journal
+http://www.ffconsultancy.com/products/ocaml_journal/?e
+

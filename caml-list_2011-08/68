@@ -1,0 +1,148 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p791Y8VO029827
+	for <caml-list@sympa-roc.inria.fr>; Tue, 9 Aug 2011 03:34:08 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Av0EALONQE7Lzuai/2dsb2JhbABCpyh3gUABAQQBJxNECwsYLj0aiAa/DYZGBJs4iEQ
+X-IronPort-AV: E=Sophos;i="4.67,340,1309730400"; 
+   d="scan'208";a="115324416"
+Received: from hendrix.mega-nerd.net ([203.206.230.162])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 09 Aug 2011 03:34:01 +0200
+Received: from hendrix.mnn (hendrix.mnn [192.168.200.99])
+	by hendrix.mega-nerd.net (Postfix) with SMTP id 9FE701067BC
+	for <caml-list@inria.fr>; Tue,  9 Aug 2011 11:33:59 +1000 (EST)
+Date: Tue, 9 Aug 2011 11:33:59 +1000
+From: Erik de Castro Lopo <mle+ocaml@mega-nerd.com>
+To: caml-list@inria.fr
+Message-Id: <20110809113359.c306a95842c0c86ea160025d@mega-nerd.com>
+In-Reply-To: <4E401BC7.5040001@inria.fr>
+References: <20110808131504.d9137220d4b4401cc3450e5a@mega-nerd.com>
+	<20110808035322.GI29083@localhost>
+	<20110808174619.00b76d12a02f2c58c10c0108@mega-nerd.com>
+	<20110808080356.GD29083@localhost>
+	<4E401BC7.5040001@inria.fr>
+Reply-To: caml-list@inria.fr
+Organization: Erik Conspiracy Secret Labs
+X-Mailer: Sylpheed 3.2.0beta1 (GTK+ 2.24.4; x86_64-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Val_int vs caml_copy_nativeint
+
+Xavier Leroy wrote:
+
+> On 08/08/2011 10:03 AM, Guillaume Yziquel wrote:
+> 
+> > Then I do not see anything wrong if the code snippet you sent. However,
+> > when you change Val_int to caml_copy_nativeint, the layout of the tuple
+> > is different. [...] So if you keep the same OCaml code when reading
+> > the result value, it's no surprise that the pointer is shown in
+> > place of the integer you expected.
+> 
+> This is good advice indeed: make sure your Caml type declaration
+> matches the data representation that your Caml/C stub implements...
+> 
+> >    /* Package up the result as a tuple. */
+> >    v_response = caml_alloc_tuple (3) ;
+> >    Store_field (v_response, 0, Val_int (width)) ;
+> >    Store_field (v_response, 1, Val_int (height)) ;
+> >    Store_field (v_response, 2, caml_copy_string (code)) ;
+> >    CAMLreturn (v_response) ;
+> 
+> Additionally, do make sure that "v_response" is registered with the GC
+> (declared with one of the CAMLlocal macros).
+
+This is strange, it wasn't declared with a CAMLlocal macro and it
+was working, but if I do declare it with one the program segfaults
+during garbage collection (caml_oldify_local_roots).
+
+The program is small, so I've included the working version of the
+C stub code below. In the Ocaml code I have:
+
+    external iec16022ecc200 :
+	int -> (* size *)
+	string -> (* code *)
+	(int * int * string) = "caml_iec16022ecc200"
+
+The C stub code below works. If I change "value v_response" to
+"CAMLlocal1 (v_response)" it segfaults. If I use caml_copy_nativeint()
+instead of Val_int when I'm preparing the v_response tuple I get what
+looks like a pointer instead of the small integer (ie [16, 160] range)
+I was expecting.
+
+Cheers,
+Erik
+
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/memory.h>
+#include <caml/custom.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+#include <caml/bigarray.h>
+
+#include <stdio.h>
+#include <string.h>
+#include <assert.h>
+
+#include <iec16022ecc200.h>
+
+
+typedef union
+{	unsigned char * u ;
+    signed char * s ;
+    char * c ;
+} flexi_char_ptr_t ;
+
+
+CAMLprim value
+caml_iec16022ecc200 (value v_size, value v_code)
+{	unsigned char buffer [2048] ;
+	flexi_char_ptr_t code, barcode ;
+	int width, height, k ;
+	value v_response ;
+
+	CAMLparam2 (v_size, v_code) ;
+
+	width = height = Int_val (v_size) ;
+	code.c = String_val (v_code) ;
+
+	barcode.u = iec16022ecc200 (&width, &height, NULL, strlen (code.c), code.u, NULL, NULL, NULL) ;
+
+	if (barcode.u == NULL)
+	{	failwith ("iec16022ecc200 failed") ;
+		fprintf (stderr, "%s %d: Should never get here.\n", __FILE__, __LINE__) ;
+		exit (1) ;
+		} ;
+
+	/* Sanity check the buffer size. */
+	assert (width * height < (int) sizeof (buffer) - 1) ;
+
+	/* Need to convert the resulting 0x00 and 0x01 byte string to a text
+	 * string that we can pass back to Ocaml. */
+	for (k = 0 ; k < width * height ; k++)
+		buffer [k] = barcode.c [k] ? '1' : '0' ;
+
+	/* Make sure buffer is string terminated. */
+	buffer [width * height] = 0 ;
+
+	/* Free the memory allocated by iec16022ecc200(). */
+	free (barcode.u) ;
+
+	barcode.u = buffer ;
+
+	/* Package up the result as a tuple. */
+	v_response = caml_alloc_tuple (3) ;
+
+	Store_field (v_response, 0, Val_int (width)) ;
+	Store_field (v_response, 1, Val_int (height)) ;
+	Store_field (v_response, 2, caml_copy_string (barcode.c)) ;
+
+    CAMLreturn (v_response) ;
+} /* caml_iec16022ecc200 */
+
+
+
+-- 
+----------------------------------------------------------------------
+Erik de Castro Lopo
+http://www.mega-nerd.com/

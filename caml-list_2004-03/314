@@ -1,0 +1,117 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA11082; Tue, 23 Mar 2004 01:59:30 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA12917 for <caml-list@pauillac.inria.fr>; Tue, 23 Mar 2004 01:59:29 +0100 (MET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i2N100KW008413
+	for <caml-list@inria.fr>; Tue, 23 Mar 2004 02:00:01 +0100
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2-20030924/3.7W) with ESMTP id JAA20267;
+	Tue, 23 Mar 2004 09:59:15 +0900 (JST)
+To: Thomas.Fischbacher@Physik.Uni-Muenchen.DE
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Hashtbl and destructive operations on keys
+In-Reply-To: <Pine.LNX.4.58.0403222348530.30579@seekar.cip.physik.uni-muenchen.de>
+References: <Pine.LNX.4.58.0403221904350.9046@seekar.cip.physik.uni-muenchen.de>
+	<871xnky9zk.dlv@vanicat.homelinux.org>
+	<Pine.LNX.4.58.0403222348530.30579@seekar.cip.physik.uni-muenchen.de>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20040323095914D.garrigue@kurims.kyoto-u.ac.jp>
+Date: Tue, 23 Mar 2004 09:59:14 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 76
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 hashtbl:01 jacques:01 physik:01 accum:01 val:01 hashtbl:01 val:01 accum:01 consing:01 hash:01 re-use:01 hash:01 end-up:01 hashtable:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 314
+
+From: Thomas Fischbacher <Thomas.Fischbacher@Physik.Uni-Muenchen.DE>
+
+> What I rather want to do is roughly along the following lines:
+> 
+> 
+> let nonconsing_accum f_combine f_copy ht h_key h_val =
+>   if Hashtbl.mem ht h_key
+>   then Hashtbl.replace ht h_key 
+>       (f_combine (Hashtbl.find ht h_key) h_val)
+>   else Hashtbl.add ht (f_copy h_key) h_val
+> ;;
+> 
+> let result =
+>   (
+>    let ht = Hashtbl.create 10 in
+>    let arr = Array.make 4 0 in
+>    for i = 0 to 1000 do
+>      for k = 0 to 4-1 do
+>        arr.(k) <- Random.int 5;
+>      done;
+>      nonconsing_accum (+) Array.copy ht arr 1;
+>    done;
+>    Hashtbl.fold (fun k v so_far -> (k,v)::so_far) ht [];
+>   )
+> ;;
+> 
+> Former experience with CMU CL tells me that this technique of not 
+> unnecessarily consing hash keys can easily lead to a performance gain of 
+> a factor of 10 - depending on the application, of course.
+> 
+> But I have a very bad feeling about it as long as I do not have any 
+> guarantee that I really can re-use the corpus of a hash key passed to 
+> Hashtbl.replace.
+
+If I understand correctly your intention, you are asking whether
+Hashtbl.replace may end-up putting parts of your key inside the
+hash table?
+Looking at the source code for Hashtbl.replace, this may only happen
+if an equivalent key was not already in the table, and since your
+program only calls replace for keys already in the table, this is safe.
+
+But you probably already know that, so what you really want is a
+sentence like "the key itself is inserted in the hashtable only if
+there was no element to replace, otherwise the original key is kept"
+added to the documentation.
+Note however that such a comment may be seen as an overspecification:
+it is more confusing than useful for normal use...
+
+Moreover, the behaviour for the Map module is different: there, the
+new key is used. (This is for the add function, but it happens to have
+the same semantics as Hashtbl.replace)
+And this is also different from using Hashtbl.remove followed by
+Hashtbl.add, which was supposed to have the same semantics as
+Hashtbl.replace.
+
+> Yes, one answer certainly is "just make the hash value a ref and work on 
+> its contents". But there are indeed some crazy situations where one is 
+> better off using the above technique.
+
+I'm wondering what kind of crazy situation.
+Looks to me that that using a ref would be more efficient:
+  let nonconsing_accum f_combine f_copy ht h_key h_val =
+    try
+      let h_ref = Hashtbl.find ht h_key in
+      h_ref := f_combine !h_ref h_val
+    with Not_found ->
+      Hashtbl.add ht (f_copy h_key) (ref h_val)
+  ;;
+In your approach your are accessing 3 times the hash table, where once
+should be enough.
+
+However one might argue that nonconsing_accum should be a primitive on
+hashtables, as it can be implemented more efficiently by directly
+accessing the internal representation.
+
+Jacques Garrigue
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

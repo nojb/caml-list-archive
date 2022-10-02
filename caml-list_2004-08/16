@@ -1,0 +1,103 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA23180; Mon, 2 Aug 2004 09:42:05 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA22425 for <caml-list@pauillac.inria.fr>; Mon, 2 Aug 2004 09:42:04 +0200 (MET DST)
+Received: from invasion.mail.pas.earthlink.net (invasion.mail.pas.earthlink.net [207.217.120.254])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i727g2EV004997
+	for <caml-list@inria.fr>; Mon, 2 Aug 2004 09:42:02 +0200
+Received: from 168-103-58-16.tcsn.qwest.net ([168.103.58.16] helo=dylan)
+	by invasion.mail.pas.earthlink.net with asmtp (Exim 4.34)
+	id 1BrXSL-00064T-VQ
+	for caml-list@inria.fr; Mon, 02 Aug 2004 00:42:02 -0700
+Message-ID: <009b01c47864$5a3e46b0$0201a8c0@dylan>
+From: "David McClain" <dmcclain1@mindspring.com>
+To: "caml" <caml-list@inria.fr>
+Subject: [Caml-list] OCaml 3.08 and Bus Errors
+Date: Mon, 2 Aug 2004 00:43:01 -0700
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="Windows-1252"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 6.00.2800.1437
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2800.1441
+X-ELNK-Trace: 7a0ab3eafc8cf994b22988ad1c62733440683398e744b8a4d89b50a88c81e9b7680bf9aa4aec603f387f7b89c61deb1d350badd9bab72f9c350badd9bab72f9c
+X-Originating-IP: 168.103.58.16
+X-Miltered: at nez-perce with ID 410DF04A.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; mcclain:01 dmcclain:01 internals:01 avoiding:01 pointers:01 camlparam:01 doubles:01 doubles:01 pointers:01 occupies:01 invalidated:01 reclaimed:01 wrappers:01 camlparam:01 wrappers:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+... in going back over my sources from 5 years ago, it appears that at one
+time I was trying (perhaps too hard) to outsmart the internals of OCaml. I
+regret having to do this, but bear with me one moment...
+
+I was avoiding declaring CAMLparamN() of input arguments in many cases
+because I was attempting to gain a unified access to both of OCaml native
+Arrays of double, and my own FastArray implementation which predates the
+BigArray stuff. The only time it appeared necessary to declare an input
+parameter is when some OCaml allocation could occur, and where we need to
+track the possible relocation of those parameters as a result of a triggered
+GC cycle.
+
+But if I were completely finished accessing these parameters by the time an
+OCaml allocation occurred, then I could care less where these parameters had
+possibly been relocated. The caller of my C routines still have live
+pointers to these parameters and so they form valid memory roots for GC.
+Hence, GC does not need my CAMLparam's to find the system roots, it merely
+offers through these macros to allow me to find them again should I need to
+after some GC may have relocated them.
+
+In my case with my FastArrays I dare not put them in these CAMLparam macros
+because the arena pointer to the FastArray doubles array is not a valid
+OCaml structure address, and so I don't want GC pounding on them. These
+addresses are external to the OCaml heap, and so I guess OCaml would ignore
+them anyway. I was playing fast and loose on purpose here because native
+OCaml arrays of doubles do pass the address of their own arena. My C
+routines have uniform access to the arena of both kinds of arrays.
+
+I realized there is risk involved in using raw external pointers, especially
+as the OCaml heap grows and eventually occupies the same region these
+pointers once did. But that can't happen until these pointers are
+invalidated and reclaimed anyway.
+
+In looking at BigArray as a possible alternative to my FastArrays, I see
+that the address passed for such arguments is much like a Custom block and
+reaching the arena requires a special offsetting access from the passed
+argument address. Hence these cannot be used interchangeably with normal
+arrays of double.
+
+I like the idea of moving back away from taking advantage of special
+internal knowledge, since that ensures a greater lifetime to my code.
+However, it still appears problematic to do so at this time...
+
+In retrospect, it appears that the bus errors may have been caused by a
+failed call to my Berkeley DBMS wrappers while the filename string was still
+alive and perhaps still in use. Not sure just yet. This is one case where I
+should have, and did, put CAMLparam wrappers on that filename string
+argument and the Bus Errors subsequently went away.
+
+But wholesale wrapping of all arguments to C glue routines is really not
+warranted, and requires careful consideration of when these parameters will
+be accessed in the code, and when OCaml heap allocations will occur. Only
+those pointers that are both valid, and still live at the time of allocation
+need protection by these CAMLparam wrappers.
+
+Do I understand the situation correctly? Or has something more fundamental
+changed in 3.08?
+
+David McClain
+Senior Corporate Scientist
+Avisere, Inc.
+
++1.520.390.7738 (USA)
+david.mcclain@avisere.com
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

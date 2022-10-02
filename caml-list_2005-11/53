@@ -1,0 +1,120 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id C85F4D460
+	for <caml-list@yquem.inria.fr>; Wed,  2 Nov 2005 12:56:35 +0100 (CET)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.176])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jA2BuZ3B001746
+	for <caml-list@yquem.inria.fr>; Wed, 2 Nov 2005 12:56:35 +0100
+Received: from [212.227.126.160] (helo=mrelayng.kundenserver.de)
+	by moutng.kundenserver.de with esmtp (Exim 3.35 #1)
+	id 1EXHEI-0005ih-00; Wed, 02 Nov 2005 12:56:34 +0100
+Received: from [84.58.130.212] (helo=gate.lan.gerd-stolpmann.de)
+	by mrelayng.kundenserver.de with asmtp (Exim 3.35 #1)
+	id 1EXHEH-0005Cc-00; Wed, 02 Nov 2005 12:56:34 +0100
+Received: from flakew.lan.gerd-stolpmann.de (flakew.lan.gerd-stolpmann.de [192.168.0.32])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id B20E2C05F;
+	Wed,  2 Nov 2005 12:56:33 +0100 (CET)
+Subject: Re: [Caml-list] Creating ocaml libraries
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Jonathan Roewen <jonathan.roewen@gmail.com>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <ad8cfe7e0511011744w74319388s7f29f5f702367031@mail.gmail.com>
+References: <ad8cfe7e0511011744w74319388s7f29f5f702367031@mail.gmail.com>
+Content-Type: text/plain
+Date: Wed, 02 Nov 2005 12:56:33 +0100
+Message-Id: <1130932593.4327.22.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.2.1.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: kundenserver.de abuse@kundenserver.de auth:a6865a839c0178d9aa0ce41878507ea2
+X-Miltered: at nez-perce with ID 4368A973.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 gerd:01 stolpmann:01 internals:01 pervasives:01 stdlib:01 cmo:01 stdlib:01 pervasives:01 cmo:01 ocamlc:01 char:01 buffer:01 invokes:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+Am Mittwoch, den 02.11.2005, 14:44 +1300 schrieb Jonathan Roewen:
+> Hi List,
+> 
+> I'm having a problem writing my kernel (where user apps share the same
+> application space/libraries).
+> 
+> The problem stems from in_channel & out_channel types. I want to map
+> these onto a file system layer implemented by the kernel.
+> 
+> Whilst I don't mind making small modifications to the standard library
+> internals, what I don't want to have to do is build the kernel into
+> the standard library...
+> 
+> So, say in pervasives.ml, I might have something like type in_channel
+> = VFS.file_stream, and make all the functions that work on in/out
+> channels to call VFS functions.
+> 
+> Now, my question here is: how can I compile stdlib.cma without having
+> to have the .cmo file(s) present? Or even written for that matter?
+
+You mean you what to exchange one of the members of stdlib.cma? This is
+not possible. If you have a stdlib_minus_pervasives.cma, you can add
+pervasives.cmo with normal "ocamlc -a", however ("partial linking").
+
+> One last question: could the VFS.ml implementation call functions in
+> pervasives still? (Though, not the IO functions, unless there was some
+> magic to not make it fall into an endless loop). Say land, lor,
+> char_of_int, etc.?
+
+I see two ways:
+
+(1) Split modules up:
+
+Pervasives_kernel: contains land, lor, etc. but not I/O.
+Pervasives: re-exports everything from Pervasives_kernel (e.g. let land
+= Pervasives_kernel.land etc.), and adds I/O.
+
+The problematic part are the other modules of the stdlib. Some only
+depend on Pervasives_kernel (like List), so you can use them in your
+kernel. Some need I/O (like Buffer), and you can use them only if you
+split them, too.
+
+(2) Pluggable I/O:
+
+Just define the I/O types as class types, e.g.
+
+class type in_channel =
+object
+  method output_string : string -> int -> int -> int
+  method close_in : unit -> unit
+  ...
+end
+
+and in_channel_provider =
+object
+  method open_in : string -> in_channel
+  ...
+end
+
+Add a function to Pervasives allowing you to set the provider objects
+for I/O. The function open_in now takes the current provider and calls
+its open_in method to get a new in_channel.
+output_string simply invokes the output_string method of the in_channel,
+etc.
+
+If you need binary compatibility to the standard version of Pervasives,
+you can split the module up again in Pervasives_pluggable (with the
+additional functions) and normal Pervasives.
+
+The advantage is that you need not to modify the other modules of
+stdlib.
+
+Hope these ideas help you.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Telefon: 06151/153855                  Telefax: 06151/997714
+------------------------------------------------------------
+

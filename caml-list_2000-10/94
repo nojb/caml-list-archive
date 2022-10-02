@@ -1,0 +1,324 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA14162 for caml-red; Sun, 15 Oct 2000 10:56:53 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA11587 for <caml-list@pauillac.inria.fr>; Sun, 15 Oct 2000 00:52:44 +0200 (MET DST)
+From: bcpierce@cis.upenn.edu
+Received: from silvercomet.emperorlinux.com (adsl-216-158-26-151.cust.oldcity.dca.net [216.158.26.151])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e9EMqg502786
+	for <caml-list@pauillac.inria.fr>; Sun, 15 Oct 2000 00:52:42 +0200 (MET DST)
+Received: from silvercomet.emperorlinux.com (IDENT:bcpierce@localhost [127.0.0.1])
+	by silvercomet.emperorlinux.com (8.9.3/8.9.3) with ESMTP id LAA25510
+	for <caml-list@caml.inria.fr>; Sat, 14 Oct 2000 11:59:32 -0400
+To: caml-list@pauillac.inria.fr
+Subject: OCaml sync tool for Rex organizer
+Reply-to: bcpierce@cis.upenn.edu
+Date: Sat, 14 Oct 2000 11:59:32 -0400
+Message-ID: <25507.971539172@silvercomet.emperorlinux.com>
+Sender: weis@pauillac.inria.fr
+
+The other day someone showed me a Rex organizer -- a $100 PDA in the form
+of a PCMCIA card with 512K memory, a small LCD display on the front, and
+a few buttons for navigation.  I was instantly hooked, bought one, and
+started looking around for Linux support for it.  Of course, the end of
+the story was that, after looking at what a few people had done, I got a
+hack attack and ended by writing my own... in OCaml, obviously.  Now I
+can dump all my favorite data (addresses and arbitrary text files) in
+seconds to an organizer the size of a credit card.
+
+It's nothing fancy, but in the interests of helping others have fun and
+waste time, here it is (in its entirety)...
+
+Share and enjoy,
+
+     Benjamin 
+
+
+(* bcprex.ml -- A little hack for downloading data to a Xircom Rex
+                organizer from a linux system.
+
+   Author: Benjamin C. Pierce
+   This code may be distributed under the terms of the GNU Public License.
+
+   This _very simple and unpolished_ little program takes all the
+   information in the directory where it is started and formats it so
+   that it can be downloaded to a Xircom Rex organizer.  It handles just
+   the features I needed, and no more.  You will probably need to hack
+   it yourself to adapt it to your needs.  
+   
+   WHAT YOU WILL NEED:
+     1) A Xircom RexPro organizer (buy from your favorite gadget store; 
+        they cost about $100)
+     2) A copy of the "TruSync linux beta developer pack" from StarFish
+        software.  Download this from
+           http://www.starfish.com/tsdn/linux.html
+        unpack it, and put the binary file ProConnect somewhere in your
+        search path.
+     3) An Objective Caml compiler to compile this file.  Download the
+        O'Caml system from http://caml.inria.fr and install according to 
+        the instructions.  (If you haven't installed O'Caml before, it's
+        easy.  RPMs are provided for Redhat systems.)
+        
+   INSTRUCTIONS:
+     1) Compile the present file like this:
+           ocamlc -o bcprex unix.cma str.cma bcprex.ml -cclib -lunix
+     2) Put the executable file bcprex in your search path
+     3) Cd to the directory where you will keep the files you want to download
+        to the rex
+     4) Initialize the Rex (if you haven't already): tell it your name,
+        the current time, etc.
+     5) Insert the Rex card in your PCMCIA slot
+     6) Check that /dev/mem0c now exists.  If it does, make sure that
+        it's readable by ProConnect, either by doing
+            chmod a+rw /dev/mem0c
+        or by making ProConnect itself owned by root and setuid.
+     7) Upload the current state by typing
+           ProConnect -o init.rexdump -f /dev/mem0c
+     8) Create some files that you want to download (see information
+        below on formats)
+     9) Download your data by executing 'bcprex' (from in this directory)
+
+   SUPPORTED FORMATS:
+     * TEXT FILES with extension .txt are downloaded as Rex memos.  The first
+       line of the file is used as the title of the memo, the rest as the
+       body.  
+     * VCARD FILES with extension .vcd are interpreted as lists of VCards
+       and downloaded as contact records.  Each VCard looks like this:
+
+           BEGIN:VCARD
+           <fields>
+           END:VCARD
+
+       where each <field> can be:
+
+           N:lastname;firstname;middlename;title;suffix
+               (all fields optional, but the ; separators are required)
+
+           TEL;HOME:<number>
+
+           TEL;WORK:<number>
+
+           <FIELD>:<BODY>
+               where <FIELD> is any other field name and <BODY> is a
+               string terminated by a carriage return not immediately
+               followed by a space (a CR followed by a space is ignored). 
+
+       Sample VCard:
+
+         BEGIN:VCARD
+         N:Smith;John;;;
+         TEL;WORK:123 222 3333
+         TEL;HOME:987 654 3210
+         ADR:222 Main St., Philadelphia, PA 19191
+         NOTE:Some information.
+          Some more information.
+         END:VCARD
+
+       The N, TEL;WORK, and TEL;HOME fields are treated specially.  All other
+       fields are concatenated and dumped into the contact record as a note.
+
+   WISH LIST:
+     * It would be nice to download appointments as Rex calendar records
+     * At the moment, Rex categories are not supported in any way
+     * I couldn't figure out how to get a quote or hash character into the
+       Rex: the string escape convention in the TruSync thing seems
+       broken.
+*)
+
+
+
+open Printf
+   
+let outchan = ref None
+
+let theoutchan() =
+  match !outchan with
+    None -> assert false
+  | Some(ch) -> ch
+
+let emit s = output_string (theoutchan()) s
+let emitln s = emit s; emit "\n"
+
+let error s = print_string s; exit 1
+
+let readdir f = 
+  let dir = Unix.opendir f in
+  let rec loop files =
+    let f = try Unix.readdir dir with End_of_file -> "" in
+    if f="" then files
+    else if f="." || f=".." then loop files
+    else loop (f::files)
+  in
+  let files = loop [] in
+  Unix.closedir dir;
+  files
+
+let rec trim s =
+  let l = String.length s in 
+  if l=0 then s
+  else if s.[0]=' ' || s.[0]='\t' || s.[0]='\n' || s.[0]='\r' then
+    trim (String.sub s 1 (l-1))
+  else if s.[l-1]=' ' || s.[l-1]='\t' || s.[l-1]='\n' || s.[l-1]='\r' then
+    trim (String.sub s 0 (l-1))
+  else
+    s
+
+let rec trimEnd s =
+  let l = String.length s in 
+  if l=0 then s
+  else if s.[l-1]=' ' || s.[l-1]='\t' || s.[l-1]='\n' || s.[l-1]='\r' then
+    trimEnd (String.sub s 0 (l-1))
+  else
+    s
+
+let readfile f =
+  try
+    let ch = open_in f in
+    let rec loop lines =
+      match
+        try Some(input_line ch) with End_of_file -> None
+      with
+        None -> List.rev lines
+      | Some(l) -> loop ((trimEnd l)::lines) in 
+    let res = loop [] in
+    close_in ch;
+    res
+  with
+    Sys_error _ -> []
+
+(* ---------------------------------------------------------------------- *)
+
+let quotechar = Str.regexp "\""
+let hashchar = Str.regexp "#"
+let slashchar = Str.regexp "/"
+let semichar = Str.regexp ";"
+
+let escape s = 
+  let s = Str.global_replace slashchar "//" s in
+(*  let s = Str.global_replace quotechar "/\"" s in *)
+  let s = Str.global_replace quotechar "'" s in 
+  let s = Str.global_replace hashchar "<hash>" s in
+  s
+
+let processMemo f =
+  printf "Memo %s\n" f;
+  let ll = readfile f in
+  let title = List.hd ll in
+  let body = List.tl ll in
+  emit (sprintf "memo 1 \"%s\" \"" title);
+  List.iter (fun l -> emit (escape l); emit "  #\n") body;
+  emit "\"\n"
+
+(* ---------------------------------------------------------------------- *)
+
+let collectVCards ll =
+  let rec nextCard cards = function
+      [] -> List.rev cards
+    | "BEGIN:VCARD" :: rest -> nextField cards [] rest
+    | "" :: rest -> nextCard cards rest
+    | s :: rest -> error (sprintf "Unrecognized vcard format: %s\n" s)
+  and nextField cards fields = function
+      [] -> error "End of file while processing a VCARD"
+    | "END:VCARD"::rest -> nextCard ((List.rev fields)::cards) rest
+    | ""::rest -> nextField cards fields rest
+    | s::rest when s.[0] = ' ' ->
+        if fields=[] then
+          error "Line beginning with blank at beginning of VCARD"
+        else
+          nextField cards (((List.hd fields) ^ s) :: (List.tl fields)) rest
+    | s::rest ->
+        nextField cards (s::fields) rest
+  in nextCard [] ll
+
+let notes = ref ""
+
+let dumpfield f =
+  let colonpos =
+    try
+      String.index f ':'
+    with Not_found ->
+      error (sprintf "VCard field '%s' does not contain a colon" f) in 
+  let kind = String.sub f 0 colonpos in
+  let body =
+    escape (String.sub f (colonpos+1) (String.length f - colonpos - 1)) in
+  match kind with
+    "N" ->
+      let parts = Str.split_delim semichar body in
+      if List.length parts <> 5 then
+        error (sprintf "VCARD name field should have five (not %d) parts (%s)"
+                 (List.length parts) body);
+      emit "  1 0 \"";
+      emit (List.nth parts 0);
+      emit "\"\n";
+      emit "  2 0 \"";
+      if (List.nth parts 1) <> "" then begin
+        emit (List.nth parts 1);
+        emit " ";
+      end;
+      emit (List.nth parts 2);
+      if (List.nth parts 3) <> "" then begin
+        emit " ";
+        emit (List.nth parts 3);
+      end;
+      if (List.nth parts 4) <> "" then begin
+        emit " ";
+        emit (List.nth parts 4);
+      end;
+      emit "\"\n";
+  | "TEL;WORK" -> 
+      emit "  17 0 \"";
+      emit body;
+      emit "\"\n"
+  | "TEL;HOME" -> 
+      emit "  18 0 \"";
+      emit body;
+      emit "\"\n"
+  | _ ->
+      notes := !notes ^ " || " ^ body
+
+let dumpnotes() =
+  if !notes <> "" then begin
+    emit "  0 0 \"";
+    emit !notes;
+    emit "\"\n";
+  end;
+  notes := ""
+
+let dumpcard c =
+  emit "contact 1 0\n";
+  List.iter dumpfield c;
+  dumpnotes()
+    
+let processAddresses f =
+  List.iter dumpcard (collectVCards (readfile f))
+
+(* ---------------------------------------------------------------------- *)
+
+let processfile f =
+  if Filename.check_suffix f ".txt" then processMemo f
+  else if Filename.check_suffix f ".sp" then processMemo f
+  else if Filename.check_suffix f ".todo" then processMemo f
+  else if Filename.check_suffix f ".vcd" then processAddresses f
+  else printf "Skipping %s\n" f
+
+let initrex() =
+  let init = readfile "init.rexdump" in
+  List.iter emitln init  
+
+let main() =
+  outchan := Some(open_out "rexdump.tmp");
+  initrex();
+  let files = readdir "." in
+  List.iter processfile files;
+  emit "done\n";
+  close_out (theoutchan());
+  flush stdout;
+(*
+  let ll = readfile "rexdump.tmp" in
+  List.iter (fun l -> print_string l; print_newline()) ll
+*)
+  let result = Sys.command "ProConnect -i rexdump.tmp -f /dev/mem0c" in
+  if result <> 0 then printf "ProConnect failed with exit code %d\n" result;
+  exit result
+
+;; main()
+
+
+

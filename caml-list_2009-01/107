@@ -1,0 +1,166 @@
+Return-Path: <darioteixeira@yahoo.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: **
+X-Spam-Status: No, score=2.0 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE,
+	DNS_FROM_RFC_POST,DNS_FROM_RFC_WHOIS autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 4818DBB84
+	for <caml-list@yquem.inria.fr>; Thu, 15 Jan 2009 18:31:46 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmsCADIBb0lDww/TlGdsb2JhbACOYIUgAQEBAQkLCAkRA61EjgYFAgGFaw
+X-IronPort-AV: E=Sophos;i="4.37,271,1231110000"; 
+   d="scan'208";a="22537513"
+Received: from web111514.mail.gq1.yahoo.com ([67.195.15.211])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 15 Jan 2009 18:31:45 +0100
+Received: (qmail 94072 invoked by uid 60001); 15 Jan 2009 17:31:44 -0000
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+  s=s1024; d=yahoo.com;
+  h=X-YMail-OSG:Received:X-Mailer:Date:From:Subject:To:MIME-Version:Content-Type:Content-Transfer-Encoding:Message-ID;
+  b=g7ANi7FIaNvg3GPDPRjBosaC2bjreIdaXyFJ9SsdEp/vCw6rYjwPcE263/dupeVwAiMwgVlljloylyHLb+JT7NF3UqDeCMMTXCxguLArLDpwtoQnxMg2Kuy5TEtblb5Ba3bwkHQfTD2LtnC/uKJ21A4oRq6mCywSO2e2INnp9jE=;
+X-YMail-OSG: 8Mq3e7EVM1kpPZpV7EbRnljSFs6L7fnkrT5nAEyBfAgaDKoi7WUMJSvGAqElgPMAQRr0HNaV_lM5lPdUa6ehMBpjWg9M6TjTqLNx.eYZJmUC15vaKA15p1bST3qSxfgmjCsFDvP2tEGDwiuPCasiIB7RfVagWz..WQh6.04ECnsofpIiaSxOWS58hoHUsFZbp33yL5kssSjGGXW27v2ULEwGtPsRd9yjU3eiCfSCw9vdj9AlOHtch3HYKJmRKKxKpQ--
+Received: from [213.205.71.56] by web111514.mail.gq1.yahoo.com via HTTP; Thu, 15 Jan 2009 09:31:43 PST
+X-Mailer: YahooMailWebService/0.7.260.1
+Date: Thu, 15 Jan 2009 09:31:43 -0800 (PST)
+From: Dario Teixeira <darioteixeira@yahoo.com>
+Subject: Private types in 3.11, again
+To: caml-list@yquem.inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <279131.80665.qm@web111514.mail.gq1.yahoo.com>
+X-Spam: no; 0.00; nodes:01 nodes:01 ocaml:01 node:01 node:01 recursive:01 recursive:01 runtime:01 sig:01 val:01 val:01 struct:01 seq:01 seq:01 foobar:01 
+
+Hi,
+
+(Note: this problem is similar to one I've posted before; there are however
+differences.  Also, my apologies for the problem requiring a long introduct=
+ion
+before actually being presented).
+
+Consider a sequence of nodes such as those present in an inline context in
+XHTML.  Some of these nodes are leaf nodes (Text and Href), while others ar=
+e
+built from a list of existing nodes (Bold and Mref).  Moreover, some nodes
+create hyperlinks (Href and Mref).  A straightforward Ocaml representation
+could be as follows:
+
+
+type node_t =3D
+=09| Text of string
+=09| Bold of node_t list=09=09=09(* recursive! *)
+=09| Href of string
+=09| Mref of string * node_t list=09=09(* recursive! *)
+
+
+There is furthermore an important restriction: a link node may not be the
+ancestor of another link node, no matter how deep the ancestry level (in
+similarity with the W3C rules for XHTML).  While this restriction could be
+enforced by runtime checking, I very much prefer to represent nodes in such
+a way that the type system itself would ensure the impossibility of creatin=
+g
+illegal values.
+
+Below is the best solution I could come up with so far (note that this code
+requires 3.11).  It uses a phantom type to "taint" link nodes, making them
+unsuitable to be descendants of other link nodes.  Also, note the use of
+'private' to allow pattern-matching by external code without breaking the
+phantom type restrictions.
+
+
+module Node:
+sig
+=09type node_t =3D
+=09=09private
+=09=09| Text of string
+=09=09| Bold of node_t list
+=09=09| Href of string
+=09=09| Mref of string * node_t list
+
+=09type +'a t =3D private node_t
+
+=09val text: string -> [> `Nonlink ] t
+=09val bold: 'a t list -> 'a t
+=09val href: string -> [> `Link ] t
+=09val mref: string -> [< `Nonlink ] t list -> [> `Link ] t
+end =3D
+struct
+=09type node_t =3D
+=09=09| Text of string
+=09=09| Bold of node_t list
+=09=09| Href of string
+=09=09| Mref of string * node_t list
+
+=09type +'a t =3D node_t
+
+=09let text txt =3D Text txt
+=09let bold seq =3D Bold seq
+=09let href lnk =3D Href lnk
+=09let mref lnk seq =3D Mref (lnk, seq)
+end
+
+
+So far so good.  Now consider a function that takes a node and returns
+another node, in all identical except that all occurrences of Text (either
+in the parent or in all descendants if the node is defined recursively)
+are replaced by the capitalised version.  Moreover, I want to place this
+function in a different module, called Foobar:
+
+
+module Foobar:
+sig
+        open M
+        val capitalise_node: 'a t -> 'a t
+end =3D
+struct
+        open M
+        let capitalise_node node =3D
+                let rec capitalise_node_aux forbid_link node =3D match (for=
+bid_link, node) with
+                        | (_, Text txt)                 -> text (String.cap=
+italize txt)
+                        | (x, Bold seq)                 -> bold (List.map (=
+capitalise_node_aux x) seq)
+                        | (false, Href lnk)             -> href lnk
+                        | (false, Mref (lnk, seq))      -> mref lnk (List.m=
+ap (capitalise_node_aux true) seq)
+                        | _                             -> failwith "oops"
+                in capitalise_node_aux false node
+end
+
+
+Unfortunately, the code above fails to compile, producing this error:
+
+
+Error: This expression has type [> `Link | `Nonlink ] M.t list
+       but is here used with type [< `Nonlink ] M.t list
+       The second variant type does not allow tag(s) `Link
+
+
+For the Foobar module to work, I have to remove the 'private' declaration i=
+n
+module Node, which of course breaks the phantom type.  Note that the functi=
+on
+above will also compile fine if it is defined inside Node instead of Foobar
+(but which is useless to me).
+
+So my question is how can I make the Foobar code behave as if it were defin=
+ed
+inside Node.  Based on a previous thread [1], I'm guessing there is a solut=
+ion,
+but I've been unable to hit on its exact formulation.
+
+
+Thanks in advance for any light you may shed on this issue.  It is much
+appreciated!
+
+Kind regards,
+Dario Teixeira
+
+
+[1] http://groups.google.com/group/fa.caml/browse_thread/thread/d9c5e30b973=
+db187#
+
+=0A=0A=0A      
+

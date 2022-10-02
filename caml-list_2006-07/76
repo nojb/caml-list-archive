@@ -1,0 +1,164 @@
+Return-Path: <brogoff@speakeasy.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id EC224BB84
+	for <caml-list@yquem.inria.fr>; Tue, 11 Jul 2006 01:25:29 +0200 (CEST)
+Received: from mail5.sea5.speakeasy.net (mail5.sea5.speakeasy.net [69.17.117.7])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k6ANPRVv009042
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@yquem.inria.fr>; Tue, 11 Jul 2006 01:25:29 +0200
+Received: (qmail 20966 invoked from network); 10 Jul 2006 23:25:20 -0000
+Received: from shell2.sea5.speakeasy.net ([69.17.116.3])
+          (envelope-sender <brogoff@speakeasy.net>)
+          by mail5.sea5.speakeasy.net (qmail-ldap-1.03) with AES256-SHA encrypted SMTP
+          for <rich@annexia.org>; 10 Jul 2006 23:25:20 -0000
+Date: Mon, 10 Jul 2006 16:25:20 -0700 (PDT)
+From: brogoff <brogoff@speakeasy.net>
+To: Richard Jones <rich@annexia.org>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Polymorphic method question
+In-Reply-To: <20060710200508.GA18988@furbychan.cocan.org>
+Message-ID: <Pine.LNX.4.58.0607101619040.26509@shell2.speakeasy.net>
+References: <Pine.LNX.4.58.0607101215080.5875@shell2.speakeasy.net>
+ <20060710200508.GA18988@furbychan.cocan.org>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at concorde with ID 44B2E1E7.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; escapes:01 recursion:01 recursive:01 dependencies:01 felleisen:01 ocaml:01 polymorphism:01 recursive:01 struct:01 translated:01 translated:01 failwith:01 failwith:01 val:01 struct:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.8 required=5.0 tests=SPF_SOFTFAIL 
+	autolearn=disabled version=3.0.3
+
+On Mon, 10 Jul 2006, Richard Jones wrote:
+
+> On Mon, Jul 10, 2006 at 12:21:26PM -0700, brogoff wrote:
+> > This type scheme cannot quantify 'a :
+> > it escapes this scope.
+>
+> Check out this thread:
+>
+> http://caml.inria.fr/pub/ml-archives/caml-list/2005/02/a67b1a509263be01705305f36d64c39c.en.html
+>
+> Rich.
+
+Hi Rich,
+
+Thanks for the info, I guess I missed that one when it came out. Unfortunately,
+the solution proposed, breaking the recursion by introducing some polymorphic
+algebraic type to hold any kind of value in some class type to represent the
+visitor, breaks the whole thing. There are just too many recursive
+dependencies. Here's a more complete, but still small, example. The modules
+are only there to show how the classes would go into files, they're not
+essential.
+
+PS: Before anyone tells me that algebraic data types are favored for this
+over visitor classes, I'm well aware of all that, and in general agree
+with those who prefer their ML sans OOP. However, I was trying to encode a
+design pattern I read about somewhere (Felleisen?) which made good use of
+polymorphic methods, only to find that it just doesn't translate into the OCaml
+class system. The restriction on polymorphism in mutually recursive class
+definitions makes the idea unworkable. Any possibility that restriction will be
+lifted?
+
+(* The following code won't work, but hopefully gives the idea *)
+
+module Shape =
+  struct
+    class virtual ['a] shape_visitor =
+      object
+        method visit_square : square -> 'a
+        method visit_rectangle : rectangle  -> 'a
+        method visit_polygon :  polygon -> 'a
+        method visit_translated : translated  -> 'a
+        (* and potentially many more! *)
+      end
+    and virtual shape =
+      object
+        method virtual visit : 'a . 'a shape_visitor -> 'a
+      end
+    and square pt width =
+      object (self)
+        inherit shape
+        method visit visitor = visitor#visit_square self
+
+        method as_tuple : ((int * int) * (int * int)) =
+          let (ll_x, ll_y) = pt in
+          (pt, (ll_x + width, ll_y + width))
+
+        method as_point_list : (int * int) list =
+          failwith "Shape.square#as_point_list: unimplemented"
+      end
+    and rectangle ll ur =
+      object (self)
+        inherit shape
+        method visit visitor = visitor#visit_rectangle self
+
+        method as_tuple : ((int * int) * (int * int)) = (ll, ur)
+
+        method as_point_list : (int * int) list =
+          failwith "Shape.rectangle#as_point_list: unimplemented"
+      end
+
+    and polygon points =
+      object (self)
+        val points : (int * int) list = points
+        inherit shape
+
+        method visit visitor = visitor#visit_polygon self
+
+        method as_point_list : (int * int) list =
+          points
+      end
+
+    class translated pt s =
+      object (self)
+        inherit shape
+        method visit visitor = visitor#visit_translated self
+
+        method get_shape = s
+        method get_translation = pt
+
+        method as_point_list : (int * int) list =
+          failwith "Shape.translated#as_point_list: unimplemented"
+      end
+  end (* module Shape *)
+
+module Contains_point =
+  struct
+    (* Writing code that works over shapes *)
+    class contains_point point =
+      object
+        inherit bool Shape.shape_visitor
+
+        method make_contains_point p =
+          new contains_point p
+
+        method visit_square : Shape.square node -> bool =
+          fun s ->
+            let ((ll_x, ll_y), (ur_x, ur_y)) = s#as_tuple in
+            let (x, y) = point in
+            ll_x <= x && x <= ur_x && ll_y <= y && y <= ur_y
+
+        method visit_rectangle : Shape.rectangle node  -> bool =
+          fun r ->
+            let ((ll_x, ll_y), (ur_x, ur_y)) = r#as_tuple in
+            let (x, y) = point in
+            ll_x <= x && x <= ur_x && ll_y <= y && y <= ur_y
+
+        method visit_polygon : Shape.polygon node  -> bool =
+          fun p ->
+            failwith "Contains_point.contains_point#visit_polygon: unimplemented"
+
+        method visit_translated : Shape.translated node  -> bool =
+          fun t ->
+            failwith "Contains_point.contains_point#visit_translated: unimplemented"
+  end;;
+
+
+
+-- 
+-- Brian
+
+

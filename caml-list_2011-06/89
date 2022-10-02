@@ -1,0 +1,171 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p5M9vHNu004208
+	for <caml-list@sympa-roc.inria.fr>; Wed, 22 Jun 2011 11:57:25 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ap0CAJW7AU7VBIoSkWdsb2JhbABUpwsXAQEBAQkLCwcUBCGIdaAnn1qGLQSRapAO
+X-IronPort-AV: E=Sophos;i="4.65,405,1304287200"; 
+   d="scan'208";a="101760280"
+Received: from impaqm2.telefonica.net (HELO telefonica.net) ([213.4.138.18])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 22 Jun 2011 11:57:25 +0200
+Received: from IMPmailhost3.adm.correo ([10.20.102.124])
+	by IMPaqm2.telefonica.net with bizsmtp
+	id ytnM1g00c2h2L9m3MxxQCo; Wed, 22 Jun 2011 11:57:24 +0200
+Received: from NANA.localdomain ([2.138.179.25])
+	by IMPmailhost3.adm.correo with BIZ IMP
+	id yxxP1g00s0ZGGrE1jxxQEW; Wed, 22 Jun 2011 11:57:24 +0200
+X-Brightmail-Tracker: AAAAAA==
+X-original-sender: ferferse@telefonica.net
+Received: from mfp by NANA.localdomain with local (Exim 4.72)
+	(envelope-from <ferferse@telefonica.net>)
+	id 1QZKBX-0002RT-LR
+	for caml-list@inria.fr; Wed, 22 Jun 2011 11:57:23 +0200
+Date: Wed, 22 Jun 2011 11:57:23 +0200
+From: Mauricio Fernandez <mfp@acm.org>
+To: caml-list <caml-list@inria.fr>
+Message-ID: <20110622095723.GB6128@NANA.localdomain>
+Mail-Followup-To: caml-list <caml-list@inria.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.17+20080114 (2008-01-14)
+Subject: [Caml-list] Encoding open recursion/function overriding/inheritance in modules
+
+I'm encoding open recursion and inheritance in modules and only came up with
+the following, which requires that a number of type equations be added
+manually (I'm missing something to express
+(functor X : FOO) -> FOO with [all types = X's]).
+
+This encoding supports function redefinition (with access to previous
+definition) and, separately, interface extensions --- I haven't found a way to
+do both at once (it seems to me that this would require a "row variable" of
+sorts to carry extra members in a module).
+
+module type BASE =
+sig
+  type t
+
+  val make : int -> t
+  val f : t -> unit
+  val g : t -> unit
+
+  val m : unit -> unit
+end
+
+module type TRAIT1 =
+sig
+  type t
+  val h : t -> unit
+end
+
+module type TRAIT2 =
+sig
+  type t
+  val i : t -> unit
+end
+
+module type BASE_TRAIT1_TRAIT2 =
+sig
+  include BASE
+  include TRAIT1 with type t := t
+  include TRAIT2 with type t := t
+end
+
+(** "Base classes" take a functor of type [BASE_f] that overrides function
+  * definitions. *)
+module type BASE_f = functor(X : BASE) -> BASE with type t = X.t
+
+module Base
+  (INIT_STATE : sig val n : int end)
+  (F : BASE_f) : BASE =
+struct
+
+  module rec M : BASE with type t = int =
+  struct
+    open Printf
+    module SELF = F(M)
+    type t = int
+
+    let state = ref INIT_STATE.n
+
+    let make n = n
+    let f = printf "Base.f: %d\n"
+    let g n = printf "Base.g: %d\n" n ; SELF.f n
+
+    let m () = printf "Base.m: state %d\n" !state
+  end
+
+  include M
+end
+
+module Trait1 =
+struct
+  module OVERRIDE(SUPER : BASE) = struct end
+
+  module EXTEND(SELF : BASE) =
+  struct
+    let h t = print_endline "Trait1.h; g"; SELF.g t
+  end
+end
+
+module Trait2 =
+struct
+  module OVERRIDE(SUPER : BASE) =
+  struct
+    let f t = print_endline "Trait2.f"; SUPER.f t
+    let g t = print_endline "Trait2.g"; SUPER.g t
+  end
+
+  module EXTEND(SELF: sig
+                  include BASE
+                  include TRAIT1 with type t := t
+                end) =
+  struct
+    let i t = print_endline "Trait2.i; h"; SELF.h t
+  end
+end
+
+module X(INIT : sig val n : int end) : BASE_TRAIT1_TRAIT2 =
+struct
+  module OVERRIDEN(B : BASE) =
+  struct
+    include B
+    (* function overriding is stratified, so we can choose which SUPER
+     * we give to each trait (we could also pass a SELF recursive module
+     * built as done below) *)
+    include Trait1.OVERRIDE(B)
+    include Trait2.OVERRIDE(B)
+  end
+
+  module rec SELF : BASE_TRAIT1_TRAIT2 =
+  struct
+    module B = Base(INIT)(OVERRIDEN)
+    include OVERRIDEN(B)
+
+    include Trait1.EXTEND(SELF)
+    include Trait2.EXTEND(SELF)
+  end
+
+  include SELF
+end
+
+(* it is also possible to compose traits by functorizing the above over a
+ * (Base : BASE_f) module *)
+
+let make_x n =
+  let module M = X(struct let n = n end) in
+    (module M : BASE_TRAIT1_TRAIT2)
+
+let () =
+  let module X = (val make_x 10 : BASE_TRAIT1_TRAIT2) in
+    X.m ();
+    print_newline ();
+    X.f (X.make 1);
+    print_newline ();
+    X.g (X.make 2);
+    print_newline ();
+    X.h (X.make 3);
+    print_newline ();
+    X.i (X.make 4)
+
+-- 
+Mauricio Fernandez

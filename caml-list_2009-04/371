@@ -1,0 +1,89 @@
+Return-Path: <markus.mottl@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.9 required=5.0 tests=AWL,DNS_FROM_RFC_POST,
+	SPF_NEUTRAL autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id A274BBC37
+	for <caml-list@yquem.inria.fr>; Thu, 30 Apr 2009 17:46:41 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkYKAJdk+UnRVdypc2dsb2JhbACDAJMsPwEMCgsHEQOnO4EIkE4BAwEDg3wF
+X-IronPort-AV: E=Sophos;i="4.40,273,1238968800"; 
+   d="scan'208";a="39285965"
+Received: from mail-fx0-f169.google.com ([209.85.220.169])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 30 Apr 2009 17:46:40 +0200
+Received: by fxm17 with SMTP id 17so2435262fxm.27
+        for <caml-list@yquem.inria.fr>; Thu, 30 Apr 2009 08:46:40 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:date:message-id:subject
+         :from:to:content-type:content-transfer-encoding;
+        bh=uqN9A7hW0PkltjDp3pT8PHFa55rOi9/0GbPge5ddkDE=;
+        b=KWLcSG7idrXmWmnP15+V/Adt8Sl7yxYKqIr5PG3f1SefOkf3ZEzUsSCA3tEz4R7QQL
+         Za/Jfju2AXbbyIqkWTT8AiacDPt4q38HrSVxPv3Wj7P9pPBEmiaNwPOOxNNmFOvoCvBU
+         HW8ee8zti6GOvu736gva0Hyxcw3T7lhnsUuuU=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:date:message-id:subject:from:to:content-type
+         :content-transfer-encoding;
+        b=VAcdk6IakoSa/fRRL6WX6J9jXNZ97tG3R30m/v51nRPKCD4XrxhfKJ4ZIoY0MgJgS3
+         eaDFB+x0CqdyQCMEiAcYyiBdGuAk2M1+jgIQyihWHylaGcdpjf/a5aW++C2EzRI75bHW
+         2P9A57UOUDO8ch7Wa8ZoIwQRsm9DIsGCz+Tw8=
+MIME-Version: 1.0
+Received: by 10.86.86.2 with SMTP id j2mr1979295fgb.50.1241106399399; Thu, 30 
+	Apr 2009 08:46:39 -0700 (PDT)
+Date: Thu, 30 Apr 2009 11:46:39 -0400
+Message-ID: <f8560b80904300846v734fdd58lb6040e7b1b456a1@mail.gmail.com>
+Subject: Custom blocks and finalization
+From: Markus Mottl <markus.mottl@gmail.com>
+To: OCaml List <caml-list@yquem.inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; markus:01 mottl:01 markus:01 mottl:01 ocaml:01 bindings:01 finalizers:01 ocaml-code:01 ocaml:01 callbacks:01 segfaults:01 finalizers:01 runtime:01 ocaml-team:01 restrictive:01 
+
+Hi,
+
+we've recently run into a class of bugs concerning finalization
+functions with custom blocks that is probably not uncommon in OCaml
+bindings (e.g. Postgresql-bindings, SSL-bindings, likely others).  It
+seems somewhat unintuitive, but finalizers registered from within C do
+_not_ behave the same as ones registered from OCaml-code with the
+Gc-module.
+
+The OCaml manual explicitly states that custom functions registered
+from within C are not allowed to allocate values, perform callbacks,
+(de)register roots (I guess global roots, too?), or (as is obviously
+also true) release/acquire the OCaml-runtime lock.  Developers
+probably often miss this information.  The consequences of bugs
+violating any of these constraints are usually rare and hard to
+understand segfaults.
+
+This means that people will have to register finalizers from within
+OCaml for such values, which is certainly rather inconvenient.  As a
+general rule, it seems advisable to never use finalizers that need to
+release the runtime lock, e.g. if finalization code can block.  The
+reason is that finalizers can be run from any thread, including ones
+that should not block for an indefinite amount of time.  This implies
+that people who have designed APIs using finalization that way should
+consider redesigning it such that users have to "clean up" manually,
+thus forcing them to think about when and in which thread this
+happens.
+
+Otherwise, it might be helpful if the OCaml-team could consider
+whether this situation can be improved.  For example not being allowed
+to register/unregister roots to values seems overly restrictive, since
+global roots (e.g. for protecting OCaml-callback closures) sometimes
+need to be associated with C-values (e.g. for allowing some external
+C-library to efficiently perform callbacks into OCaml).  Registering
+the finalizer from within C during allocation rather than having to
+wrap up the value a second time with an OCaml-finalizer would seem
+much simpler.
+
+Regards,
+Markus
+
+-- 
+Markus Mottl        http://www.ocaml.info        markus.mottl@gmail.com
+

@@ -1,0 +1,149 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by sympa.inria.fr (Postfix) with ESMTPS id BAA497F256
+	for <caml-list@sympa.inria.fr>; Tue,  6 Nov 2012 12:48:26 +0100 (CET)
+Received-SPF: None (mail4-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail4-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail4-smtp-sop.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail4-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail4-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail4-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AicCACL4mFBCJwNzd2dsb2JhbABEsUKOKoNmAQwHDwc7gh4BAQQoUgVKcA2ICQa7aZJYA5JJgzEBkzM
+X-IronPort-AV: E=Sophos;i="4.80,722,1344204000"; 
+   d="scan'208";a="161539936"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 06 Nov 2012 12:48:25 +0100
+Received: (qmail 63703 invoked by uid 9370); 6 Nov 2012 11:48:23 -0000
+Date: 6 Nov 2012 11:48:23 -0000
+Message-ID: <20121106114823.63702.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: ivg@ieee.org, Didier.Cassirame@gmail.com
+CC: caml-list@inria.fr
+X-Validation-by: oleg@okmij.org
+Subject: [Caml-list] Higher order functors over tuples
+
+
+Ivan Gotovchits wrote
+> In general, the problem is to compute a tuple of objects that have
+> types different, but conforming to the same interface
+That seems to be the right problem for existentials -- which exist in
+OCaml under the name of objects. Methods are the interface and fields
+are private data. Of course we can get by with mere records -- but if
+we have objects anyway we might as well use them.
+
+> For example, we have several different data generator modules conforming
+> to the signature
+
+>    module type Generator =
+>    sig
+>      type t
+>      type r
+>      val create: unit  -> t
+>      val result: t -> r option
+>      val step:   t -> t option
+>    end
+
+> Each generator can be stepped forward and queried for a result. Generator
+> can expire, in such case it will return None as a result. I want to make a
+> ?list? of different generators and do some arbitary iterations on them.
+
+Here is the implementation of that example using objects. It seems the
+object implementation provides the same static assurances and
+abstractions as the module implementation. Since generators can
+expire, the effective number of generators does change
+dynamically. The static tupling doesn't buy us much.
+
+(* The interface of generators *)
+
+class type ['r] generator = object ('self)
+    method result : unit -> 'r option
+    method step   : unit -> 'self option
+end;;
+
+
+(* Function `proceed' iterates over the generator and print results *)
+
+let rec proceed : int generator -> unit = fun gen ->
+  match gen#step () with
+  | Some gen -> begin
+      match gen#result () with
+      | Some r -> print_int r; proceed gen
+      | None   -> proceed gen
+  end
+  | None -> print_newline ();
+      print_endline "generator finished"
+;;
+
+(* Just for a completness of the example a pair of simple generators: *)
+
+class odd : int -> [int] generator = fun init -> object
+    val v = init
+    method step () = if v <= 10 then Some {< v = v + 2 >} else None
+    method result () = if v <= 9 then Some v else None
+end
+;;
+
+(* A different way to constrain the type *)
+class even init = object (self : int #generator)
+    val v = init
+    method step () = if v <= 10 then Some {< v = v + 2 >} else None
+    method result () = if v <= 8 then Some v else None
+end
+;;
+
+(* Make a list of generators itself a generator *)
+
+let gen_list : 'r generator list -> 'r generator = fun gens -> object
+    val v = gens
+    method step () = 
+      let rec loop = function
+	| [] -> None
+	| h :: t -> 
+	    begin match h#step () with 
+            | None -> loop t
+	    | Some gen -> Some {< v = t @ [gen]  >}
+	    end
+      in loop v
+
+    (* find the first generator that gives a result *)
+    method result () =
+      let rec loop = function
+	| [] -> None
+	| h :: t -> 
+	    begin match h#result () with 
+            | None -> loop t
+	    | r    ->  r
+	    end
+      in loop (List.rev v)
+end
+;;
+
+
+let a_gen_list = gen_list [new even 0;
+			   new odd (-1);
+			   new even 0;
+			   new even 0];;
+
+
+proceed a_gen_list;;
+
+212243446566878889999
+generator finished
+

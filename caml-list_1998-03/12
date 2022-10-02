@@ -1,0 +1,180 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA07941 for caml-redistribution; Fri, 13 Mar 1998 10:19:02 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA29186 for <caml-list@pauillac.inria.fr>; Fri, 13 Mar 1998 09:56:57 +0100 (MET)
+Received: from madiran.inria.fr (root@madiran.inria.fr [128.93.8.77])
+	by concorde.inria.fr (8.8.7/8.8.5) with ESMTP id JAA27102
+	for <caml-list@inria.fr>; Fri, 13 Mar 1998 09:56:56 +0100 (MET)
+Received: from madiran.inria.fr (localhost.inria.fr [127.0.0.1]) by madiran.inria.fr (8.8.5/8.6.6) with ESMTP id JAA04394 for <caml-list@inria.fr>; Fri, 13 Mar 1998 09:56:49 +0100
+Message-Id: <199803130856.JAA04394@madiran.inria.fr>
+X-Mailer: exmh version 1.6.9 05/05/96
+From: Francois Rouaix <Francois.Rouaix@inria.fr>
+To: caml-list@inria.fr
+Subject: [LONG] Re: Overloading 
+In-reply-to: Your message of "Thu, 12 Mar 1998 18:29:26 +0100."
+             <199803121729.SAA16062@cahors.inria.fr> 
+Reply-To: Francois.Rouaix@inria.fr
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Date: Fri, 13 Mar 1998 09:56:49 +0100
+Sender: weis
+
+As it's been said in this thread, we've been working on overloading for
+quite a long time. This is a (not so) short summary prepared with Pierre:
+
+ [1988-1990]
+ - Pierre Weis put some overloading in Caml (Classic Caml as we now call it).
+ It supported static overloading of polymorphic function. This means that you
+ could overload arithmetic operators (such as +), but polymorphic functions
+ as well (such as map on lists, arrays, etc...). The compiler would replace
+ overloaded symbols at compile-time with their appropriate instance, and
+ reject the program if there was any ambiguity. This approach was not
+ pursued because its interaction with the type-checker was considered too
+ tricky. Also, while you could overload "print" (as you can expect),
+ let print_list l = List.iter print l
+ would not behave as expected (it would print any list as
+ <poly> <poly> <poly> ....).
+ This prompted the study of type-systems where type information (computed
+ statically) is passed at run-time to select correct instances of overloaded
+ symbols.
+
+ [1988-1992]
+ - I worked on Alcool for my thesis. To make a long story short, it was the
+ same kind of overloading as in Haskell, except that you needn't define
+ classes, since the type system was using a type algebra with extensible
+ records, based on Didier Remy's work of 1989. The Alcool type system had
+ some cool aspects, but produced "unfriendly types", to say the least. Those
+ of you who are familiar with object types in OCaml (and especially type
+ errors with objects) known what I mean (check the POPL'90 paper for the
+ details).
+
+ [1990-1995]
+ - Pierre, Catherine Dubois and later myself worked on "generics", also named
+ "Extensional polymorphism", which is closer in spirit to CLOS than to
+ Alcool/Haskell polymorphism. I actually implemented this system on top
+ of Caml Light, so to the easiest way to explain the system is to give some
+ short examples (check the POPL'95 paper if you want the formal system):
+
+generic add = case #a -> #b -> #c of
+   << int -> int -> int >> -> add_int
+ | << float -> float -> float >> -> add_float
+ | << int -> float -> float >> ->
+       (fun x y -> add_float (float_of_int x) y)
+ | << float -> int -> float >> ->
+       (fun x y -> add_float x (float_of_int y))
+;;
+
+generic is a modified "let", which defines an ad-hoc polymorphic value
+by pattern-matching on types. It's compiled as a function taking a type
+parameter and returning a normal value. At occurrences of a generic-defined
+symbol, the instance type is passed to the function.
+
+You can then write: "add 1 1", "add 1 1.3", etc..., but also
+let double x = add x x in double 1, double 1.3
+which shows that this ad-hoc polymorphism mixes well with traditionnal 
+polymorphism.
+
+This other example:
+generic length =
+case #a -> int of
+   << string -> int >> -> string_length
+|  << #ty vect -> int >> -> vect_length
+|  << 'a list -> int >> -> 
+          (fun _ -> print_string "'a list !";  0)
+|  << #ty list -> int >> -> list_length
+;;
+
+shows that you can overload on polymorphic functions, and that you don't
+have the Haskell restriction on the arity of types on which you overload
+(e.g. here, we overload on "string" and "'a list").
+
+Then, the fun begins when you realize that you can write functions that
+mix computations on values and types, as in the tautology checker
+
+generic rec taut = 
+  case #a -> bool of
+    <<bool -> bool>> -> 
+        (fun x -> x)
+ |  <<(bool -> #ty) -> bool >> ->
+        fun f -> taut (f true) & taut (f false)
+;;
+
+taut is defined on a whole family of functions with different types, such as:
+
+taut (fun x -> x or true)
+or
+taut (fun x y z -> (x or y) or (not x or z))
+
+
+
+Finally, a really tricky example:
+
+generic rec curryn =
+  case #a -> #b of
+   << (#ty1 * #ty2 -> #ty3)  -> #ty1 -> #ty >> ->
+        (fun f x -> curryn (fun y -> f (x,y)))
+
+ | << (#ty -> #ty') -> (#ty -> #ty') >> -> (fun f -> f)
+
+ | << (#ty -> #ty') -> (#ty -> #ty'') >> ->
+        (fun f x -> curryn (f x))
+;;
+
+
+which curryfies any function with some tuple in some parameter, e.g.
+let add2 (x,y) = x+y;;
+print (curryn add2 1 2: int);;
+
+let add3 (x,(y,z)) = x+y+z;;
+print (curryn add3 1 2 3: int);;
+
+let add4 (x,(y,(z,t))) = x+y+z+t;;
+print (curryn add4 1 2 3 4 : int);;
+
+let addIP x (y,z) = x+y+z;;
+print (curryn addIP 1 1 1 : int);;
+
+let addPP (x,y) (z,t) = x+y+z+t;;
+print (curryn addPP 1 1 1 1 : int);;
+
+let addIIP x y (z,t) =  x+y+z+t;;
+print (curryn addIIP 1 1 1 1 : int);;
+
+let addIPIP x (y,z) t (u,v) = x+y+z+t+u+v;;
+print (curryn addIPIP 1 1 1 1 1 1  : int);;
+
+
+In this type system, we still have static type-checking and inference,
+but there are some practical problems: coherence (as always when you do
+powerful overloading), true separate compilation, but more significantly,
+you have to define all "instances" of an overloaded function in a single
+"generic" definition. In most cases, this is not what the user wants.
+
+  [1997-...]
+  Jun Furuse is now tackling this problem.
+
+A big problem with overloading is that it requires sophisticated type systems,
+whereas the user expects a "do-what-I-mean" behavior from the type-checker.
+As you've seen when objects were introduced in Caml, it's difficult to hide
+a complex type system from the user, especially when there are type errors.
+
+--f
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

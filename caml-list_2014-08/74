@@ -1,0 +1,81 @@
+Return-Path: <xavier.leroy@inria.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 2B2C67F747
+	for <caml-list@sympa.inria.fr>; Mon, 18 Aug 2014 18:33:47 +0200 (CEST)
+X-IronPort-AV: E=Sophos;i="5.01,887,1400018400"; 
+   d="scan'208";a="89733418"
+Received: from estephe.inria.fr (HELO [128.93.11.95]) ([128.93.11.95])
+  by mail2-relais-roc.national.inria.fr with ESMTP; 18 Aug 2014 18:33:47 +0200
+Message-ID: <53F22AEB.5070506@inria.fr>
+Date: Mon, 18 Aug 2014 18:33:47 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Thunderbird/31.0
+MIME-Version: 1.0
+To: caml-list@inria.fr
+References: <CAHR=VkwXynFAJm13MwKrsJNgx4HeW_LU03BQxqD4S7prG1A8Rw@mail.gmail.com>
+In-Reply-To: <CAHR=VkwXynFAJm13MwKrsJNgx4HeW_LU03BQxqD4S7prG1A8Rw@mail.gmail.com>
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Unix file descriptors vs. in/out channels
+
+Hi Thomas,
+
+> [problem] I am a bit puzzled w.r.t. the interplay between Pervasives
+> functions that operate on in/out channels and the Unix function that
+> operate on file descriptors. From the documentation, I assume that it
+> is not possible to close an (input) channel that was created using
+> Unix.in_channel_of_descr without closing the associated file
+> descriptor. 
+
+Correct.
+
+> Therefore, I assume that I cannot use
+> Unix.in_channel_of_descr and Unix.out_channel_of_descr more that once
+> for my file-descriptor (because otherwise, these channels would not be
+> reclaimed). 
+
+I don't quite understand your remark.  You need to close (explicitly
+and at once) all in_channels and out_channels associated with your
+file_descr, once you're done with it.  The first close_in/close_out
+will close the underlying FD, and the others will ignore the fact that
+the FD is already closed.
+
+> But, is is safe to use both kind of channels?
+
+Sometimes :-)  An example is Unix.open_connection, which gives you a
+pair of in/out channels on the same socket.  The only caveat is that
+writes on out_channels are buffered, so you need to flush explicitly
+to make sure the data is actually sent over the socket.
+
+> [summary] I would like to open a file in read-write mode, and use it
+> (mainly) to stream a big data-structure in it and (sometime) reading
+> the content of this data-structure.
+
+For a file opened in RW mode, the problem is that reads through
+the in_channel may not see the data written through the out_channel,
+even if you religiously flush the out_channel before reading anything.
+The reason is that in_channels are also buffered, and may hold stale
+data corresponding to the state of the file before recent writes.  And
+there is no flush operation for in_channels...
+
+> Btw, while playing with this problem, I found the following strange
+> behavior: if I uncomment the second line in debug (see below), I can
+> read data from the input channel, while if the debug line is comment,
+> reading from the channel yields an End_of_file exception. Is this
+> expected?
+
+This is another gotcha :-)  in_channels and out_channels maintain
+(their idea of) the current position in the file.  This helps avoiding
+unnecessary "lseek" operations to determine current position and
+length.  However, if you share a FD between two channels, the
+channels's idea of the current position is inconsistent with the
+actual position of the FD.
+
+Bottom line: for your intended application, it's better to use Unix
+functions exclusively.  The trick with an (in_channel, out_channel) pair
+does work pretty well for sockets, named pipes and terminals, though.
+
+- Xavier Leroy
+

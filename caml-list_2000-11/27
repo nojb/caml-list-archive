@@ -1,0 +1,146 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA16558 for caml-red; Fri, 3 Nov 2000 10:23:36 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA18575 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 2000 08:24:31 +0100 (MET)
+Received: from ext.lri.fr (ext.lri.fr [129.175.15.4])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id eA37OUT01314
+	for <caml-list@inria.fr>; Fri, 3 Nov 2000 08:24:30 +0100 (MET)
+Received: from pc87.lri.fr (IDENT:root@pc87 [129.175.8.106])
+          by ext.lri.fr (8.9.3/jtpda-5.3.2) with ESMTP id IAA06489
+          ; Fri, 3 Nov 2000 08:24:30 +0100 (MET)
+Received: from lri.fr (IDENT:jcourant@localhost.localdomain [127.0.0.1])
+          by pc87.lri.fr (8.9.3/jtpda-5.3.2) with ESMTP id IAA24280
+          ; Fri, 3 Nov 2000 08:24:29 +0100
+Message-ID: <3A02682D.7BC56F72@lri.fr>
+Date: Fri, 03 Nov 2000 08:24:29 +0100
+From: Judicael Courant <Judicael.Courant@lri.fr>
+X-Mailer: Mozilla 4.72 [fr] (X11; U; Linux 2.2.14-5.0 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: stephanh@win.tue.nl
+CC: caml-list@inria.fr
+Subject: Re: Why does the order in the Makefile matter?
+References: <200011021822.TAA11126@pauillac.inria.fr>
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis@pauillac.inria.fr
+
+Pierre Weis a écrit :
+> > So it would be nice if the compiler itself could put the .cmo files
+> > in an order compatible with the static binding rule. This would
+> > remove the tedium of putting the .cmo files in an appropriate order
+> > from the programmer.
+> 
+> We can propose an external tool that will try to find for you some
+> order compatible with static binding if any, something similar to
+> ocamldep for module compilation dependancy. This existed in Caml Light
+> and was named ``lorder'':
+> 
+> lorder
+> ------
+>   A tool to compute the dependencies between a set of .zo files
+>   and suggest a correct linking order.
+> 
+> > Would this be difficult to implement?
+> 
+
+It is quite easy to implement in bash, using sed and the tsort Unix
+utility (in the code of xxargs, you may notice that bash supports
+higher-order functions!). I have already done it (*).
+Here are the functions you need:
+
+-------------------------------------------------------------
+# general-purpose function
+# xxargs f reads lines on its standard input an applies f to each
+# of them, in order
+# ignores the last line if it does not end with a newline
+xxargs ()
+{
+local F
+local ARGS
+F=$1
+while read ARGS
+do
+ $F $ARGS
+done
+}
+
+
+# takes a list of dependency with form
+# f f1 ... fn
+# meaning f depends on f1 and ... and fn
+# and outputs a list within tsort format
+format ()
+{
+read f l
+while [ "$f" != "" ]
+do
+ set -- $l
+ while [ "$1" != "" ]
+ do
+ echo $1 $f
+ shift
+ done
+read f l
+done
+}
+
+# tidy the input: if a line begins
+# with a .cmi or .cmx, we ignore it, since we want to know the
+# relations between .cmo files (in order to link).
+# otherwise, delete the ":", and change .cmi into .cmo in order to
+# have the "must be linked before" relation (if the corresponding .mli
+file
+# has no associated .ml file, this can introduce fake .cmo files)
+# files, that is, files t) 
+# Moreover, we delete the prefix "./" in filenames
+tidy ()
+{
+case "$1" in
+*.cmo:) echo "$@" | sed -e "s/://g" -e "s/.cmi/.cmo/g" -e "s|\./||g";;
+*) ;;
+esac
+}
+
+# removes .cmo that would not have a corresponding .ml
+tidyout ()
+{
+local BASE
+local DIR
+BASE=`basename $1 .cmo`
+DIR=`dirname $1`
+if [ -f "$DIR/$BASE.ml" ]
+then
+echo "$1"
+fi
+}
+
+# takes a list of dependencies in ocamldep format and outputs
+# the topologically sorted list of .cmo
+# typical usage:
+# ocamldep -I foo foo/*.ml foo/*.mli *.ml .mli | order
+# or: cat .depend
+order ()
+{
+xxargs tidy | format | tsort | xxargs tidyout
+}
+-------------------------------------------------------------
+
+
+Enjoy!
+
+Judicaël Courant.
+
+(*) When I wrote this, my aim was to have a script to automagically
+check that the code of my students' would compile and do some automated
+tests over it. For security reasons (the students would submit through
+an anonymous web form), I did not want to do just a "make all". So I
+wrote a script that just did the necessary job. The above functions are
+part of the script. More about this if anybody is interested.
+
+-- 
+Judicael.Courant@lri.fr, http://www.lri.fr/~jcourant/
+(+33) (0)1 69 15 64 85
+"Montre moi des morceaux de ton monde, et je te montrerai le mien"
+Tim, matricule #929, condamné à mort.
+http://rozenn.picard.free.fr/tim.html
+
+

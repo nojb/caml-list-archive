@@ -1,0 +1,128 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA06888; Tue, 15 Jan 2002 12:36:46 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA07178 for <caml-list@pauillac.inria.fr>; Tue, 15 Jan 2002 12:36:45 +0100 (MET)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g0FBaeb03664
+	for <caml-list@inria.fr>; Tue, 15 Jan 2002 12:36:45 +0100 (MET)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.10.1/1.01.28121999) with ESMTP id g0FBaee48261
+          for <caml-list@inria.fr>; Tue, 15 Jan 2002 12:36:40 +0100 (CET)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.9.2/jb-1.1)
+	id MAA17687 for <caml-list@inria.fr>; Tue, 15 Jan 2002 12:36:40 +0100 (MET)
+Date: Tue, 15 Jan 2002 12:36:40 +0100 (MET)
+From: Alain Frisch <frisch@clipper.ens.fr>
+To: Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] record labels
+In-Reply-To: <Pine.GSO.4.33.0201151117560.3037-100000@clipper.ens.fr>
+Message-ID: <Pine.GSO.4.33.0201151227550.10071-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello, and sorry for polluting again this list with this topic ...
+
+I've been asked for the patch I mentionned in my previous mail;
+in the toplevel directory of ocaml-3.04 source tree, you can do:
+
+patch -Np1 < patch_record
+
+where patch_record is the file appended below. Here is a short
+description: for field access (r.l) or modification (r.l <- ...),
+when l is a simple label (not a fully qualified path)
+and r is known to be record, then l is given a record scope rule.
+For instance:
+
+        Objective Caml version 3.04
+
+# module A = struct type t = { x : int } end;;
+module A : sig type t = { x : int; }  end
+# module B = struct type 'a t = { x : 'a } end;;
+module B : sig type 'a t = { x : 'a; }  end
+# fun (a : A.t) -> a.x;;
+- : A.t -> int = <fun>
+# fun (a : 'a B.t) -> a.x;;
+- : 'a B.t -> 'a = <fun>
+
+Let me know if you find some strange behaviour ...
+
+-- 
+  Alain
+
+
+=========== CUT FROM HERE  (file patch_record) ============================
+diff -aur ocaml-3.04/typing/typecore.ml ocaml-patch-record/typing/typecore.ml
+--- ocaml-3.04/typing/typecore.ml	Fri Dec  7 08:27:59 2001
++++ ocaml-patch-record/typing/typecore.ml	Tue Jan 15 12:14:33 2002
+@@ -106,6 +106,40 @@
+   | _ ->
+       assert false
+
++
++(* Copied from env.ml *)
++let labels_of_type ty_path decl =
++  match decl.type_kind with
++    Type_record(labels, rep) ->
++      Datarepr.label_descrs
++        (Btype.newgenty (Tconstr(ty_path, decl.type_params, ref Mnil)))
++        labels rep
++  | _ -> []
++
++(* Note: this is rather inefficient; it is not necessary to compute
++   all labels of the records (tbl_all is not used for Texp_field).
++   But who cares ? *)
++
++let rec lookup_label ty name env =
++  let ty = repr ty in
++  match ty.desc with
++  | Tconstr (path, _, _) ->
++      let td = Env.find_type path env in
++      let lbls = labels_of_type path td in
++      List.assoc name lbls
++  | _ -> raise Not_found
++
++let find_label loc ty lid env =
++  try
++    try
++      match lid with
++        | Longident.Lident name -> lookup_label ty name env
++        | _ -> raise Not_found
++    with Not_found -> Env.lookup_label lid env
++  with Not_found ->
++    raise(Error(loc, Unbound_label lid))
++
++
+ (* Typing of patterns *)
+
+ (* Creating new conjunctive types is not allowed when typing patterns *)
+@@ -832,11 +866,7 @@
+         exp_env = env }
+   | Pexp_field(sarg, lid) ->
+       let arg = type_exp env sarg in
+-      let label =
+-        try
+-          Env.lookup_label lid env
+-        with Not_found ->
+-          raise(Error(sexp.pexp_loc, Unbound_label lid)) in
++      let label = find_label sexp.pexp_loc arg.exp_type lid env in
+       let (ty_arg, ty_res) = instance_label label in
+       unify_exp env arg ty_res;
+       { exp_desc = Texp_field(arg, label);
+@@ -845,11 +875,7 @@
+         exp_env = env }
+   | Pexp_setfield(srecord, lid, snewval) ->
+       let record = type_exp env srecord in
+-      let label =
+-        try
+-          Env.lookup_label lid env
+-        with Not_found ->
+-          raise(Error(sexp.pexp_loc, Unbound_label lid)) in
++      let label = find_label sexp.pexp_loc record.exp_type lid env in
+       if label.lbl_mut = Immutable then
+         raise(Error(sexp.pexp_loc, Label_not_mutable lid));
+       let (ty_arg, ty_res) = instance_label label in
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

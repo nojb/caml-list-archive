@@ -1,0 +1,85 @@
+Return-Path: <damien.doligez@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id D351EBBC1
+	for <caml-list@yquem.inria.fr>; Fri, 11 Apr 2008 15:42:21 +0200 (CEST)
+X-IronPort-AV: E=Sophos;i="4.25,642,1199660400"; 
+   d="scan'208";a="11347332"
+Received: from 250-112.msr-inria.inria.fr ([193.55.250.112])
+  by mail3-relais-sop.national.inria.fr with ESMTP/TLS/AES128-SHA; 11 Apr 2008 15:42:21 +0200
+Message-Id: <9E6E230C-9F58-4E9D-8E3A-6E603BA40DB1@inria.fr>
+From: Damien Doligez <damien.doligez@inria.fr>
+To: Caml Mailing List <caml-list@yquem.inria.fr>
+In-Reply-To: <47FE3E65.7030907@rice.edu>
+Content-Type: text/plain; charset=US-ASCII; format=flowed; delsp=yes
+Content-Transfer-Encoding: 7bit
+Mime-Version: 1.0 (Apple Message framework v919.2)
+Subject: Re: [Caml-list] Question about CAMLparamx macros
+Date: Fri, 11 Apr 2008 15:42:20 +0200
+References: <47FE3E65.7030907@rice.edu>
+X-Mailer: Apple Mail (2.919.2)
+X-Spam: no; 0.00; damien:01 damien:01 ocaml:01 manipulates:01 foo:01 ocaml:01 runtime:01 foo:01 exn:01 error-prone:01 exn:01 expr:01 expr:01 unspecified:01 camlparam:01 
+
+On 2008-04-10, at 18:20, Raj Bandyopadhyay wrote:
+
+> My question is, when do I have to use or not use these macros? I  
+> know I need to use these when my C function accepts AND returns  
+> OCaml 'value' types, but what about the following cases?
+
+You must use the macros as soon as your function manipulates values
+and can call the GC (directly or indirectly).  Since it's so hard to  
+tell
+whether a function can call the GC, it's safer to use them on all
+functions that manipulate values.
+
+With one very important exception: finalization functions must not
+use the macros (and must never call the GC either).
+
+> 1) When the C function takes a value as parameter or creates a value  
+> local variable, but returns something else e.g.
+> char *foo(value v, int x)
+
+Use the macros.  CAMLreturnT is here exactly for this case.
+
+> 2) When the C function does not create a value local variable  
+> explicitly or takes a value as a parameter but returns the result of  
+> a callback to the OCaml runtime
+> e.g.
+> value foo(int x) {return  
+> caml_callback_exn(*caml_named_value(...),...)}
+
+This function does manipulate *caml_named_value(...), which is a value.
+
+BTW, the above style is extremely error-prone, because that value is  
+stored
+in a temporary variable that you can't pass to CAMLlocal.
+
+Let me expand the code:
+
+value foo (int x) {
+   return caml_callback_exn (<expr1>, <expr2>);
+}
+
+Both <expr1> and <expr2> are values.  The compiled code will evaluate
+them in some unspecified order.  If it evaluates one and then the other
+calls the GC, you'll get a crash.  To be safe, you must make sure that
+neither expression calls the GC (this is the hard way), or play it safe:
+
+value foo (int x) {
+   CAMLparam0 ();
+   CAMLlocal2 (e1, e2);
+   e1 = <expr1>;
+   e2 = <expr2>;
+   CAMLreturn (caml_callback_exn (e1, e2));
+}
+
+This way, you know there won't be a GC during the evaluation of
+the arguments of caml_callback_exn.
+
+-- Damien
+

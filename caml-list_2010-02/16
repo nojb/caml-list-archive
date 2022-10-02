@@ -1,0 +1,251 @@
+Return-Path: <daniel.c.buenzli@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 9CBBBBBAF
+	for <caml-list@yquem.inria.fr>; Tue,  2 Feb 2010 14:12:33 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqICACO0Z0vRVdvdimdsb2JhbACDM5dbPQEBAQoJDAcRBasxgXSFNIhtAQEDBYEogj5aBItk
+X-IronPort-AV: E=Sophos;i="4.49,390,1262559600"; 
+   d="scan'208";a="42688212"
+Received: from mail-ew0-f221.google.com ([209.85.219.221])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 02 Feb 2010 14:12:13 +0100
+Received: by ewy21 with SMTP id 21so32347ewy.22
+        for <caml-list@inria.fr>; Tue, 02 Feb 2010 05:12:13 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:sender:received:date
+         :x-google-sender-auth:message-id:subject:from:to:content-type;
+        bh=nzFczqd7lR1tBUKKzmA7K8pgCDK18mQOxhtZMv7+7gs=;
+        b=f4YwA9JigSsHywBJSWIS2gExWbT7AuVqAPHDAKy+U51GkvUrCdQYU35mj7Ly6fRtlE
+         Fr/SPU7srwZVwRkcx/P6DPC+0v/jzINDtgnHq1TR57wqk2KdsQ3Mrj4Jm336s8veUNqv
+         OQmgFtYsOW/gjQcL6Ia1BNuLCyyZ38A1PAPkk=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:sender:date:x-google-sender-auth:message-id:subject
+         :from:to:content-type;
+        b=iI/HT+ohGYWV3rLqC4U6bNOjd9mKiVK1hn8s817pxnhimHblF2Lq3D8J2zoEKNbY+k
+         /9ZfuzlXs3KGpyRjepZJT0+U5VeV/HQDMDzpVv1AgUAPyrS4VGOhRN1g3wNO5NtmAWiT
+         kfS4kkkRdgovseXDA+YzZpYmB3VdUAIZIX1FE=
+MIME-Version: 1.0
+Sender: daniel.c.buenzli@gmail.com
+Received: by 10.213.109.129 with SMTP id j1mr1331037ebp.79.1265116331843; Tue, 
+	02 Feb 2010 05:12:11 -0800 (PST)
+Date: Tue, 2 Feb 2010 14:12:11 +0100
+X-Google-Sender-Auth: 336a430d30f6d4f8
+Message-ID: <91a3da521002020512v758849f0mdac3538abac44161@mail.gmail.com>
+Subject: Thread safe heterogenous property lists (dictionaries)
+From: =?UTF-8?Q?Daniel_B=C3=BCnzli?= <daniel.buenzli@erratique.ch>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=UTF-8
+X-Spam: no; 0.00; buenzli:01 andrej:01 functor:01 ocaml:01 logarithmic:01 mutable:01 hashtbl:01 ocaml:01 node:01 sig:01 val:01 val:01 bool:01 sig:01 bool:01 
+
+Hello,
+
+I needed an implementation of heterogenous property lists [1] ---
+hereafter dictionaries. There's some code floating around on the www
+(e.g. here [2]) but it uses a thread unsafe implementation of
+universal types. This makes it unacceptably ugly as thread safety is
+not even guaranteed among independent dictionaries, locking is needed
+per key.
+
+Below I give two implementations of immutable heterogenous
+dictionaries. Both use exceptions to implement a thread safe universal
+type. This is based on code by Andrej Bauer and refined by Stephen
+Weeks here [3]. A functor application is needed to create a function
+that create new keys for a given type but in practice that
+inconvenience is rather small (see the test code). This means you
+don't have to wait on OCaml 3.12 to get thread safe heterogenous
+dictionaries (see Alain Frish's "perfect" solution for universal types
+with first class modules there [3]).
+
+The first implementation uses association lists, it's suitable for
+small dictionaries as lookup time is linear in the number of entries.
+This implementation is completely thread-safe.
+
+The second one uses Maps for logarithmic time lookups. Operations on
+dictionaries are thread safe. However key creation is not because
+unique ids need to be generated for them. While not perfect this is
+acceptable to me as keys are likely to be created in module
+initialization code and thus will be executed by a single thread. This
+implementation can be easily modified to implement mutable
+dictionaries using Hashtbl as the underlying map for constant lookup
+time.
+
+Best,
+
+Daniel
+
+[1] http://mlton.org/PropertyList
+[2] http://eigenclass.org/R2/writings/heterogeneous-containers-in-ocaml
+[3] http://ocaml.janestreet.com/?q=node/18
+
+(* The signature we are interested in. *)
+
+(** Heterogenous dictionaries. *)
+module type Dict = sig
+
+  type t
+  (** The type for dictionaries. *)
+
+  type 'a key
+  (** The type for keys whose lookup value is of type ['a]. *)
+
+  val empty : t
+  (** The empty dictionary. *)
+
+  val is_empty : t -> bool
+  (** [is_empty d] is [true] iff [d] is empty. *)
+
+  val add : 'a key -> 'a -> t -> t
+  (** [add k v d] is [d] with [k] mapping to [v]. *)
+
+  val find : 'a key -> t -> 'a option
+  (** [find k d] is the value of [k] in [d], if any. *)
+
+  module Key : sig
+  (** Creating keys. *)
+
+    val bool : unit -> bool key
+    (** [bool ()] is a new key for a boolean value. *)
+
+    val int : unit -> int key
+    (** [int ()] is a new key for an integer value. *)
+
+    val float : unit -> float key
+    (** [float ()] is a new key for a float value. *)
+
+    val string : unit -> string key
+    (** [string ()] is a new key for string value. *)
+
+    module ForType (T : sig type t end) : sig
+      val create : unit -> T.t key
+      (** [create ()] is a new key for the type [T.t]. *)
+    end
+  end
+end
+
+(* Implementation. *)
+
+module type Id = sig                              (* A signature for key ids. *)
+  type t
+  val create : unit -> t
+end
+
+module Key (Id : Id) = struct         (* Given key ids, implements dict keys. *)
+  type 'a t = Id.t * ('a -> exn) * (exn -> 'a option)
+
+  module ForType (T : sig type t end) = struct
+    exception E of T.t
+    let inject v = E v
+    let project = function E v -> Some v | _ -> None
+    let create () = Id.create (), inject, project
+  end
+
+  module BoolKey = ForType (struct type t = bool end)
+  module IntKey = ForType (struct type t = int end)
+  module FloatKey = ForType (struct type t = float end)
+  module StringKey = ForType (struct type t = string end)
+
+  let bool = BoolKey.create
+  let int = IntKey.create
+  let float = FloatKey.create
+  let string = StringKey.create
+end
+
+module DList : Dict = struct    (* Dictionaries as assoc lists, thread-safe. *)
+
+  module Id = struct
+    type t = unit ref
+    let create () = ref ()
+  end
+
+  module Key = Key (Id)
+
+  type t = (Id.t * exn) list
+  type 'a key = 'a Key.t
+
+  let empty = []
+  let is_empty = function [] -> true | _ -> false
+  let add k v l =
+    let rec aux ((id, inject, _) as k) v left right = match right with
+    | [] -> (id, inject v) :: left
+    | ((id', _) as b) :: right' ->
+	if id' == id then List.rev_append left ((id, inject v) :: right') else
+	aux k v (b :: left) right'
+    in
+    aux k v [] l
+
+  let rec find ((id, _, project) as k) = function
+    | (id', exn) :: l' -> if id' == id then project exn else find k l'
+    | [] -> None
+
+end
+
+module DMap : Dict = struct (* Dicts as maps, thread-safe except for key gen. *)
+
+  module Id = struct
+    type t = int
+    let compare : int -> int -> int = compare
+    let create =                                          (* NOT thread safe. *)
+      let c = ref min_int in
+      fun () ->
+	let id = !c in
+	incr c; if id > !c then assert false (* too many ids *) else id
+  end
+
+  module Key = Key (Id)
+  module Map = Map.Make(Id)
+
+  type t = exn Map.t
+  type 'a key = 'a Key.t
+	
+  let empty = Map.empty
+  let is_empty = Map.is_empty
+  let add (id, inject, _) v m = Map.add id (inject v) m
+  let find  (id, _, proj) m = try proj (Map.find id m) with Not_found -> None
+end
+
+(* Testing *)
+
+module Test (Dict : Dict) = struct
+  let b1 = Dict.Key.bool ()
+  let b2 = Dict.Key.bool ()
+  let i1 = Dict.Key.int ()
+  let i2 = Dict.Key.int ()
+  let s1 = Dict.Key.string ()
+  let s2 = Dict.Key.string ()
+
+  module IntPairKey = Dict.Key.ForType (struct type t = int * int end)
+
+  let p1 = IntPairKey.create ()
+  let p2 = IntPairKey.create ()
+
+  let d0 = Dict.empty
+  let d1 = Dict.add b1 true d0
+  let d2 = Dict.add i1 84 d1
+  let d3 = Dict.add s1 "dip" d2
+  let d4 = Dict.add p1 (4,2) d3
+  let d5 = Dict.add i1 85 d4
+
+  let () =
+    let all_dicts = [d0; d1; d2; d3; d4; d5] in
+    let assert_bind k some d = assert (Dict.find k d = some) in
+    List.iter (assert_bind b2 None) all_dicts;
+    List.iter (assert_bind i2 None) all_dicts;
+    List.iter (assert_bind s2 None) all_dicts;
+    List.iter (assert_bind p2 None) all_dicts;
+    List.iter (assert_bind b1 None) [d0];
+    List.iter (assert_bind b1 (Some true)) [d1; d2; d3; d4; d5];
+    List.iter (assert_bind i1 None) [d0; d1];
+    List.iter (assert_bind i1 (Some 84)) [d2; d3; d4];
+    assert_bind i1 (Some 85) d5;
+    List.iter (assert_bind s1 None) [d0; d1; d2];
+    List.iter (assert_bind s1 (Some "dip")) [d3; d4; d5];
+    List.iter (assert_bind p1 None) [d0; d1; d2; d3];
+    List.iter (assert_bind p1 (Some (4,2))) [d4; d5];
+end
+
+module Test_DList = Test (DList)
+module Test_DMap = Test (DMap)
+

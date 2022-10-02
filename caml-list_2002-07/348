@@ -1,0 +1,1338 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA03782; Thu, 18 Jul 2002 09:35:51 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA03769 for <caml-list@pauillac.inria.fr>; Thu, 18 Jul 2002 09:35:50 +0200 (MET DST)
+Received: from swan.mail.pas.earthlink.net (swan.mail.pas.earthlink.net [207.217.120.123])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g6I2Jkf22457
+	for <caml-list@inria.fr>; Thu, 18 Jul 2002 04:19:47 +0200 (MET DST)
+Received: from user-0ccegbj.cable.mindspring.com ([24.199.65.115] helo=flapdragon.homeip.net)
+	by swan.mail.pas.earthlink.net with esmtp (Exim 3.33 #1)
+	id 17V0tK-0001H3-00; Wed, 17 Jul 2002 19:19:42 -0700
+Subject: Re: [Caml-list] Opaque pointers with camlidl
+From: "Yaron M. Minsky" <yminsky@CS.Cornell.EDU>
+To: Michael Tucker <mtucker@eecs.harvard.edu>
+Cc: caml-list@inria.fr
+In-Reply-To: 
+	<Pine.BSF.4.44.0207171759380.61599-100000@bowser.eecs.harvard.edu>
+References: 
+	<Pine.BSF.4.44.0207171759380.61599-100000@bowser.eecs.harvard.edu>
+Content-Type: multipart/mixed; boundary="=-ha4f+ObkQjxR2YEdd7br"
+X-Mailer: Ximian Evolution 1.0.8 
+Date: 17 Jul 2002 22:19:41 -0400
+Message-Id: <1026958782.11081.13.camel@dragonfly.localdomain>
+Mime-Version: 1.0
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--=-ha4f+ObkQjxR2YEdd7br
+Content-Type: text/plain
+Content-Transfer-Encoding: 7bit
+
+For what it's worth, I have written a small berkeley DB interface (for
+version 3.3.11, the one found in RH 7.3), which I've attached to this
+email.  The ml is actually embedded inside the bdb_stubs.c file in
+comment lines beginning with "//+".  There's a little python script
+called ocextr(yeah, yeah, I should have written it in ocaml) for
+extracting the appropriate code.
+
+The makefile is optimized for my own little environment, and this isn't
+really ready for public consumption, but you might find a use for it. 
+It has decent support for dbenvs, direct db access and cursors.  At some
+point I'll add transactions, but I haven't gotten around to it yet.  If
+you find any bugs, please tell me about them.
+
+Also, if you figure out a nice way of doing this with camlidl, please
+post it to the list.  I'd love to be avoid hand-coding this kind of
+interface.
+
+y
+
+On Wed, 2002-07-17 at 18:09, Michael Tucker wrote:
+> Hi,
+> 
+>   I am trying to write an O'Caml program that interfaces with Berkeley DB
+> (which has a C interface). Some of the calls include arguments that are
+> pointers to opaque structures -- that is, I pass a pointer, the server
+> goes to the address, fills it, but then my only use of it is to pass it
+> back to the server. In other words, I will not be examining or altering
+> the contents, just holding it to preserve state. Some of these structures
+> are fairly complex, and may require a lot of code-schlepping to get into
+> IDL format, so it would be great if I could signify that there is a truly
+> opaque (I don't care about its layout, I just know the size) structure
+> coming into O'Caml. I looked in the camlidl manual, but didn't see any
+> attributes that looked relevant. I would like the data to be transferred
+> and stored in OCaml, but I am fine with it being stored as raw data (a
+> string?). Is there anything like this that will let me effectively pickle
+> and unpickle structures without supplying any information beyond their
+> size?
+> 
+> I'm sure I'm fouling up my explanation, so feel free to send questions...
+> I am just hoping that someone has run into a similar situation in the
+> past!
+> 
+> Thanks,
+> Mike
+> 
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+-- 
+|--------/            Yaron M. Minsky              \--------|
+|--------\ http://www.cs.cornell.edu/home/yminsky/ /--------|
+
+Open PGP --- KeyID B1FFD916 (new key as of Dec 4th)
+Fingerprint: 5BF6 83E1 0CE3 1043 95D8 F8D5 9F12 B3A9 B1FF D916
+
+--=-ha4f+ObkQjxR2YEdd7br
+Content-Disposition: attachment; filename=bdb_stubs.c
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/x-c; name=bdb_stubs.c; charset=ISO-8859-1
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/custom.h>
+#include <caml/fail.h>
+#include <caml/memory.h>
+#include <caml/callback.h>
+
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <limits.h>
+#include <db.h>
+/* O_CREAT and others are not defined in db.h */
+#include <fcntl.h>
+
+#include <string.h>
+#include "bdb_stubs.h"
+
+#define True 1
+#define False 0
+
+
+// comments starting with "//+" are extracted automatically to create the .=
+ml
+// file that forms the other half of this interface.
+
+/************************************************************/
+/***  Custom Operations *************************************/
+/************************************************************/
+
+// Close the DB_ENV
+int caml_dbenv_close_internal(value dbenv) {
+  if (!(UW_dbenv_closed(dbenv))) {=20
+    UW_dbenv_closed(dbenv) =3D True;
+    return UW_dbenv(dbenv)->close(UW_dbenv(dbenv),0);
+  }
+  else return 0;
+}
+
+static void finalize_caml_dbenv(value dbenv) {=20
+  CAMLparam1(dbenv);
+  caml_dbenv_close_internal(dbenv);=20
+  CAMLreturn0;
+}
+
+static struct custom_operations dbenv_custom =3D {=20
+  "dbenv", =20
+  finalize_caml_dbenv, =20
+  custom_compare_default, =20
+  custom_hash_default,
+  custom_serialize_default, =20
+  custom_deserialize_default=20
+};=20
+
+/************************************************************/
+
+// Close the DB
+int caml_db_close_internal(value db) {
+  if (!(UW_db_closed(db))) {=20
+    UW_db_closed(db) =3D True;
+    return UW_db(db)->close(UW_db(db),0);
+  }
+  else return 0;
+}
+
+static void finalize_caml_db(value db) {=20
+  CAMLparam1(db);
+  caml_db_close_internal(db);=20
+  CAMLreturn0;
+}
+
+static struct custom_operations db_custom =3D {=20
+  "db", =20
+  finalize_caml_db, =20
+  custom_compare_default, =20
+  custom_hash_default,
+  custom_serialize_default, =20
+  custom_deserialize_default=20
+};=20
+
+/************************************************************/
+
+// Close the Transaction
+int caml_cursor_close_internal(value cursor) {
+  if (!(UW_cursor_closed(cursor))) {=20
+    UW_cursor_closed(cursor) =3D 1;
+    return UW_cursor(cursor)->c_close(UW_cursor(cursor));
+  }
+  else return 0;
+}
+
+static void finalize_caml_cursor(value cursor) {
+  CAMLparam1(cursor);
+  caml_cursor_close_internal(cursor);=20
+  CAMLreturn0;
+}
+
+static struct custom_operations cursor_custom =3D {=20
+  "cursor", =20
+  finalize_caml_cursor, =20
+  custom_compare_default, =20
+  custom_hash_default,
+  custom_serialize_default, =20
+  custom_deserialize_default=20
+};=20
+
+/************************************************************/
+/************ Exception buckets *****************************/
+/************************************************************/
+
+static value *caml_db_exn =3D NULL;
+static value *caml_key_exists_exn =3D NULL;
+
+value caml_db_init(value v){
+  CAMLparam1(v);
+  if (caml_db_exn =3D=3D NULL)=20
+    caml_db_exn =3D caml_named_value("dberror");
+  if (caml_key_exists_exn =3D=3D NULL)=20
+    caml_key_exists_exn =3D caml_named_value("keyexists");
+  CAMLreturn (Val_unit);
+}
+
+//+ (* Exception declarations *)
+//+=20
+//+ exception DBError of string
+//+ let _ =3D Callback.register_exception "dberror" (DBError "")
+//+
+//+ exception Key_exists
+//+ let _ =3D Callback.register_exception "keyexists" Key_exists
+//+
+//+ external db_init : unit -> unit =3D "caml_db_init"
+//+ let _ =3D db_init ()
+//+
+//+ type cursor
+//+ type dbenv
+//+ type db
+
+void raise_db(char *msg) {
+  raise_with_string(*caml_db_exn, msg);
+}
+
+void raise_key_exists() {
+  // failwith("Key Exists");
+  raise_constant(*caml_key_exists_exn);
+}
+
+// Used as callback by db infrastructure for setting errors.  As a result,
+// calls to DB->err and DBENV->err lead to exceptions.
+
+// FIX: currently, prefix is ignored.  Should be concatenated.
+void raise_db_cb(const char *prefix, char *msg) { raise_db(msg); }
+
+
+
+/************************************************************/
+/**  DBENV call interface  *******************************/
+/************************************************************/
+
+// Opening of Dbenv moudle
+//+
+//+
+//+ module Dbenv =3D
+//+ struct
+//+=20
+//+   type t =3D dbenv
+
+
+/**  DBENV Flags  ********************************************/
+
+// Declaration of flag enums in ocaml must be in same order as in C
+
+static int dbenv_create_flags[] =3D { DB_CLIENT };
+
+//+
+//+   type create_flag =3D CLIENT
+
+static int dbenv_open_flags[] =3D {
+  DB_JOINENV, DB_INIT_CDB, DB_INIT_LOCK, DB_INIT_LOG, DB_INIT_MPOOL,=20
+  DB_INIT_TXN, DB_RECOVER, DB_RECOVER_FATAL, DB_USE_ENVIRON,
+  DB_USE_ENVIRON_ROOT, DB_CREATE, DB_LOCKDOWN, DB_PRIVATE,=20
+  DB_SYSTEM_MEM, DB_THREAD
+};
+
+//+=20
+//+   type open_flag =3D=20
+//+       JOINENV | INIT_CDB | INIT_LOCK | INIT_LOG=20
+//+     | INIT_MPOOL | INIT_TXN | RECOVER | RECOVER_FATAL=20
+//+     | USE_ENVIRON | USE_ENVIRON_ROOT | CREATE=20
+//+     | LOCKDOWN | PRIVATE | SYSTEM_MEM | THREAD
+
+static int dbenv_verbose_flags[] =3D {
+  DB_VERB_CHKPOINT, DB_VERB_DEADLOCK, DB_VERB_RECOVERY, DB_VERB_WAITSFOR
+};
+
+//+=20
+//+   type verbose_flag =3D=20
+//+       VERB_CHKPOINT | VERB_DEADLOCK | VERB_RECOVERY | VERB_WAITSFOR
+
+/**  DBENV Calls  *******************************************/
+//+
+
+//+   external create : create_flag list -> t =3D "caml_dbenv_create"
+value caml_dbenv_create(value vflags){
+  CAMLparam1(vflags);
+  CAMLlocal1(rval);
+  int err;
+  int flags =3D convert_flag_list(vflags,dbenv_create_flags);
+  DB_ENV *dbenv;
+ =20
+  err =3D db_env_create(&dbenv,flags);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+
+  dbenv->set_errcall(dbenv,raise_db_cb);
+
+  rval =3D alloc_custom(&dbenv_custom,Camldbenv_wosize,0,1);
+  UW_dbenv(rval) =3D dbenv;
+  UW_dbenv_closed(rval) =3D False;
+  CAMLreturn (rval);
+}
+
+
+//+   external dopen : t -> string -> open_flag list -> int -> unit =3D=20
+//+        "caml_dbenv_open"
+value caml_dbenv_open(value dbenv, value vdirectory,=20
+		      value vflags, value vmode){
+  CAMLparam4(dbenv,vdirectory,vflags,vmode);
+  int err;
+  char *directory =3D String_val(vdirectory);
+  int flags =3D convert_flag_list(vflags,dbenv_open_flags);
+
+  if (UW_dbenv_closed(dbenv)) {=20
+    invalid_argument("Attempt to use closed dbenv");
+  }
+
+  err =3D UW_dbenv(dbenv)->open(UW_dbenv(dbenv), directory,=20
+			      flags,=20
+			      Long_val(vmode) );=20
+  if (err !=3D 0) {=20
+    UW_dbenv(dbenv)->err(UW_dbenv(dbenv),err,
+			 "caml_dbenv_open: open failed.");=20
+  }
+
+  CAMLreturn (Val_unit);
+}
+// simple open, combination of create and open
+//+   let sopen dirname flags mode =3D=20
+//+     let dbenv =3D create [] in
+//+     dopen dbenv dirname flags mode;
+//+     dbenv
+
+
+
+//+   external close : t -> unit =3D "caml_dbenv_close"
+value caml_dbenv_close(value dbenv) {
+  CAMLparam1(dbenv);
+  int err =3D caml_dbenv_close_internal(dbenv);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+  CAMLreturn (Val_unit);
+}
+
+
+//+   external set_verbose_internal : t -> verbose_flag list ->=20
+//+           bool -> unit =3D  "caml_dbenv_set_verbose"
+//+   let set_verbose dbenv flag onoff =3D=20
+//+       set_verbose_internal dbenv [flag] onoff
+value caml_dbenv_set_verbose(value dbenv, value vflags,=20
+			     value v_onoff) {
+  CAMLparam3(dbenv,vflags,v_onoff);
+  int err;
+
+  int which =3D convert_flag_list(vflags,dbenv_verbose_flags) + 1;
+  int onoff =3D Bool_val(v_onoff);
+ =20
+  if (UW_dbenv_closed(dbenv)) {=20
+    invalid_argument("Attempt to use closed dbenv");
+  }
+
+  err =3D UW_dbenv(dbenv)->set_verbose(UW_dbenv(dbenv),which,onoff);
+
+  if (err !=3D 0) {
+    UW_dbenv(dbenv)->err(UW_dbenv(dbenv),err,
+			 "caml_dbenv_set_verbose:");=20
+  }
+  CAMLreturn (Val_unit);
+}
+
+//+   external set_cachesize : t -> gbytes:int -> bytes:int -> ncache:int -=
+> unit
+//+          =3D "caml_dbenv_set_cachesize"
+value caml_dbenv_set_cachesize(value dbenv, value gbytes,=20
+			       value bytes, value ncache) {
+  CAMLparam4(dbenv, gbytes, bytes, ncache);
+  int err;
+
+  err =3D UW_dbenv(dbenv)->set_cachesize(UW_dbenv(dbenv),Int_val(gbytes),=20
+				       Int_val(bytes), Int_val(ncache));
+  if (err !=3D 0) { UW_dbenv(dbenv)->err(UW_dbenv(dbenv),err,
+				       "caml_dbenv_set_cachesize"); }
+
+  CAMLreturn (Val_unit);
+}
+
+
+
+// Termination of Dbenv module
+//+=20
+//+ end
+
+
+/************************************************************/
+/**  DB call interface  *************************************/
+/************************************************************/
+
+// Opening of Db moudle
+//+
+//+
+//+ module Db =3D
+//+ struct
+//+=20
+//+   type t =3D db
+
+
+
+/**  DB Flags  ***********************************************/
+static int db_create_flags[] =3D {
+  DB_XA_CREATE
+};
+
+//+
+//+   type create_flag =3D XA_CREATE
+
+static int db_open_flags[] =3D {
+  DB_CREATE, DB_EXCL, DB_NOMMAP, DB_RDONLY, DB_THREAD, DB_TRUNCATE=20
+};
+
+//+=20
+//+   type open_flag =3D=20
+//+      CREATE | EXCL | NOMMAP | RDONLY | THREAD | TRUNCATE=20
+
+static int db_types[] =3D {
+  DB_BTREE, DB_HASH, DB_QUEUE, DB_RECNO, DB_UNKNOWN
+};
+
+//+=20
+//+   type db_type =3D BTREE | HASH | QUEUE | RECNO | UNKNOWN
+
+
+static int db_put_flags[] =3D { DB_APPEND, DB_NODUPDATA, DB_NOOVERWRITE };
+
+//+
+//+   type put_flag =3D APPEND | NODUPDATA | NOOVERWRITE
+
+// DB_GET_BOTH is omitted because it doesn't make sense given our interface
+static int db_get_flags[] =3D {=20
+  DB_CONSUME, DB_CONSUME_WAIT, DB_SET_RECNO, DB_RMW
+};
+
+//+=20
+//+   type get_flag =3D CONSUME | CONSUME_WAIT | SET_RECNO | RMW
+
+
+static int db_set_flags[] =3D {
+  DB_DUP, DB_DUPSORT, DB_RECNUM, DB_REVSPLITOFF, DB_RENUMBER, DB_SNAPSHOT
+};
+
+//+=20
+//+   type set_flag =3D DUP | DUPSORT | RECNUM | REVSPLITOFF=20
+//+                 | RENUMBER | SNAPSHOT
+
+/** DB Calls **************************************************/
+//+
+
+//+   external create : ?dbenv:Dbenv.t -> create_flag list -> t =3D=20
+//+        "caml_db_create"
+value caml_db_create(value dbenv_opt, value vflags){
+  CAMLparam2(dbenv_opt,vflags);
+  int err;
+  int flags =3D convert_flag_list(vflags,db_create_flags);
+  DB *db;
+  DB_ENV *dbenv;
+  CAMLlocal1(rval);
+
+  if (Is_None(dbenv_opt)) { dbenv =3D NULL; }
+  else { dbenv =3D UW_dbenv(Some_val(dbenv_opt)); }
+ =20
+  if (dbenv !=3D NULL && UW_dbenv_closed(dbenv)) {=20
+    invalid_argument("Attempt to use closed dbenv");
+  }
+
+  err =3D db_create(&db,dbenv,flags);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+
+  db->set_errcall(db,raise_db_cb);
+
+  rval =3D alloc_custom(&db_custom,Camldb_wosize,0,1);
+  UW_db(rval) =3D db;
+  UW_db_closed(rval) =3D False;
+  CAMLreturn (rval);
+ =20
+}
+
+//+   external dopen : t -> string -> db_type -> open_flag list -> int -> u=
+nit =3D=20
+//+        "caml_db_open"
+value caml_db_open(value db, value vfname,=20
+		   value vdbtype, value vflags,=20
+		   value vmode){
+  CAMLparam5(db, vfname, vdbtype, vflags, vmode);
+  int err;
+  char *fname =3D String_val(vfname);
+  int flags =3D convert_flag_list(vflags,db_open_flags);
+  int dbtype =3D Flag_val(vdbtype,db_types);
+
+  if (UW_db_closed(db)) {=20
+    invalid_argument("Attempt to use closed db");
+  }
+
+
+  err =3D UW_db(db)->open(UW_db(db), fname, NULL, /* no support for databas=
+e */
+			dbtype, flags, Long_val(vmode) );=20
+  if (err !=3D 0) {=20
+    UW_db(db)->err(UW_db(db),err,
+			 "caml_db_open");=20
+  }
+
+  CAMLreturn (Val_unit);
+}
+
+//+   external close : t -> unit =3D "caml_db_close"
+value caml_db_close(value db) {
+  CAMLparam1(db);
+  int err =3D caml_db_close_internal(db);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+  CAMLreturn (Val_unit);
+}
+
+//+   external del : t -> string -> unit =3D "caml_db_del"
+value caml_db_del(value db, value key) {
+  CAMLparam2(db,key);
+  DBT dbt; // static keyword initializes record to zero.
+  int err;
+
+  if (UW_db_closed(db)) {=20
+    invalid_argument("Attempt to use closed db");
+  }
+
+  bzero(&dbt,sizeof(DBT));
+
+  dbt.data =3D String_val(key);
+  dbt.size =3D string_length(key);
+
+ =20
+  err =3D UW_db(db)->del(UW_db(db),=20
+		       NULL /* No TXN_ID */,=20
+		       &dbt,
+		       0 /* no flags */);
+  if (err !=3D 0) { UW_db(db)->err(UW_db(db),err, "caml_db_del"); }
+
+  CAMLreturn (Val_unit);
+}
+
+
+//+   external put : t -> key:string -> data:string -> put_flag list -> uni=
+t
+//+             =3D "caml_db_put"
+value caml_db_put(value db, value vkey, value vdata, value vflags) {
+  CAMLparam4(db, vkey, vdata, vflags);
+  DBT key, data;
+  int flags, err;
+ =20
+  if (UW_db_closed(db)) {=20
+    invalid_argument("Attempt to use closed db");
+  }
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+
+  key.data =3D String_val(vkey);
+  key.size =3D string_length(vkey);
+  data.data =3D String_val(vdata);
+  data.size =3D string_length(vdata);
+  flags =3D convert_flag_list(vflags, db_put_flags);
+
+  err =3D UW_db(db)->put(UW_db(db), NULL, &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err  =3D=3D DB_KEYEXIST) {raise_key_exists();}
+    UW_db(db)->err(UW_db(db),err,"caml_db_put");=20
+  }
+
+  CAMLreturn (Val_unit);
+}
+
+
+//+   external get : t -> string -> get_flag list -> string
+//+             =3D "caml_db_get"
+value caml_db_get(value db, value vkey, value vflags) {
+  CAMLparam3(db, vkey, vflags);
+  DBT key,data;
+  int flags, err;
+  CAMLlocal1(rval);
+
+  if (UW_db_closed(db)) {=20
+    invalid_argument("Attempt to use closed db");
+  }
+
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  key.data =3D String_val(vkey);
+  key.size =3D string_length(vkey);
+  flags =3D convert_flag_list(vflags, db_get_flags);
+
+
+  err =3D UW_db(db)->get(UW_db(db), NULL, &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_NOTFOUND) { raise_not_found(); }
+    UW_db(db)->err(UW_db(db),err,"caml_db_get");=20
+  }
+
+  // FIX: this currently uses an extra, unnecessary copy in order to simpli=
+fy
+  // memory management.
+  rval =3D alloc_string(data.size);
+  memcpy (String_val(rval), data.data, data.size);
+  CAMLreturn (rval);
+}
+
+//+   external set_flags : t -> set_flag list -> unit =3D "caml_db_set_flag=
+s"
+value caml_db_set_flags(value db, value vflags) {
+  CAMLparam2(db,vflags);
+  int flags=3D0,err;
+
+  if (UW_db_closed(db)) {=20
+    invalid_argument("Attempt to use closed db");
+  }
+
+  flags =3D convert_flag_list(vflags,db_set_flags);
+
+  err =3D UW_db(db)->set_flags(UW_db(db),flags);
+  if (err !=3D 0) { UW_db(db)->err(UW_db(db),err,"caml_db_set_flags"); }
+
+  CAMLreturn (Val_unit);
+}
+
+
+//  More user-friendly version of dopen (simple open)
+//+
+//+   let sopen ?dbenv fname dbtype ?moreflags flags mode =3D=20
+//+     let db =3D create ?dbenv [] in
+//+     (match moreflags with=20
+//+         None -> ()
+//+       | Some flags -> set_flags db flags );
+//+     dopen db fname dbtype flags mode;
+//+     db
+
+
+
+//+   external set_h_ffactor : t -> int -> unit
+//+          =3D "caml_db_set_h_ffactor"
+value caml_db_set_h_ffactor(value db, value v) {
+  CAMLparam2(db,v);
+  int err;
+
+  err =3D UW_db(db)->set_h_ffactor(UW_db(db),Int_val(v));
+  if (err !=3D 0) { UW_db(db)->err(UW_db(db),err,"caml_db_set_h_ffactor"); =
+}
+
+  CAMLreturn (Val_unit);
+}
+
+//+   external set_pagesize : t -> int -> unit
+//+          =3D "caml_db_set_pagesize"
+value caml_db_set_pagesize(value db, value v) {
+  CAMLparam2(db,v);
+  int err;
+
+  err =3D UW_db(db)->set_pagesize(UW_db(db),Int_val(v));
+  if (err !=3D 0) { UW_db(db)->err(UW_db(db),err,"caml_db_set_pagesize"); }
+
+  CAMLreturn (Val_unit);
+}
+
+//+   external set_cachesize : t -> gbytes:int -> bytes:int -> ncache:int -=
+> unit
+//+          =3D "caml_db_set_cachesize"
+value caml_db_set_cachesize(value db, value gbytes, value bytes, value ncac=
+he) {
+  CAMLparam4(db, gbytes, bytes, ncache);
+  int err;
+
+  err =3D UW_db(db)->set_cachesize(UW_db(db),Int_val(gbytes), Int_val(bytes=
+),
+				 Int_val(ncache));
+  if (err !=3D 0) { UW_db(db)->err(UW_db(db),err,"caml_db_set_cachesize"); =
+}
+
+  CAMLreturn (Val_unit);
+}
+
+
+
+
+// Termination of Db module
+//+=20
+//+ end
+//+
+
+//*******************************************************************
+//*******************************************************************
+
+// Opening of Cursor moudle
+//+
+//+ module Cursor =3D
+//+ struct
+//+=20
+//+   type t =3D cursor
+
+//*******************************************************************
+//*******************************************************************
+
+static int cursor_put_flags[] =3D {=20
+  DB_AFTER, DB_BEFORE, DB_CURRENT=20
+};
+
+//+
+//+   type put_flag =3D AFTER | BEFORE | CURRENT=20
+
+static int cursor_kput_flags[] =3D {
+  DB_KEYFIRST, DB_KEYLAST, DB_NODUPDATA
+};
+
+//+
+//+   type kput_flag =3D KEYFIRST | KEYLAST | NODUPDATA
+
+static int cursor_get_type[] =3D {=20
+  DB_CURRENT, DB_FIRST, DB_LAST,=20
+  DB_NEXT, DB_PREV, DB_NEXT_DUP, DB_NEXT_NODUP, DB_PREV_NODUP, 0
+};
+
+//+
+//+   type get_type =3D CURRENT | FIRST | LAST=20
+//+          | NEXT | PREV | NEXT_DUP | NEXT_NODUP
+//+          | PREV_NODUP | NULL
+
+static int cursor_get_flags[] =3D { DB_DIRTY_READ, DB_RMW };
+
+//+
+//+   type get_flag =3D DIRTY_READ | RMW
+
+//*******************************************************************
+//*******************************************************************
+
+//+=20
+//+   external create : ?writecursor:bool -> Db.t -> t =3D "caml_cursor_cre=
+ate"
+value caml_cursor_create(value vwritecursor, value db) {
+  CAMLparam2(vwritecursor,db);
+  int err;
+  int flags =3D 0;
+  CAMLlocal1(rval);
+  DBC *cursor;
+
+  if (UW_db_closed(db)) {=20
+    invalid_argument("Attempt to use closed db");
+  }
+
+
+  // setup flags from vwritecursor
+  if (Is_Some(vwritecursor) && Bool_val(vwritecursor)) {=20
+    flags =3D DB_WRITECURSOR;=20
+  }
+
+  err =3D UW_db(db)->cursor(UW_db(db),NULL,&cursor,flags);
+  if (err !=3D 0) {
+    UW_db(db)->err(UW_db(db),err, "caml_cursor_create");=20
+  }
+
+  rval =3D alloc_custom(&cursor_custom,Camldb_wosize,0,1);
+  UW_cursor(rval) =3D cursor;
+  UW_cursor_closed(rval) =3D False;
+  CAMLreturn (rval);
+}
+
+//+   external close : t -> unit =3D "caml_cursor_close"
+value caml_cursor_close(value cursor) {
+  CAMLparam1(cursor);
+  int err =3D caml_cursor_close_internal(cursor);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+  CAMLreturn (Val_unit);
+}
+
+//+   external put : t -> string -> put_flag -> unit
+//+          =3D "caml_cursor_put"
+value caml_cursor_put(value cursor, value vdata, value vflag) {
+  CAMLparam3(cursor,vdata,vflag);
+  DBT key, data;
+  int flags, err;
+ =20
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  data.data =3D String_val(vdata);
+  data.size =3D string_length(vdata);
+  flags =3D Flag_val(vflag, cursor_put_flags);
+
+  err =3D UW_cursor(cursor)->c_put(UW_cursor(cursor), &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_KEYEXIST) { raise_key_exists(); }
+    raise_db(db_strerror(err));=20
+  }
+
+  CAMLreturn (Val_unit);
+}
+
+//+   external kput : t -> key:string -> data:string -> kput_flag -> unit
+//+          =3D "caml_cursor_kput"
+value caml_cursor_kput(value cursor, value vkey, value vdata, value vflag) =
+{
+  CAMLparam4(cursor,vkey,vdata,vflag);
+  DBT key, data;
+  int flags, err;
+ =20
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  key.data =3D String_val(vkey);
+  key.size =3D string_length(vkey);
+  data.data =3D String_val(vdata);
+  data.size =3D string_length(vdata);
+  flags =3D Flag_val(vflag,cursor_kput_flags);
+
+  err =3D UW_cursor(cursor)->c_put(UW_cursor(cursor), &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_KEYEXIST) { raise_key_exists(); }
+    raise_db(db_strerror(err));=20
+  }
+
+  CAMLreturn (Val_unit);
+}
+
+
+//+   external init :  t -> string -> get_flag list -> string
+//+          =3D "caml_cursor_init"
+value caml_cursor_init(value cursor, value vkey, value vflags) {
+  CAMLparam3(cursor,vkey,vflags);
+  CAMLlocal1(rval);
+  DBT key,data;
+  int flags =3D convert_flag_list(vflags,cursor_get_flags) | DB_SET;
+  int err;
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  key.data =3D String_val(vkey);
+  key.size =3D string_length(vkey);
+ =20
+  err =3D UW_cursor(cursor)->c_get(UW_cursor(cursor), &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_NOTFOUND) { raise_not_found(); }
+    raise_db(db_strerror(err));
+  }
+
+  rval =3D alloc_string(data.size);
+  memcpy (String_val(rval), data.data, data.size);
+  CAMLreturn (rval);
+}
+
+
+//+   external init_range :  t -> string -> get_flag list -> string * strin=
+g
+//+          =3D "caml_cursor_init_range"
+value caml_cursor_init_range(value cursor, value vkey, value vflags) {
+  CAMLparam3(cursor,vkey,vflags);
+  CAMLlocal3(rkey,rdata,rpair);
+  DBT key,data;
+  int flags =3D convert_flag_list(vflags,cursor_get_flags) | DB_SET_RANGE;
+  int err;
+
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+
+  key.data =3D String_val(vkey);
+  key.size =3D string_length(vkey);
+
+  err =3D UW_cursor(cursor)->c_get(UW_cursor(cursor), &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_NOTFOUND) { raise_not_found(); }
+    raise_db(db_strerror(err));
+  }
+
+  rdata =3D alloc_string(data.size);
+  memcpy (String_val(rdata), data.data, data.size);
+  rkey =3D alloc_string(key.size);
+  memcpy (String_val(rkey), key.data, key.size);
+  rpair =3D alloc(2,0);
+  Store_field(rpair,0,rkey);
+  Store_field(rpair,0,rdata);
+  CAMLreturn (rpair);
+}
+
+//+   external init_both :  t -> key:string -> data:string=20
+//+               -> get_flag list -> unit =3D "caml_cursor_init"
+value caml_cursor_init_both(value cursor, value vkey, value vdata,=20
+			    value vflags) {
+  CAMLparam4(cursor,vkey,vdata,vflags);
+  DBT key,data;
+  int flags =3D convert_flag_list(vflags,cursor_get_flags) | DB_GET_BOTH;
+  int err;
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  key.data =3D String_val(vkey);
+  key.size =3D string_length(vkey);
+ =20
+  data.data =3D String_val(vdata);
+  data.size =3D string_length(vdata);
+
+  err =3D UW_cursor(cursor)->c_get(UW_cursor(cursor), &key, &data, flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_NOTFOUND) { raise_not_found(); }
+    raise_db(db_strerror(err));
+  }
+
+  CAMLreturn (Val_unit);
+}
+
+
+//+   external get : t -> get_type -> get_flag list -> string * string
+//+                =3D "caml_cursor_get"
+value caml_cursor_get(value cursor, value vtype, value vflags) {
+  CAMLparam3(cursor,vtype,vflags);
+  CAMLlocal3(rpair,rkey,rdata);
+  DBT key,data;
+  int flags =3D Flag_val(vtype,cursor_get_type) |=20
+    convert_flag_list(vflags,cursor_get_flags);
+  int err;
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  err =3D UW_cursor(cursor)->c_get(UW_cursor(cursor), &key, &data,flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_NOTFOUND) { raise_not_found(); }
+    raise_db(db_strerror(err));
+  }
+
+  rkey =3D alloc_string(key.size);
+  memcpy (String_val(rkey), key.data, key.size);
+  rdata =3D alloc_string(data.size);
+  memcpy (String_val(rdata), data.data, data.size);
+  rpair =3D alloc(2,0);
+  Store_field(rpair,0,rkey);
+  Store_field(rpair,1,rdata);
+  CAMLreturn (rpair);
+}
+
+
+//+   external get_keyonly : t -> get_type -> get_flag list -> string
+//+                =3D "caml_cursor_get_keyonly"
+value caml_cursor_get_keyonly(value cursor, value vtype, value vflags) {
+  CAMLparam3(cursor,vtype,vflags);
+  CAMLlocal1(rkey);
+  DBT key,data;
+  int flags =3D Flag_val(vtype,cursor_get_type) |=20
+    convert_flag_list(vflags,cursor_get_flags);
+  int err;
+  bzero(&key,sizeof(DBT)); bzero(&data,sizeof(DBT));
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  err =3D UW_cursor(cursor)->c_get(UW_cursor(cursor), &key, &data,flags);
+  if (err !=3D 0) {=20
+    if (err =3D=3D DB_NOTFOUND) { raise_not_found(); }
+    raise_db(db_strerror(err));
+  }
+
+  rkey =3D alloc_string(key.size);
+  memcpy (String_val(rkey), key.data, key.size);
+  CAMLreturn (rkey);
+}
+
+
+
+//+   external del : t -> unit =3D "caml_cursor_del"
+value caml_cursor_del(value cursor) {
+  CAMLparam1(cursor);
+  int err;
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  err =3D UW_cursor(cursor)->c_del(UW_cursor(cursor), 0);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+
+  CAMLreturn (Val_unit);
+}
+
+
+//+   external count : t -> int =3D "caml_cursor_count"
+value caml_cursor_count(value cursor) {
+  CAMLparam1(cursor);
+  int err;
+  db_recno_t counter;
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  err =3D UW_cursor(cursor)->c_count(UW_cursor(cursor), &counter,0);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+
+  CAMLreturn (Val_long(counter));
+}
+
+//+   external dup : ?keep_position:bool -> t -> t =3D "caml_cursor_dup"
+value caml_cursor_dup(value vkeep_position, value cursor) {
+  CAMLparam2(vkeep_position,cursor);
+  CAMLlocal1(rval);
+  int flags =3D 0, err;
+  DBC *newcursor;
+
+  if (UW_cursor_closed(cursor)) {=20
+    invalid_argument("Attempt to use closed cursor");
+  }
+
+  if (Is_Some(vkeep_position) && Bool_val(vkeep_position)) {=20
+    flags =3D DB_POSITION;=20
+  }
+ =20
+  err =3D UW_cursor(cursor)->c_dup(UW_cursor(cursor), &newcursor, flags);
+  if (err !=3D 0) { raise_db(db_strerror(err)); }
+
+  rval =3D alloc_custom(&cursor_custom,Camldb_wosize,0,1);
+  UW_cursor(rval) =3D newcursor;
+  UW_cursor_closed(rval) =3D False;
+
+  CAMLreturn (rval);
+}
+
+
+//+   external ajoin : ?nosort:bool -> db -> cursor array -> get_flag list =
+->
+//+                       cursor =3D "caml_join_cursors"
+//+   let join ?nosort  db cursor_list get_flag_list =3D
+//+        ajoin ?nosort db (Array.of_list cursor_list) get_flag_list
+value caml_join_cursors(value vnosort, value db, value vcursors, value vfla=
+gs) {
+  CAMLparam4(vnosort,db,vcursors,vflags);
+  CAMLlocal1(rval);
+  DBC *jcurs; // pointer to joined cursor
+  int carray_len =3D Wosize_val(vcursors);
+  int flags =3D convert_flag_list(vflags,cursor_get_flags);
+  DBC *cursors[carray_len + 1];
+  int i;
+
+  if (Is_Some(vnosort) && Bool_val(vnosort)) {=20
+    flags =3D flags | DB_JOIN_NOSORT;=20
+  }
+
+  for (i=3D0; i < carray_len; i++) {=20
+    if (UW_cursor_closed(Field(vcursors,i))) {
+      invalid_argument("caml_join_cursors: Attempt to use closed cursor");
+    }
+    cursors[i] =3D UW_cursor(Field(vcursors,i));
+  }
+  cursors[i] =3D NULL;
+
+  if UW_db_closed(db) {      =20
+    invalid_argument("caml_join_cursors: Attempt to use closed db");
+  }
+ =20
+  UW_db(db)->join(UW_db(db),cursors,&jcurs,flags);
+ =20
+
+  rval =3D alloc_custom(&cursor_custom,Camldb_wosize,0,1);
+  UW_cursor(rval) =3D jcurs;
+  UW_cursor_closed(rval) =3D False;
+  CAMLreturn (rval);
+}
+
+
+// +   external join_cursors : ?nosort:bool -> t -> cursor array -> cursor
+// value caml_db_join_cursors(value ) {
+// =20
+// }
+
+
+
+// Termination of Cursor module
+//+=20
+//+ end
+//+
+
+
+
+
+--=-ha4f+ObkQjxR2YEdd7br
+Content-Disposition: attachment; filename=bdb_stubs.h
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/x-c-header; name=bdb_stubs.h; charset=ISO-8859-1
+
+/*****************************************************************/
+/**  DBENV *******************************************************/
+/*****************************************************************/
+
+struct camldbenv {
+  DB_ENV *dbenv;
+  int closed;
+};
+
+/*****************************************************************/
+/***  DB  ********************************************************/
+/*****************************************************************/
+
+struct camldb {
+  DB *db;
+  int closed;
+};
+
+/*****************************************************************/
+/***  DB_TXN  ****************************************************/
+/*****************************************************************/
+
+struct camltxn {
+  DB_TXN *txn;
+  int closed;
+};
+
+/*****************************************************************/
+/***  DB_CURSOR  *************************************************/
+/*****************************************************************/
+
+struct camlcursor {
+  DBC *cursor;
+  int closed;
+};
+
+/*****************************************************************/
+/**  DB and DBENV macros  ****************************************/
+/*****************************************************************/
+
+// datatype syzes
+#define Camldbenv_wosize \
+  ((sizeof(struct camldbenv) + sizeof(value) - 1) / sizeof(value))
+#define Camldb_wosize \
+  ((sizeof(struct camldb) + sizeof(value) - 1) / sizeof(value))
+
+// Unwrapping functions
+#define UW_dbenv(v) (((struct camldbenv *)(Bp_val(v)))->dbenv)
+#define UW_dbenv_closed(v) (((struct camldbenv *)(Bp_val(v)))->closed)
+
+#define UW_db(v) (((struct camldb *)(Bp_val(v)))->db)
+#define UW_db_closed(v) (((struct camldb *)(Bp_val(v)))->closed)
+
+#define UW_txn(v) (((struct camltxn *)(Bp_val(v)))->txn)
+#define UW_txn_closed(v) (((struct camltxn *)(Bp_val(v)))->closed)
+
+#define UW_cursor(v) (((struct camlcursor *)(Bp_val(v)))->cursor)
+#define UW_cursor_closed(v) (((struct camlcursor *)(Bp_val(v)))->closed)
+
+#define Is_string(v)   (Is_block(v) && (Tag_val(v) =3D=3D String_tag))
+#define Is_None(v)  (Is_long(v))
+#define Is_Some(v)  (~Is_long(v))
+#define Some_val(v) (Field(v,0))
+#define Flag_val(vflag,flags) (flags[Long_val(vflag)])
+
+
+--=-ha4f+ObkQjxR2YEdd7br
+Content-Disposition: attachment; filename=Makefile
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/x-makefile; name=Makefile; charset=ISO-8859-1
+
+#########################################################################
+#                                                                       #
+#                            Objective Caml                             #
+#                                                                       #
+#            Xavier Leroy, projet Cristal, INRIA Rocquencourt           #
+#                                                                       #
+#   Copyright 1999 Institut National de Recherche en Informatique et    #
+#   en Automatique.  All rights reserved.  This file is distributed     #
+#   under the terms of the GNU Library General Public License, with     #
+#   the special exception on linking described in file ../../LICENSE.   #
+#                                                                       #
+#########################################################################
+
+# $Id: Makefile,v 1.5 2001/12/07 13:39:50 xleroy Exp $
+
+CINCLUDES=3D-I$(CAMLLIB)
+ifeq ($(OSTYPE),cygwin)
+   CC=3Dgcc
+   CXX=3Dg++
+   CFLAGS=3D-O3 -Werror-implicit-function-declaration $(CINCLUDES) -I .
+   CXXFLAGS=3D-O3 $(CINCLUDES) -I .
+   OCAMLC=3Docamlc.opt
+   OCAMLOPT=3Docamlopt.opt
+else
+   CC=3Dgcc
+   CXX=3Dg++
+   CFLAGS=3D-O3 -Werror-implicit-function-declaration $(CINCLUDES) -I .
+   CXXFLAGS=3D-O3 $(CINCLUDES) -I .
+   OCAMLC=3Docamlc.opt
+   OCAMLOPT=3Docamlopt.opt
+endif
+
+#PP=3D-pp "cpp -traditional -UNTL"
+
+RANLIB=3Dranlib
+OCAMLDEP=3Docamldep $(PP)
+CAMLINCLUDE=3D-I $(HOME)/arch/noarch/lib/ocaml -I $(HOME)/arch/x86-Linux/li=
+b/ocaml
+COMMONCAMLFLAGS=3D $(CAMLINCLUDE) $(PP) #-thread=20
+CAMLLIBS=3Dunix.cma str.cma mylibs.cma=20
+OCAMLFLAGS=3D$(COMMONCAMLFLAGS) -g=20
+OCAMLOPTFLAGS=3D$(COMMONCAMLFLAGS) -inline 40=20
+
+COBJS =3D bdb_stubs.o
+
+libmlbdb.a: $(COBJS)
+	rm -rf libmlbdb.a
+	ar rc libmlbdb.a $(COBJS)
+	$(RANLIB) libmlbdb.a
+
+bdb.ml: bdb_stubs.c
+	ocextr bdb_stubs.c > bdb.ml
+
+test: bdb.cma test.ml
+	$(OCAMLC) $(OCAMLFLAGS) $(CAMLLIBS) -o test bdb.cma test.ml=20
+
+bdb.cma: bdb.cmo libmlbdb.a
+	$(OCAMLC) $(OCAMLFLAGS) -a -o bdb.cma -custom bdb.cmo -cclib -lmlbdb -ccli=
+b -ldb -ccopt "-L ."
+
+bdb.cmxa: bdb.cmx
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) -a -o bdb.cmxa bdb.cmx -cclib -lmlbdb -cclib =
+-ldb
+
+bdbcaml: bdb.cma
+	ocamlmktop -o bdbcaml -custom unix.cma $^
+
+partialclean:
+	rm -f *.cm*
+
+clean: partialclean
+	rm -f *.a *.o
+
+install:
+	cp libmldb.a $(LIBDIR)/libmldb.a
+	cd $(LIBDIR); $(RANLIB) libmldb.a
+	cp db.cma db.cmi db.mli $(LIBDIR)
+
+installopt:
+	cp db.cmx db.cmxa db.a $(LIBDIR)
+	cd $(LIBDIR); $(RANLIB) db.a
+
+
+
+# Common rules
+.SUFFIXES: .ml .mli .cmo .cmi .cmx
+
+.ml.o:
+	$(OCAMLOPT) -output-obj $(OCAMLOPTFLAGS) $<=20
+
+.cpp.o:
+	$(CXX) $(CXXFLAGS) -c $<
+
+.c.o:
+	$(CC) $(CFLAGS) -c $<=20
+
+.c.obj:
+	$(CC) $(CFLAGS) /c $<=20
+
+.ml.cmo:
+	$(OCAMLC) $(OCAMLFLAGS) -c $<
+
+.mli.cmi:
+	$(OCAMLC) $(OCAMLFLAGS) -c $<
+
+.ml.cmx:
+	$(OCAMLOPT) $(OCAMLOPTFLAGS) -c $<
+
+# Dependencies
+dep:
+	$(OCAMLDEP) $(INCLUDES) *.ml *.mli > .depend
+
+include .depend
+
+
+# DO NOT DELETE
+
+--=-ha4f+ObkQjxR2YEdd7br
+Content-Disposition: attachment; filename=ocextr
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain; name=ocextr; charset=ISO-8859-1
+
+#!/usr/bin/env python2
+
+import string
+import os
+import sys
+
+try:
+    fnames =3D sys.argv[1:]
+except:
+    print "Failed: no arguments given"
+    sys.exit(-1)
+
+for fname in fnames:
+    file =3D open(fname)
+    for line in file.readlines():
+        if line[:3] =3D=3D "//+":
+            if line[3] =3D=3D " ":
+                print line[4:],
+            else:
+                print
+       =20
+
+
+--=-ha4f+ObkQjxR2YEdd7br--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

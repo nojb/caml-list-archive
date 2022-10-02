@@ -1,0 +1,116 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q47H7nmG016905
+	for <caml-list@sympa-roc.inria.fr>; Mon, 7 May 2012 19:07:49 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsMBAJ4AqE/ZSMDqkWdsb2JhbAA7CQ6zDiIBAQEBCQsLBxQDJIIMAQEEAScTPwULCyElDwEEKCETG4dkAQkJsQAfiguLD4YQBJthjQ87
+X-IronPort-AV: E=Sophos;i="4.75,544,1330902000"; 
+   d="scan'208";a="157085005"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 07 May 2012 19:07:44 +0200
+Received: from moweb001.kundenserver.de (moweb001.kundenserver.de [172.19.20.114])
+	by fmmailgate03.web.de (Postfix) with ESMTP id 283E01B470CED
+	for <caml-list@inria.fr>; Mon,  7 May 2012 19:07:44 +0200 (CEST)
+Received: from frosties.localnet ([95.208.118.96]) by smtp.web.de (mrweb001)
+ with ESMTPA (Nemesis) id 0M8zhl-1SHrZD3tl7-00CRDb; Mon, 07 May 2012 19:07:43
+ +0200
+Received: from mrvn by frosties.localnet with local (Exim 4.77)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1SRRPP-00066v-Py; Mon, 07 May 2012 19:07:39 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+Cc: Goswin von Brederlow <goswin-v-b@web.de>,
+        OCaML List Mailing <caml-list@inria.fr>
+References: <87r4uykb09.fsf@frosties.localnet>
+	<415387F7-557D-40C7-8F9E-E8CDC5603E3C@math.nagoya-u.ac.jp>
+	<87aa1lcohv.fsf@frosties.localnet>
+	<4A169BB4-3316-437A-9E73-FABEAEDB9D2F@math.nagoya-u.ac.jp>
+	<D350BA18-9214-47C7-8921-4D4AFD4DE356@math.nagoya-u.ac.jp>
+Date: Mon, 07 May 2012 19:07:39 +0200
+In-Reply-To: <D350BA18-9214-47C7-8921-4D4AFD4DE356@math.nagoya-u.ac.jp>
+	(Jacques Garrigue's message of "Mon, 7 May 2012 17:11:04 +0900")
+Message-ID: <87397bly1w.fsf@frosties.localnet>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Provags-ID:  V02:K0:HCOdkGdsoaYAJglkfsXfbq6YsSHb2xNsMQIisGMUfix
+ KQ9+ngO0zZjLZVr6oDOV+C66F9anr9dUr+kkKNHi+hu4vOL6md
+ DD9z/LSadhEvvFsfE4zhNZfcShFb3bEU/Lx5lH+yM/+G4rGulO
+ eympCnoYCrIAlwl0WJjdziLOWPHHYD6WWEs3ReqbnI4hdSmN/E
+ Nck10oN6SAGb7fatcaCdQ==
+Subject: Re: [Caml-list] A shallow option type
+
+Jacques Garrigue <garrigue@math.nagoya-u.ac.jp> writes:
+
+> Sorry for all these mails.
+> Looks like I don't think well when I'm sleepy...
+>
+> Anyway, I think that at last I have a reasonable (much simpler) solution.
+> This still uses sopt_tag (i.e. lazy_tag-1), but this time the argument is
+> the number of "some" constructors, so there is no extra cost for marshaling.
+> The only values on which Sopt.some is not the identity are those with a
+> single argument, which is additionally represented by an integer between 0 and last.
+> Moreover, even if for some reason you build such a value using a real sum
+> type, you still have Sopt.arg (Sopt.some v) = v, the only change being a loss
+> of sharing (which is anyway not guaranteed by the ocaml specification).
+>
+> Jacques
+>
+> module Sopt : sig
+>  type +'a t
+>  val none : 'a t
+>  val some : 'a -> 'a t
+>  val is_none : 'a t -> bool
+>  val arg  : 'a t -> 'a
+>  val depth : 'a t -> int
+> end = struct
+>  type 'a t = Obj.t
+>  let sopt_tag = Obj.lazy_tag - 1
+>  let none = Obj.new_block sopt_tag 1
+>  let last = 255
+>  let area = Array.create (last+1) none
+>  let () =
+>    Obj.set_field none 0 (Obj.repr 0);
+>    for i = 1 to last do
+>      let stub = Obj.new_block sopt_tag 1 in
+>      Obj.set_field stub 0 (Obj.repr i);
+>      area.(i) <- stub
+>    done
+>  let is_none x = (x = none)
+>  let is_sopt x =
+>    Obj.is_block x && Obj.tag x = sopt_tag && Obj.size x = 1 &&
+>    let i = Obj.obj (Obj.field x 0) in i >= 0 && i <= last
+>  let depth x =
+>    let x = Obj.repr x in
+>    if is_sopt x then Obj.obj (Obj.field x 0) else -1
+>  let some (x : 'a) : 'a t =
+>    let i = depth x in
+>    if i < 0 then Obj.magic x else
+>    if i = last then invalid_arg "Sopt.some" else Obj.obj area.(i+1)
+>  let arg (x : 'a t) : 'a =
+>    let i = depth x in
+>    if i < 0 then Obj.magic x else
+>    if i = 0 then invalid_arg "Sopt.arg" else Obj.obj area.(i-1)
+> end
+
+What exactly is the point of specially tagged blocks? All you need is a
+bunch of pointers to values to encode the depth. You can use the value
+pointed at to encode the index the pointer is at and physical equality
+to ensure it actualy is one of your pointers:
+
+let area = Array.init (last+1) (fun i -> ref i)
+
+let is_sopt x =
+  let r = Obj.repr x in
+  Obj.is_block r && Obj.size x = 1 && Obj.is_int (Obj.field r 0) &&
+  let i = Obj.obj (Obj.field r 0) in
+  i >= 0 && i <= last && Obj.obj r == area.(i)
+
+# is_sopt 1;;
+- : bool = false
+# is_sopt area.(5);;
+- : bool = true
+# is_sopt (ref 5);;
+- : bool = false
+
+MfG
+        Goswin

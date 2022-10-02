@@ -1,0 +1,101 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id E4271BBC4
+	for <caml-list@yquem.inria.fr>; Fri, 20 Feb 2009 19:36:38 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkICAFiHnknUGyoFlGdsb2JhbACUVwEBAQEJCwgJEQO/Y4QPBg
+X-IronPort-AV: E=Sophos;i="4.38,242,1233529200"; 
+   d="scan'208";a="21465041"
+Received: from smtp5-g21.free.fr ([212.27.42.5])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 20 Feb 2009 19:36:37 +0100
+Received: from smtp5-g21.free.fr (localhost [127.0.0.1])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 346CFD4810C;
+	Fri, 20 Feb 2009 19:36:31 +0100 (CET)
+Received: from [192.168.1.3] (che78-2-82-237-71-191.fbx.proxad.net [82.237.71.191])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 0CC01D4803C;
+	Fri, 20 Feb 2009 19:36:29 +0100 (CET)
+Message-ID: <499EF82C.6080101@inria.fr>
+Date: Fri, 20 Feb 2009 19:36:28 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Thunderbird 2.0.0.4 (X11/20070620)
+MIME-Version: 1.0
+To: yminsky@gmail.com
+Cc: victor-caml-list@nicollet.net, caml-list@inria.fr
+Subject: Re: [Caml-list] Lazy and Threads
+References: <20090217155455.GA2352@stock.ovh.net> <891bd3390902171214s40e4c378sc9c373f6c2822597@mail.gmail.com>
+In-Reply-To: <891bd3390902171214s40e4c378sc9c373f6c2822597@mail.gmail.com>
+X-Enigmail-Version: 0.95.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; yaron:01 minsky:01 bug:01 mutexes:01 stdlib:01 buffered:01 buffered:01 yaron:01 complained:01 ocaml's:01 speedup:01 computations:01 granularity:01 semantics:01 computations:01 
+
+Victor Nicollet wrote:
+>     I'm working with both lazy expressions and threads, and noticed that the
+>     evaluation of lazy expressions is not thread-safe:
+
+Yaron Minsky wrote:
+> At a minimum, this seems like a bug in the documentation. The
+> documentation states very clearly that Undefined is called when a value
+> is recursively forced.  Clearly, you get the same error when you force a
+> lazy value that is in the process of being forced for the first time....
+> It does seem like fixing the behavior to match the current documentation
+> would be superior to fixing the documentation to match the current behavior.
+
+It's not just the Lazy module: in general, the whole standard library
+is not thread-safe.  Probably that should be stated in the
+documentation for the threads library, but there isn't much point in
+documenting it per standard library module.
+
+As to making the standard library thread-safe by sprinkling it with
+mutexes, Java-style: no way.  There is one part of the stdlib that is
+made thread-safe this way: buffered I/O operations.  (The reason is
+that, owing to the C implementation of some of these operations, a
+race condition in buffered I/O could actually crash the whole program,
+rather than just result in unexpected results as in the case of pure
+Caml modules.)  You (Yaron) and others recently complained that such
+locking around buffered I/O made some operations too slow for your
+taste.  Wait until you wrap a mutex around all Lazy.force
+operations...
+
+More generally speaking, locking within a standard library is the
+wrong thing to do: that doesn't prevent race conditions at the
+application level, and for reasonable performance you need to lock at
+a much coarser grain, again at the application level.  (That's one of
+the things that make shared-memory programming with threads and locks
+so incredibly painful and non-modular.)
+
+Coming back to Victor's original question:
+
+>     Aside from handling a mutex myself (which I don't find very elegant for
+>     a read operation in a pure functional program) is there a solution I can
+>     use to manipulate lazy expressions in a pure functional multi-threaded
+>     program?
+
+You need to think more / tell us more about what you're trying to
+achieve with sharing lazy values between threads.
+
+If your program is really purely functional (i.e. no I/O of any kind),
+OCaml's multithreading is essentially useless, as you're not going to
+get any speedup from it and would be better off with sequential
+computations.  If your program does use threads to overlap computation
+and I/O, using threads might be warranted, but then what is the
+appropriate granularity of locking that you'd need?
+
+A somewhat related question is: what semantics do you expect from
+concurrent Lazy.force operations on a shared suspension?  One thread
+blocks while the other completes the computation?  Same but with busy
+waiting?  (if the computations are generally small).  Or do you want
+speculative execution?  (Both threads may evaluate the suspended
+computation.)
+
+There is no unique answer to these questions: it all depends on what
+you're trying to achieve...
+
+- Xavier Leroy
+

@@ -1,0 +1,264 @@
+Received: by margaux.inria.fr, Tue, 3 Nov 92 17:33:22 +0100
+Received: from concorde.inria.fr by margaux.inria.fr, Tue, 3 Nov 92 16:40:46 +0100
+Received: from aitgw.ge.com by concorde.inria.fr; Tue, 3 Nov 92 16:42:16 +0100
+Received: from ESDSDF.dnet.ge.com by aitgw.ge.com (5.65/GE Gateway 1.5)
+	id AA06675; Tue, 3 Nov 92 10:43:57 -0500
+Message-Id: <9211031543.AA06675@aitgw.ge.com>
+Received: from ESDSDF.dnet.ge.com by AITGW.dnet.ge.com (utk-mail11d v1.5)
+	with MAIL-11; Tue, 3 Nov 92 10:44:11 EST
+Date: Tue, 3 Nov 92 10:44:11 EST
+From: HEDDEN@ESDSDF.dnet.ge.com
+X-To: AITGW::"caml-list@margaux.inria.fr"
+Subject: BigNums in Caml Light 0.5
+To: caml-list@margaux
+Sender: weis@margaux
+Status: O
+
+Dear Caml Light users,
+
+I would like to see some form of "arbitrary precision" math or
+"big nums" added to Caml Light.  Below is a very preliminary
+attempt at such an implementation written in Caml Light.  At this
+point, I am not so much concerned with speed as I am with
+obtaining the capabilities. 
+
+I am using vectors and a "base 10000" implementation to represent
+floating point numbers.  So far I have written routines for +, -
+and *.  (They were easy.)  I would like to expand it to include
+division, mod/remainder, gcd, sqrt, exp, log, trig functions,
+etc.
+
+If anyone would like to help me in this effort, I'd appreciate 
+it.  If anyone can supply/recommend algorithms, that would be 
+appreciated, too.  Alternate implementations and improvements 
+will be accepted, as well.  In short, I am completely open to 
+suggestion.  Please help.
+
+I will probably need to stick with a Caml Light implementation 
+because the 'C' interface is only available on Unix, and I am 
+working on an Amiga.  Besides, this would make the code useable 
+by all.
+
+Jerry D. Hedden
+hedden@esdsdf.dnet.ge.com
+
+====================== Cut Here ===============================
+
+
+(* Bignums module *)
+(* Functions implemented so far:
+
+        renormalize : bignum -> bignum = <fun>
+          Internal -- used to "fixup" the result of a calculation
+
+        add_big : bignum -> bignum -> bignum = <fun>
+        sub_big : bignum -> bignum -> bignum = <fun>
+        mult_big : bignum -> bignum -> bignum = <fun>
+          Basic operations
+
+        string_of_bignum : bignum -> string = <fun>
+        bignum_of_string : string -> bignum = <fun>
+          Conversion functions
+
+        big_fib : int -> bignum = <fun>
+        big_fact : int -> bignum = <fun>
+          Example functions that use bignums
+*)
+
+type bignum = {Neg:bool; Point:int; Value:int vect};;
+
+let rec renormalize {Neg=neg;Point=pt;Value=v} =
+  let vl = vect_length v in
+  begin
+    for i = (pred vl) downto 1 do
+      let x = v.(i) in
+      if x >= 10000
+         then (v.(i)      <- x mod 10000;
+               v.(pred i) <- v.(pred i) + x/10000)
+         else
+      if x < 0
+         then (v.(i)      <- 10000 + (x mod 10000);
+               v.(pred i) <- v.(pred i) - (succ (x/10000)))
+    done;
+    if v.(0) < 0
+       then renormalize {Neg=not neg; Point=pt;
+                         Value=(map_vect (function a -> -a) v)}
+       else let first =
+              let ff =
+                let rec find_first n =
+                  if n < vl
+                     then if (eq_int v.(n) 0)
+                             then find_first (succ n)
+                             else n
+                     else n
+                in find_first 0
+              in min ff pt
+            and last =
+              let ll =
+                let rec find_last n =
+                  if n >= 0
+                     then if (eq_int v.(n) 0)
+                             then find_last (pred n)
+                             else n
+                     else n
+                in find_last (pred vl)
+              in max ll pt
+            in if first >= vl
+                  then {Neg=false;Point=0;Value=[|0|]}
+                  else if (eq_int first 0) & (eq_int last (pred vl))
+                          then {Neg=neg;Point=pt;Value=v}
+                          else let vvl = succ (last-first) in
+                               let vv = make_vect vvl 0 in
+                               begin
+                                 blit_vect v first vv 0 vvl;
+                                 {Neg=neg;Point=(pt-first);Value=vv}
+                               end
+  end
+;;
+
+
+let add_big {Neg=nx;Point=px;Value=vx} {Neg=ny;Point=py;Value=vy} =
+  let xl = vect_length vx
+  and yl = vect_length vy
+  and dpt = succ (max px py) in
+  let len = dpt + (max (xl-px) (yl-py)) in
+  let xx = make_vect len 0
+  and yy = make_vect len 0
+  in begin
+    blit_vect (if nx then (map_vect (function a -> -a) vx)
+                        else vx)
+              0 xx (dpt-px) xl;
+    blit_vect (if ny then (map_vect (function a -> -a) vy)
+                        else vy)
+              0 yy (dpt-py) yl;
+    renormalize {Neg=false; Point=dpt;
+                 Value=vect_of_list (map2 (prefix +) (list_of_vect xx)
+                                                     (list_of_vect yy))}
+  end
+;;
+
+
+let sub_big {Neg=nx;Point=px;Value=vx} {Neg=ny;Point=py;Value=vy} =
+  let xl = vect_length vx
+  and yl = vect_length vy
+  and dpt = succ (max px py) in
+  let len = dpt + (max (xl-px) (yl-py)) in
+  let xx = make_vect len 0
+  and yy = make_vect len 0
+  in begin
+    blit_vect (if nx then (map_vect (function a -> -a) vx)
+                        else vx)
+              0 xx (dpt-px) xl;
+    blit_vect (if ny then (map_vect (function a -> -a) vy)
+                        else vy)
+              0 yy (dpt-py) yl;
+    renormalize {Neg=false; Point=dpt;
+                  Value=vect_of_list (map2 (prefix -) (list_of_vect xx)
+                                                      (list_of_vect yy))}
+  end
+;;
+
+
+let mult_big {Neg=nx;Point=px;Value=vx} {Neg=ny;Point=py;Value=vy} =
+  let xl = vect_length vx
+  and yl = vect_length vy
+  in
+  let z = make_vect (xl+yl) 0
+  in begin
+    for j = (yl-1) downto 0 do
+      for i = (xl-1) downto 0 do
+        z.(i+j+1) <- z.(i+j+1) + (vx.(i) * vy.(j))
+      done;
+      for i = (xl+j) downto (j+1) do
+        let q = z.(i) in
+        if q >= 10000
+           then (z.(i)      <- q mod 10000;
+                 z.(pred i) <- z.(pred i) + q/10000)
+      done
+    done;
+    renormalize {Neg=not(nx=ny);Point=(px+py+1);Value=z}
+  end
+;;
+
+
+let string_of_bignum {Neg=neg;Point=pt;Value=v} =
+  let vl = vect_length v
+  and n4 n =
+    let s = string_of_int n in
+    (make_string (4-(string_length s)) `0`) ^ s
+  in
+  let rec no_trail s =
+    let ln = string_length s in
+    if (eq_int ln 0) then ""
+                     else if (nth_char s (pred ln)) = `0`
+                             then no_trail (sub_string s 0 (pred ln))
+                             else s
+  and nstr a b =
+    if a<=b then (n4 v.(a)) ^ (nstr (succ a) b)
+            else ""
+  in
+  let sign = if neg then "-" else ""
+  and point = if (succ pt) < vl then "." else ""
+  and last = if (succ pt) < vl
+                then no_trail (n4 v.(pred vl))
+                else ""
+  in sign ^ (string_of_int v.(0)) ^ (nstr 1 pt) ^
+              point ^ (nstr (succ pt) (vl-2)) ^ last
+;;
+
+
+let bignum_of_string s =
+  let last = pred (string_length s)
+  and neg,first =
+    match nth_char s 0 with
+        `-` -> true,1
+      | `+` -> false,1
+      | _   -> false,0
+  in
+  let dp = find_dp 0
+    where rec find_dp n =
+      if n > last
+         then n
+         else if (nth_char s n) = `.`
+                 then n
+                 else find_dp (succ n)
+  in
+  let asize = let size = (3+dp-first)/4 in
+              if (eq_int size 0) then 1 else size
+  and bsize = (3+last-dp)/4
+  in
+  let x = make_vect (asize+bsize) 0 in
+  let rec set_num n y =
+    if (n-4) <= first
+       then  x.(y) <- int_of_string (sub_string s first (n-first))
+       else (x.(y) <- int_of_string (sub_string s (n-4) 4);
+             set_num (n-4) (pred y))
+  and set_dec n y =
+    if (n+3) >= last
+       then  x.(y) <- int_of_string (sub_string (s^"000") n 4)
+       else (x.(y) <- int_of_string (sub_string s n 4);
+             set_dec (n+4) (succ y))
+  in
+  begin
+    (if dp > first then set_num dp (pred asize));
+    (if dp < last then set_dec (succ dp) asize);
+    {Neg=neg;Point=(pred asize);Value=x}
+  end
+;;
+
+
+let big_fib = fib_rec (bignum_of_string "0") (bignum_of_string "1")
+  where rec fib_rec a b n = if n<=0 then a else fib_rec b (add_big a b) (pred n)
+;;
+
+
+let big_fact = fact_rec (bignum_of_string "1")
+  where rec fact_rec ans n =
+    if n<=0
+       then ans
+       else fact_rec (mult_big ans (bignum_of_string (string_of_int n))) (pred n)
+;;
+
+
+
+

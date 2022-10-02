@@ -1,0 +1,164 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA17894 for caml-red; Sat, 25 Nov 2000 16:55:21 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA29369 for <caml-list@pauillac.inria.fr>; Sat, 25 Nov 2000 16:43:49 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id eAPFhmj12755;
+	Sat, 25 Nov 2000 16:43:48 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA01077; Sat, 25 Nov 2000 16:43:47 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200011251543.QAA01077@pauillac.inria.fr>
+Subject: Re: AW: Format.sprintf and "%a"
+In-Reply-To: <C9A98ED35114D31197D000805FEA668E02650FA0@mucexch.muc.sdm.de> from "jim.rauser@sdm.de" at "Nov 23, 100 04:13:35 pm"
+To: jim.rauser@sdm.de
+Date: Sat, 25 Nov 2000 16:43:47 +0100 (MET)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis@pauillac.inria.fr
+
+> Pierre Weis wrote:
+> >
+> > Nothing more than the reported type error: your functions  are
+> > designed to return unit (they work by side effect) not string (which
+> > would mean they are functional), and this is obviously uncompatible.
+> >
+> > let s =
+> >  Format.fprintf str_formatter "Test: %a@." fmt_foo Foo;
+> >  Format.flush_str_formatter ();;
+> > val s : string = "Test: Foo\n"
+ 
+Jim Rauser mailto:rauser@qcentic.de answered:
+
+> Okay, I found the definition of the type "format" in pervasives.mli,
+> so I understand the type error now.  But I then tried to partially
+> apply Format.fprintf to Format.str_formatter:
+> 
+>   let fsprintf = Format.fprintf Format.str_formatter;;
+>   val fsprintf : ('_a, Format.formatter, unit) format -> '_a = <fun>
+> 
+> Looks good, except for the ominous "_" in front of the type variable
+> (what does it mean, anyway?).  But:
+
+Have a look at the FAQ:
+http://pauillac.inria.fr/caml/FAQ/FAQ_EXPERT-eng.html
+
+the item ``What means '_a ? '' could be relevant.
+
+>   let fmt_string f s = Format.fprintf f "%s" s;;
+>   fsprintf "%a@." fmt_string "foo";;
+>                   ----------
+>   This expression has type Format.formatter -> string -> unit
+>   but is here used with type (string -> 'a, Format.formatter, unit) format
+> 
+> This type error also makes sense.
+
+No, I just don't understand it, and I was not able to reproduce it:
+
+# let fsprintf = Format.fprintf Format.str_formatter;;
+val fsprintf : ('_a, Format.formatter, unit) format -> '_a = <fun>
+# let fmt_string f s = Format.fprintf f "%s" s;;
+val fmt_string : Format.formatter -> string -> unit = <fun>
+# fsprintf "%a@." fmt_string "foo";;
+- : unit = ()
+# Format.flush_str_formatter ();;
+- : string = "foo\n"
+
+However, the usual semantics of '_a still applies:
+
+#fsprintf;;
+- : ((Format.formatter -> string -> unit) -> string -> unit,
+     Format.formatter, unit)
+    format -> (Format.formatter -> string -> unit) -> string -> unit
+= <fun>
+
+> What I don't understand is, why it *does* work with Format.fprintf,
+> that is, how the compiler convinces itself that an argument list
+> like ["%a" fmt_string "foo"] unifies with the type [('a,
+> Format.formatter, unit) format]?  I don't recall seeing anything
+> else in the manual that talks about functions with variable arity;
+> is there some extra-linguistic magic going on here?
+
+Yes. Here are some hints about this magic.
+
+First of all, the typechecker has an extra rule for strings: the
+auxiliary rule states that if the typechecking context needs to
+consider a string constant as a value of type ('a, 'b, 'c) format then
+this is not considered as an error.  Furthermore the typechecker
+analyses the contents of the constant format strings to find out what
+can be the types of the arguments of printf. For instance:
+
+# ("" : ('a, 'b, 'c) format);;
+- : ('a, 'b, 'a) format = <abstr>
+
+# let fmt = ("print an int: %i" : ('a, 'b, 'c) format);;
+val fmt : (int -> 'a, 'b, 'a) format = <abstr>
+
+In case of an application of printf the typechecker unifies the result
+type of the application to the one specified by the given format
+string (unit in the case of format for printf, string in the case of
+format for sprintf).
+
+# let f i = Printf.fprintf stdout fmt i;;
+val f : int -> unit = <fun>
+# f 3;;
+print an int: 3- : unit = ()
+
+You have to be careful with partial applications of printf-like
+functions to format strings, since those applications are really
+partial applications! (Meaning that side-effects may happen at each
+new argument passed to the function)!
+
+For instance, the format "print an int: %i", is in some sense
+equivalent to the functional expression:
+
+ print_string "print an int: "; function i -> print_int i
+
+Hence the following behaviours:
+
+# Printf.fprintf stdout fmt;;
+print an int: - : int -> unit = <fun>
+
+and also:
+
+# let f = Printf.fprintf stdout fmt;;
+print an int: val f : int -> unit = <fun>
+
+More generally, a ('a, 'b, 'c) format string value applied to a printf
+like function means that:
+
+-- the resulting function will accept arguments with type 'a
+-- embedded %a applications will accept values of type 'b as first
+   argument
+-- the resulting function will return values of type 'c
+
+# Printf.sprintf;;
+- : ('a, unit, string) format -> 'a = <fun>
+
+# Printf.sprintf "%a";;       
+- : (unit -> '_a -> string) -> '_a -> string = <fun>
+
+# Printf.fprintf;;
+- : out_channel -> ('a, out_channel, unit) format -> 'a = <fun>
+
+# Printf.fprintf stdout "%a";;
+- : (out_channel -> '_a -> unit) -> '_a -> unit = <fun>
+
+As you can see, embedded function calls must have the same 'b and 'c
+parameters as the format they are called from (meaning that since
+Printf.fprintf stdout takes a ('a, out_channel, unit) format as format
+string, it can only accept %a convertion specifications with functions
+f having type out_channel -> 'a -> unit).
+
+PS: May be having format strings as lexical entities per se may help
+to remove a bit of the magic. Also, format srings concatenation have
+been discussed in this list some time ago ... (I remembered that safe
+format concatenation is possible if we add of an extra fourth type
+parameter to format strings ...)
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+

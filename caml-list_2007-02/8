@@ -1,0 +1,114 @@
+Return-Path: <dra-news@metastack.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 90D4FBC0B
+	for <caml-list@yquem.inria.fr>; Thu,  1 Feb 2007 16:22:05 +0100 (CET)
+Received: from orion.metastack.com (no-dns-yet.demon.co.uk [80.177.38.218] (may be forged))
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l11FM473021975
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@yquem.inria.fr>; Thu, 1 Feb 2007 16:22:05 +0100
+Received: from treble (cpc2-cmbg6-0-0-cust535.cmbg.cable.ntl.com [81.107.34.24])
+	(authenticated bits=0)
+	by orion.metastack.com (8.13.4/8.13.3) with ESMTP id l11EcLIL003871
+	(version=TLSv1/SSLv3 cipher=RC4-MD5 bits=128 verify=NO)
+	for <caml-list@yquem.inria.fr>; Thu, 1 Feb 2007 14:38:21 GMT
+From: "David Allsopp" <dra-news@metastack.com>
+To: "'OCaml List'" <caml-list@yquem.inria.fr>
+Subject: Concurrent hash tables
+Date: Thu, 1 Feb 2007 15:22:03 -0000
+Organization: MetaStack Solutions Ltd.
+Message-ID: <00bb01c74614$ba617d70$6a7ba8c0@treble>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Mailer: Microsoft Office Outlook 11
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2900.3028
+Thread-Index: AcdGFLmWFVemAhK1QTaKR7smmgN0Cg==
+X-Miltered: at concorde with ID 45C2059C.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; hash:01 hash:01 util:01 o'caml:01 threads:01 trivial:01 mappings:01 o'caml's:01 hashing:01 hashes:01 threads:01 spawned:01 hashtbl:01 elts:01 elts:01 
+
+I've been experimenting with a concurrent hash table implementation under
+Windows XP based on some of the ideas from the util.concurrent library in
+Java. I've hit some confusing results and am wondering whether someone more
+fluent with the internal workings of O'Caml threads can explain them.
+
+My trivial hash table implementation uses an array of lists to store pairs
+for the (key, value) mappings. O'Caml's own hashing primitive is used for
+the hashes. The hash table is set up with a user-specified number of locks
+(so, in order to write to a particular hash bucket, you must possess the
+lock for n mod nLocks). In the first attempt I made, the hash table is never
+resized, so the locking cases for reading are never hit and there are no
+conflicts. The interesting results come with the set operations to update
+values in the hash table. The threads spawned in each test cycle 500000
+random operations. There are 16 of them and each thread executes the same
+operations as it did in the previous test. Approximately 10% of these
+operations are set, the rest are get (with the result being ignored).
+
+My set code looks like this:
+
+let set {buckets = buckets; locks = locks} key value =
+  let hash = Hashtbl.hash key mod Array.length buckets
+  in
+    let lock = locks.(hash mod Array.length locks)
+    in
+      Mutex.lock lock;
+      (* Very poor function to update the buckets... *)
+      let rec f acc elts =
+        match elts with
+          [] -> (key, value)::acc
+        | (key', value')::elts -> if key' = key
+                                  then (key, value)::acc @ elts (* :o) *)
+                                  else f ((key', value')::acc) elts
+      in
+        buckets.(hash) <- f [] buckets.(hash);
+        Mutex.unlock lock
+
+For 16 threads operating on a single hash table with one lock for all
+writes, this takes about 20 seconds. For 16 threads with 8 locks, it
+consistently takes about 30... which seems a bit counterintuitive! The
+garbage collector does not seem to be causing trouble - I do a Gc.compact()
+in between each test to try and a combination of monitoring with
+Gc.create_alarm and test re-ordering has shown that it doesn't seem to be
+getting in the way of the results.
+
+If I replace the Mutex.lock line with
+
+if not(Mutex.try_lock lock)
+then Mutex.lock lock;
+
+then the two versions come down to roughly the same speed (though the 8 lock
+version is still never faster). Further inspection shows that the
+concurrency has definitely improved in the 8-lock case --- there are
+approximately 800k - 1 million locking conflicts in the 1-lock case and
+between 10k - 100k conflicts in the 8-lock case.
+
+Which leads to two questions:
+
+1. Why is the Mutex.try_lock lock version faster (discussion follows)
+2. Why does increasing the concurrency seem to hurt the performance?
+
+Looking in Win32.c for the implementation of try_lock and lock, the
+difference seems to be the padding put around the call to
+WaitForSingleObject --- it has to call caml_enter_blocking_section and so on
+(I'm assuming that the Begin_root call is what would normally be done
+"under-the-hood" by CAMLparam1). Would a better implementation of Mutex.lock
+therefore be to call WaitForSingleObject with a 0 timeout and then try with
+the INFINITE version so reducing the overhead of releasing and reacquiring
+the OCaml global mutex in the successful case?
+
+Any explanations much appreciated --- I'm aware that since SMP isn't
+supported, highly concurrent implementations of structures such as this
+aren't really that useful but I'm intrigued by the performance hit of
+increasing concurrency on this operation! I blush as I say that I've never
+tried code profiling before so don't really know where to start using that
+to see if would help explain things further...
+
+
+David
+

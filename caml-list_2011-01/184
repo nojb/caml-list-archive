@@ -1,0 +1,129 @@
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p0JM2XXd009553
+	for <caml-list@sympa-roc.inria.fr>; Wed, 19 Jan 2011 23:02:33 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjQBACfuNk2A1gkBe2dsb2JhbACkXQEBFiIFH61MkS2FUASFLA
+X-IronPort-AV: E=Sophos;i="4.60,346,1291590000"; 
+   d="scan'208";a="87451200"
+Received: from courier.cs.helsinki.fi (HELO mail.cs.helsinki.fi) ([128.214.9.1])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 19 Jan 2011 23:02:28 +0100
+Received: from melkinpaasi.cs.helsinki.fi (melkinpaasi.cs.helsinki.fi [128.214.9.14])
+  (AUTH: PLAIN cs-relay, TLS: TLSv1/SSLv3,256bits,AES256-SHA)
+  by mail.cs.helsinki.fi with esmtp; Thu, 20 Jan 2011 00:02:27 +0200
+  id 00093EA8.4D375F73.00002D9E
+Received: by melkinpaasi.cs.helsinki.fi (Postfix, from userid 37211)
+	id 44C2D821F1; Thu, 20 Jan 2011 00:02:27 +0200 (EET)
+Date: Thu, 20 Jan 2011 00:02:27 +0200
+From: Lauri Alanko <la@iki.fi>
+To: caml-list@inria.fr
+Message-ID: <20110119220226.GM323@melkinpaasi.cs.helsinki.fi>
+References: <20110119123335.GL323@melkinpaasi.cs.helsinki.fi>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+In-Reply-To: <20110119123335.GL323@melkinpaasi.cs.helsinki.fi>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: [Caml-list] Generative functors how?
+
+On Wed, Jan 19, 2011 at 02:33:35PM +0200, Lauri Alanko wrote:
+> Also, the limitations of package type constraints were also somewhat
+> surprising. The limitation about unpacking first-class modules in
+> functors was thankfully explained in the documentation, and it made
+> sense after a moment's reflection. No such rationale was included for
+> the rest of the design, so I'd be interested in hearing what's behind
+> it.
+
+Regarding the functor restriction, I found this explained in
+
+<http://caml.inria.fr/pub/papers/xleroy-applicative_functors-popl95.pdf>,
+
+section 2.7. It would be nice to have these sorts of background
+references mentioned in the manual.
+
+This brings me to a related issue. Functors in O'Caml are applicative,
+as described in the above paper. However, I have a bit of
+side-effectful magic code whose type-safety depends on functors being
+generative (details at the end). What should I do?
+
+One option is using the brand new -no-app-funct compiler option, which
+I haven't seen advertised very much. However, this is a global change
+(or can -no-app-funct be used consistently with only some modules?),
+and although I don't currently see any need for applicative functors,
+I dislike the idea of disabling them completely just for the
+occasional need for generativity.
+
+The other option is to use first-class modules. Instead of
+
+module F(M : S1) : S2
+
+one would use
+
+val f : (module S1) -> (module S2)
+
+This is arguably a more faithful interface, since the result module
+initialization does have side effects, and I think the usual custom is
+that functor applications are not really supposed to be observably
+effectful. (But is type generation an "effect"?)
+
+The problem with this is firstly that the expressible constraints are
+limited. One can do stuff like:
+
+val f : (module S1 with type t = 'a) -> (module S2 with type u = 'a)
+
+but nothing more complex. The second problem is simply that because of
+the above functor limitation with first class module unpacking, no
+functor can directly use a generative module function like this, so I
+have to cascade the change into all my functors that even indirectly
+depend on generativity. Again, this is arguably a good thing since
+then the generativity is directly expressed in the interfaces, but
+it's just much nicer to write:
+
+
+module F(M : S1) : S2 = struct
+  ...
+  module MA : SA = ...
+  module MB : SB = G(MB)
+  ...
+end
+
+rather than
+
+let f m =
+  let module M = (val m : S1) in
+  let module FM = struct
+    ...
+    module MA : SA = ...
+    module MB : SB = (val g (module MA : SA) : SB)
+    ...
+  end in
+  (module FM : S2)
+
+The extra level of indentation is almost a deal-breaker. :)
+
+So, any recommendations for the best approach?
+
+
+Lauri
+
+P.S. Oh yes, here's a rough sketch of the magic:
+
+module TypeId(Unit : sig end) : sig
+  type 'a t
+  val gen : unit -> 'a t
+  val cast : 'a t -> 'b t -> 'a -> 'b option
+end = struct
+  type 'a t = int
+  let next = ref 0
+  let gen () = incr next; !next
+  let cast ka kb a =
+    if ka = kb then
+      Some (Obj.magic a)
+    else
+      None
+end
+
+In this particular case, obviously a single module would be
+sufficient, but I want to be able to have generatively multiple
+distinct type constructors 'a t, so that typeids used in one context
+cannot accidentally be confused by those used in another.

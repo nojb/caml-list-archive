@@ -1,0 +1,136 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 12C55BBC4
+	for <caml-list@yquem.inria.fr>; Tue, 14 Apr 2009 16:40:11 +0200 (CEST)
+X-IronPort-AV: E=Sophos;i="4.38,431,1233529200"; 
+   d="c'?scan'208";a="27660818"
+Received: from estephe.inria.fr ([128.93.11.95])
+  by mail1-relais-roc.national.inria.fr with ESMTP; 14 Apr 2009 16:40:10 +0200
+Message-ID: <49E4A04A.5050701@inria.fr>
+Date: Tue, 14 Apr 2009 16:40:10 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Thunderbird 2.0.0.17 (X11/20080929)
+MIME-Version: 1.0
+To: Tim Leek <trleek@gmail.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] C wrappers for Ocaml functions
+References: <9af41d0e0904140451l5a3a0207vb5bd7532a35bbc4e@mail.gmail.com>
+In-Reply-To: <9af41d0e0904140451l5a3a0207vb5bd7532a35bbc4e@mail.gmail.com>
+Content-Type: multipart/mixed;
+ boundary="------------090108010006000409030001"
+X-Spam: no; 0.00; wrappers:01 ocaml:01 ocaml:01 bindings:01 pointers:01 -lm:01 runtime:01 ocamlopt:01 -output-obj:01 lib:01 ocamlopt:01 gcc:01 lib:01 -where:01 -lcurses:01 
+X-Attachments: type="text/x-c" name="ht_wrap.c" name="ht_wrap.c" 
+
+This is a multi-part message in MIME format.
+--------------090108010006000409030001
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+
+> So I am investigating packing my nice Ocaml code into a library and
+> writing C bindings so that I can talk to it. [...]
+> In particular, I have found
+> none that cover how to obtain pointers to OCaml function return values
+> that are not strings or ints, how to store them in C-land, and how to pass
+> them back to Ocaml as parameters.
+
+You have two choices: copy the contents of the OCaml data structure to
+a C data structure, e.g. an OCaml tuple or record of ints can be
+copied to a C struct, field by field; or, treat the OCaml value as an
+opaque type on C's side.
+
+The code you posted attempts to do the second approach, but you cannot
+just take a Caml "value" and give it to arbitrary C code: the Caml GC
+will lose track of the value and reclaim it (or copy it elsewhere) at
+the first opportunity.
+
+Instead, you need to wrap the Caml value in a C memory block and
+register it with the GC using caml_register_global_root.  Then, an
+explicit free function must be provided in the C interface to
+unregister with the GC and to free the wrapper.  See the
+attached modification of your ht_wrap.c example.  It should put you on
+the right tracks.
+
+> 5. And this is how I am attempting to compile it.  Note that error I'm
+> getting here is in link.  If I add "-lm" it gets less noisy but still is
+> mad at me. Why am I having to add math library?
+
+Because the Caml runtime system needs it.  As Dmitry wrote, the
+simplest way to build your example is:
+
+ocamlopt -output-obj -o ht_lib.o ht.ml
+ocamlopt -c ht_wrap.c
+gcc -o htt ht_test.c ht_lib.o ht_wrap.o -L`ocamlopt -where` -lasmrun -lcurses -lm
+
+Hope this helps,
+
+- Xavier Leroy
+
+--------------090108010006000409030001
+Content-Type: text/x-c;
+ name="ht_wrap.c"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline;
+ filename="ht_wrap.c"
+
+#include <caml/mlvalues.h>
+#include <caml/callback.h>
+#include <caml/alloc.h>
+#include <caml/memory.h>
+
+#include "ht.h"
+
+struct hashtable {
+  value v;
+};
+
+static struct hashtable * ht_alloc (value v)
+{
+  struct hashtable * wrapper = malloc(sizeof(struct hashtable));
+  if (wrapper == NULL) return NULL;
+  wrapper->v = v;
+  caml_register_global_root(&(wrapper->v));
+  return wrapper;
+}
+
+void ht_free (struct hashtable * ht)
+{
+  caml_remove_global_root(&(ht->v));
+  free(ht);
+}
+
+struct hashtable * ht_create (void) {
+ static value *create_closure = NULL;
+ if (create_closure == NULL)
+   create_closure = caml_named_value("create");
+ return ht_alloc(caml_callback(*create_closure, Val_unit));
+}
+
+void ht_add (struct hashtable * ht, char *key, int val) {
+ static value *add_closure = NULL;
+ if (add_closure == NULL)
+   add_closure = caml_named_value("add");
+ caml_callback3(*add_closure, ht->v, caml_copy_string(key), Val_int(val));
+}
+
+void ht_mem (struct hashtable * ht, char *key) {
+ static value *mem_closure = NULL;
+ if (mem_closure == NULL)
+   mem_closure = caml_named_value("mem");
+ caml_callback2(*mem_closure, ht->v, caml_copy_string(key));
+}
+
+void ht_remove (struct hashtable * ht, char *key) {
+ static value *remove_closure = NULL;
+ if (remove_closure == NULL)
+   remove_closure = caml_named_value("remove");
+ caml_callback2(*remove_closure, ht->v, caml_copy_string(key));
+}
+
+--------------090108010006000409030001--
+

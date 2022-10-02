@@ -1,0 +1,253 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8EJj6cg001527
+	for <caml-list@sympa-roc.inria.fr>; Wed, 14 Sep 2011 21:45:06 +0200
+Date: Wed, 14 Sep 2011 21:45:06 +0200
+From: ds.caml@sol42.com
+Message-Id: <201109141945.p8EJj6cg001527@walapai.inria.fr>
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjsBADUDcU7ZdBodlGdsb2JhbABBgnwBlhEBjTkCA3sUAQEBAQkLCQkUAyOBUwEBBE4xJwMBAh1YBQQCAgISCYd3ApV1pV6BBQSYeQ
+X-IronPort-AV: E=Sophos;i="4.68,382,1312149600"; 
+   d="scan'208";a="119851895"
+Received: from correo17.acens.net ([217.116.26.29])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 14 Sep 2011 21:45:01 +0200
+Received: (qmail 16543 invoked from network); 14 Sep 2011 19:45:00 -0000
+Received: from unknown (HELO mail.SOL42.com) (dsolaz.sistelcom.com@[90.164.93.9])
+          (envelope-sender <ds.caml@sol42.com>)
+          by correo17.acens.net (qmail-ldap-1.03) with SMTP
+          for <caml-list@inria.fr>; 14 Sep 2011 19:45:00 -0000
+Received: from dsldevice.lan (EHLO minimax.lan)
+To: undisclosed-recipients:;
+Subject: [Caml-list] 
+
+	by mail.SOL42.com with ESMTPA id 4e710389055f81;
+
+	Wed, 14 Sep 2011 21:42:01 +0200
+
+Content-Type: text/plain; charset=iso-8859-1
+
+Mime-Version: 1.0 (Apple Message framework v1084)
+
+Subject: Re: [Caml-list] Link a .so/.dll dynamically
+
+From: ds.caml@sol42.com
+
+In-Reply-To: <1316016912.24759.29.camel@aurora>
+
+Date: Wed, 14 Sep 2011 21:42:01 +0200
+
+Content-Transfer-Encoding: quoted-printable
+
+Message-Id: <FC07674C-A9A4-4F38-BF23-087B34D7E41B@sol42.com>
+
+References: <4E70C18F.3040304@lri.fr> <1316016912.24759.29.camel@aurora>
+
+To: caml-list@inria.fr
+
+X-Mailer: Apple Mail (2.1084)
+
+
+
+On 14 Sep 2011, at 18:15, J=E9r=E9mie Dimino wrote:
+
+> You can also use dlopen and dlsym on unix, and=20
+
+> LoadLibrary and GetProcAddress on windows.
+
+
+
+Right.  For truly dynamic loading, if you already have a set of .so =
+
+files with similar API you might want to write some "loader" in C and =
+
+compile that into your OCaml program.  No need to put an extra dynlink =
+
+layer in between.  BTW Dynlink is not available on all platforms.
+
+
+
+In this "loader" you would call dlopen() and dlsym() (or their Windows =
+
+counterparts) to get the addresses of the functions in the .so, and make =
+
+them available to the rest of your OCaml program.  You still need to =
+
+translate OCAml-to-C function arguments and C-to-OCaml function results. =
+
+ Note that this is somewhat insecure C plumbing, you can easily bring =
+
+down the whole process in a number of ways.
+
+
+
+
+
+While it is way too soon for announcements, I do have some very =
+
+experimental code that allows to do exactly this in pure OCaml.  All you =
+
+need to do is write a C wrapper, sort of like how you do it in Python =
+
+(seehttp://docs.python.org/extending/extending.html for example).  The =
+
+OCaml code looks like this:
+
+
+
+# #load "dffi.cma";;
+
+# open DL;;
+
+# #install_printer Pointer.pp;;
+
+
+
+# let lib =3D dlopen "/wherever/pgtest.dylib" [];;
+
+val lib : DL.dllib =3D <abstr>
+
+
+
+# let connect          =3D dlsym lib "pq_connect_db" and
+
+   disconnect       =3D dlsym lib "pq_finish" and
+
+   protocol_version =3D dlsym lib "pq_protocol_version";;
+
+val connect : DL.dlfun =3D <abstr>
+
+val disconnect : DL.dlfun =3D <abstr>
+
+val protocol_version : DL.dlfun =3D <abstr>
+
+
+
+# let [|conn|] =3D dlcall connect [|String "dbname=3Dname_of_database"|];;=
+
+
+
+val conn : DL.cval =3D Ptr (PGconn*)0x0000000100100ef0
+
+
+
+# dlcall protocol_version [|conn|];;
+
+- : DL.cval array =3D [|Int 3|]
+
+
+
+# dlcall disconnect [|conn|];;
+
+- : DL.cval array =3D [||]
+
+
+
+# dlclose lib;;
+
+- : unit =3D ()
+
+
+
+And pgtest.c (a PostgreSQL client lib protowrapper) looks like this:
+
+
+
+#include <sys/types.h>
+
+#include <unistd.h>
+
+#include <errno.h>
+
+#include <stdio.h>
+
+#include <libpq-fe.h>
+
+
+
+#include "dlutil.h"
+
+
+
+FUNC(pq_connect_db) {
+
+	ARGS; DECL;
+
+	PGconn* conn;
+
+	CHECKNUMARGS(1); CHECKSTR(0); /*1 arg, must be String*/
+
+	conn =3D PQconnectdb((const char*)GETSTR(0));
+
+	if (PQstatus(conn) =3D=3D CONNECTION_OK) {
+
+		ALLOC(1); /*return 1 value*/
+
+		SETPTR(0, PGconn*, conn); }
+
+	else {
+
+		PQfinish(conn);
+
+		ALLOC(0); }
+
+	RETURN; }
+
+
+
+FUNC(pq_finish) {
+
+	ARGS; DECL;
+
+	CHECKNUMARGS(1); CHECKPTR(0); CHECKPTR_TYPE(0, PGconn*);
+
+	PQfinish(GETPTR(0, PGconn*));
+
+	ALLOC(0);
+
+	RETURN; }
+
+
+
+FUNC(pq_protocol_version) {
+
+	ARGS; DECL;
+
+	CHECKNUMARGS(1); CHECKPTR(0); CHECKPTR_TYPE(0, PGconn*);
+
+	ALLOC(1);
+
+	SETINT(0, PQprotocolVersion(GETPTR(0, const PGconn*)));
+
+	RETURN; }
+
+
+
+FUNC, ARGS, CHECKNUMARGS and the rest are nasty dlutil.h macros that do =
+
+all the OCaml-C magic as described in the OCaml docs.
+
+
+
+Functions all have the same signature, they receive an array of values =
+
+amd can check the number and type of its elements.  They return another =
+
+array, like multiple value returns in Lisp.  You can get pretty creative =
+
+with this scheme.
+
+
+
+This is very early code with plenty of missing stuff, and I haven't used =
+
+it for anything serious yet, but if it might be of use to anyone as-is =
+
+then just ask.
+
+
+
+
+
+Regards.
+
+-Daniel
+

@@ -1,0 +1,165 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p41EGcjl032125
+	for <caml-list@sympa-roc.inria.fr>; Sun, 1 May 2011 16:16:38 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: As8DAEFqvU1V2gB5i2dsb2JhbACYIo4NAQEBCgsLGyWIcbldDoVyBJMviW4
+X-IronPort-AV: E=Sophos;i="4.64,297,1301868000"; 
+   d="scan'208";a="107174448"
+Received: from emailfrontal2.citycable.ch ([85.218.0.121])
+  by mail1-smtp-roc.national.inria.fr with SMTP; 01 May 2011 16:16:32 +0200
+X-Alinto-smtpauth-localdomain: Yes
+Received: from seldon (unknown [85.218.93.111])
+	(Authenticated sender: guillaume.yziquel@citycable.ch)
+	by emailfrontal2.citycable.ch (Postfix) with ESMTPA id 4789D8340AA;
+	Sun,  1 May 2011 16:16:29 +0200 (CEST)
+Received: from yziquel by seldon with local (Exim 4.72)
+	(envelope-from <guillaume.yziquel@citycable.ch>)
+	id 1QGXQj-0005Q8-Pp; Sun, 01 May 2011 16:15:25 +0200
+Date: Sun, 1 May 2011 16:15:25 +0200
+From: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+To: redfire <jeremie.salvucci@free.fr>
+Cc: Basile Starynkevitch <basile@starynkevitch.net>, caml-list@inria.fr
+Message-ID: <20110501141525.GO17796@localhost>
+References: <1304244654.4147.34.camel@localhost.localdomain>
+ <20110501123045.bfd38cf6.basile@starynkevitch.net>
+ <1304247307.4147.53.camel@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <1304247307.4147.53.camel@localhost.localdomain>
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p41EGcjl032125
+Subject: Re: [Caml-list] Byte code generation for the Ocaml virtual machine
+ (ZAM)
+
+Le Sunday 01 May 2011 à 12:55:07 (+0200), redfire a écrit :
+> Salut Basile,
+> 
+> Je compile un sous ensemble de Scheme vers la ZAM. La machine virtuelle
+> d'Ocaml n'étant pas typée pour Scheme, je dois implémenter un mécanisme
+> qui va me permettre de tester les types à l'exécution.
+> 
+> D'après ce que j'ai compris, la machine virtuelle ne prend en compte que
+> les entiers de base. Le reste est géré par l'intermédiaire de primitives
+> C. Donc par exemple, si dans le programme source Scheme il est écrit
+> (display 5), je voulais stocker dans l'environnement global un couple
+> (2, 5). Le 2 représentant le type integer ici. Comme ça à l'exécution,
+> je sais que je  dois convertir cet entier en une chaîne de caractères à
+> l'aide de la primitive C correspondante.
+> Donc ici, je souhaitais sérialiser (2, 5) dans la zone data (avec le
+> module Marshall) en espérant récupérer un bloc composé d'au moins deux
+> champs dont deux d'entre eux seraient, le type et la valeur.
+> Malheureusement, je ne parviens pas à ce résultat. Je ne récupère que le
+> 5.
+
+yziquel@seldon:~/sandbox/ocaml/bytecode$ cat couple.ml 
+let get_type : int * int -> int = function (t, _) -> t 
+yziquel@seldon:~/sandbox/ocaml/bytecode$ ocamlc -c -dlambda couple.ml 
+(setglobal Couple!
+  (let (get_type/1030 (function param/1033 (field 0 param/1033)))
+    (makeblock 0 get_type/1030)))
+yziquel@seldon:~/sandbox/ocaml/bytecode$ ls
+couple.cmi  couple.cmo  couple.ml
+yziquel@seldon:~/sandbox/ocaml/bytecode$ ocamldumpobj couple.cmo 
+## start of ocaml dump of "couple.cmo"
+       0  BRANCH 6
+       2  ACC0 
+       3  GETFIELD0 
+       4  RETURN 1
+       6  CLOSURE 0, 2
+       9  PUSHACC0 
+      10  MAKEBLOCK1 0
+      12  POP 1
+      14  SETGLOBAL Couple
+## end of ocaml dump of "couple.cmo"
+yziquel@seldon:~/sandbox/ocaml/bytecode$ 
+
+Ou peut-être plus explicite:
+
+yziquel@seldon:~/sandbox/ocaml/bytecode$ cat couple.ml 
+let couple = (2, 5)
+let _ = let (t, _) = couple in t
+yziquel@seldon:~/sandbox/ocaml/bytecode$ ocamlc -c -dlambda couple.ml
+(setglobal Couple!
+  (let (couple/1030 [0: 2 5])
+    (seq (field 0 couple/1030) (makeblock 0 couple/1030))))
+yziquel@seldon:~/sandbox/ocaml/bytecode$ ocamldumpobj couple.cmo
+## start of ocaml dump of "couple.cmo"
+       0  GETGLOBAL <0>(2, 5)
+       2  PUSHACC0 
+       3  GETFIELD0 
+       4  ACC0 
+       5  MAKEBLOCK1 0
+       7  POP 1
+       9  SETGLOBAL Couple
+## end of ocaml dump of "couple.cmo"
+
+Essentiellement, il me semble qu'il s'agit de GETFIELD0. Mais je vous
+suggère d'utiliser d'autres valeurs que 2 et 5. En effet, l'entier 2 est
+représenté par un 5 dans le bloc puisque 2 * 2 + 1 = 5. Je ne sais pas
+comment vous faites pour lire un 5 à la place du 2, mais si c'est via
+des fonctions en C, c'est peut-être là votre problème.
+
+> En écrivant ce mail, je pense à une autre technique qui consisterait
+> plutôt à sérialiser seulement la valeur (vu que je ne parviens qu'à
+> récupérer celle-ci) et à générer le bloc à l'aide de MAKEBLOCK. Mais ça
+> me ferait modifier pas mal de choses.
+> 
+> Donc mon principal problème concerne la mise en place de ces couples
+> dans la zone data et leur récupération. Dans le mail précédent,
+> j'expliquais que j'ai trouvé un exemple sur internet qui sérialisait les
+> données dans un tableau à l'aide de Obj.repr pour mettre des données de
+> types différents dans un même tableau. Ensuite il fait un output value
+> et ça fonctionne. Sauf que ce morceau de code ne travaille que sur des
+> données de types primitifs et non pas de couples ou autres.
+> 
+> Je souhaite simplement pouvoir stocker un couple et récupérer chacun des
+> champs. Mais je n'ai pas trouvé de documentation qui explique clairement
+> et dans le détail comment tout ceci peut-être effectué.
+> 
+> J'espère avoir été un peu plus clair.
+> 
+> Il y a peut-être un moyen beaucoup plus simple de réaliser ceci mais je
+> ne le connais pas.
+> 
+> Merci à toi ;-)
+> 
+> Amicalement.
+> 
+> --
+> Jérémie Salvucci
+> 
+> Le dimanche 01 mai 2011 à 12:30 +0200, Basile Starynkevitch a écrit :
+> > On Sun, 01 May 2011 12:10:54 +0200
+> > redfire <jeremie.salvucci@free.fr> wrote:
+> > 
+> > > Hello all,
+> > > 
+> > > I'm currently doing a student project where I have to generate bytecode
+> > > for the caml virtual machine. I convert a subset of the Scheme language.
+> > > My main issue concerns the dynamic typing mechanism. My idea is to store
+> > > every values I manipulate like this (type, value).
+> > 
+> > Salut Jérémie, 
+> > 
+> > je suis très heureux de te lire. Par contre, je n'ai pas compris ton message (alors que je connais bien Ocaml et bien son bytecode). C'est quoi ton but exact? Coder un Scheme en Ocaml?
+> > 
+> > Amicalement
+> > 
+> > 
+> > 
+> 
+> 
+> 
+> -- 
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+> 
+> 
+
+-- 
+     Guillaume Yziquel
+

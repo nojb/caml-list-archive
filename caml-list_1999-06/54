@@ -1,0 +1,134 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA29091 for caml-redistribution; Wed, 23 Jun 1999 21:58:18 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA22806 for <caml-list@pauillac.inria.fr>; Wed, 23 Jun 1999 15:19:01 +0200 (MET DST)
+Received: from isis.lip6.fr (isis.lip6.fr [132.227.60.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id PAA04337
+	for <caml-list@inria.fr>; Wed, 23 Jun 1999 15:19:00 +0200 (MET DST)
+Received: from spi.lip6.fr (monbazillac.lip6.fr [132.227.82.65])
+          by isis.lip6.fr (8.8.8/jtpda-5.2.9.1+lip6) with ESMTP id PAA11661
+          ; Wed, 23 Jun 1999 15:18:58 +0200 (MET DST)
+Received: from ventoux.lip6.fr (root@ventoux.lip6.fr [132.227.83.34])
+          by spi.lip6.fr (8.8.6/jtpda-5.2) with ESMTP id PAA24452
+          ; Wed, 23 Jun 1999 15:18:57 +0200 (MET DST)
+Received: from ventoux.lip6.fr (530@localhost [127.0.0.1])
+          by ventoux.lip6.fr (8.8.7/jtpda-5.2) with ESMTP id PAA13795
+          ; Wed, 23 Jun 1999 15:19:07 +0200
+Message-Id: <199906231319.PAA13795@ventoux.lip6.fr>
+X-Mailer: exmh version 2.0.2
+To: Daniel Bonniot <dbonniot@ens-lyon.fr>
+Subject: Re: Typage des modules 
+Cc: caml-list@inria.fr
+In-Reply-To: Your message of "Tue, 22 Jun 1999 17:38:54 +0200."
+             <376FAE0E.9C1AD8AE@ens-lyon.fr> 
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Date: Wed, 23 Jun 1999 15:19:06 +0200
+From: "Sylvain BOULM'E" <Sylvain.Boulme@lip6.fr>
+Sender: weis
+
+Bonjour,
+
+Pour repondre a votre question, il y a plusieurs solutions... La "meilleure" 
+depend du probleme que vous avez a resoudre :
+
+1. Le polymorphisme de OCAML
+ 
+Dans "b.mli", vous declarez 
+val f: 'a -> 'a
+
+Si f utilise en fait des fonctions de "a.ml", vous passez ces fonctions en 
+parametres de f. Cette methode devient vite penible si vous avez en fait 
+plusieurs fonctions "f" qui dependent de plusieurs fonctions de "a.ml"
+
+2. Dans ce cas, vous pouvez utilisez le mecanisme de foncteur de OCAML.
+Par exemple :
+
+module type B_Type =
+  sig
+    type t
+    val f: t->t
+  end
+
+module MakeB (A: sig type a val g: a->a end) : B_Type with type t=A.a = 
+  struct 
+    type t=A.a
+    let f x = (A.g x)
+  end
+
+module type A_Type =
+  sig
+    type a
+    module B : B_Type with type t=a
+    val v: a
+    val g: a -> a
+  end
+
+module A: A_Type =
+  struct
+    type b = { x:int}
+    type a = b
+    let g x = x
+    module B = MakeB  (struct type a = b  let g=g end)
+    let v = B.f {x=3}
+  end
+
+module B = MakeB (A)
+
+Dans cet exemple vous pouvez evidemment faire de "A_Type" un "a.mli", et de 
+"A" un "a.ml". Mais ce mecanisme devient penible quand les dependences se 
+compliquent (avec eventuellement des definitions de B et de A mutuellement 
+recursives) : dans ce cas, soit on peut revoir son decoupage en "module" (deux 
+fonctions mutuellement recursives devraient peut-etre appartenir au meme 
+module), soit on peut utiliser les mecanismes objets.
+
+3. 
+
+class virtual ['a] a_type =
+  object 
+    method virtual stop: 'a -> bool
+    method virtual v: 'a
+    method virtual g: 'a -> 'a
+  end
+
+class ['b] b_class (o:'b) =
+  object 
+    constraint 'b = 'a #a_type
+    method f x= 
+        if (o#stop x) 
+        then o#v
+        else (o#g x)
+  end
+
+
+module type A_Type =
+sig
+  type a
+  val obj : a a_type
+  val p: a -> string
+end
+
+module A: A_Type = 
+struct
+  type a={x : int}
+  class a_class = 
+    object (s)
+      inherit [a] a_type
+      method b = new b_class s
+      method stop y = y.x <= 0
+      method v = s#b#f {x=3}
+      method g y = 
+         if (s#stop y) then (s#b#f y) else { x= y.x-5 }
+    end
+   let obj = (new a_class :> a a_type)
+   let p y = string_of_int y.x
+end;;
+    
+let obj_b = new b_class A.obj;;  
+
+
+J'espere que vous trouverez ce que vous cherchez,
+
+Sylvain.
+                      
+
+
+

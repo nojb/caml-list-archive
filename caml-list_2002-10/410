@@ -1,0 +1,129 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA28714; Tue, 15 Oct 2002 14:19:47 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA28676 for <caml-list@pauillac.inria.fr>; Tue, 15 Oct 2002 14:19:45 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g9FCJh503880;
+	Tue, 15 Oct 2002 14:19:43 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA28770; Tue, 15 Oct 2002 14:19:43 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200210151219.OAA28770@pauillac.inria.fr>
+Subject: Re: [Caml-list] monomorphic restriction or typing/scanf bug?
+In-Reply-To: <200210150329.g9F3TAX26896@plinky.bolt-action.com> from Chris Hecker at "Oct 14, 102 08:29:10 pm"
+To: checker@d6.com (Chris Hecker)
+Date: Tue, 15 Oct 2002 14:19:43 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> The "scan" function in the code below works if it's at global scope,
+> but not if it's defined inside the test2 function.  Is this a bug or a
+> typing restriction?  I assume the latter (and that I could have boiled
+> this example to one of the ones in the FAQ?), but I don't understand
+> these kinds of polymorphism typing issues.
+> 
+> Chris
+> 
+> 
+> type t =
+>     Foo of int
+>   | Bar of int * int 
+> 
+> exception FB of t
+> 
+> 
+> (* works *)
+> let scan s (fmt : ('a, Scanf.Scanning.scanbuf, 'b) format) f =
+>   try
+>     raise (FB (Scanf.sscanf s fmt f))
+>   with
+>     End_of_file | Scanf.Scan_failure _ -> ()
+> 
+> let test () =
+>   let line = "Foo 1" in
+>   try
+>     scan line "Foo %d" (fun i -> Foo i);
+>     scan line "Bar %d %d" (fun i j -> Bar (i,j));
+>     failwith "bad line"
+>   with
+>     FB t -> t
+> 
+> (* doesn't work *)
+> let test2 () =
+>   let line = "Foo 1" in
+>   let scan s (fmt : ('a, Scanf.Scanning.scanbuf, 'b) format) f =
+>     try
+>       raise (FB (Scanf.sscanf s fmt f));
+>       ()
+>     with
+>       End_of_file | Scanf.Scan_failure _ -> ()
+>   in
+>   try
+>     scan line "Foo %d" (fun i -> Foo i);
+>     scan line "Bar %d %d" (fun i j -> Bar (i,j));
+>     failwith "bad line"
+>   with
+>     FB t -> t
+> 
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+
+This is unrelated to Scanf (apart from the fact that sscanf is
+polymorphic).
+
+This is not a bug, this is not a typing restriction, this is an ugly
+semantics of type constraints.
+
+The problem is that type variables in type constraints are shared (are
+not generalized whatsoever) in a whole definition. Hence, the 'a and
+'b in your format specification accumulate incompatible type
+constraints (type instance unifications), hence the typing error
+reported by the compiler.
+
+On the other hand, when the scan function is global, 'a and 'b are
+generalized at the hand of the definition as usual (since their is no
+use of scan, hence no instanctiation of 'a nor 'b). Hence the global
+definition does not behave teh same as the local one.
+
+To give a simpler example, consider this simple (working) code snippet:
+
+# let test () =
+    let f x = x in
+    f 1; f "1";;
+Warning: this expression should have type unit.
+val test : unit -> string = <fun>
+
+Now, consider I add a single (and useless) type constraint on the x
+parameter of f, just stating that it should have a type:
+
+# let test () =
+    let f (x : 'a) = x in
+    f 1; f "1"
+  ;;
+Warning: this expression should have type unit.
+This expression has type string but is here used with type int
+
+The phrase it rejected since the type ('a) of the parameter (x) of f
+has been instantiated once with int, and then further instantiation to
+string fails (the warning emitted by the compiler clearly states that
+"f 1" was properly type-checked).
+
+Thnaks for the interesting example, that could help us to revised the
+semantics of type constraints in Caml, still having in mind that
+global and local definition should always behave the same.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

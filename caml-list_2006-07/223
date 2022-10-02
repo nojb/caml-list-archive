@@ -1,0 +1,143 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id D8377BB84
+	for <caml-list@yquem.inria.fr>; Sun, 23 Jul 2006 21:58:13 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k6NJwDMX009415
+	for <caml-list@yquem.inria.fr>; Sun, 23 Jul 2006 21:58:13 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA19529 for <caml-list@pauillac.inria.fr>; Sun, 23 Jul 2006 21:58:12 +0200 (MET DST)
+Received: from sigma957.cis.mcmaster.ca (sigma957.CIS.McMaster.CA [130.113.64.83])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k6NJwBor009400
+	for <caml-list@inria.fr>; Sun, 23 Jul 2006 21:58:12 +0200
+Received: from Gorash7.UTS.McMaster.CA (Gorash7.UTS.McMaster.CA [130.113.196.61])
+	by sigma957.cis.mcmaster.ca (8.13.4/8.13.4) with ESMTP id k6NJw6Ge024208
+	for <caml-list@inria.fr>; Sun, 23 Jul 2006 15:58:06 -0400 (EDT)
+Received: from cgpsrv2.cis.mcmaster.ca (univmail.CIS.McMaster.CA [130.113.64.46])
+	by Gorash7.UTS.McMaster.CA (8.13.6/8.13.6) with ESMTP id k6NJvweW026407
+	for <caml-list@inria.fr>; Sun, 23 Jul 2006 15:58:00 -0400
+Received: from [69.193.76.85] (account carette@univmail.cis.mcmaster.ca HELO [192.168.1.101])
+  by cgpsrv2.cis.mcmaster.ca (CommuniGate Pro SMTP 4.1.8)
+  with ESMTP-TLS id 133174341 for caml-list@inria.fr; Sun, 23 Jul 2006 15:57:58 -0400
+Message-ID: <44C3D4C8.8010502@mcmaster.ca>
+Date: Sun, 23 Jul 2006 15:58:00 -0400
+From: Jacques Carette <carette@mcmaster.ca>
+Organization: McMaster University
+User-Agent: Thunderbird 1.5.0.4 (Windows/20060516)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: Variance problem in higher-order Functors?
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-PMX-Version-Mac: 4.7.1.128075, Antispam-Engine: 2.1.0.0, Antispam-Data: 2006.7.23.123432
+X-PerlMx-Spam: Gauge=IIIIIII, Probability=7%, Report='__CT 0, __CTE 0, __CT_TEXT_PLAIN 0, __HAS_MSGID 0, __MIME_TEXT_ONLY 0, __MIME_VERSION 0, __SANE_MSGID 0, __USER_AGENT 0'
+X-Miltered: at nez-perce with ID 44C3D4D5.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 44C3D4D3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; variance:01 higher-order:01 functors:01 higher-order:01 functors:01 ocaml:01 functor:01 sig:01 foo:01 val:01 foo:01 struct:01 struct:01 sig:01 val:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+I seem to have encountered a problem in type-checking of higher-order 
+functors with type constraints -- it seems to me that the containment 
+check is backwards.  Below I include complete code (between ======= 
+makers).  This was tried in ocaml 3.09.01
+
+Basically, I use singleton types to encode presence/absence of a 
+semantic property.  I use type constraints to ensure that the functor 
+cannot be applied if the constraint is not satisfied.  If I write 
+everything "simply", it all works.  If I go higher-order, it fails.  
+Below is what I can distill from a much much larger program and still 
+show the issue.
+=============
+(* this works *)
+module type DOMAIN = sig
+    type kind
+    type foo
+    val  upd : foo -> foo
+end
+
+type domain_is_field
+
+module Rational = struct
+    type kind = domain_is_field
+    type foo  = int * int
+    let  upd (x,y) = (x-1, y+1)
+end
+
+module Integer = struct
+    type kind
+    type foo  = int
+    let  upd x = x-1
+end
+
+module type UPDATE = sig
+    type obj
+    val update : obj -> obj
+end
+
+module DivisionUpdate(D:DOMAIN with type kind = domain_is_field) = struct
+    type obj = D.foo
+    let update a = D.upd a
+end
+
+(* this one is semantically incorrect! *)
+module BadUpdate(D:DOMAIN) = struct
+    type obj = D.foo
+    let update a = D.upd a
+end
+
+(* works, as expected *)
+module A = DivisionUpdate(Rational)
+(* _correctly_ generates an error
+module A = DivisionUpdate(Integer)
+*)
+
+(* However, if we go higher order: *)
+module type UPDATE2 =
+    functor(D:DOMAIN) -> sig
+    type obj = D.foo
+    val update : obj -> obj
+end
+
+(* this is the same as the "updates" above, just wrapped in a module *)
+module Bar(D:DOMAIN)(U:UPDATE2) = struct
+    module U = U(D)
+    let update x = U.update x
+end
+
+(* works as there are no restrictions *)
+module T3 = Bar(Integer)(BadUpdate) ;;
+
+(* and now this does not work?!?! even though it should!*)
+module T2 = Bar(Rational)(DivisionUpdate) ;;
+
+============
+The error I get on this very last line is
+Signature mismatch:
+Modules do not match:
+  functor
+    (D : sig type kind = domain_is_field type foo val upd : foo -> foo 
+end) ->
+    sig type obj = D.foo val update : D.foo -> D.foo end
+is not included in
+  UPDATE2
+Modules do not match:
+  DOMAIN
+is not included in
+  sig type kind = domain_is_field type foo val upd : foo -> foo end
+Type declarations do not match:
+  type kind
+is not included in
+  type kind = domain_is_field
+
+and this last check seems to be looking at signature inclusion 
+*backwards*, especially since it works if you do the same at the 'top 
+level' instead of passing things in through a functor.
+
+Or I am making a mistake somewhere above?
+
+Jacques
+

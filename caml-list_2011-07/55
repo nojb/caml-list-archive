@@ -1,0 +1,66 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p66Nf5mh021348
+	for <caml-list@sympa-roc.inria.fr>; Thu, 7 Jul 2011 01:41:05 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ar4BALzxFE6ACH+RmWdsb2JhbABTmR6PAQEBAQEBCAsLBxQlwl6IeoY3BJc7i18
+X-IronPort-AV: E=Sophos;i="4.65,489,1304287200"; 
+   d="scan'208";a="86727164"
+Received: from router-304.cs.umd.edu (HELO egg.cs.umd.edu) ([128.8.127.145])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 07 Jul 2011 01:40:59 +0200
+Received: from [192.168.32.2] (pool-71-163-241-45.washdc.fios.verizon.net [71.163.241.45])
+	(Authenticated sender: khooyp)
+	by egg.cs.umd.edu (Postfix) with ESMTPSA id 18EA7680796;
+	Wed,  6 Jul 2011 19:40:56 -0400 (EDT)
+Mime-Version: 1.0 (Apple Message framework v1084)
+Content-Type: text/plain; charset=us-ascii
+From: Khoo Yit Phang <khooyp@cs.umd.edu>
+In-Reply-To: <102E6342-F199-4A3C-B651-06795D14EB89@cs.umd.edu>
+Date: Wed, 6 Jul 2011 19:40:55 -0400
+Cc: Khoo Yit Phang <khooyp@cs.umd.edu>
+Message-Id: <CCB81930-965B-42F5-A971-4988F6905612@cs.umd.edu>
+References: <102E6342-F199-4A3C-B651-06795D14EB89@cs.umd.edu>
+To: caml-list@yquem.inria.fr
+X-Mailer: Apple Mail (2.1084)
+X-Greylist: Sender succeeded SMTP AUTH, not delayed by milter-greylist-4.3.7 (egg.cs.umd.edu [0.0.0.0]); Wed, 06 Jul 2011 19:40:56 -0400 (EDT)
+X-CSD-MailScanner-ID: 18EA7680796.AF226
+X-CSD-MailScanner: Found to be clean
+X-CSD-MailScanner-SpamCheck: not spam, SpamAssassin (not cached, score=-50,
+	required 5, autolearn=not spam, ALL_TRUSTED -50.00)
+X-CSD-MailScanner-From: khooyp@cs.umd.edu
+X-CSD-MailScanner-Watermark: 1310600456.42861@LFlFTUsqdNaZB4E0ghsAkg
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p66Nf5mh021348
+Subject: [Caml-list] Re: Race conditions with asynchronous exceptions in standard library
+
+Hi,
+
+As Oleg clarified, this issue arises even without threads, in native code as well as bytecode executions (with differences due to when signals are processed). Let me further distinguish several scenarios:
+
+
+1) Writing third-party libraries that are safe under asynchronous exceptions
+
+With some care, it is possible to write third-party Ocaml libraries that are safe even if asynchronous exceptions occur. One way would be to write in purely functional style, another would be to fork and execute a separate process, yet another would be to carefully arrange the code to avoid signals (as Fabrice suggested for queue.ml). However, I don't believe it would be possible to implement, for example, memoization or hashconsing, in a purely functional manner or by forking; forking would be impractical to implement libraries such as imperative graph data structures; and it may not always be possible to rearrange the code in a safe manner.
+
+Instead, I propose to provide signal masking functions (sigprocmask), e.g., mask_signals and unmask_signals, to bracket regions of code where signals should not be processed. It would be great if these were part of the standard library, since they require some knowledge of how the Ocaml runtime handles signal processing, in particular, to flush signals that have been recorded by the runtime, but not yet dispatched, before entering the signal-masked code region.
+
+(Unix.sigprocmask may work, though it has a higher overhead since the signal mask is encoded as a list.)
+
+Another reason to have this in the standard library would be to support reentrancy, i.e., of a signal-masked code region calling another function that itself enters signal-masking, and not accidentally unmask signals prematurely (see http://hackage.haskell.org/trac/ghc/ticket/1036 for example). Having libraries implement signal-masking in an ad-hoc manner is likely to lead to such mistakes.
+
+
+
+2) Writing applications that are safe that use libraries that are unsafe under asynchronous exceptions
+
+Even if libraries are unsafe, applications can be written safely by carefully wrapping those library functions with signal-masking functions as above.
+
+
+
+3) The OCaml standard library
+
+I don't think that the OCaml standard library needs to be changed, if applications can wrap these libraries as above. It would be useful to document which libraries are safe to use under asynchronous exceptions, if only for a small performance consideration. Alternatively, if signal masking isn't available, then it would be useful to document the hazards of asynchronous exceptions under Sys.signal and similar functions.
+
+I may have missed it, but does the OCaml manual explain exactly where signals are processed (other than reading the source code)? If so, it would also be useful to link to it from Sys.signal and friends.
+
+
+Yit
+July 6, 2011

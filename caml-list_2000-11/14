@@ -1,0 +1,175 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA09858 for caml-red; Thu, 2 Nov 2000 19:28:17 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA00984 for <caml-list@pauillac.inria.fr>; Thu, 2 Nov 2000 18:29:49 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id eA2HTmr02732;
+	Thu, 2 Nov 2000 18:29:48 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA06467; Thu, 2 Nov 2000 18:29:48 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200011021729.SAA06467@pauillac.inria.fr>
+Subject: Re: Where did the exception occur?
+In-Reply-To: <wd8r94y8r4c.fsf@parate.irisa.fr> from =?ISO-8859-1?Q?David_Mentr=E9?= at "Oct 30, 100 01:12:35 pm"
+To: David.Mentre@irisa.fr (David =?iso-8859-1?q?Mentr=E9?=)
+Date: Thu, 2 Nov 2000 18:29:48 +0100 (MET)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis@pauillac.inria.fr
+
+> Maybe a little example in the Ref. Manual or the FAQ would be useful, as
+> I'm not the first one to be caught by this problem?
+[...]
+
+Let me propose this little tutorial for the debugger...
+
+Launching the debugger:
+-----------------------
+
+Given the following obviously wrong program written in file
+uncaught.ml, (the program raises an uncaught exception Not_found, when
+evaluating the expression find_address "INRIA", since "IRIA" (and not
+"INRIA") has been added to the list of adresses):
+
+(* file uncaught.ml *)
+
+let l = ref [];;
+
+let find_address name = List.assoc name !l;;
+
+let add_address name adress = l := (name, address) :: ! l;;
+
+add_address "IRIA" "Rocquencourt";;
+
+print_string (find_address "INRIA"); print_newline ();;
+
+If you want to find where and why this exception has been raised, you
+have to:
+
+1) compile the program in debug mode:
+
+ocamlc -g uncaught.ml
+
+2) launch the debugger:
+
+ocamldebug a.out
+
+Then the debugger writes a banner and a prompt:
+
+        Objective Caml Debugger version 3.00+14 (2000-09-06)
+
+(ocd)
+
+Finding the cause of a spurious exception:
+------------------------------------------
+Type r (for run); you get
+
+(ocd) r
+Loading program... done.
+Time : 12
+Program end.
+Uncaught exception: Not_found
+(ocd) 
+
+Self explanatory, is'nt it ?
+
+So, you want to step backward to set the program counter before the
+time the exception is raised; hence type in b as backstep, and you get
+
+(ocd) b
+Time : 11 - pc : 15500 - module List
+143     [] -> <|b|>raise Not_found
+
+The debugger tells you that you are in module List, inside a pattern
+matching on a list that allready chose the [] case and is about to
+execute raise Not_found, since the program is stopped just before this
+expression (as witnessed by the <|b|> mark).
+
+But, as you know, you want the debugger to tell you which procedure
+calls the one from list, and may who calls the procedure that call the
+one from list; hence, you want a backtrace of the execution stack:
+
+(ocd) bt
+#0  Pc : 15500  List char 3562
+#1  Pc : 19128  Uncaught char 221
+
+So the last function called is from module List at charadcter 3562,
+that is :
+
+let rec assoc x = function
+    [] -> raise Not_found
+          ^
+  | (a,b)::l -> if a = x then b else assoc x l
+
+The function that calls it is in module Uncaught, file uncaught.ml char 221:
+print_string (find_address "INRIA"); print_newline ();;
+                                  ^
+What else ?
+
+If you're developping a program you can compile it with the -g option,
+to be ready to debug it if necessary.  Hence, to find your spurious
+exception you just need to type ocamldebug a.out, then r, b, and bt
+gives you the backtrace.
+
+Help and info in the debugger:
+------------------------------
+
+To get more info about the current status of the debugger you can ask
+it directly at the toplevel prompt of the debugger; for instance:
+
+(ocd) info breakpoints
+No breakpoint.
+
+(ocd) help break
+  1      15396  in List, character 3539
+break : Set breakpoint at specified line or function.
+Syntax: break function-name
+break @ [module] linenum
+break @ [module] # characternum
+
+Setting break points:
+---------------------
+Let's set up a breakpoint and rerun the entire program ((g)oto 0 then (r)un):
+
+(ocd) break @Uncaught 9
+Breakpoint 3 at 19112 : file Uncaught, line 9 column 34
+
+(ocd) g 0
+Time : 0
+Beginning of program.
+
+(ocd) r
+Time : 6 - pc : 19112 - module Uncaught
+Breakpoint : 1
+9 add "IRIA" "Rocquencourt"<|a|>;;
+
+Then, we can step and find what happens when find_address is about to
+be called
+(ocd) s
+Time : 7 - pc : 19012 - module Uncaught
+5 let find_address name = <|b|>List.assoc name !l;;
+
+(ocd) p name
+name : string = "INRIA"
+
+(ocd) p !l
+$1 : (string * string) list = ["IRIA", "Rocquencourt"]
+(ocd)
+
+Now we can guess that List.assoc will fail to find "INRIA" in the list...
+
+Debugging under Emacs:
+-----------------------
+Note also that under Emacs you call the debugger using ESC-x camldebug
+a.out. Then emacs will set you directly to the file and character
+reported by the debugger, and you can step back and forth using ESC-b
+and ESC-s, you can set up break points using CTRL-X space, and so on...
+
+Hope this helps,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+

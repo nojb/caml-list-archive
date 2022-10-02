@@ -1,0 +1,100 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA00617; Wed, 9 Jun 2004 12:35:59 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA00587 for <caml-list@pauillac.inria.fr>; Wed, 9 Jun 2004 12:35:57 +0200 (MET DST)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i59AZuSH011503
+	for <caml-list@inria.fr>; Wed, 9 Jun 2004 12:35:56 +0200
+Received: from localhost (akasha.ijm.jussieu.fr [134.157.173.57])
+          by shiva.jussieu.fr (8.12.11/jtpda-5.4) with ESMTP id i59AZuCu015448
+          ; Wed, 9 Jun 2004 12:35:56 +0200 (CEST)
+X-Ids: 165
+Date: Wed, 09 Jun 2004 12:35:54 +0200 (CEST)
+Message-Id: <20040609.123554.58117203.andrieu@ijm.jussieu.fr>
+To: Thomas.Fischbacher@Physik.Uni-Muenchen.DE
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] String Problem
+From: Olivier Andrieu <andrieu@ijm.jussieu.fr>
+In-Reply-To: <Pine.LNX.4.58.0406091144100.9017@seekar.cip.physik.uni-muenchen.de>
+References: <Pine.LNX.4.58.0406091144100.9017@seekar.cip.physik.uni-muenchen.de>
+X-Mailer: Mew version 4.0.64 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 40C6E80C.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at shiva.jussieu.fr with ID 40C6E80C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 andrieu:01 andrieu:01 2004:99 parallelize:01 chunks:01 serializing:01 serialized:01 serialize:01 serialize:01 intext:01 camlprim:01 flags:01 char:01 malloc:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+ Thomas Fischbacher [Wed, 9 Jun 2004]:
+ > 
+ > Dear Caml hackers,
+ > 
+ > I am just doing some quite large (string theory) calculation which
+ > basically runs through a huge tree and does some computation at
+ > every node in ocaml which I have to parallelize in an effective
+ > way. My present approach is to set an alarm for the process doing
+ > the calculation, then splitting into chunks and serializing all the
+ > work that corresponds to nodes that have been touched but for which
+ > the calculation has not yet been finished. The serialized strings
+ > are then compressed and sent out via the net to other machines to
+ > help with the calculation.
+ > 
+ > I'd love to avoid temporary files, as these are not necessary, and
+ > my design is simpler and cleaner without having to worry about
+ > filesystem issues.
+ >
+ > Now I encounter the problem that ocaml can only serialize to
+ > strings, but these are limited to 16 MB in size. If my data set
+ > (which is structured in a complicated way, i.e. it would be quite
+ > some effort to write specialized readers and printers) gets large
+ > enough, this entire approach therefore breaks down.
+
+It's quite easy to serialize to a Bigarray with a bit of C code
+(warning, not tested): 
+
+,----
+| #include "intext.h"
+| #include "bigarray.h"
+| 
+| CAMLprim value ml_marshal_to_bigarray(value v, value flags)
+| {
+|   char *buf;
+|   long len;
+|   output_value_to_malloc(v, flags, &buf, &len);
+|   return alloc_bigarray(BIGARRAY_UINT8 | BIGARRAY_C_LAYOUT | BIGARRAY_MANAGED, 
+|                         1, buf, &len);
+| }
+| 
+| CAMLprim value ml_demarshal_from_bigarray(value b)
+| {
+|   struct caml_bigarray *b_arr = Bigarray_val(b);
+|   return input_value_from_block(b_arr->data, b_arr->dim[0]);
+| }
+`----
+
+,----
+| open Bigarray
+| 
+| external marshal_to_bigarray : 
+|   'a -> Marshal.extern_flags list -> 
+|   (char, int8_unsigned_elt, c_layout) Array1.t 
+|      = "ml_marshal_to_bigarray"
+| 
+| external demarshal_from_bigarray :
+|   (char, int8_unsigned_elt, c_layout) Array1.t -> 'a 
+|      = "ml_demarshal_from_bigarray"
+`----
+
+Alternatively, buy a 64 bits computer :)
+
+-- 
+   Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

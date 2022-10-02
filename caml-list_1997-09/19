@@ -1,0 +1,106 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA21168 for caml-redistribution; Thu, 25 Sep 1997 19:18:13 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA18923 for <caml-list@pauillac.inria.fr>; Thu, 25 Sep 1997 14:19:37 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.5) with ESMTP id OAA02385;
+	Thu, 25 Sep 1997 14:19:35 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA18919; Thu, 25 Sep 1997 14:19:33 +0200 (MET DST)
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+Message-Id: <199709251219.OAA18919@pauillac.inria.fr>
+Subject: Re: camlex/camlyacc + threads problem
+In-Reply-To: <199709231254.OAA20307@yeti2.didac-mip.fr> from Jean-Claude Laffitte at "Sep 23, 97 02:54:07 pm"
+To: laffitte@yeti2.didac-mip.fr (Jean-Claude Laffitte)
+Date: Thu, 25 Sep 1997 14:19:33 +0200 (MET DST)
+Cc: caml-list@inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> I make an intensive use of threads and I have an intensive need of safety. So
+> the question is, what  means  *thread-safe* ?
+
+To quote Dave Butenhof, "Programming with Posix threads":
+
+        ``Thread-safe'' means that the code can be called from
+        multiple threads without destructive results.  It does not
+        require that the code run efficiently in multiple threads,
+        only that it can operate safely in multiple threads.
+
+> Is it just a problem whith global values  ( critical section ), or do I only 
+> use the pervasive library in my threads ?
+> For example, is this code safe ? :
+> 
+> let crazy name = 
+>     let counter = 0 in 
+>     while ( true ) do
+>       let str = String.create 30                       (* safe ? *)
+>       and arr = Array.create 10 a in                   (* safe ? *)
+>         Printf.sprintf str "%s : %d" name counter      (* safe ? *)
+>    done
+>   
+> let main  =
+>   begin
+>     let t1 =  Thread.create crazy "First"
+>     and t2 =  Thread.create crazy "second" 
+>     and t3 =  Thread.create crazy "Third" in
+>     Thread.join (t3); 
+>   end
+
+Yes, it is. (Though it does not typecheck.)
+
+> Do I need mutexes for all the Arrays, Lists, Strings, Stacks ... I use  ??
+
+There are essentially four kinds of data structures / library functions:
+
+1- Purely functional data structures and functions (no side effects):
+   these are always thread-safe.  The module List is a good example.
+   No need for mutexes.
+
+2- Basic functions over mutable data structures, e.g. reading and writing
+   references, or elements of arrays or strings, or Array.create,
+   or String.create.  These are atomic operations, meaning that if two
+   threads A and B assign the same array element, then either
+   A will assign it, then B, or B, then A,
+   but no weird behavior will occur that might cause the array element
+   to hold a value other than that stored by A or that stored by B.
+   I/O functions from Pervasive also fall in this class.
+   You don't have to protect these structures with a mutex, though
+   there are many cases where you will want to, e.g. for guaranteeing
+   that a sequence of assignments over a shared array
+   are performed atomically.
+
+3- More complicated functions over mutable data structures, e.g.
+   Array.copy, or the functions in Hashtable, Stack, Lexing:
+   modifications on these data structures are not atomic, so if two threads
+   modify the same structure concurrently, internal invariants may be broken
+   and unexpected results ensue.  You should always associate these data
+   structures with a mutex, or make sure they are used in only one thread.
+
+4- Functions with internal global state.  The only example in the whole
+   standard library is the Parsing module.  Here, it's unsafe to call
+   one of these functions from two threads simultaneously, even on
+   different arguments (e.g. different Lexing.lexbuf arguments for
+   a parser).  Use a global mutex or make sure only one thread does
+   parsing.
+
+Of all these functions, class 4 is the most troublesome, and I expect
+to get entirely rid of it for the next release of O'Caml (e.g. by putting
+the parsing state inside the Lexing.lexbuf argument).
+
+Class 3 could be made thread-safe by adding mutexes inside the library
+modules, but this is problematic.  For instance, it is impractical to
+associate a mutex with each array or string.  It also imposes
+significant overhead on the standard library, especially in the
+non-threaded case.  Finally, it often makes more sense to use a mutex in
+the user code to protect a group of related standard library data
+structures (e.g. a hashtable and an array), rather than rely on
+fine-grained locking in the library itself.
+
+Hope this clarifies the issues.  Nobody said multithreaded programming
+was easy...
+
+- Xavier Leroy
+
+
+
+

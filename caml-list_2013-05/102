@@ -1,0 +1,109 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 442C17EE51
+	for <caml-list@sympa.inria.fr>; Mon, 20 May 2013 09:31:28 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.210;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.210;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.210;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhACABDQmVHB/BfScmdsb2JhbABAGoM4AcE6gRYOAQwIDAkUAyWCHwEBBScLAQVAEQsYCRYPCQMCAQIBRQYBDAgBAYgNCDO6OI5uOoNUA5c4gSmEdY4z
+X-IPAS-Result: AhACABDQmVHB/BfScmdsb2JhbABAGoM4AcE6gRYOAQwIDAkUAyWCHwEBBScLAQVAEQsYCRYPCQMCAQIBRQYBDAgBAYgNCDO6OI5uOoNUA5c4gSmEdY4z
+X-IronPort-AV: E=Sophos;i="4.87,706,1363129200"; 
+   d="scan'208";a="18148564"
+Received: from msa01.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.210])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 20 May 2013 09:31:28 +0200
+Received: from [192.168.1.108] ([86.195.25.40])
+	by mwinf5d49 with ME
+	id e7XS1l00f0ruiWm037XTCZ; Mon, 20 May 2013 09:31:27 +0200
+Message-ID: <5199D14E.5000205@frisch.fr>
+Date: Mon, 20 May 2013 09:31:26 +0200
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:21.0) Gecko/20100101 Thunderbird/21.0
+MIME-Version: 1.0
+To: Markus Mottl <markus.mottl@gmail.com>, 
+ OCaml List <caml-list@yquem.inria.fr>
+References: <CAP_800qQSBK1YDkT5i6FoSEEfzhBbqWSWUDqpFis2hwGiYBM8Q@mail.gmail.com>
+In-Reply-To: <CAP_800qQSBK1YDkT5i6FoSEEfzhBbqWSWUDqpFis2hwGiYBM8Q@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+Subject: Re: [Caml-list] First-class modules in functor bodies
+
+On 05/19/2013 05:14 PM, Markus Mottl wrote:
+> I've been wondering why the following is disallowed:
+>
+> -----
+> module M (U : sig end) = struct
+>    module type S = sig val x : int end
+>    let a = ((module struct let x = 42 end : S))
+>    module A = (val a)
+> end
+> -----
+>
+> The error message is:
+>
+> -----
+> File "foo.ml", line 4, characters 13-20:
+> Error: This kind of expression is not allowed within the body of a functor.
+> -----
+>
+> Is there some inherent unsoundness issue with allowing this kind of
+> use of first-class modules within functor bodies
+
+Indeed, unpacking first-class modules does not interact nicely with 
+applicative functors.  The problem is that with applicative functors, a 
+path such as "F(M).t" must refer to a well-defined type, and always the 
+same one for a given module M, but with first-class modules, you could 
+apply the same functor F twice to the same argument M and dynamically 
+get two different types F(M).t, thus breaking soundness.
+
+Here is an counter-example provided by Didier Rémy:
+
+     module type X = sig type t val x : t val bin : t -> t -> t end
+     module X1 = struct type t = int let x = 0 let bin = (+) end
+     module X2 = struct type t = string let x = "" let bin = (^) end
+
+     let b = ref false
+
+     module F(U:sig end) =
+      (val (if !b then (module X1 : X) else (module X2 : X)) : X)
+
+     module U = struct end;;
+     b := false;;
+     module Y1 = F(U);;
+     b := true;;
+     module Y2 = F(U);;
+
+Then Y1.t = F(U).t = Y2.t, and the following would be well-typed:
+
+     Y2.bin (Y1.bin Y1.x Y2.x) Y1.x
+
+
+
+Jacques Garrigue has a proposal to extend the language with functors 
+explicitly marked as generated:
+
+   http://caml.inria.fr/mantis/view.php?id=5905
+
+In such functors, it is indeed allowed to unpack first-class modules.
+
+
+Alain

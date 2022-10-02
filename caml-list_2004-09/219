@@ -1,0 +1,110 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA21674; Thu, 9 Sep 2004 14:09:17 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA22422 for <caml-list@pauillac.inria.fr>; Thu, 9 Sep 2004 14:09:16 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i89C9GSp022572
+	for <caml-list@inria.fr>; Thu, 9 Sep 2004 14:09:16 +0200
+Received: from bourg.inria.fr (bourg.inria.fr [128.93.11.100]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA23251 for <caml-list@inria.fr>; Thu, 9 Sep 2004 14:09:16 +0200 (MET DST)
+Received: from basile by bourg.inria.fr with local (Exim 4.34)
+	id 1C5NjJ-00074I-ON
+	for caml-list@inria.fr; Thu, 09 Sep 2004 14:08:45 +0200
+Date: Thu, 9 Sep 2004 14:08:45 +0200
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Gripes with array
+Message-ID: <20040909120845.GA26938@bourg.inria.fr>
+References: <200409090310.29295.jon@jdh30.plus.com> <16704.901.571258.566181@gargle.gargle.HOWL> <20040909082354.GA22512@annexia.org> <20040909.110850.59463842.oandrieu@nerim.net>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <20040909.110850.59463842.oandrieu@nerim.net>
+User-Agent: Mutt/1.5.6+20040803i
+From: "Basile Starynkevitch [local]" <basile.starynkevitch@inria.fr>
+X-Miltered: at nez-perce with ID 414047EC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 basile:01 basile:01 2004:99 andrieu:01 2004:99 filliatre:01 pointers:01 byterun:01 mlvalues:01 bigarrays:01 volunteering:01 gbyte:01 pointers:01 chunks:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, Sep 09, 2004 at 11:08:50AM +0200, Olivier Andrieu wrote:
+>  Richard Jones [Thu, 9 Sep 2004]:
+>  > On Thu, Sep 09, 2004 at 09:17:25AM +0200, Jean-Christophe Filliatre wrote:
+>  > > 
+>  > > Jon Harrop writes:
+>  > >  > 
+>  > >  > Does anyone have any pointers to information about the origin of the size 
+>  > >  > limit for arrays? [....]
+>  > > 
+>  > > In ocaml sources, the  file byterun/mlvalues.h gives all details about
+>  > > the  block  header structure.  [....]
+>  > > 
+>  > > But I must  agree with you: this is definitely too  small and we could
+>  > > imagine  that, when the  tag says  a block  is an  array, the  size is
+>  > > stored within the first (or the last) field instead.
+
+I do agree that using Bigarrays is the way to go, until everyone has a
+64 bits machine. For completeness, we could also consider the
+following scheme (which I am NOT volunteering to implement!)
+
+   The header layout remains the same (so only 22 bits for size on 32
+   bits machine), but if the size is all bit ones, the block is
+   actually a fixed block, and the real array size is the word before
+   the header.
+
+However, I see another potential problem (which could already
+potentially appear today, with standard 0caml 3.08, on 64 bits
+machines with more than 1Gbyte of RAM). If you have a huge array of
+pointers, the garbage collector (even the minor one) has to scan the
+full array - and this scan is "atomic" in the sense that it is not
+interruptible (and I believe that designing a GC which incrementally
+scans big values by chunks is not trivial, given Ocaml GC performance
+needs). So for an array of say 300 million pointers, the GC has to
+scan it, which takes a significant time (I would guess several tenths
+of seconds at least, just scanning this single array).
+
+I am asking, do lucky people with a 64 bits machines and plenty of RAM
+did experiment some bizarre GC behavior when handling such monster
+pointer arrays in Ocaml - for example,
+   let monster =  Array.init 300_000_000 (fun i -> ((Printf.sprintf "int%d" i), i))
+
+More practically, I would be curious to hear from people having run
+Ocaml programs (on rather big 64 bits hardware, with multigigabyte
+RAM) in processes of more than a gigabyte of Ocaml heap! Does the GC
+works well in its default setting, or have they to tune it?
+
+>  > I have a similar problem with the maximum size of strings.  In
+>  > practical terms, it limits the size of file uploads to COCANWIKI to
+>  > around 6 MB (ie., not very much) [not the full 16 MB because of
+>  > character escaping, but even 16 MB would be far too small]. [....]
+
+FWIW, I had similar limitations in Poesia more than a year ago. I
+solved it by specifying that Poesia (a web filter) won't handle web
+content of more than ten million bytes. (Maybe an enhanced buffer
+package, representing buffer contents in array of strings, could
+help).
+
+> 
+>  > Does the tag field need to be so wide?  What does the tag mean if it
+>  > has different values < No_scan_tag (251)?
+> 
+> it's for variants (with or without arguments)
+
+Apparently, people are less bitten by the maximal number of
+variants. I guess that most applications don't have big sum (ie
+variant) types with more than a hundred of non-empty choices (ie
+Choice of ... construct).
+
+Regarding very big data structures, I tend to believe that they should
+be more organized than just a single monster array (hence the current
+array limits on 32 bits machine is a sensible tradeoff), even on 64
+bits irons. But I have no practical experience on these.
+
+-- 
+Basile STARYNKEVITCH -- basile dot starynkevitch at inria dot fr
+Project cristal.inria.fr -  temporarily
+http://cristal.inria.fr/~starynke --- all opinions are only mine 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,176 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA09545; Wed, 7 Jan 2004 12:30:14 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA10062 for <caml-list@pauillac.inria.fr>; Wed, 7 Jan 2004 12:30:13 +0100 (MET)
+Received: from mail1.bluewin.ch (mail1.bluewin.ch [195.186.1.74])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id i07BUC512096
+	for <caml-list@inria.fr>; Wed, 7 Jan 2004 12:30:12 +0100 (MET)
+Received: from [10.0.1.2] (62.202.63.213) by mail1.bluewin.ch (Bluewin AG 7.0.024)
+        id 3FC71A76004BF790 for caml-list@inria.fr; Wed, 7 Jan 2004 11:30:12 +0000
+Mime-Version: 1.0 (Apple Message framework v609)
+Content-Transfer-Encoding: 7bit
+Message-Id: <EA83B6DA-4104-11D8-8A96-000393DBC266@epfl.ch>
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+To: caml-list@inria.fr
+From: =?ISO-8859-1?Q?Daniel_B=FCnzli?= <daniel.buenzli@epfl.ch>
+Subject: [Caml-list] Encoding existential types without modules
+Date: Wed, 7 Jan 2004 12:30:37 +0100
+X-Mailer: Apple Mail (2.609)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; existential:01 haskell:01 existential:01 adapting:01 datatype:01 datatype:01 expresses:01 impl:01 impl:01 expr:01 expr:01 val:01 val:01 struct:01 unpacking:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello,
+
+I think this may be usefull to others (e.g. to port some clever haskell 
+code). Below, I give two examples that show how to encode existential 
+types in ocaml without using modules. This is done by adapting to ocaml 
+the encoding given by Pierce in [1]. It uses polymorphic record fields.
+
+The examples are a little bit silly but their aim is to show the 
+concept of the encoding.
+The first example is a counter abstract datatype. The second one is a 
+datatype that can hold a list of composable function, that is a type 
+that expresses something like
+
+  type ('a, 'b) funlist = Nil of ('a ->'b) | Cons of exists 'c. ('a -> 
+'c) * ('c,'b) funlist
+
+I usually need three types to encode an existential type. Does anybody 
+see a simpler way of doing that ?
+
+Daniel
+
+[1] Benjamin C. Pierce, Types and Programming Languages, section 24.3
+
+
+--- Abstract counter datatype
+
+(* The type expressed by the three types below is :
+    type packed_counter =
+       exists 'x. { create : 'x; get : ('x -> int); inc : ('x -> 'x)}
+*)
+type 'x counter = { create : 'x;  get : ('x -> int); inc : ('x -> 'x) }
+type 't counter_scope = { bind_counter : 'x. 'x counter -> 't }
+type packed_counter = { open_counter : 't. 't counter_scope -> 't }
+
+(* Creating a package from a counter implementation *)
+let pack_counter impl = { open_counter = fun scope -> 
+scope.bind_counter impl }
+
+(* Using a package with a scoped expression *)
+let with_packed_counter p e = p.open_counter e
+
+(* Two different implementations of the counter *)
+let int_impl = { create = 1 ; get = (function i -> i) ; inc = (fun i -> 
+i+1) }
+let float_impl = { create = 1.0; get = (function i -> (int_of_float i)) 
+;
+		   inc = (fun i -> i +. 1.0) }
+
+let counter = pack_counter int_impl
+let counter' = pack_counter float_impl
+
+(* An expression using an abstract counter *)
+let expr =
+   { bind_counter = fun counter -> (* counter is bound to the << 
+interface >> *)
+     (counter.get (counter.inc counter.create)) }
+
+let result = with_packed_counter counter expr
+let result' = with_packed_counter counter' expr
+
+(*
+    This doesn't type, the counter type is abstract !
+    let expr =
+    { bind_counter = fun counter ->
+      (counter.get (counter.inc (counter.get counter.create))) }
+*)
+
+(*
+    This doesn't type, the abstract type tries to escape its scope !
+    let expr = { bind_counter = fun counter -> (counter.create) }
+*)
+
+
+--- Lists of composable functions.
+
+module Funlist : sig
+
+(* The funlist datatype *)
+type ('a, 'b) t
+
+(* Constructors *)
+val nil : ('a, 'a) t
+val cons : ('a -> 'b) -> ('b, 'c) t -> ('a, 'c) t
+
+(* Applying a value to a composition *)
+val apply : ('a, 'b) t -> 'a -> 'b
+
+end = struct
+
+(* The type expressed by the four types below is :
+    type ('a, 'b) t = Nil of ('a -> 'b)
+                    | Cons of exists 'c. ('a -> 'c) * ('c, 'b) t  *)
+
+type ('a, 'b) t = Nil of ('a -> 'b) | Cons of ('a, 'b) packed_list
+and ('a, 'b, 'c) list_data = ('a -> 'c) * ('c, 'b) t
+and ('a, 'b, 'z) list_scope = { bind_list : 'c. ('a, 'b, 'c) list_data 
+-> 'z}
+and ('a, 'b) packed_list = { open_list : 'z. ('a, 'b, 'z) list_scope -> 
+'z }
+
+(* Packing and unpacking lists *)
+let pack_list h t = { open_list = fun scope -> scope.bind_list (h,t) }
+let with_packed_list p e = p.open_list e
+
+(* Constructors *)
+let nil = Nil(fun x -> x)
+let cons h t = Cons(pack_list h t)
+
+
+(* The following type is introduced to avoid the problem of polymorphic
+recursion that comes while attempting a naive implementation of the 
+apply
+funtion. The idea was taken from Laufer, Odersky, Polymorphic Type 
+Inference
+and Abstract Data Types, 1994. *)
+
+(* The type expressed by the three types below is :
+     type 'b packed_apply = exists 'a. ('a, 'b) t * 'a
+*)
+type ('a, 'b) apply_data = ('a, 'b) t * 'a
+type ('b, 'z) apply_scope = { bind_apply : 'a. ('a, 'b) apply_data -> 
+'z}
+type 'b packed_apply = { open_apply : 'z. ('b, 'z) apply_scope -> 'z}
+
+(* Packing and unpacking applications *)
+let pack_apply l x = { open_apply = fun scope -> scope.bind_apply (l,x) 
+}
+let with_packed_apply p e = p.open_apply e
+
+let rec apply' a =
+   with_packed_apply
+     a { bind_apply = function
+       | Nil id, x -> id x
+       | Cons l, x ->
+	  with_packed_list
+	    l { bind_list = function h,t -> apply' (pack_apply t (h x))}}
+	
+let apply l x = apply' (pack_apply l x)
+
+end
+
+(* Example of use *)
+let twice x = 2*x
+let double x = (x, x)
+let list = Funlist.cons twice (Funlist.cons (( = ) 4) (Funlist.cons 
+double Funlist.nil))
+let a, b = Funlist.apply list 2
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

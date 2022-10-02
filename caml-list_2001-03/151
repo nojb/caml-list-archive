@@ -1,0 +1,141 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA30027; Wed, 21 Mar 2001 19:41:42 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA28986 for <caml-list@pauillac.inria.fr>; Wed, 21 Mar 2001 19:41:41 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f2LIfcL22661;
+	Wed, 21 Mar 2001 19:41:38 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA29863; Wed, 21 Mar 2001 19:41:38 +0100 (MET)
+Date: Wed, 21 Mar 2001 19:41:38 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Chris Hecker <checker@d6.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] recursive modules redux, & interface files
+Message-ID: <20010321194138.A29405@pauillac.inria.fr>
+References: <4.3.2.7.2.20010318142842.00d85300@shell16.ba.best.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <4.3.2.7.2.20010318142842.00d85300@shell16.ba.best.com>; from checker@d6.com on Sun, Mar 18, 2001 at 03:05:41PM -0800
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> 1.  So, I understand that doing recursive types across modules is
+> hard (but I'd say very important for decoupling large software), but
+> is it true that I can't even call across modules recursively?  Even
+> with mli files to resolve the types?  I find that incredibly hard to
+> believe, but I can't get it to work and it seems the docs say it's
+> impossible as well (so why am I posting about it, you ask?
+> Disbelief that it's not possible, I guess. :).
+
+You're right that cross-module recursion even between functions is not
+supported, and you're right that this is not because of typing
+difficulties -- the type-checking of such recursions is easy.
+
+This is because value components of modules can be the result of
+arbitrary computations, and the only way to ensure that these
+computations succeed is by making sure they occur sequentially.
+Consider for instance:
+
+    A.mli    val x : int                B.mli    val y : int
+    A.ml     let x = B.y + 1            B.ml     let y = A.x * 3
+
+We don't know how to evaluate these definitions correctly -- indeed,
+there is no integer solution to this recursive definition.
+
+Other languages avoid this problem in one of two ways.  C and C-like
+languages only allow global identifiers to be defined as functions or
+compile-time constants, but not results of arbitrary computations.
+Haskell and other lazy languages rely on lazy evaluation to perform
+on-demand initialization (i.e. compute the definition the first time
+it's needed), and aborting computation if a dynamic dependency cycle
+is detected (as in the example above).
+
+Java goes pretty much the Haskell way, relying on dynamic class
+loading to lazily evaluate static field definitions; originally, it
+raised an exception on discovering a dynamic dependency cycle;
+nowadays, I think it just pre-initializes static fields to 0 or null,
+then compute the initial values based on this (so that in the example
+above you'd get x = 1 and y = 3 if the program refers to B.y first,
+and y = 0 and x = 1 if the program refers to A.x first :-).
+
+The Haskell solution is semantically cleanest, but lazy evaluation
+of module components entails a performance penalty and some increase
+in code size (the compiler must emit "am I initialized already?" tests
+on every module value access).  (The semantics of Java class
+initialization entail similar penalties, although they partially hide
+them by relying on JIT compilation -- blech.)
+
+A possible approach for Caml would be to have a link-time analysis
+that detects cross-module value recursions that involve only function
+definitions, and allow these (because they are safe -- like in C!).
+Fabrice Le Fessant posted a patch to OCaml a while ago that does
+pretty much this.  I'm still hoping more general, principled solutions
+exist, but they sure are hard to design!
+
+> 2. Also, on a related note, why do the interface file and the
+> implementation file (or equivalently, I believe, the signature and
+> structure) both have to have all the concrete types duplicated?  I can
+> see the value of having interfaces that hide some implementation stuff
+> and abstract types, but if I've got a big fully-specified variant type
+> in a .mli file, it's annoying and error prone (yes, I know the
+> compiler will catch it) to have to retype the whole thing into the ml
+> file (which I have to do if I want to hide anything else in the ml
+> file, meaning I can't just have an ml without an mli).
+
+Yes, it's annoying, and it's more or less a consequence of the
+ideology behind the ML module system: that structures define things,
+and that signatures can later be ascribed to these structures to hide
+or abstract some of these things.  With this ideology, every type that
+is declared in a signature -- even if it's a concrete declaration that
+includes as much information as a type definition! -- must be matched
+by a type definition in the corresponding structure. It's just very
+principled and logical -- just a bit inconvenient at times :-)
+
+Another way to think about it is that every structure (or
+implementation file) must "stand on its own" and make sense without
+the signature (or interface file) that will be ascribed to it later
+on.  It makes sense when the signature is not known when the structure
+is defined, e.g.
+
+        module M = struct type t = A | B ... end
+        (* 5000 lines later: *)
+        module M' = (M : sig type t = A | B ... end)
+
+It becomes practically inconvenient when the signature is known at the
+time of the structure definition:
+
+        module M : sig type t = A | B ... end =
+          struct type t = A | B ... end
+
+Which is the case with interface and implementation files.
+
+In this case, one could envision an automatic completion of the
+structure / implementation file so that concrete type specifications
+from the signature do not need to be implemented in the structure.
+Doing this right is not obvious, though.  First, it's not enough to
+say that a concrete type spec does not need to be matched in the
+structure.  This would type-check
+
+        module M : sig type t = A | B end = struct end
+
+but not
+
+    module M : sig type t = A | B  val v : t end = struct let v = A end
+
+In other terms, the unmatched concrete type specs in the signature
+need to be somehow reintroduced in the structure definition, so that
+other parts of the structure may refer to them.  While I think it can
+be done in most practical cases, it's a bit of a kludge and I'm not
+sure how to do this in all cases.
+
+Is the practical value of this kludge enough to forget that it's a
+kludge?  Can't we live with the current duplication of concrete type
+definitions in the name of systematic, principled module systems?  
+I really don't know.
+
+Best,
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

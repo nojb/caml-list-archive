@@ -1,0 +1,191 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA24321; Wed, 17 Apr 2002 12:43:31 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA26380 for <caml-list@pauillac.inria.fr>; Wed, 17 Apr 2002 12:43:30 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from mel-rto6.wanadoo.fr (smtp-out-6.wanadoo.fr [193.252.19.25])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3HAhTX07742
+	for <caml-list@inria.fr>; Wed, 17 Apr 2002 12:43:29 +0200 (MET DST)
+Received: from mel-rta4.wanadoo.fr (193.252.19.58) by mel-rto6.wanadoo.fr; 17 Apr 2002 12:43:29 +0200
+Received: from debian (80.8.75.200) by mel-rta4.wanadoo.fr; 17 Apr 2002 12:43:16 +0200
+Received: from moi by debian with local (Exim 3.35 #1 (Debian))
+	id 16xmuJ-0000VG-00
+	for <caml-list@inria.fr>; Wed, 17 Apr 2002 12:43:23 +0200
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Polymorphic variants
+References: <3CBD4523.6080707@ozemail.com.au>
+From: Remi VANICAT <vanicat@labri.u-bordeaux.fr>
+Date: 17 Apr 2002 12:43:23 +0200
+In-Reply-To: <3CBD4523.6080707@ozemail.com.au>
+Message-ID: <87y9fmr4fo.dlv@wanadoo.fr>
+Lines: 159
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-15
+Content-Transfer-Encoding: 8bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+John Max Skaller <skaller@ozemail.com.au> writes:
+
+> Unfortunately, this doesn't work out as well as I'd expected
+> because of recursion:
+> 
+> type a = [`A of a  | `B]
+> type b = [`A of  b]
+> 
+> The second type is a subtype of the first,
+> but this fails:
+> 
+> let f (x:a) =
+> match x with
+>   #b -> ()
+> 
+> with the message:
+> 
+> This pattern matches values of type [< b] = [< `A of b]
+> but is here used to match values of type a = [ `A of a | `B];;
+
+
+the problem here is that you intended #b is a non fixed matching rule,
+I mean, imagine you have :
+
+`A (`A ( `A ( `A ( `A ( `A `B)))))
+
+to check that this is not in #b, one have to look deep in the
+structure of the value. pattern matching only look at the firsts
+levels of the structure. This must be done otherwise. for example :
+
+type a = [`A of a | `B | `C]
+type b = [`A of b | `C]
+
+let rec f (x:a) =
+  match x with
+  | `A x -> `A (f x)
+  | `C -> `C
+  | _ -> failwith "arg";;
+
+> 
+> Ocaml understands subtyping by subsets of variants,
+> but the constructor arguments must be invariant.
+> The work around is to decode the argument manually,
+> but then one wonders what the gain over standard variants is.
+> Here is another example:
+> 
+>  type x = [`A of int | `A of float];;
+> This variant type contains a constructor [ `A of float] which should be
+> [ `A of int]
+> 
+> No, I meant what I said! I can write both:
+> 
+> `A 1
+> 
+> and also
+> 
+> `A 1.1
+
+No, you can't. the types informations are lost at runtime, so ocaml
+will never be able to make the difference between the two.
+
+> 
+> and I am trying  to tell the compiler they both belong
+> to type x. It has no right to complain here. Of course,
+> this does lead to a problem:
+> 
+>  match x with | `A a -> ..
+> 
+> what type is a? It's 'a initially,
+> and bound on the first use. Which makes
+> matching on first `A 1 and then `A 1.1
+> impossible.  
+
+it won't be enough, to fail to match this, ocaml should be able to
+know type at runtime. Type doesn't not exist at runtime
+
+> This is a problem with the ocaml type
+> inference mechanism not my type declaration!
+> [So it can't deduce the type of a .. but I could specify it
+> if there were syntax like
+> 
+> | `A (a:int) -> ...
+> 
+> [It seems to me that the type of the argument
+> is taken *incorrectly* as the intersection
+> type int & float, when it is actually a sum..
+> in the case of a sum the constraint would be
+> enough to fix the type correctly .. on the other hand,
+> intersections would correctly solve the covariance
+> problem .. ??]
+> 
+> In fact I found the type inference
+> engine stumbled around over legitimate matches,
+> and some extra help in the form of function argument
+> type  constraints was necessary (a small price to pay,
+> but worth noting an example in the manual).
+> 
+> In any case, polymorphic variant constructors really
+> ARE overloaded, but when it comes to declaring
+> types, overloading isn't allowed. This is an anomaly ..
+> and it hit me quite hard initially, because of the natural
+> attempt to try to use covariant arguments.
+> 
+> A second problem I found is the verbose error messages.
+> When you have 20 variants, a mismatch is a real pain
+> to decypher. It would be useful if variants HAD to be
+> declared like:
+> 
+> variant `A of int
+> variant `A of float
+> variant `B of long
+> 
+> so that spelling mistakes and type errors in constructor
+> arguments could be more easily pinpointed .. but of course,
+> this can't work due to recursion ... hmmm...
+> 
+> One thing that *definitely* needed improvement is the syntax
+> for declaring types: having to repeat all the cases every time
+> is an error prone tedium. It appears this HAS been done in
+> ocaml 3.04! THANK YOU!! One can now write:
+> 
+> type a = [`A]
+> type b = [`B]
+> type c = [a | b]
+> 
+> [#types were previously allowed in pattern matches 
+
+it's not type in pattern matching, it's pattern. It is not, at all,
+the same thing, even if their is link between the two.
+
+> but not type declarations ..]
+
+not exactly :
+
+
+type foo = [ 'BAR ]
+type 'a t = 'a constraint 'a = #foo;;
+
+is correct, but deprecated, one should use :
+
+type 'a t = 'a constraint [< foo] = 'a;;
+
+> 
+> Well, are polymorphic variants worth the effort?
+> I think they are: they're not perfect, they're certainly
+> more error prone than standard variants .. but they're
+> also a lot more expressive and save considerable
+> coding, and in many cases they're much faster as well.
+> [In particular, injecting a subset of cases into a supertype
+> is a no-operation, whereas standard variants require
+> actually building new values]
+
+You should look to the mixin.ml file that can be found in testlabl
+directories of the source distribution, it show how to make what you
+seem to want.
+-- 
+Rémi Vanicat
+vanicat@labri.u-bordeaux.fr
+http://dept-info.labri.u-bordeaux.fr/~vanicat
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

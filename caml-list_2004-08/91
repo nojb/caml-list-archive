@@ -1,0 +1,175 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA27827; Thu, 5 Aug 2004 14:35:00 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA23532 for <caml-list@pauillac.inria.fr>; Thu, 5 Aug 2004 14:34:59 +0200 (MET DST)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i75CYwmL026606
+	for <caml-list@pauillac.inria.fr>; Thu, 5 Aug 2004 14:34:58 +0200
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.12.11/1.01.28121999) with ESMTP id i75CYwVh011761
+          ; Thu, 5 Aug 2004 14:34:58 +0200 (CEST)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.12.3/jb-1.1)
+	id i75CYuYR017211 ; Thu, 5 Aug 2004 14:34:56 +0200 (MET DST)
+X-Authentication-Warning: clipper.ens.fr: frisch owned process doing -bs
+Date: Thu, 5 Aug 2004 14:34:56 +0200 (MET DST)
+From: Alain Frisch <Alain.Frisch@ens.fr>
+X-X-Sender: frisch@clipper.ens.fr
+Reply-To: Alain Frisch <Alain.Frisch@ens.fr>
+To: Ross Duncan <ross.duncan@comlab.ox.ac.uk>
+cc: Caml list <caml-list@pauillac.inria.fr>
+Subject: Re: [Caml-list] Conditional Modules
+In-Reply-To: <D3659702-E6D1-11D8-97DB-000A95C61840@comlab.ox.ac.uk>
+Message-ID: <Pine.SOL.4.44.0408051417220.8762-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavisd-milter (http://amavis.org/)
+X-Greylist: Sender IP whitelisted, not delayed by milter-greylist-1.3.3 (nef.ens.fr [129.199.96.32]); Thu, 05 Aug 2004 14:34:58 +0200 (CEST)
+X-Miltered: at nez-perce with ID 41122972.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; alain:01 frisch:01 alain:01 frisch:01 caml-list:01 russo:01 unpack:01 unpack:01 implemented:01 eleves:01 bytecomp:01 translmod:01 bytecomp:01 translmod:01 2004:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 5 Aug 2004, Ross Duncan wrote:
+
+> So I guess my request for help should now become a feature request for
+> the language!  Is this at all compatible with static typing?
+
+Yes, it is. One issue is to specify the type of the result; one would like
+to compute the least upper bound of the two module types. The
+simple-minded patch below chooses a simpler method: it takes the type of
+the first branch as the type for the result (the second branch must be
+compatible with this type).
+
+But there is no reason to stop with this if-then-else construction; one
+could for instance import the match and the let-in construction from the
+core language to the module language. A nice solution would be to make the
+core language/type system and the module language/type system mutually
+recursive. One simple solution has been proposed in:
+
+Claudio V. Russo. First-Class Structures for Standard ML.
+http://www.dcs.ed.ac.uk/home/cvr/
+
+One would have a "pack" operation that takes a module value and turns
+it into a core value (packed module), an "unpack" operation that takes
+a packed module and turns it into a module value (with a given module
+type). The if-then-else could be encoded as:
+
+module M = unpack (if e then pack M1 else pack M2 : S)
+
+but you could also do:
+
+let f b =
+  let module M = unpack (if e then pack M1 else pack M2 : S) in
+  ...
+
+I implemented some time ago such a patch for OCaml (actually, there was
+only the "let module M = unpack (...)" construction and not the unpack in
+the module language): http://www.eleves.ens.fr/home/frisch/soft#patches
+
+
+-- Alain
+
+
+diff -Naur ocaml/bytecomp/translmod.ml ocaml_if/bytecomp/translmod.ml
+--- ocaml/bytecomp/translmod.ml	2004-06-12 10:55:45.000000000 +0200
++++ ocaml_if/bytecomp/translmod.ml	2004-08-05 14:04:22.000000000 +0200
+@@ -268,6 +268,10 @@
+                 [transl_module ccarg None arg]))
+   | Tmod_constraint(arg, mty, ccarg) ->
+       transl_module (compose_coercions cc ccarg) rootpath arg
++  | Tmod_ifthenelse(e,y,n,c) ->
++      Lifthenelse(transl_exp e,
++		  transl_module cc rootpath y,
++		  transl_module (compose_coercions cc c) rootpath n)
+
+ and transl_structure fields cc rootpath = function
+     [] ->
+diff -Naur ocaml/parsing/parser.mly ocaml_if/parsing/parser.mly
+--- ocaml/parsing/parser.mly	2004-05-19 14:15:19.000000000 +0200
++++ ocaml_if/parsing/parser.mly	2004-08-05 14:06:28.000000000 +0200
+@@ -420,6 +420,8 @@
+       { unclosed "(" 2 ")" 4 }
+   | LPAREN module_expr COLON module_type RPAREN
+       { mkmod(Pmod_constraint($2, $4)) }
++  | IF expr THEN module_expr ELSE module_expr
++      { mkmod(Pmod_ifthenelse($2,$4,$6)) }
+   | LPAREN module_expr COLON module_type error
+       { unclosed "(" 1 ")" 5 }
+   | LPAREN module_expr RPAREN
+diff -Naur ocaml/parsing/parsetree.mli ocaml_if/parsing/parsetree.mli
+--- ocaml/parsing/parsetree.mli	2003-11-25 09:46:45.000000000 +0100
++++ ocaml_if/parsing/parsetree.mli	2004-08-05 13:51:26.000000000 +0200
+@@ -236,6 +236,7 @@
+   | Pmod_functor of string * module_type * module_expr
+   | Pmod_apply of module_expr * module_expr
+   | Pmod_constraint of module_expr * module_type
++  | Pmod_ifthenelse of expression * module_expr * module_expr
+
+ and structure = structure_item list
+
+diff -Naur ocaml/parsing/printast.ml ocaml_if/parsing/printast.ml
+--- ocaml/parsing/printast.ml	2003-11-25 09:46:45.000000000 +0100
++++ ocaml_if/parsing/printast.ml	2004-08-05 13:52:31.000000000 +0200
+@@ -545,6 +545,11 @@
+       line i ppf "Pmod_constraint\n";
+       module_expr i ppf me;
+       module_type i ppf mt;
++  | Pmod_ifthenelse (e,y,n) ->
++      line i ppf "Pmod_ifthenelse\n";
++      expression i ppf e;
++      module_expr i ppf y;
++      module_expr i ppf n
+
+ and structure i ppf x = list i structure_item ppf x
+
+diff -Naur ocaml/typing/typedtree.ml ocaml_if/typing/typedtree.ml
+--- ocaml/typing/typedtree.ml	2003-11-25 10:20:43.000000000 +0100
++++ ocaml_if/typing/typedtree.ml	2004-08-05 14:01:11.000000000 +0200
+@@ -126,6 +126,7 @@
+   | Tmod_functor of Ident.t * module_type * module_expr
+   | Tmod_apply of module_expr * module_expr * module_coercion
+   | Tmod_constraint of module_expr * module_type * module_coercion
++  | Tmod_ifthenelse of expression * module_expr * module_expr * module_coercion
+
+ and structure = structure_item list
+
+diff -Naur ocaml/typing/typedtree.mli ocaml_if/typing/typedtree.mli
+--- ocaml/typing/typedtree.mli	2003-11-25 10:20:43.000000000 +0100
++++ ocaml_if/typing/typedtree.mli	2004-08-05 14:01:10.000000000 +0200
+@@ -127,6 +127,7 @@
+   | Tmod_functor of Ident.t * module_type * module_expr
+   | Tmod_apply of module_expr * module_expr * module_coercion
+   | Tmod_constraint of module_expr * module_type * module_coercion
++  | Tmod_ifthenelse of expression * module_expr * module_expr * module_coercion
+
+ and structure = structure_item list
+
+diff -Naur ocaml/typing/typemod.ml ocaml_if/typing/typemod.ml
+--- ocaml/typing/typemod.ml	2004-06-13 14:48:01.000000000 +0200
++++ ocaml_if/typing/typemod.ml	2004-08-05 14:00:17.000000000 +0200
+@@ -514,6 +514,20 @@
+            mod_type = mty;
+            mod_env = env;
+            mod_loc = smod.pmod_loc }
++  | Pmod_ifthenelse(se,sy,sn) ->
++      let e = Typecore.type_expression env se in
++      let y = type_module anchor env sy in
++      let mty = y.mod_type in
++      let n = type_module anchor env sn in
++      let coercion =
++        try
++          Includemod.modtypes env n.mod_type mty
++        with Includemod.Error msg ->
++          raise(Error(sn.pmod_loc, Not_included msg)) in
++      rm { mod_desc = Tmod_ifthenelse(e,y,n,coercion);
++	   mod_type = mty;
++	   mod_env = env;
++	   mod_loc = smod.pmod_loc }
+
+ and type_structure anchor env sstr =
+   let type_names = ref StringSet.empty
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

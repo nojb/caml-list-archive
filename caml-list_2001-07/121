@@ -1,0 +1,153 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA02685; Thu, 12 Jul 2001 15:04:02 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA03044 for <caml-list@pauillac.inria.fr>; Thu, 12 Jul 2001 15:04:01 +0200 (MET DST)
+Received: from uni-sb.de (uni-sb.de [134.96.252.33])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f6CD41b13511
+	for <caml-list@inria.fr>; Thu, 12 Jul 2001 15:04:01 +0200 (MET DST)
+Received: from cs.uni-sb.de (cs.uni-sb.de [134.96.252.31])
+	by uni-sb.de (8.11.4/2001062800) with ESMTP id f6CD3rv08222;
+	Thu, 12 Jul 2001 15:03:54 +0200 (CEST)
+Received: from mail.cs.uni-sb.de (mail.cs.uni-sb.de [134.96.254.200])
+	by cs.uni-sb.de (8.11.4/2001053000) with ESMTP id f6CD3rF11066;
+	Thu, 12 Jul 2001 15:03:53 +0200 (CEST)
+Received: from ps.uni-sb.de (grizzly.ps.uni-sb.de [134.96.186.68])
+	by mail.cs.uni-sb.de (8.11.4/2001062800) with ESMTP id f6CD3qf11106;
+	Thu, 12 Jul 2001 15:03:52 +0200 (CEST)
+X-Authentication-Warning: email: Host grizzly.ps.uni-sb.de [134.96.186.68] claimed to be ps.uni-sb.de
+Received: from ps.uni-sb.de (zoidberg.ps.uni-sb.de [134.96.186.121])
+	by ps.uni-sb.de (8.11.2/8.11.0) with ESMTP id f6CD3p801889;
+	Thu, 12 Jul 2001 15:03:51 +0200
+Message-ID: <3B4DA037.17BE529A@ps.uni-sb.de>
+Date: Thu, 12 Jul 2001 15:03:51 +0200
+From: Andreas Rossberg <rossberg@ps.uni-sb.de>
+Organization: =?iso-8859-1?Q?Universit=E4t?= des Saarlandes
+X-Mailer: Mozilla 4.77 [en] (X11; U; Linux 2.4.2-2 i686)
+X-Accept-Language: de, en
+MIME-Version: 1.0
+To: caml-list@inria.fr
+CC: Christian RINDERKNECHT <rinderkn@hugo.int-evry.fr>
+Subject: Re: [Caml-list] Question on typing
+References: <20010711155215.B23575@hugo.int-evry.fr>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Christian RINDERKNECHT wrote:
+> 
+> Could someone tell me the reason why a type variable cannot be used as
+> a type constructor, like in:
+> 
+> type 'a t = K of bool 'a;;
+
+[Longish and technical answer, summary follows below.]
+
+What you want is usually refered to as higher-order polymorphism. There
+are two reasons against having it in the language, one pragmatical, the
+other technical.
+
+First, if you wanted to allow this you had to introduce a proper `kind'
+system into the language. Kinds are the "types of types". For example,
+int has kind * (which denotes ground types), while eg. the list type
+constructor has kind *->* (a type function from ground types to ground
+types). Types with kind other than * are usually called constructors in
+type theory.
+
+Ocaml restricts constructors to have first-order kinds, ie. kinds of the
+form *->*->*->* etc. (well, actually it does not use currying but rather
+has tuple kinds, but that does not make much of a difference). The
+constructor t you want to declare has kind (*->*)->*, however, ie. it is
+higher-order. Another important restriction in Ocaml is that
+constructors may only be used with a full supply of arguments. You would
+bump into this second restriction with your example as soon as you
+actually tried to apply t: you cannot write down any type expression of
+kind *->*.
+
+The point with both these restrictions is that you do not need to
+declare kinds for type variables. Any type variable has kind * and the
+programmer need not be bothered with kinds. If you wanted to lift the
+restrictions you either had to introduce syntax for kinds in the
+language and annotate type variables at their binding occurance, or you
+had to do `kind inference'.
+
+The second argument against higher-order polymorphism in ML is that -
+without at least some restrictions - it would indeed require
+higher-order unification for type inference, because conceptually you
+get arbitrary lambdas at the type level. Higher-order unification is
+undecidable. So undecidability is due to functional kinds (ie. functions
+at the type level), it has nothing to do with functional types
+(functions at the value level) as you suspected.
+
+However, there are in fact languages that provide higher-order
+polymorphism, Haskell being one example. Haskell deals with the
+pragmatic side by doing kind inference. For your example it is easy to
+derive that 'a has kind *->*. But there are examples where no unique
+kind can be infered. Consider
+
+	type ('a,'b) apply = 'b 'a
+
+Apply can have any kind of the form (K->K')->K->K'. So if you do not
+want to introduce kind syntax into the language you can either have
+`polymorphic kinds' (which further complicates things) or you have to do
+some defaulting. This is what Haskell does, assigning * whenever there
+is no more information available. This seems to work pretty well in
+practice but of course precludes a lot of useful higher-order type
+definitions. Moreover, the inference approach does not work for the
+specification of abstract types in ML signatures.
+
+The decidability problem is dealt with by restricting the use of type
+synonyms: a type constructor that is not generative (ie. just
+abbreviates some type) may still only be used fully applied. This avoids
+type lambdas during type inference (there remain only constants and
+variables of higher kind) and unification stays decidable. Of course, it
+also precludes useful examples: You could write
+
+	type u = list t
+
+because list is a generative constructor (a constant), but not
+
+	type 'a aux = 'a * 'a
+	type v = aux t
+
+because aux is a type synonym that is not used in a fully applied
+fashion in the definition of v.
+
+(BTW, ML's choice of postfix syntax and tupled arguments for type
+application is really unfortunate when you want to extend it to
+higher-order types. :-( )
+
+So you still need some restrictions. Those could only be lifted if you
+did not care for inference: type checking alone, where you provide full
+type and kind annotations at lambda bindings, is decidable, because you
+essentially get the higher-order lambda calculus.
+
+To summarise: it can be done but significantly complicates the language
+and requires some restrictions to maintain decidable type inference.
+YMMV whether the additional degree of genericity is worth this
+complication, in particular since most of it can be done in ML via
+modules already.
+
+BTW, your second type declaration
+
+> type 'a t = {x : 'a 'a};;
+
+is ill-kinded, very much like the value declaration
+
+	let t a = {x = a a}
+
+is ill-typed - unless you introduce something as esoteric as recursive
+kinds ;-)
+
+Best regards,
+
+	- Andreas
+
+-- 
+Andreas Rossberg, rossberg@ps.uni-sb.de
+
+"Computer games don't affect kids.
+ If Pac Man affected us as kids, we would all be running around in
+ darkened rooms, munching pills, and listening to repetitive music."
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

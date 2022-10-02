@@ -1,0 +1,134 @@
+Return-Path: <martin.jambon@ens-lyon.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 343B5BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 23 Jan 2008 21:30:39 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAANMyl0dCbwQbmGdsb2JhbACLWYRFAQEBAQcEBAkinXKBFQ
+X-IronPort-AV: E=Sophos;i="4.25,240,1199660400"; 
+   d="scan'208";a="21697462"
+Received: from out3.smtp.messagingengine.com ([66.111.4.27])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 23 Jan 2008 21:30:38 +0100
+Received: from compute1.internal (compute1.internal [10.202.2.41])
+	by out1.messagingengine.com (Postfix) with ESMTP id 9B9F18D197;
+	Wed, 23 Jan 2008 15:30:37 -0500 (EST)
+Received: from heartbeat2.messagingengine.com ([10.202.2.161])
+  by compute1.internal (MEProxy); Wed, 23 Jan 2008 15:30:37 -0500
+X-Sasl-enc: wHz0h789aDz+xyKhOCmN5LEfSoP0tZtPZy3bX7TEJL8t 1201120237
+Received: from [192.168.1.12] (ALyon-157-1-120-155.w90-41.abo.wanadoo.fr [90.41.231.155])
+	by mail.messagingengine.com (Postfix) with ESMTP id D3CF9247D2;
+	Wed, 23 Jan 2008 15:30:36 -0500 (EST)
+Date: Wed, 23 Jan 2008 21:30:17 +0100 (CET)
+From: Martin Jambon <martin.jambon@ens-lyon.org>
+X-X-Sender: martin@martin.ec.wink.com
+To: blue storm <bluestorm.dylc@gmail.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] small Camlp4 code : get a free name
+In-Reply-To: <527cf6bc0801231159o7c001a73lddd74e5b3cb30061@mail.gmail.com>
+Message-ID: <Pine.LNX.4.64.0801232130060.29973@martin.ec.wink.com>
+References: <527cf6bc0801231159o7c001a73lddd74e5b3cb30061@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Spam: no; 0.00; ens-lyon:01 camlp:01 syntax:01 camlp:01 syntax:01 compiler:01 compiler:01 sig:01 struct:01 vars:01 expr:01 expr:01 foo:01 foo:01 vars:01 
+
+On Wed, 23 Jan 2008, blue storm wrote:
+
+>>> I deduce that there is no standard way of introducing
+>>> `fresh' (w.r.t. the abstract syntax tree) variables
+>>> within a camlp4 syntax extension? Wouldn't that be nice? =)
+>
+>>> Has anybody every implemented a solution to that problem?
+>
+>> That  would be nice, but doing it cleanly would require a large amount of work
+>> and user visible changes.
+>
+> I'm not sure it's a "clean" way of doing it, but i think this may works :
+> you can fold the AST to get every bound variable names, and then look
+> for conflicts.
+>
+> I tried to do that. See my camlp4 code at the end of the message.
+>
+> The folder is very simple : it collects every identifier name, even
+> not-really-bounded ones (eg. in patterns). I don't think it's a
+> problem : the important thing is to get no false positive.
+>
+> Is there a problem with this method ?
+> Do you have any comment or advice ?
+
+Nice, but in theory, it may create identifiers that are bound to an 
+incorrect value when the programmer forgot to define such a value.
+
+For example, module A should provide A.x to module B (= another .ml file).
+If the programmer forgets to define A.x, the compiler should report the 
+error at the time of compiling b.ml. But if some camlp4 extension 
+operating over a.ml introduces a variable A.x and by chance it has the 
+same type as the expected A.x, then the compiler will remain silent and B 
+will use the wrong value for A.x.
+
+
+Martin
+
+> ------------------
+> open Camlp4;
+>
+> module Make (Syntax : Sig.Camlp4Syntax) = struct
+>  open Syntax;
+>
+>  value get_bound_vars =
+>    let folder = object (self)
+>      inherit Ast.fold as super;
+>
+>      value binds = [];
+>      method binds = binds;
+>
+>      method ident = fun
+>        [ <:ident< $lid:id$ >> | <:ident< $uid:id$ >> ->
+>          {< binds = [id::binds] >}
+>        | other -> super#ident other ];
+>    end in
+>    fun expr -> (folder#expr expr)#binds;
+>
+>  value get_free_var suffix binds =
+>    let rec generate var =
+>      if List.mem var binds
+>      then generate ("_" ^ var ^ "_")
+>      else var
+>    in generate suffix;
+> end;
+> ------------------
+>
+>
+> You can test it with this example code (for example) :
+> ------------------
+> open Camlp4
+> open PreCast
+>
+> module FV = Freevars.Make(Syntax)
+>
+> let _loc = Loc.ghost
+> let expr = <:expr< match foo with bar -> foo2 | _ -> 1 + 2 >>
+>
+> let binds = FV.get_bound_vars expr
+> let fv = FV.get_free_var "foo" binds
+> (* fv is "_foo_" *)
+> ------------------
+>
+> Thanks for your comments.
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+
+--
+http://wink.com/profile/mjambon
+http://martin.jambon.free.fr
+

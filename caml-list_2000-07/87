@@ -1,0 +1,207 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA08327 for caml-red; Mon, 24 Jul 2000 23:39:23 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA13091 for <caml-list@pauillac.inria.fr>; Mon, 24 Jul 2000 10:39:36 +0200 (MET DST)
+Received: from dopamine.iq.org (dopamine.iq.org [203.4.184.129])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e6O8dRT08227
+	for <caml-list@inria.fr>; Mon, 24 Jul 2000 10:39:28 +0200 (MET DST)
+Received: by dopamine.iq.org (Postfix, from userid 110)
+	id 5E49310C7F; Mon, 24 Jul 2000 15:34:23 +1000 (EST)
+To: caml-list@inria.fr
+Subject: automatic construction of mli files
+Cc: proff@iq.org
+From: Julian Assange <proff@iq.org>
+Date: 24 Jul 2000 15:34:22 +1000
+Message-ID: <wxhf9gytup.fsf@foo.iq.org>
+Lines: 188
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: weis@pauillac.inria.fr
+
+
+.mli files are highly redundant. Almost without exception all, or at
+the vast majority of .mli information can be generated from the
+underlying .ml implementation. We have programming languages to reduce
+redundancy, not increase it. Keeping mli and ml files in-sync is not
+only a waste of time, but error-prone and from my survey often not
+performed correctly, particularly where consistency is not enforced by
+the compiler (e.g comments describing functions and types). While
+exactly the same problem exists in a number of other
+separate-compilation language implementations, we, as camlers, should
+strive for something better.
+
+The mli case parallels the hideous task of maintaining C extern
+definitions in .h files (the C++ case is usually even worse). This is
+always the first thing to go in any C project I work on. Instead I use
+a small cpp / sed script to automagically generates this information
+from the underlying C implementation file.  This is quite simple to
+use and merely involves placing the token "EXPORT" before the
+variable/function definition. There is some minor added complexity to
+support the full range of C compile-time variable
+instantiation. Appended to this email is the part of my C style-guide
+that describes this approach. Having greater control over the language
+and compiler proper we should be able to do better, but the general
+approach seems sound and applicable to ocaml.
+
+GENEXTERN EXPORT MACROS
+-----------------------
+
+Redundant code is bad code. Unproto-typed code is bad code. Prototypes
+and extern's are redundant by their very nature, and it's depressing
+that people put up with the soul destroying action of manually
+creating, updating (an exceptionally tedious and error-prone task) the
+great swag of prototypes and externs that a C program of any size
+needs for its various bits to communicate with each other. God didn't
+give you a computer in order to further the evils of redundant
+behaviour, but to eliminate it.
+
+Examine the following conventional situation, where we have two C
+files, each of which has variables and functions that the other calls --
+I dont' recommend this way of parsing information about, but we need it
+for the example :)
+
+	== frazer.c ==
+
+	bool CIA_support = TRUE;
+
+	static int campaign_fund;
+	static int frazer_dollars:
+	static char *frazer_mental_state = "hopeful";
+
+	void
+	frazer(void)
+	{
+		frazer_dollars -= bribe_kerr(frazer_dollars);
+		campaign_find -= frazer_dollars/2;
+		if (dismiss_govenment &&
+		    strcasecmp(dismiss_action, "care-taker"))
+			frazer_mental_state = "hot doggarty dog";
+	}
+
+	== kerr.c ==
+
+	bool dismiss_government;
+	char *dismiss_action;
+
+	#ifndef HAVE_STRCASECMP
+	int strcasecmp (char *s, char *s2)
+	{
+		do
+		{
+			char c1=tolower(*s);
+			char c2=tolower(*s2);
+			if (c1>c2)
+				return 1;
+			if (c1<c2)
+				return -1;
+		} while (*s++ && *s2++);
+		return 0;
+	}
+	#endif
+
+	int
+	kerr(int offer)
+	{
+		if (offer>KER_MIN_ACTION)
+		{
+			dismiss_government = TRUE;
+			if (offer>KER_MIN_ACTION * 2)
+				dismiss_action = "care-taker";
+			else
+				dismiss_action = "dissolution";
+			return (CIA_support? offer/2: offer);
+		}
+		return offer/8;
+	}
+
+Now, lets look at the prototypes we will need to support these
+shenanigans:
+
+	== frazer.h ==
+	extern bool CIA_support;
+	void frazer(void);
+
+	== kerr.h ==
+	extern bool dismiss_government;
+	extern char *dismiss_action;
+	#ifndef HAVE_STRCASECMP
+	int strcasecmp (char *s, char *s2);
+	#endif
+	int kerr(int offer);
+
+In the marutukku build system this becomes:
+
+
+	== frazer.c ==
+
+	EXPORT bool CIA_support = TRUE;
+
+	static int campaign_fund;
+	static int frazer_dollars:
+	static char *frazer_mental_state = "hopeful";
+
+	EXPORT void frazer(void)
+	{
+		frazer_dollars -= bribe_kerr(frazer_dollars);
+		campaign_find -= frazer_dollars/2;
+		if (dismiss_government &&
+		    strcasecmp(dismiss_action, "care-taker"))
+			frazer_mental_state = "hot doggarty dog";
+	}
+
+	== kerr.c ==
+
+	EXPORT bool dismiss_government;
+	EXPORT char *dismiss_action;
+
+	#ifndef HAVE_STRCASECMP
+	EXPORT int strcasecmp (char *s, char *s2)
+	{
+		do
+		{
+			char c1=tolower(*s);
+			char c2=tolower(*s2);
+			if (c1>c2)
+				return 1;
+			if (c1<c2)
+				return -1;
+		} while (*s++ && *s2++);
+		return 0;
+	}
+	#endif
+
+	EXPORT int kerr(int offer)
+	{
+		if (offer>KER_MIN_ACTION)
+		{
+			dismiss_government = TRUE;
+			if (offer>KER_MIN_ACTION * 2)
+				dismiss_action = "care-taker";
+			else
+				dismiss_action = "dissolution";
+			return (CIA_support? offer/2: offer);
+		}
+		return offer/8;
+	}
+
+EXPORT is merely the token genextern.sh uses for parsing cues,
+although it's nice to see at a glance what is being referenced (or at
+least, is meant to be referenced) from other .c files. Everything not
+EXPORT'ed should be static. Can you see why?
+
+Now, lets look at what has happened to frazer.h and kerr.h:
+
+	== frazer.h ==
+	#include "frazer.ext"
+
+	== kerr.h ==
+	#include "kerr.ext"
+
+frazer.ext and kerr.ext are automatically generated by the
+following rule in mk/rules.mk.in
+
+    %.ext : %.c %.h $(top_srcdir)/config.h $(top_srcdir)/scripts/genextern.sh
+            CPP="$(CPP)";export CPP; sh $(top_srcdir)/scripts/genextern.sh $<\
+	    > $@.tmp $(DEFS) $(INCLUDES) $(CPPFLAGS) $(CFLAGS) \
+	    && mv -f $@.tmp $@ || rm -f $@.tmp
+
+
+

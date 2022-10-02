@@ -1,0 +1,280 @@
+Return-Path: <Tiphaine.Turpin@free.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id CD230BBC1
+	for <caml-list@yquem.inria.fr>; Fri, 22 Feb 2008 14:56:25 +0100 (CET)
+X-IronPort-AV: E=Sophos;i="4.25,391,1199660400"; 
+   d="scan'208";a="9468165"
+Received: from arvin.irisa.fr (HELO [131.254.11.86]) ([131.254.11.86])
+  by mail3-relais-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 22 Feb 2008 14:56:25 +0100
+Message-ID: <47BED395.3030204@free.fr>
+Date: Fri, 22 Feb 2008 14:52:21 +0100
+From: "Tiphaine.Turpin" <Tiphaine.Turpin@free.fr>
+User-Agent: Thunderbird 1.5.0.10 (X11/20070303)
+MIME-Version: 1.0
+To: Julien Moutinho <julien.moutinho@gmail.com>,
+	caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Re: OO programming
+References: <47BDADE9.4030902@free.fr> <47BDD545.7020404@free.fr> <20080221235646.GA14422@localhost>
+In-Reply-To: <20080221235646.GA14422@localhost>
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 8bit
+X-Spam: no; 0.00; modular:01 observers:01 typecheck:01 iter:01 foo:01 observers:01 simulated:01 0100,:01 verbose:01 ocaml:01 oreilly-book:01 val:01 mutable:01 iter:01 ocamlc:01 
+
+This is a nice account on how to write those things in a clean and 
+modular way. It does not meet all of my requirements however...
+
+The 'msg parameter seems to allow the extension of the set of messages 
+that may be used at the interface, and the use of closed types enforce 
+strong consistency checks between the two classes. However, a first 
+problem is that the communication can only be extended through the  'msg 
+parameter: although we may add methods to both classes, it will not be 
+possible to for a class to use the new methods of the other (at least, 
+if the objects are taken from the existing "subject" and "observers" 
+fields). For instance, the following extension to your first design 
+fails to typecheck:
+
+class  ['msg] observer'
+  (subject: 'msg subject) = object
+    inherit ['msg'] observer subject
+    method send' = ()
+  end
+and ['msg] subject' = object
+  inherit ['msg] subject
+  method notify' =
+    List.iter
+      (fun obs -> obs#foo)
+      observers
+end
+
+Second, if We try to be more concrete, we certainly don't want to write
+
+    method send' : 'msg -> unit = function _ -> ()
+
+but instead (as soon as we don't want the method to be virtual 
+anymore),  something like:
+
+    method send' : 'msg -> unit = function `HELLO -> ()
+
+which prevents any further extension, as we get: constraint 'a = [ `HELLO ].
+
+A solution that works is
+
+    method send' : 'msg -> unit = function `HELLO -> () | _ -> assert false
+
+because this only implies constraint 'a = [> `HELLO ], but then we loose 
+the guarantee that `HELLO is indeed handled (we could have said fun _ -> 
+assert false).
+
+In fact, the use of a parameter message type allows to separate the type 
+of the interface between the two objects from the "structure" of the 
+link between the two classes. So the pattern may be "applied", but not 
+really "extended" in the most general sense. The interesting point is 
+that successive extension (i.e., adding methods) can be simulated by 
+adding messages and extending the handler, but we loose the strong 
+consistency guarantee that the messages are actually handled. 
+Interestingly, we will still detect a use of a message with different 
+number or type of parameters : exactly as when using constraints with 
+open types as suggested by Remi Vanicat.
+
+Tiphaine Turpin
+
+
+
+Julien Moutinho a écrit :
+> On Thu, Feb 21, 2008 at 08:47:17PM +0100, Tiphaine.Turpin wrote:
+>   
+>> [...]
+>>     
+>
+> Below is a couple of design patterns which may be of interest to you.
+> The first one uses the [and] keyword with [class].
+> The second one uses the [and] keyword with [class type].
+>
+> One advantage of the later being its capacity to be split
+> into several files (namely: header.ml, observer.ml and subject.ml),
+> but it is a little bit more verbose.
+>
+> BTW, See also this chapter focusing on POO with OCaml:
+>   http://caml.inria.fr/pub/docs/oreilly-book/html/index.html#chap-POO
+>
+> HTH.
+>
+>
+> # First design: implementation
+> # -----------------------------
+>
+> % cat tiph_oo_and.ml
+> class ['msg] observer
+>   (subject: 'msg subject) =
+>   object
+>     method subject = subject
+>     method send : 'msg -> unit = fun _ -> ()
+>   end
+> and ['msg] subject =
+>   object (self)
+>     method private coerce =
+>         (self :> 'msg subject)
+>     val mutable observers : 'msg observer list = []
+>     method add () =
+>         let o = new observer self#coerce in
+>         observers <- o :: observers; o
+>     method notify (msg: 'msg) =
+>         List.iter
+>           (fun obs -> obs#send msg)
+>           observers
+>   end
+>
+> let s = new subject
+> let o = s#add ()
+> let () = o#send `HELLO
+>
+> # First design: interface
+> # -----------------------------
+>
+> % ocamlc -i tiph_oo.ml
+> class ['a] observer :
+>   'a subject ->
+>   object
+>     method send : 'a -> unit
+>     method subject : 'a subject
+>   end
+>
+> and ['a] subject :
+>   object
+>     val mutable observers : 'a observer list
+>     method add : unit -> 'a observer
+>     method private coerce : 'a subject
+>     method notify : 'a -> unit
+>   end
+>
+> val s : _[> `HELLO ] subject
+> val o : _[> `HELLO ] observer
+>
+> # Second design: implementation
+> # -----------------------------
+>
+> % cat tiph_oo_mod.ml
+> module Header =
+>   struct
+>     class type ['msg] observer =
+>       object
+>         method subject : 'msg subject
+>         method send    : 'msg -> unit
+>       end
+>     and ['msg] subject =
+>       object
+>         method add    : unit -> 'msg observer
+>         method notify : 'msg -> unit
+>       end
+>   end
+>
+> module Observer =
+>   struct
+>     class ['msg] observer :
+>       'msg Header.subject ->
+>       ['msg] Header.observer =
+>       fun subject ->
+>       object
+>         method subject = subject
+>         method send = fun _ -> ()
+>       end
+>   end
+>
+> module Subject =
+>   struct
+>     class ['msg] subject :
+>       ['msg] Header.subject =
+>       object (self)
+>         method private coerce =
+>             (self :> 'msg subject)
+>         val mutable observers = []
+>         method add () =
+>             let o = (new Observer.observer self#coerce :> 'msg Header.observer) in
+>             observers <- o :: observers; o
+>         method notify (msg: 'msg) =
+>             List.iter
+>               (fun obs -> obs#send msg)
+>               observers
+>       end
+>   end
+>
+> let s = new Subject.subject
+> let o = s#add ()
+> let () = o#send `HELLO
+>
+> module Subject__alternative =
+>   (* NOTE: in this alternative, a double coercion is used
+>    * in order to have a [subject] class bigger than
+>    * [Header.subject] (a public method [some_method] here). *)
+>   struct
+>     class ['msg] subject =
+>       object (self)
+>         method private coerce =
+>             ((self :> 'msg subject) :> 'msg Header.subject)
+>         val mutable observers = []
+>         method add () =
+>             let o = (new Observer.observer self#coerce :> 'msg Header.observer) in
+>             observers <- o :: observers; o
+>         method notify (msg: 'msg) =
+>             List.iter
+>               (fun obs -> obs#send msg)
+>               observers
+>         method some_method = ()
+>       end
+>   end
+>
+> let s_a = new Subject__alternative.subject
+> let o_a = s_a#add ()
+> let () = o_a#send `HI
+>
+>
+> # Second design: interface
+> # -----------------------------
+>
+> % ocamlc -i tiph_oo_mod.ml
+> module Header :
+>   sig
+>     class type ['a] observer =
+>       object method send : 'a -> unit method subject : 'a subject end
+>     and ['a] subject =
+>       object method add : unit -> 'a observer method notify : 'a -> unit end
+>   end
+>
+> module Observer :
+>   sig class ['a] observer : 'a Header.subject -> ['a] Header.observer end
+>
+> module Subject : sig class ['a] subject : ['a] Header.subject end
+>
+> val s : _[> `HELLO ] Subject.subject
+> val o : _[> `HELLO ] Header.observer
+>
+>
+> module Subject__alternative :
+>   sig
+>     class ['a] subject :
+>       object
+>         val mutable observers : 'a Header.observer list
+>         method add : unit -> 'a Header.observer
+>         method private coerce : 'a Header.subject
+>         method notify : 'a -> unit
+>         method some_method : unit
+>       end
+>   end
+>
+> val s_a : _[> `HI ] Subject__alternative.subject
+> val o_a : _[> `HI ] Header.observer
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>   
+

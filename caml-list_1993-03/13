@@ -1,0 +1,195 @@
+Received: by margaux.inria.fr, Fri, 19 Mar 93 14:36:50 +0100
+Received: from concorde.inria.fr by margaux.inria.fr, Thu, 18 Mar 93 23:32:30 +0100
+Received: from dcs.ed.ac.uk (stroma.dcs.ed.ac.uk) by concorde.inria.fr; Thu, 18 Mar 1993 23:32:28 +0100
+Received: from damsay.dcs.ed.ac.uk by dcs.ed.ac.uk id aa15495;
+          18 Mar 93 22:28 GMT
+From: cr@dcs.ed.ac.uk
+Date: Thu, 18 Mar 93 22:28:19 GMT
+Message-Id: <8280.9303182228@damsay.dcs.ed.ac.uk>
+To: xavier@Theory.Stanford.edu
+Cc: caml-list@margaux
+In-Reply-To: Xavier Leroy's message of Thu, 18 Mar 1993 13:32:25 -0800 (PST) <9303182132.AA22196@Tamuz.Stanford.EDU>
+Subject: streams
+Sender: weis@margaux
+Status: O
+
+
+Le reponse de Xavier me satisfait pleinement. Et, desormais, je jette
+stream_get a la poubelle, et les streams sont des donnees imperatives ....
+
+D'ailleurs, mon programme qui l'utilisait, apres optimisation ne l'utilise
+plus !
+
+Par contre, j'aimerais bien des listes infinies fonctionnelles, avec le
+pattern matching et tout le tin-toin. Peut-etre avant la release 1.0 de 2004 ?
+
+(**************
+Attention au terme "liste lazy" ????
+
+Pour moi "liste lazy" = liste calculee lorsque l'on s'en sert la premiere fois,
+puis conservee pour les utilisations futures. 
+
+Donc les listes lazy permettent de faire des listes infinies, mais ce n'est
+pas la meme chose.
+
+Peut-etre que ma terminologie n'est pas la bonne ?
+**************)
+
+
+A propos des listes lazy, voici un petit programme : (les listes s'appelle des
+streams ..... pardon)
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+-------------------------stream.ml-------------------------
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+(* le type des streams *)
+type 'a l_stream =
+	L of unit -> 'a * 'a stream
+|	C of 'a * 'a stream
+and 'a stream == 'a l_stream ref;;
+
+(* deux cons *)
+let Cons a s = ref (C (a,s));;
+let LCons a s b = ref (L (function () -> (a,s b)));;
+
+let stream_from f = 
+  let rec stream_from_aux () = ref (L (function
+	() -> (f(),stream_from_aux ())))
+  in stream_from_aux ()
+;;
+
+let stream_get  = function
+	ref (C (a,s)) -> (a,s)
+|	ref (L f) as p -> let c = f () in
+		p := C c;c
+;;
+
+let stream_next  = function
+	ref (C (a,s)) as p -> p := !s;a
+|	ref (L f) as p -> let (a,s) = f () in
+		p := !s;a 
+;;
+
+(* pour eviter de garder une copie calculer quand on n'en a pas besoin *)
+let stream_copy = function
+	ref p -> ref p
+;;
+
+(* version destructive de do_stream et do_stream_bound *)
+let do_stream_del f s = 
+  while true do
+    f (stream_next s)
+  done
+;;
+
+let do_stream_bound_del f n s = 
+  let pn = ref n in
+  while !pn > 0 do
+    f (stream_next s);
+    decr pn
+  done
+;;
+
+(* version non destructive *)
+let do_stream f s = 
+  let ps = ref s in
+  while true do
+    let (a,s0) = (stream_get !ps)  in
+    f a;ps:=s0
+  done
+;;
+
+let do_stream_bound f n s = 
+  let ps = ref s in
+  let pn = ref n in
+  while !pn > 0 do
+    let (a,s0) = (stream_get !ps)  in
+    f a;decr pn;ps := s0
+  done
+;;
+
+(* le map sur les streams *)
+let map_stream f s = 
+  let rec map_aux = function
+        ref (C (a,s)) -> ref (L (function 
+          () -> (f a,map_aux s)))
+|	ref (L g) as p -> ref (L (function
+          () -> let (a,s) as c = g () in
+		p := C c;(f a,map_aux s)))
+  in map_aux s
+;;
+
+(* une fonction un peu tordu *)
+let rec_stream f s = 
+   let rec rec_aux = function
+        ref (C (a,s)) -> 
+          f a (function () -> (rec_aux s))
+|	ref (L g) as p -> 
+          let (a,s) as c = g () in
+		p := C c;f a (function () -> (rec_aux s))
+  in rec_aux s
+;;
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++   
+---------------------------------------------------------------
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Et voici un peti programme pour le stream des nombres premiers.
+
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+----------------primes.ml--------------------------------------
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+#open "stream";;
+
+let init_stream = 
+  let rec init_aux n = 
+    LCons n init_aux (succ n)
+  in init_aux 2
+;;
+
+let raye n s = 
+  let raye_aux a fs =
+    if a mod n = 0 then 
+      fs ()
+    else 
+      LCons a fs ()
+  in rec_stream raye_aux s
+;;
+
+let primes =
+  let rec primes_aux s =
+    let (a,s) = stream_get s in
+      LCons a primes_aux (raye a s)
+  in primes_aux init_stream
+;;
+
+let print_int_stream = do_stream_bound
+  (function a -> print_int a; print_string " "; flush stdout);;
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+----------------------------------------------------------------
+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+
+Remarque, ce programme est tres gourmant ...., et ce n'est pas parce-que la
+liste est "lazy", j'ai essaye les streams pas "lazy" (sans references) et ca
+craque quand meme tres vite en caml-light.
+
+Pourquoi ? Je m'en doute un peu, mais peut-on reparer ca ? 
+
+
+Christophe
+
+PS: j'ai essaye en lsml (version 0.1) avec les listes built-in, c'est pire. 
+lml (version 0.97) s'en tire bien.
+
+
+
+
+
+
+
+
+
+
+
+

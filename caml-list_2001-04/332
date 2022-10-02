@@ -1,0 +1,103 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA00580; Thu, 26 Apr 2001 18:53:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA00742 for <caml-list@pauillac.inria.fr>; Thu, 26 Apr 2001 18:53:26 +0200 (MET DST)
+Received: from green.csi.cam.ac.uk (green.csi.cam.ac.uk [131.111.8.57])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f3QGrP505808
+	for <caml-list@inria.fr>; Thu, 26 Apr 2001 18:53:25 +0200 (MET DST)
+Received: from mrs35-1.clare.cam.ac.uk
+	([131.111.230.199] helo=blue ident=mail)
+	by green.csi.cam.ac.uk with esmtp (Exim 3.22 #1)
+	id 14sp1B-0002U1-00
+	for caml-list@inria.fr; Thu, 26 Apr 2001 17:53:25 +0100
+Received: from mrs by blue with local (Exim 2.05 #1 (Debian))
+	id 14sp4j-0004Nm-00; Thu, 26 Apr 2001 17:57:05 +0100
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] two unrelated questions
+References: <200104252108.OAA02055@smtp2-cm.mail.eni.net>
+From: Mark Seaborn <mrs35@cam.ac.uk>
+Date: 26 Apr 2001 17:57:04 +0100
+In-Reply-To: Chris Hecker's message of "Wed, 25 Apr 2001 14:08:33 -0700"
+Message-ID: <873davha5b.fsf@argbg34.argonet.co.uk>
+Lines: 73
+User-Agent: Gnus/5.0803 (Gnus v5.8.3) XEmacs/21.1 (Crater Lake)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Chris Hecker <checker@d6.com> writes:
+
+> 1.  What is the right "functional pattern" for early-outing on success
+>     while using an iter/map/fold type function?  Say I'm using iter to
+>     search for something in an opaque datastructure.  Should I throw
+>     an exception to get out, or is that bad style?  I guess this
+>     question only makes sense for iter, since map/fold produce results
+>     that you theoretically want to preserve.  So, the question is
+>     really, given an iter-style interface to a datastructure (one that
+>     takes an ('a -> unit)), how do you tell it to stop iterating?  I
+>     guess if the function was ('a -> bool) you could do it that way,
+>     but most iters aren't ((List|Array|Hashtbl).iter, for example).
+>     Is throwing an exception the best bet?
+
+Wrapping up the exception-throwing method with a function that
+provides an escaping continuation function is something you might
+prefer stylistically.
+
+Another way of doing it is to CPS-convert the fold function to get
+something like:
+
+let rec foldc kons knil l = match l with
+  | [] -> knil
+  | x::xs -> kons x knil (fun rest -> foldc kons rest xs)
+
+Then `reverse' and `map' can be defined by:
+
+let reverse l = foldc (fun x xs c -> c (x::xs)) [] l
+let map f l = foldc (fun x xs c -> (f x)::(c xs)) [] l
+
+(Notice that `foldc' can be used to traverse the list from
+right-to-left as well as left-to-right by calling the continuation
+function at a different time.)
+
+A function to return the first value satisfying a predicate in a list
+and break out of the fold operation can be defined by:
+
+let first_such pred l =
+  foldc (fun x _ c -> if pred x then Some x else c None)
+    None l
+
+This is more powerful than fold, but also harder to understand, and
+easier to use wrongly if you forget to call the continuation function.
+
+Also, if you re-order the arguments of foldc and pass it a return
+continuation you get something you can use to thread multiple values
+through (which is possibly more efficient in OCaml?), instead of just
+using one collector value (and putting a tuple in it):
+
+let rec foldc' kons l c knil = match l with
+  | [] -> c knil
+  | x::xs -> kons x (fun rest -> foldc' kons xs c rest) knil
+
+for example:
+  foldc' (fun x c l1 l2 -> c (x::l1) (x::l2))
+    [1;2;3;4] (fun a b -> (a,b)) [] []
+gives
+  ([4;3;2;1], [4;3;2;1])
+
+You can use this to stop a fold operation and restart it later, and
+for building lazy lists out of any collection that provides a `foldc'
+operation.  However, it starts to get difficult to understand the
+order of evaluation, so I'm not sure whether this is very useful in
+practice (it probably gets to the point where you may as well use a
+lazy language instead) or whether it's just a handy way of obfuscating
+your programs.
+
+-- 
+         Mark Seaborn
+   - mseaborn@bigfoot.com - http://www.srcf.ucam.org/~mrs35/ -
+
+          ``Anyone foolish enough to predict the outcome of
+               this match is a fool'' -- Fred Trueman
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

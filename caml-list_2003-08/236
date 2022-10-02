@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA07067; Wed, 20 Aug 2003 22:39:25 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA03917 for <caml-list@pauillac.inria.fr>; Wed, 20 Aug 2003 22:39:24 +0200 (MET DST)
+Received: from mail.speakeasy.net (mail9.speakeasy.net [216.254.0.209])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h7KKdMT07061
+	for <caml-list@inria.fr>; Wed, 20 Aug 2003 22:39:22 +0200 (MET DST)
+Received: (qmail 2299 invoked from network); 20 Aug 2003 20:39:20 -0000
+Received: from unknown (HELO grace.speakeasy.org) ([216.254.0.2])
+          (envelope-sender <brogoff@speakeasy.net>)
+          by mail9.speakeasy.net (qmail-ldap-1.03) with DES-CBC3-SHA encrypted SMTP
+          for <ben@socialtools.net>; 20 Aug 2003 20:39:20 -0000
+Date: Wed, 20 Aug 2003 13:39:20 -0700 (PDT)
+From: brogoff@speakeasy.net
+To: Benjamin Geer <ben@socialtools.net>
+cc: Brian Hurt <bhurt@spnz.org>, "caml-list@inria.fr" <caml-list@inria.fr>
+Subject: Re: [Caml-list] does class polymorphism need to be so complicated?
+In-Reply-To: <3F43BBB8.9090806@socialtools.net>
+Message-ID: <Pine.LNX.4.44.0308201312120.7047-100000@grace.speakeasy.net>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; brogoff:01 caml-list:01 subtyping:01 foo:01 int-:01 unit-:01 baz:01 quux:01 wrappers:01 coercions:01 endline:01 val:01 bug:01 faq:01 beginner's:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 20 Aug 2003, Benjamin Geer wrote:
+> Unless I've missed something, this only works if none of the classes of 
+> type fbbq have any additional methods.  Here's an example that doesn't work:
+
+Yes, OCaml doesn't have implicit subtyping. The language manual is quite clear 
+on that. If you want to solve your problem, you'll need to coerce, and you 
+can solve it fairly simply by replacing the troublesome line below with one of 
+the following 
+
+tp#process (et :> fbbq) ;;
+
+or 
+
+let proc o = (new thing_processor)#process (o :> fbbq);;
+proc et;;
+
+or stuff like that. You get the picture. The (row) type representing 
+"fbbq or anything which has the same methods" is this 
+
+type 'a fbbq_c = 'a constraint 'a = 
+    < foo: int->int;
+      bar: unit->string;
+      baz: unit->bool;
+      quux: unit->unit; .. >
+
+where as you can see there is a type variable to handle that row polymorphism. 
+So, if you want a method which takes that as an argument, it has to be 
+polymorphic. Easier to solve it as I did above with a function wrappers and 
+coercions. A solution using polymorphic methods is sketched next, where I 
+use them to fake implicit subtyping
+
+class type thing =
+    object
+      method foo : int -> int
+      method bar : string
+      method baz : bool
+      method quux : unit
+  end;;
+
+class thing_processor =
+   object
+     method process : 'a . (#thing as 'a ) -> unit =
+       fun obj ->
+         begin
+           obj#quux;
+           print_string (string_of_int (obj#foo 1));
+           print_string obj#bar;
+           print_string (string_of_bool obj#baz);
+           print_endline ""
+         end
+   end ;;
+let tp = new thing_processor ;;
+tp#process et ;;
+
+so I guess you are now left with a Perl like TMTOWTDI situation. 
+
+Overall, yes, the class system is complicated. 
+
+-- Brian
+
+> type fbbq =
+>    <foo: int->int; bar: string; baz: bool; quux: unit > ;;
+> 
+> class thing x_init =
+>     object (self)
+>       val mutable x = x_init
+>       method foo y = x + y
+>       method bar = string_of_int (self#foo 2)
+>       method baz = (x = 1)
+>       method quux = print_string (string_of_int x)
+>   end;;
+> 
+> class extra_thing x_init =
+>     object (self)
+>       inherit thing x_init
+>       method quuux = self#quux; self#quux
+>   end;;
+> 
+> class thing_processor =
+>    object
+>        method process (obj : fbbq) =
+> 	obj#quux;
+> 	print_string (string_of_int (obj#foo 1));
+> 	print_string obj#bar;
+> 	print_string (string_of_bool obj#baz)
+>    end ;;
+> 
+> let et = new extra_thing 1 ;;
+> let tp = new thing_processor ;;
+> tp#process et ;;
+> 
+> The call to 'process' produces the following error:
+> 
+> This expression has type
+>    extra_thing =
+>      < bar : string; baz : bool; foo : int -> int; quuux : unit; quux : 
+> unit >
+> but is here used with type
+>    fbbq = < bar : string; baz : bool; foo : int -> int; quux : unit >
+> Only the first object type has a method quuux
+> 
+> So this approach doesn't fit the requirement, which is to be able to use
+> a derived class anywhere its base class can be used.
+> 
+> Ben
+> 
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> 
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

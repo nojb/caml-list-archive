@@ -1,0 +1,145 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 88069D461
+	for <caml-list@yquem.inria.fr>; Tue,  1 Nov 2005 01:28:45 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jA10SiQp007891
+	for <caml-list@yquem.inria.fr>; Tue, 1 Nov 2005 01:28:45 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA20905 for <caml-list@pauillac.inria.fr>; Tue, 1 Nov 2005 01:28:44 +0100 (MET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id jA10SfBT015558
+	for <caml-list@inria.fr>; Tue, 1 Nov 2005 01:28:43 +0100
+Received: from localhost (suiren [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.1/8.13.1) with ESMTP id jA10SauK011780;
+	Tue, 1 Nov 2005 09:28:37 +0900 (JST)
+Date: Tue, 01 Nov 2005 09:27:44 +0900 (JST)
+Message-Id: <20051101.092744.112578253.garrigue@math.nagoya-u.ac.jp>
+To: xcforum@free.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Question about polymorphic variants
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <D55E9EA1-986E-4B34-AC3C-CE4C18E356CF@free.fr>
+References: <E2B22BDD-C8AE-4D16-B805-5231D086A942@free.fr>
+	<20051029.092649.55723981.garrigue@math.nagoya-u.ac.jp>
+	<D55E9EA1-986E-4B34-AC3C-CE4C18E356CF@free.fr>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 4366B6BC.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 4366B6B9.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 variants:01 inference:01 inference:01 arrays:01 val:01 abstr:01 ocaml:01 pointer:01 ocaml:01 initialized:01 val:01 arrays:01 iter:01 toplevel:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+From: Xavier Clerc <xcforum@free.fr>
+
+> I must admit that I don't grasp the link between the existence of a  
+> "top" type and the inference of a polymorphic type in the given  
+> examples. I would expect inference of 'a array in arrays example and  
+> 'a in "List.map (fun (x, y) -> x + 1)" and don't see in what  
+> circumstances such types would not be safe (modulo the array  
+> representation issue discussed above).
+> Could you exhibit an example where such inference would be false/ 
+> unsafe ?
+
+Here is the concrete counter-example for top. It uses the (unsafe) Obj
+module to produce a segmentation fault, but through an operation that
+most people would suppose to be safe.
+
+# let l = [| Obj.repr 1.0 |];;
+val l : Obj.t array = [|<abstr>|]
+# l.(0) <- Obj.repr 1;;
+Segmentation fault
+
+How does it relate to top? Essentially, every ocaml value is
+represented by a fixed-size word, either an integer or a
+pointer to a boxed representation. All Obj.repr does is return its
+argument with type Obj.t, the type of all ocaml values, which we can
+see as another name for top. So one could assume that Obj.repr is a 
+coercion to top. The trouble, as you can see here, is that Obj.t
+itself appears to be unsafe. Here l is created as an array, initialized
+with a float. This means that internally it will get a float array
+representation. Now when we try to put an integer into it, it will try
+to use the float array assignment operation, which attempts to
+dereference the argument to get its float representation. This
+naturally results in a segmentation fault.
+As a result we can see here that one assumption in the above must be
+false. Since the definition of Obj.repr is exactly that of a coercion
+to top, this must mean that adding top to the type system is unsound.
+
+Now, how can I use it to find a problem in the following typing?
+
+  # let g = map (fun x -> 1) ;;
+  val g : 'a list -> int list
+
+I first need a "bad" implementation of map, which uses arrays behind the
+scene.
+  let map f =
+    let arr = ref [||] in
+    fun l ->
+      List.iter
+        (fun x -> if !arr = [||] then arr := [|x|] else !arr.(0) <- x) l;
+      List.map f l
+  val map : ('a -> 'b) -> 'a list -> 'b list
+
+This function just keeps the last list element in a one-element array,
+but does nothing with it, so it is exactly equivalent to List.map.
+Actually, it cannot do anything bad, as the type system protects me:
+
+  # let g = map (fun x -> 1) ;;
+  val g : '_a list -> int list
+
+But now let's assume that Obj.t is really top, and Obj.repr a safe
+operation.
+
+  # let g' l = g (List.map Obj.repr l) ;;
+  val g' : 'a list -> int list
+
+This time we've got the right type.
+Let's use it:
+
+  # g' [1.0];;
+  - : int list = [1]
+  # g' [1];;
+  Segmentation fault
+
+
+> Well, the only way to get rid of the leading underscore in inferred  
+> type is to "use" all the tags of the type (that is "converge" toward  
+> the upper bound of the variant), as in the following toplevel session :
+> 
+> # let f = function
+>    | `Off -> 0
+>    | `On -> 1;;
+> val f : [< `Off | `On ] -> int = <fun>
+> # let mf = List.map f;;
+> val mf : _[< `Off | `On ] list -> int list = <fun>
+> # mf [`On];;
+> - : int list = [1]
+> # mf;;
+> - : _[< `Off | `On > `On ] list -> int list = <fun>
+> # mf [`Off];;
+> - : int list = [0]
+> # mf;;
+> - : [ `Off | `On ] list -> int list = <fun>
+> 
+> Does this mean that [`Off | `On] list -> int list could be inferred  
+> for mf as one can pass [`Off | `On] where [< `Off | `On] is waited  
+> (as [`tag1 | `tag2 ... | `tagn] is shorthand for [< tag1 | `tag2 ...  
+> | `tagn > tag1 | `tag2 ... | `tagn]).
+
+Certainly, as [`Off|`On] is an instance of [< `Off|`On].
+But [`Off] or [`On] are other possible instances of [< `Off|`On], so
+the latter is more general.
+By the way, you can get your intended type directly with a type
+annotation.
+  # let mf = List.map (f : [`Off|`On] -> _);;
+  val mf : [ `Off | `On ] list -> int list = <fun>
+
+Jacques Garrigue
+

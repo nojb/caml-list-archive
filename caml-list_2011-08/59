@@ -1,0 +1,210 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p787F2I7020920
+	for <caml-list@sympa-roc.inria.fr>; Mon, 8 Aug 2011 09:15:02 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AksHAASMP07RVdU2kGdsb2JhbABCl3yEDosmCBQBAQEBCQkNBxQEIYFAAQEBAQIBEgITGQEtCwEDAQsBBQUlDxI0AQUBChIGJQkHh0sEnzYKjwaEFIkoAgMGhWFfBIdaiyiGLoYiPIE/giw
+X-IronPort-AV: E=Sophos;i="4.67,336,1309730400"; 
+   d="scan'208";a="115239683"
+Received: from mail-yw0-f54.google.com ([209.85.213.54])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 08 Aug 2011 09:14:57 +0200
+Received: by ywm39 with SMTP id 39so3811870ywm.27
+        for <caml-list@inria.fr>; Mon, 08 Aug 2011 00:14:56 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=sender:subject:mime-version:content-type:from:in-reply-to:date:cc
+         :content-transfer-encoding:message-id:references:to:x-mailer;
+        bh=vUOTZldpdH9nPsUWzwI7dThEPXg0rNUR/zgDgt6T8So=;
+        b=Cn3S97/pI1PlTqxJQj00+/V3u3K/5KDfWUowbQNjJ9Vj/Pn89T8ipvWkRqYiCNzOIh
+         n2kt8RG160M7brQSEZyTHgAfy8C1qJzaFr6+PCsb+iTVvv459wVWpICuGCp5NgwB2K7x
+         xMi4MTIcz3P9seIU7Z0t3zur4c2p4pdZ7k61I=
+Received: by 10.42.180.200 with SMTP id bv8mr5377235icb.21.1312787696032;
+        Mon, 08 Aug 2011 00:14:56 -0700 (PDT)
+Received: from tet.garrigue.jp (58x158x128x157.ap58.ftth.ucom.ne.jp [58.158.128.157])
+        by mx.google.com with ESMTPS id y14sm126906ibf.62.2011.08.08.00.14.53
+        (version=TLSv1/SSLv3 cipher=OTHER);
+        Mon, 08 Aug 2011 00:14:54 -0700 (PDT)
+Sender: Jacques Garrigue <jacques.garrigue@gmail.com>
+Mime-Version: 1.0 (Apple Message framework v1084)
+Content-Type: text/plain; charset=windows-1252
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <4E3AC747.2010405@lmsintl.com>
+Date: Mon, 8 Aug 2011 16:14:51 +0900
+Cc: <caml-list@inria.fr>
+Message-Id: <20B7E892-BB5F-40CE-9428-512E94B2B5A3@math.nagoya-u.ac.jp>
+References: <4E3AC747.2010405@lmsintl.com>
+To: =?utf-8?Q?S=C3=A9bastien_Furic?= <sebastien.furic@lmsintl.com>
+X-Mailer: Apple Mail (2.1084)
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p787F2I7020920
+Subject: Re: [Caml-list] Questions about default instances
+
+On 2011/08/05, at 1:22, Sébastien Furic wrote:
+
+> What is the usual way in OCaml to define mutually recursive classes that share default instances?
+
+There is no concept of "default instance" in OCaml, and as you discovered yourself,
+default instances create problems with initialization.
+Namely, an object constructor might attempt to access a default instance before it is built,
+so we need a way to know whether it is ready or not.
+This is not specific to OCaml.
+But since OCaml has no null pointers (with good reasons!), the only way to know whether
+a value is ready or not is to use either an option or a a lazy value.
+
+So a first solution to your problem is (using immediate objects):
+
+class type object_ = object
+ method to_string: string
+end
+
+class type boolean = object
+ inherit object_
+ method not_: boolean
+ method or_: boolean Lazy.t -> boolean
+ method and_: boolean Lazy.t -> boolean
+ method if_: 'a . 'a Lazy.t -> 'a Lazy.t -> 'a
+end
+
+let rec lazy_false = lazy (object (self : #boolean)
+ method to_string = "false"
+ method not_ = Lazy.force lazy_true
+ method or_ chk = Lazy.force chk
+ method and_ _ = self
+ method if_ _ chk = Lazy.force chk
+end)
+
+and lazy_true = lazy (object (self : #boolean)
+ method to_string = "true"
+ method not_ = Lazy.force lazy_false
+ method or_ _ = self
+ method and_ chk = Lazy.force chk
+ method if_ chk _ = Lazy.force chk
+end)
+
+let false_ = Lazy.force lazy_false
+and true_ = Lazy.force lazy_true
+
+Note that I used class types rather than virtual classes, since there is no point
+in a virtual class having no concrete methods.
+If you want a virtual class later, you can even build it from the class type:
+
+class virtual boolean_class = object (self : #boolean)
+  method as_bool = self#if_ (lazy true) (lazy false)
+end
+
+Now, if you want to use classes instead of immediate objects, there is an additional problem:
+a class can only recurse with other classes.
+A simple way out is to use recursive modules.
+
+module rec Bool : sig
+  class false_class : boolean
+  class true_class : boolean
+  val true_ : boolean Lazy.t
+  val false_ : boolean Lazy.t
+end = struct
+  class false_class = object (self : #boolean)
+    method to_string = "false"
+    method not_ = Lazy.force Bool.true_
+    method or_ chk = Lazy.force chk
+    method and_ _ = (self :> boolean)
+    method if_ _ chk = Lazy.force chk
+  end
+
+  and true_class = object (self : #boolean)
+    method to_string = "true"
+    method not_ = Lazy.force Bool.false_
+    method or_ _ = (self :> boolean)
+    method and_ chk = Lazy.force chk
+    method if_ chk _ = Lazy.force chk
+  end
+
+  (* Default instances (that I would have preferred to inject
+     directly in definitions above) *)
+  let false_ = lazy (new false_class)
+  and true_ = lazy (new true_class)
+end
+
+Recursive modules do not remove the need for laziness:
+for exactly the same reason, all recursion must go through
+a module containing only functions and lazy values.
+
+Jacques Garrigue
+
+
+> In order to illustrate my problem, let's suppose we would like to define a hierarchy of classes defining booleans /à la/ Smalltalk:
+> 
+> -8<-------------------------------------------------------------
+> 
+> class virtual object_ = object
+>  method virtual to_string: string
+> end
+> 
+> class virtual boolean = object
+>  inherit object_
+>  method virtual not_: boolean
+>  method virtual or_: boolean Lazy.t -> boolean
+>  method virtual and_: boolean Lazy.t -> boolean
+>  method virtual if_: 'a . 'a Lazy.t -> 'a Lazy.t -> 'a
+> end
+> 
+> class false_class = object (self)
+>  inherit boolean
+>  method to_string = "false"
+>  method not_ = new true_class
+>  method or_ chk = Lazy.force chk
+>  method and_ _ = (self :> boolean)
+>  method if_ _ chk = Lazy.force chk
+> end
+> 
+> and true_class = object (self)
+>  inherit boolean
+>  method to_string = "true"
+>  method not_ = new false_class
+>  method or_ _ = (self :> boolean)
+>  method and_ chk = Lazy.force chk
+>  method if_ chk _ = Lazy.force chk
+> end
+> 
+> (* Default instances (that I would have preferred to inject
+>   directly in definitions above) *)
+> let false_ = new false_class
+> and true_ = new true_class
+> -8<-------------------------------------------------------------
+> 
+> Methods corresponding to message not_ in both false_class and true_class should ideally return a instance of, respectively, true_class and false_class that would have been created once and for all (instead of a fresh instance each time they are invoked). How does one achieve this in OCaml the functional way? (i.e., without resorting to references, but also, ideally, without resorting to lazy values)
+> The use of immediate objects is IMO a better choice to implement booleans (because I don't want nor need to let users subclass false_class and true_class). Here is an attempt:
+> 
+> -8<-------------------------------------------------------------
+> (* Using the same definition of boolean above *)
+> let rec false_ = object (self)
+>  inherit boolean
+>  method to_string = "false"
+>  method not_ = true_
+>  method or_ chk = Lazy.force chk
+>  method and_ _ = self
+>  method if_ _ chk = Lazy.force chk
+> end
+> 
+> and true_ = object (self)
+>  inherit boolean
+>  method to_string = "true"
+>  method not_ = false_
+>  method or_ _ = self
+>  method and_ chk = Lazy.force chk
+>  method if_ chk _ = Lazy.force chk
+> end
+> -8<-------------------------------------------------------------
+> 
+> I get “Error: This kind of expression is not allowed as right-hand side of `let rec'”. I wonder why OCaml does not accept the definition of recursive values like above (notice that references to false_ and true_ are “protected” by method definitions). Wouldn't it be safe to extend recursive definitions with this pattern?
+> 
+> Cheers,
+> 
+> Sébastien.
+> 
+> -- 
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+> 
+
+

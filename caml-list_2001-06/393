@@ -1,0 +1,81 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id EAA26636; Fri, 29 Jun 2001 04:41:58 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA26552 for <caml-list@pauillac.inria.fr>; Fri, 29 Jun 2001 04:41:57 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f5T2ftf12799
+	for <caml-list@inria.fr>; Fri, 29 Jun 2001 04:41:56 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id LAA28347;
+	Fri, 29 Jun 2001 11:41:37 +0900 (JST)
+To: malc@boblycat.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Type inference problem
+In-Reply-To: <20010628172348.A24964@boblycat.com>
+References: <20010628172348.A24964@boblycat.com>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20010629114137G.garrigue@kurims.kyoto-u.ac.jp>
+Date: Fri, 29 Jun 2001 11:41:37 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 51
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Can anyone explain why O'Caml specializes the following:
+> 
+> let simple ?fn list =
+>   let fn = match fn with
+>   | Some fn -> fn
+>   | None -> fun t -> t in
+>   let rec print = function
+>     | [] -> ()
+>     | x :: xs -> print_endline (fn x); print xs
+>   in
+>   print list
+> val simple : ?fn:(string -> string) -> string list -> unit
+
+The simple answer is type inference:
+  * fn and (fun t -> t) should have the same type 'a -> 'a
+  * the result of (fn x) is of type string
+  * consequently, 'a = string
+  * and the type of fn is string -> string
+
+Now, what you would want is to distinguish when there is a function
+passed and when there is none at the type level.
+You cannot do it with optional arguments, but you can use the
+following encoding:
+
+module Default : sig
+  type ('a, 'b) t
+  val none : ('a, 'a) t
+  val some : 'a -> ('a, 'b) t
+  val get : 'a -> ('b, 'a) t -> 'b
+  val get_lazy : 'a Lazy.t -> ('b, 'a) t -> 'b
+end = struct
+  type ('a,'b) t = Dnone | Dsome of 'a
+  let none = Dnone
+  let some x = Dsome x
+  let get d = function Dnone -> Obj.magic d | Dsome x -> x        
+  let get_lazy d = function Dnone -> Obj.magic (Lazy.force d) | Dsome x -> x
+end
+
+let out ~fn x = let fn = Default.get (fun x -> x) fn in print_endline (fn x)
+val out : fn:('a -> string, 'b -> 'b) Default.t -> 'a -> unit = <fun>
+
+out ~fn:Default.none "Hello";;
+out ~fn:(Default.some string_of_int) 3;;
+
+Would it be possible to include it with optional arguments?
+Theoretically, yes, but it would require a new syntax, make typing
+more complex, and checking weaker (the type of the default is only
+checked the first time the function is called with no argument).
+I'm not sure it's worth it.
+
+     Jacques Garrigue
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

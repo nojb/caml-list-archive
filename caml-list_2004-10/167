@@ -1,0 +1,164 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA29501; Sun, 17 Oct 2004 00:30:38 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA29394 for <caml-list@pauillac.inria.fr>; Sun, 17 Oct 2004 00:30:37 +0200 (MET DST)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9GMUZnE023502
+	for <caml-list@inria.fr>; Sun, 17 Oct 2004 00:30:36 +0200
+Received: from [192.168.1.200] (ppp202-150.lns1.syd3.internode.on.net [203.122.202.150])
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id i9GMUQOU097412;
+	Sun, 17 Oct 2004 08:00:27 +0930 (CST)
+Subject: Re: [Caml-list] Flush behavior of baseic I/O class type
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: Yamagata Yoriyuki <yoriyuki@mbg.ocn.ne.jp>
+Cc: gerd@gerd-stolpmann.de, caml-list <caml-list@inria.fr>
+In-Reply-To: <20041017.005256.41640390.yoriyuki@mbg.ocn.ne.jp>
+References: <20041017.005256.41640390.yoriyuki@mbg.ocn.ne.jp>
+Content-Type: text/plain
+Message-Id: <1097965825.2685.143.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 17 Oct 2004 08:30:26 +1000
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 4171A10B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 sourceforge:01 2004:99 yamagata:01 yoriyuki:01 declarative:01 buffer:01 buffer:01 multi-byte:01 flushing:01 abstraction:01 delegating:01 flushes:01 buffering:01 caveat:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 4779
+Lines: 132
+
+On Sun, 2004-10-17 at 01:52, Yamagata Yoriyuki wrote:
+
+> I think three possibility.
+>   1) Output as far as possible, and leave the rest.
+>   2) raise an exception
+>   3) undefined.
+> 
+> What is your opinion?
+
+Hmmm, well having read all the other replies so far,
+perhaps I can contribute to the confusion with
+a slighly different approach.
+
+Your specification says '... the call of flush writes .. '
+but that's an imperative description.
+
+Instead, you could use a declarative description,
+that is, specify the pre- and post- conditions.
+
+For example:
+
+pre-condition: the buffer contains whole characters
+post-condition: the buffer is empty and its data is
+scheduled for transmission
+
+With this specification:
+
+(1) if you find yourself in the middle of a multi-byte
+character, the post condition is not guarranteed
+because the pre-condition is not met. The behaviour
+may vary depending on the kind of device, communication
+path, time of day, and version of the program.
+
+(2) The words 'scheduled for transmission' imply
+flush can return before actual transmission.
+You have to say that, because you cannot possibly
+ensure the transmission on a high level operating
+system. On Linux for example there is no way
+to ensure disk writes end up on the media.
+Just try writing to a floppy. On RH9 the only
+way to physically write the floppy is to
+unmount it.
+
+It's quite possible that flushing a buffer works
+by unlinking the memory block from the IO object,
+and adding it to a queue 'to be written', and then
+sometime later another thread writes it.
+
+It's *also* possible you have a block device that
+cannot support partial writing: you have to write
+256 bytes, period, end of story. In this case,
+flush will not be able to write everything, period,
+end of story .. it isn't acceptable to write a padded
+block out except at the end of the file. This may
+be the case for a tape drive, for example.
+
+In this case the write is still scheduled, meaning
+the level of abstraction the current class deals
+with has lost control of the situation and delegated
+it to another layer .. but no assurance that the
+physical transmission will occur is made, unless
+subsequent operations on those lower levels
+are done correctly. However, the class managing
+the buffer has still carried out its job by delegating
+to a lower level.
+
+As an example -- you have an object designed to
+physically write, and a program that flushes
+at the end of each line. But the problem is you 
+are getting a huge bill from your ISP, by sending
+twice the number of TCP/IP packets you would need to,
+because most are only half full.
+
+So you just add a buffering class into the chain,
+which captures physical write from its owner
+and buffers them. The upchain class is still satisfying
+its post-condition. The downchain class doesn't write,
+even when flush is called. It's *designed* that way.
+As far as it is concerned, once stuff is given
+to it that stuff is *already* scheduled for transmission
+by definition, and so flush on it does nothing -- the post
+condition is already satisfied.[Caveat: its buffer
+must be 'empty' after flush. But what that means is
+also an abstraction.. it probably doesn't have floating
+buffers, but uses a single fixed one .. in which case
+the 'floating buffer it would have had' is deemed
+flushed at all times anyhow .. :]
+
+(3) When you have blocking IO, nothing changes.
+Flush should block, if it is necessary to satisfy
+the post-condition.
+
+The bottom line is that 'scheduled for transmission'
+is itself an abstract phrase. What it means depends
+on the class. Each class should define this phrase,
+so the programmer can choose an appropriate class
+for their needs.
+
+Finally, I'd like to give a 'real world' and critical
+example. C++ has three kinds of device:
+
+(1) ostream
+(2) FILE*
+(3) Unix file handle
+
+Typically, ostreams and FILE* both write via Unix file handle.
+So what if you use the ostream 'cout' and the FILE* 'stdout'
+and the Unix file handle '1' all in the same program??
+
+Well, the ISO Standard in *this* case requires that
+interleaved calls to cout and stdout (but not 1) work
+'properly' (So they're required to share the same buffer).
+[AFAIC remember :] 
+
+This is not so in general for other objects such
+as a disk file or communication port. It's not even
+required for streams on the same disk file --
+they can use different buffers "just don't do that" :)
+
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

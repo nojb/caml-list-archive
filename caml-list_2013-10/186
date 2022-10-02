@@ -1,0 +1,112 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 7CD187EE44
+	for <caml-list@sympa.inria.fr>; Fri, 25 Oct 2013 11:20:48 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.211;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.211;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.211;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnUBAJ02alLB/BfTnGdsb2JhbABZDr9TgnqBNg4BAQEBAQgUCTyCJQEBBScRQAEQCxgJFg8JAwIBAgFFBgEMAQcBAYgHuSWPGjMHhCwDlCqDYIY7jjFB
+X-IPAS-Result: AnUBAJ02alLB/BfTnGdsb2JhbABZDr9TgnqBNg4BAQEBAQgUCTyCJQEBBScRQAEQCxgJFg8JAwIBAgFFBgEMAQcBAYgHuSWPGjMHhCwDlCqDYIY7jjFB
+X-IronPort-AV: E=Sophos;i="4.93,568,1378850400"; 
+   d="scan'208";a="31843904"
+Received: from msa02.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.211])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 25 Oct 2013 11:20:47 +0200
+Received: from [192.168.1.112] ([92.151.73.26])
+	by mwinf5d07 with ME
+	id hMLl1m0040a1oUC03MLlqT; Fri, 25 Oct 2013 11:20:46 +0200
+Message-ID: <526A37ED.6080901@frisch.fr>
+Date: Fri, 25 Oct 2013 11:20:45 +0200
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:25.0) Gecko/20100101 Thunderbird/25.0
+MIME-Version: 1.0
+To: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>, 
+ Bob Zhang <bobzhang1988@gmail.com>
+CC: Caml List <caml-list@inria.fr>
+References: <CANcqPu70B1kOEtZgiNH1jxBTAUoo9dyp6Dt9hKb7OXwa7f1Wig@mail.gmail.com> <C34DDC63-35B3-43EA-8361-13160A4A849E@math.nagoya-u.ac.jp>
+In-Reply-To: <C34DDC63-35B3-43EA-8361-13160A4A849E@math.nagoya-u.ac.jp>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Robust left to right flow for record disambiguation
+
+On 10/24/2013 03:40 AM, Jacques Garrigue wrote:
+>>     1.
+>>          let f (ls:t) =
+>>             ls |> List.map (fun x -> x.loc) (* cannot inferred x.loc*)
+>
+> Case 1 would require a new specification of how type propagation works.
+> In particular, propagating from an argument to another argument.
+> For this reason, the probability that it gets done is low.
+> (I know that F# handles this case in a special way, but do we want to introduce
+> a special case just for |> ?)
+
+The situation with List.map (or similar iterators) is quite common, and 
+remains one of the only cases where local annotations are often required.
+
+There is already a left-to-right propagation between arguments:
+
+  type t = {a: int};;
+  type s = {a: string};;
+  List.map (fun ({a} : t) -> a + 1) [{a=2}];;   (* accepted *)
+  List.map (fun {a} -> a + 1) [({a=2} : t)];;   (* rejected *)
+
+
+With -principal, the first case is reported as non principal (warning 18).
+
+Is there any practical or theoretical problem with specifying the 
+information flow in order to make it principal?
+
+
+
+For List.map and similar cases, one often prefers the type information 
+to flow from the data stucture to the local abstraction.  One can define:
+
+  let map l f = List.map f l
+
+so that:
+
+  map [{a=2}] (fun ({a} : t) -> a + 1);;   (* rejected *)
+  map [({a=2} : t)] (fun {a} -> a + 1);;   (* accepted *)
+
+
+One could imagine heuristics (based either on the function type, or on 
+the argument shape) to pick a different ordering, but it seems much 
+better to have a simple and predictable flow, and the left-to-right 
+seems the most natural one between function arguments.  If we specify 
+such information flow, it is then the responsibility of the library 
+author to choose a "good" ordering.  I hoped that labeled arguments 
+could let the client code choose a different one, but this doesn't work:
+
+  let map ~f l = List.map f l
+
+  map [{a=2}] ~f:(fun ({a} : t) -> a + 1);;   (* accepted *)
+  map ~f:(fun ({a} : t) -> a + 1) [{a=2}];;   (* accepted *)
+
+  map [({a=2} : t)] ~f:(fun {a} -> a + 1);;   (* rejected *)
+  map ~f:(fun {a} -> a + 1) [({a=2} : t)];;   (* rejected *)
+
+
+Does it seem reasonable to use the actual ordering between arguments on 
+the call site rather than the one defined by the function type?
+
+
+Alain

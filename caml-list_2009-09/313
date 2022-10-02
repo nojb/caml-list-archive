@@ -1,0 +1,118 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.2 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 3C0A8BBAF
+	for <caml-list@yquem.inria.fr>; Sat, 26 Sep 2009 23:40:38 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApYBAJcmvkrUnwdkkWdsb2JhbACCH5hjAQEBAQkLCgcTBLg+hB4F
+X-IronPort-AV: E=Sophos;i="4.44,457,1249250400"; 
+   d="scan'208";a="33605518"
+Received: from relay.pcl-ipout02.plus.net ([212.159.7.100])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 26 Sep 2009 23:40:38 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Al0GANMmvkrUnw6T/2dsb2JhbACCH9FjhB4F
+Received: from ptb-relay03.plus.net ([212.159.14.147])
+  by relay.pcl-ipout02.plus.net with ESMTP; 26 Sep 2009 22:40:37 +0100
+Received: from [87.114.87.187] (helo=leper.local)
+	 by ptb-relay03.plus.net with esmtp (Exim) id 1Mrf0P-0008Nv-4D
+	for caml-list@yquem.inria.fr; Sat, 26 Sep 2009 22:40:37 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] HLVM
+Date: Sat, 26 Sep 2009 22:41:02 +0100
+User-Agent: KMail/1.9.9
+References: <CFBC5B10-F95A-4B9F-823D-BB5C5C844156@refined-audiometrics.com>
+In-Reply-To: <CFBC5B10-F95A-4B9F-823D-BB5C5C844156@refined-audiometrics.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="utf-8"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200909262241.02908.jon@ffconsultancy.com>
+X-Plusnet-Relay: fb311ff66d58a393c74bb200e71a30c4
+X-Spam: no; 0.00; compilation:01 polymorphism:01 run-time:01 ocaml:01 integers:01 arrays:01 ocaml:01 allocates:01 ocaml's:01 pointer:01 pointers:01 trivial:01 ffi:01 stubs:01 hand-written:01 
+
+On Saturday 26 September 2009 18:21:21 David McClain wrote:
+> What, in particular, sets HLVM apart. Surely not just the native
+> machine types?
+
+JIT compilation opens up several hugely-productive optimizations:
+
+1. Polymorphism no longer persists to run-time so there is no need for a 
+uniform representation. Whereas OCaml tags integers and boxes floats and 
+tuples with a couple of hacks for special cases like all-float-records and 
+float arrays, HLVM never boxes any of them (including 32-bit ints, 64-bit 
+floats and complex numbers). Moreover, this massively reduces the stress on 
+the garbage collector. For example, although OCaml has a heavily optimized GC 
+it is already 50% slower than the current HLVM at computing a complex FFT 
+where the complex numbers are represented by the type float * float because 
+OCaml allocates every intermediate tuple on the minor heap.
+
+2. The garbage collector is partially specialized with respect to user defined 
+types. Whereas OCaml's GC blindly traverses the heap testing almost every 
+word to see whether or not it is a pointer, HLVM's GC JIT compiles traversal 
+code for every type it sees and that code jumps directly to the pointers in a 
+value.
+
+3. The code generator can target the exact machine being used so things like 
+SSE are trivial to implement and use. For example, the integer-based 
+Monte-Carlo test from the SciMark2 benchmark is up to 6x faster with LLVM 
+than with OCaml.
+
+4. You get a native code REPL for free.
+
+5. FFI stubs are JIT compiled for you: no more hand-written C stubs!
+
+On top of that, LLVM handles aggregate values very efficiently so HLVM lets 
+you use them for tuples. That gives you value types (a feature that OCaml 
+lacks, which can dramatically improve performance and interoperability) that 
+work with tail calls (structs break tail calls on the CLR).
+
+> Are you handling array references in some unusually efficient manner?
+
+Not really. The main oddity is that references in HLVM are currently 3 word 
+structs: one pointer to the run-time type, one word of metadata (e.g. array 
+length) and a one word pointer that points to the real data (or NULL). That 
+has three main advantages:
+
+1. You can pass arrays of value types to and from C easily and efficiently.
+
+2. You have a typed "null" pointer. So empty options, lists and arrays are 
+represented efficiently as an unboxed value (unlike F# where empty lists and 
+arrays are inefficient heap-allocated values) yet they can still be pretty 
+printed correctly (which OCaml cannot even handle and F# gets wrong on 
+optimized types like options which use the CLR's typeless null).
+
+3. You can get to the run-time type directly with a single indirection rather 
+than loading the value and then the run-time types from its header (two 
+indirections).
+
+> Are you avoiding unnecessary copy-on-writes of large arrays by some
+> form of whole-program analysis?
+
+No. HLVM does not yet do any program analysis at all. It is currently only 
+trying to map ML-style code to assembler (via LLVM IR) differently in order 
+to obtain a different performance profile. Specifically, the performance 
+profile I would like. I am not a fan of non-trivial larger scale analysis and 
+optimization because it renders performance unpredictable. Predictable 
+performance is one of the (many) nice aspects of OCaml that I would like to 
+keep.
+
+> I still don't have a handle on HLVM... 
+
+HLVM is an experiment to see what a next-generation implementation of a 
+language like OCaml might look like, addressing all of OCaml's major 
+shortcomings (interoperability, parallelism and some performance issues). My 
+preliminary results proved that there is indeed a lot to be gained by doing 
+this but more work is required to give HLVM all of the basic features.
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/?e
+

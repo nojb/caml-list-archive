@@ -1,0 +1,130 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA12584; Fri, 20 Jun 2003 11:06:51 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA12845 for <caml-list@pauillac.inria.fr>; Fri, 20 Jun 2003 11:06:50 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h5K96mH21075;
+	Fri, 20 Jun 2003 11:06:48 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA12011; Fri, 20 Jun 2003 11:06:48 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200306200906.LAA12011@pauillac.inria.fr>
+Subject: Re: [Caml-list] scanf and %2c
+In-Reply-To: <20030613202820.GM9367@alan-schm1p> from Alan Schmitt at "Jun 13, 103 04:28:20 pm"
+To: alan.schmitt@polytechnique.org (Alan Schmitt)
+Date: Fri, 20 Jun 2003 11:06:47 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; pierre:01 weis:01 caml-list:01 scanf:01 sscanf:01 val:01 stricter:01 char:01 00,:99 bscanf:01 failwith:01 scanbuf:01 horrific:01 fmt:01 abstractions:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi Alan,
+
+> As I needed to parse some string representing time (of the form hh:mm), 
+> I decided to use scanf. The correct code to do it is:
+> # let time_parse s =
+>   Scanf.sscanf s "%2s:%2s" (fun a b -> a,b)
+>   ;;
+> val time_parse : string -> string * string = <fun>
+
+Just to implement stricter parsing rules (and BTW to show scanf
+capabilities), I will elaborate a bit on this ``correct'' code.
+
+To ensure that hh and mm are indeed decimal digits, we could write:
+
+# let scan_date s = Scanf.sscanf s "%2d:%2d";;
+val scan_date : string -> (int -> int -> 'a) -> 'a = <fun>
+
+This way, the fields hh and mm are parsed and returned as integers as
+they are supposed to be.
+
+So far so good, but this is not precise enough, since (small) negative
+hours are still accepted:
+
+# scan_date "-2:12" (fun hh mm -> hh, mm);;
+- : int * int = (-2, 12)
+
+That's why I usually use:
+
+# let scan_date s = Scanf.sscanf s "%2[0-9]:%2[0-9]";;
+val scan_date : string -> (string -> string -> 'a) -> 'a = <fun>
+
+# scan_date "-2:12" (fun x y -> x, y);;
+Exception: Scanf.Scan_failure "scanf: bad input at char number 1: -".
+
+Then, you may argue that we still parse dates like 99:99 which are
+meaningless. Scanning the characters one at a time, we could be more
+precise and reject a large class of those erroneous dates:
+
+# let scan_date s = Scanf.sscanf s "%1[0-2]%1[0-9]:%1[0-5]%1[0-9]";;
+val scan_date : string -> (string -> string -> string -> string -> 'a)
+-> 'a = <fun>
+
+If minutes are now appropriately handled, we still accept to parse hours
+that are greater than 24!
+
+To deal with that problem, we first define two auxilliary functions am
+and pm to parse respectively dates before 20:00 and after 20:00, when
+the first digit of the hour is already properly parsed:
+
+let am ib = Scanf.bscanf ib "%1[0-9]:%1[0-5]%1[0-9]";;
+let pm ib = Scanf.bscanf ib "%1[0-3]:%1[0-5]%1[0-9]";;
+
+let scan_date_ib ib f =
+  Scanf.bscanf ib "%c"
+   (function c ->
+    let h0 = String.make 1 c in
+    match c with
+    | '0' | '1' -> am ib (f h0)
+    | '2' -> pm ib (f h0)
+    | _ -> failwith ("Illegal date char " ^ h0));;
+
+val scan_date_ib :
+  Scanf.Scanning.scanbuf ->
+  (string -> string -> string -> string -> 'a) -> 'a = <fun>
+
+Remark that we turned to bscanf, that is scanning from scanning
+buffers (and not strings), since the scanning is now split into
+several phases that should go on scanning from the same data structure
+(to do so with strings would involve horrific substring manipulations
+of the string argument to pass it to the next step).
+
+As a rule of thumb, scanning from buffers is much more general and
+easy than scanning from string or files: phase scanning can be
+composed smoothly and scanning from any other data structure is easily
+expressed in terms of a basic function scanning from buffers.
+
+For instance, if you insist for scanning from strings, you could define:
+
+let scan_date s = scan_date_ib (Scanf.Scanning.from_string s);;
+
+Now:
+# scan_string_date "25:12";;
+Exception: Scanf.Scan_failure "scanf: bad input at char number 2: 5".
+
+Hope this helps,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+PS: Using the new formats manipulation primitives, we could have
+factorized a bit the functions am and pm as:
+
+let minutes_fmt () = format_of_string ":%1[0-5]%1[0-9]";;
+let am_fmt () = "%1[0-9]" ^^ minutes_fmt ();;
+let pm_fmt () = "%1[0-3]" ^^ minutes_fmt ();;
+
+let am ib = Scanf.bscanf ib (am_fmt ());;
+let pm ib = Scanf.bscanf ib (pm_fmt ());;
+
+(Note the additional () abstractions to circumvenient the value
+restriction of polymorphic generalization.)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

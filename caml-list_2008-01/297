@@ -1,0 +1,116 @@
+Return-Path: <tf@functionality.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 9BF9DBC6B
+	for <caml-list@yquem.inria.fr>; Tue, 22 Jan 2008 19:43:25 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAD/IlUfAXQInh2dsb2JhbACQFwEBAQgKKZwh
+X-IronPort-AV: E=Sophos;i="4.25,234,1199660400"; 
+   d="scan'208";a="8180384"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 22 Jan 2008 19:43:25 +0100
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id m0MIhKVo021944
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Tue, 22 Jan 2008 19:43:25 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAMbHlUfU436rnmdsb2JhbACQFwEBAQEBBgIIBwoYnB8
+X-IronPort-AV: E=Sophos;i="4.25,234,1199660400"; 
+   d="scan'208";a="21614986"
+Received: from moutng.kundenserver.de ([212.227.126.171])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 22 Jan 2008 19:43:20 +0100
+Received: from [152.78.96.56] (babylon.cip.physik.uni-muenchen.de [141.84.136.30])
+	by mrelayeu.kundenserver.de (node=mrelayeu6) with ESMTP (Nemesis)
+	id 0ML29c-1JHO5f36cq-00041S; Tue, 22 Jan 2008 19:43:19 +0100
+Message-ID: <47963B6C.1010301@functionality.de>
+Date: Tue, 22 Jan 2008 18:52:28 +0000
+From: Thomas Fischbacher <tf@functionality.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.12) Gecko/20060607 Debian/1.7.12-1.2
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Caml-list List <caml-list@inria.fr>
+Subject: CamlMPI: sending marshalled objects
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V01U2FsdGVkX1/tWTYlHqJYfyl8/OhkYGhb80T/ftpThyc+PuH
+ 1Ze4fGpBrJCnNuthZ+p0HZP6ig4uloagVel4DvfYl+YSs4IdUF
+ 0k23MY6zC3sHjGL/y6ovw==
+X-Miltered: at concorde with ID 47963948.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; malloc:01 serialize:01 alloc:01 buffer:01 flags:01 val:01 buffer:01 deallocation:01 malloc:01 flags:01 allocates:01 byte:01 val:01 mlsize:01 deallocation:01 
+
+
+Hello everybody,
+
+there is an old Caml/MPI interface, written by Xavier himself in 1998.
+This provides a pair of C functions caml_mpi_send/caml_mpi_receive,
+which may look a bit funny considering present day ML-C-interface coding
+conventions, but GC-wise is actually valid code as far as I can judge.
+For reference, I added them at the end of this email.
+
+As far as I can see, output_value_to_malloc() actually should be able to
+serialize virtually any ML object (which does not contain alloc_custom()
+blocks and similar stuff) to a buffer. Sending this over the net also
+should not be much of a problem, regardless of the data being sent. If,
+on the other hand, I manually serialized to a string and tried to send
+that, I would be bound by the 16 MB maximal string length limitation on
+32-bit architectures.
+
+So much the theory. But what I actually find in reality is that -- even
+using caml_mpi_send/caml_mpi_receive rather than intermediate strings --
+my code crashes when I try to pass around serialized ML data over MPI
+which is larger than 16 MB. I am not yet 100% sure that this really is
+the problem, but at present, I have every reason to believe so.
+
+So, (1) what is going on here, and (2) how can I repair it?
+Is there a quick fix?
+
+
+value caml_mpi_send(value data, value flags,
+                     value dest, value tag, value vcomm)
+{
+   MPI_Comm comm = Comm_val(vcomm);
+   char * buffer;
+   long len;
+
+   Begin_root(vcomm)             /* prevent deallocation of communicator */
+     output_value_to_malloc(data, flags, &buffer, &len);
+     /* This also allocates the buffer */
+     enter_blocking_section();
+     MPI_Send(buffer, len, MPI_BYTE, Int_val(dest), Int_val(tag), comm);
+     leave_blocking_section();
+   End_roots();
+   stat_free(buffer);
+   return Int_val(len);
+}
+
+
+value caml_mpi_receive(value vlen, value source, value tag, value vcomm)
+{
+   MPI_Comm comm = Comm_val(vcomm);
+   mlsize_t len = Long_val(vlen);
+   char * buffer;
+   MPI_Status status;
+   value res;
+
+   Begin_root(vcomm)             /* prevent deallocation of communicator */
+     buffer = stat_alloc(len);
+     enter_blocking_section();
+     MPI_Recv(buffer, len, MPI_BYTE,
+              Int_val(source), Int_val(tag), comm, &status);
+     leave_blocking_section();
+     res = input_value_from_malloc(buffer, 0);
+     /* This also deallocates the buffer */
+   End_roots();
+   return res;
+}
+
+-- 
+best regards,
+Thomas Fischbacher
+t.fischbacher@soton.ac.uk
+

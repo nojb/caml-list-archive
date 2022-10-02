@@ -1,0 +1,130 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id SAA28793 for caml-redistribution; Fri, 27 Sep 1996 18:03:23 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id RAA28569 for <caml-list@pauillac.inria.fr>; Fri, 27 Sep 1996 17:58:21 +0200
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id RAA12235 for <caml-list@pauillac.inria.fr>; Fri, 27 Sep 1996 17:58:20 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.6.10/8.6.6) with ESMTP id RAA21158 for <caml-list@margaux.inria.fr>; Fri, 27 Sep 1996 17:58:19 +0200
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id RAA12223; Fri, 27 Sep 1996 17:58:18 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id RAA28565; Fri, 27 Sep 1996 17:58:17 +0200
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199609271558.RAA28565@pauillac.inria.fr>
+Subject: Re: native code compiler and exceptions
+To: Jocelyn.Serot@lasmea.univ-bpclermont.fr (Jocelyn Serot)
+Date: Fri, 27 Sep 1996 17:58:17 +0200 (MET DST)
+Cc: caml-list@margaux.inria.fr
+In-Reply-To: <199609271244.OAA07980@concorde.inria.fr> from "Jocelyn Serot" at Sep 27, 96 02:46:35 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+
+Hi,
+
+> I will try yo explain my pb on a small example.
+> Suppose that images are represented as pixel 2d-arrays (in fact, images
+> are implemented as ADTs, with their internal representation hidden).
+> 
+> # type image = int array array
+> # let get_pixel i y x = i.(y).(x)
+> # let set_pixel i y x p = i.(y).(x) <- p
+> # let create nr nc = Array.new_matrix nr nc 0 
+>
+> What i want to do is to compute, for example is a simple 2d-convolution,
+> turning pixel(x,y) into (p(x-1,y)+p(x,y-1)+p(x+1,y)+p(x,y+1))/4.
+
+Well, the set and get functions are well suited for the image
+abstraction, but if efficiency is a problem, you should not use these
+functions to implement low level functions on images: 
+get_pixel i y x is much more time consuming than its inlined counterpart
+i.(y).(x). For efficiency reasons, the last version should be prefered
+when available, for instance from within the abstraction...
+
+> A possible manner to handle the clipping effect at image boundaries is to
+> set that p(x,y) = 0 whenever x<0 ot y<0.
+> So it does not seem to me so "ugly" to write my convolution fn like that:
+> 
+> # let conv im =
+> #    let nr = nb_rows im and nc = nb_cols im in
+> #    let im' = create nr nc in
+> #    for y = 0 to pred nr do for x = 0 to pred nc do
+> #		let p1 = try_get_pixel im (x-1) y 0 in
+> #		let p2 = try_get_pixel im x (y-1) 0 in
+> #		let p3 = try_get_pixel im (x+1) y 0 in
+> #		let p4 = try_get_pixel im x (y+1) 0 in
+> #        set_pixel im' (y,x) ((p1+p2+p3+p4)/4) done done;
+> #    m'
+> 
+> making use of the given access fn:
+> 
+> # let try_get_pixel im y x clip =
+> #    try get_pixel im y x with Invalid_argument _  -> clip
+
+The introduction of try_get_pixel adds another indirection level: 2
+function calls and an exception handler to access one pixel! That may
+10 or 100 times slowlier than the direct access.
+
+> (btw, note that is this case clip might be a _fn_ of the "faulty" coordinates,
+> like:
+> 
+> # let try_get_pixel im y x clip =
+> #    try get_pixel im y x with Invalid_argument _  -> clip y x
+> )
+> 
+> Is this not "good" fnal programming style ?..
+
+Well this is functional, since you call functions, but once more there is no
+need to call a function with 2 arguments to return a constant (0 in
+your case).
+
+> Or does the "ugliness" lies only in the [... with Invalid_argument _  ->...]
+> construct ? In this case, i guess i should test _explicitely_ whether (y,x) are
+> in bounds instead of relying of the exception [Invalid_argument "Array.get"].Ie:
+> 
+> # let try_get_pixel im y x clip =
+> #    if (y<0 || y>=(nb_rows im) || x<0 || x>=(nb_cols im)) then clip
+> #    else get_pixel im y x
+> 
+> Is it what you mean ?
+
+Yes, you're right. There is no good reasons for explicitely trapping the
+Invalid_argument exception from within regular parts of your programs:
+if you know that you may call a primitive with an invalid argument,
+you should avoid this call, instead of trapping the error afterwards.
+
+By the way, you may observe that the function try_get_pixel
+may be simplified when called from within ``conv'': many of the tests
+are statically known and may be discarded. The resulting code exhibits
+the remaining tests but is still readable, while much more efficient:
+
+let conv im =
+ let nr = nb_rows im and nc = nb_cols im in
+ let im' = create nr nc in
+ for y = 0 to pred nr do for x = 0 to pred nc do
+  let p1 = if x = 0 then 0 else im.(x - 1).(y) in
+  let p2 = if y = 0 then 0 else im.(x).(y - 1) in
+  let p3 = if x = nc - 1 then 0 else im.(x + 1).(y) in
+  let p4 = if y = nr - 1 then 0 else im.(x).(y + 1) in
+  im'.(y).(x) <- ((p1 + p2 + p3 + p4) / 4) done done;
+ m'
+
+If you need an even more efficient routine, you should consider
+removing the tests if x = 0, if y = 0, and so on, from inside the
+loop, decomposing the loop into a straightforward loop
+ for y = 1 to nr - 2 do for x = 1 to nc - 2 do
+with no tests at all, and complete im' with the remaining cases
+afterwards ...
+
+In any case, when efficiency is concerned, you should avoid calling 2
+or 3 functions to perform an atomic task. I should say that, even if
+there is no efficiency consideration, calling a function that just
+calls a function that calls a function that performs an atomic task,
+does not help reading the program ...
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis
+
+
+
+
+
+

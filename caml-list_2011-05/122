@@ -1,0 +1,123 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p4JCeXOM011295
+	for <caml-list@sympa-roc.inria.fr>; Thu, 19 May 2011 14:40:35 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Al4CAHcP1U3U4xEIkWdsb2JhbACEWaE0FAEBAQEJCwsHFCWIcK9pkQ0CgSmBaoF9gQcEiiCKIIpI
+X-IronPort-AV: E=Sophos;i="4.65,237,1304287200"; 
+   d="scan'208";a="83518051"
+Received: from moutng.kundenserver.de ([212.227.17.8])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 19 May 2011 14:40:05 +0200
+Received: from office1.lan.sumadev.de (dslb-084-059-065-069.pools.arcor-ip.net [84.59.65.69])
+	by mrelayeu.kundenserver.de (node=mrbap2) with ESMTP (Nemesis)
+	id 0M2XRt-1PV4K60VPx-00sjLp; Thu, 19 May 2011 14:40:03 +0200
+Received: from [192.168.1.111] (546BE640.cm-12-4d.dynamic.ziggo.nl [84.107.230.64])
+	by office1.lan.sumadev.de (Postfix) with ESMTPA id A89B15F702;
+	Thu, 19 May 2011 14:40:02 +0200 (CEST)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Alain Frisch <alain@frisch.fr>
+Cc: Joel Reymont <joelr1@gmail.com>, caml-list <caml-list@inria.fr>
+In-Reply-To: <4DD4F817.9060901@frisch.fr>
+References: <346B52D2-EE21-43D1-B41E-3AEB3BBF0013@gmail.com>
+	 <4DD4150E.6080400@frisch.fr> <4DD4D3C3.9050603@frisch.fr>
+	 <09C897B9-05FC-486C-A126-C644D04BAE94@gmail.com>
+	 <4DD4F817.9060901@frisch.fr>
+Content-Type: text/plain; charset="UTF-8"
+Date: Thu, 19 May 2011 14:40:01 +0200
+Message-ID: <1305808801.22800.164.camel@thinkpad>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.28.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:RW2pPmst7GvDA0oc+X6B+KoPR07PJRHDH4JwT5Nh0C9
+ 1yDn+lAPivl4d7rXskEfmsXtH4DMqmGsy0nmePU4q7ig2Ht3el
+ pg4GKWBe14XPfyvjK8v11kwfZ2dNgV18pzKWCQJwH7d9UzMLmE
+ sFRcXoqFJMYCCCfUmpQNP3Gtdjr7Y4ub6kXTV8l81XxIdsvzVu
+ vXYH+BLGyXtbvmgVMpypw==
+Subject: Re: [Caml-list] optimizing numerical code
+
+Am Donnerstag, den 19.05.2011, 12:59 +0200 schrieb Alain Frisch:
+> On 05/19/2011 10:37 AM, Joel Reymont wrote:
+> >
+> > On May 19, 2011, at 10:24 AM, Alain Frisch wrote:
+> >
+> >> Actually, even in this branch, acc would not be unboxed. The new heuristic unboxes float variables unless they are both needed in boxed form AND mutated, which is the case for acc in your function.
+> >
+> > Shouldn't it be unboxed, though?
+> 
+> Yes, in this case, it would make a lot of sense to work with an unboxed 
+> variable and only box it when needed. But finding a good heuristic is 
+> not trivial. Always applying this approach of "on-demand" boxing might 
+> have drawbacks: more allocations (if the same value is used several 
+> times in boxed form) and less sharing of allocations (the compiler 
+> combines adjacent allocations to avoid some overhead). In the example, 
+> it is easy to find out that the variable is used only once in boxed form 
+> (in a context executed at most once).
+
+Would it make sense to let the developer help when deciding which
+occurrences of a variable are important and which not? I'm thinking here
+of a function
+
+let rare = identity
+
+with the additional pragma that the argument of rare is considered as an
+expression that is rarely evaluated. In our example:
+
+let js_divergence1 v1 v2 =
+  let acc = ref 0. in
+  for i = 0 to (Array.length v1) - 1 do
+    let x = v1.(i)
+    and y = v2.(i) in
+    let m = 0.5 *. (x +. y) in
+    let d1 = x *. log (x /. m) 
+    and d2 = y *. log (y /. m) in
+    acc := !acc +. d1 +. d2
+  done;
+  rare (!acc)              (* HERE *)
+
+For the check whether a float can be unboxed, rare occurrences are
+simply ignored. Maybe it is also helpful for other decisions, e.g.
+register allocation.
+
+> Here is another "lazy" approach that could be worth trying. 
+
+In some sense, this goes into the same direction, only that rare-ness is
+determined at runtime.
+
+Gerd
+
+> Consider a 
+> float variable x which is assigned and used both in boxed and unboxed 
+> form in the same function. Internally, we keep two variants of it: 
+> x_boxed and x_unboxed. When x is assigned the result of some float 
+> expression e:
+> 
+> - if e can be computed directly in unboxed form (e.g. it is the result 
+> of some numerical operation), assign x_unboxed only;
+> 
+> - if e comes in boxed form (e.g. it is the result of some function 
+> call), assign x_boxed and x_unboxed (by dereferencing x_boxed);
+> 
+> 
+> When x is used an an unboxing context, use x_unboxed. When x is used as 
+> a boxed value (e.g. as an argument to a function call, or as the return 
+> value of the current function), check (at runtime) if the content of 
+> x_boxed is equal to x_unboxed; if yes, return x_boxed; otherwise, box 
+> x_unboxed, store the new block in x_boxed and returns it.
+> 
+> This scheme guarantees that at most one allocation happens between two 
+> successive assignment to the variable, and that no allocation happens if 
+> it turns out that the current value is never used in boxed form. This 
+> comes at the price of some extra equality checks between floats and 
+> conditional jumps, but it might be worth trying.
+> 
+> 
+> -- Alain
+> 
+
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Bad Nauheimer Str.3, 64289 Darmstadt,Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

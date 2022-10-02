@@ -1,0 +1,153 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA01467; Wed, 10 Sep 2003 11:49:38 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA08897 for <caml-list@pauillac.inria.fr>; Wed, 10 Sep 2003 11:49:36 +0200 (MET DST)
+Received: from mail3.tpgi.com.au (mail.tpgi.com.au [203.12.160.59])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h8A9nYT23905
+	for <caml-list@inria.fr>; Wed, 10 Sep 2003 11:49:34 +0200 (MET DST)
+Received: from 203-213-85-210-syd-ts17-2600.tpgi.com.au (203-213-85-210-syd-ts17-2600.tpgi.com.au [203.213.85.210])
+	by mail3.tpgi.com.au (8.11.6/8.11.6) with ESMTP id h8A9nMg10282;
+	Wed, 10 Sep 2003 19:49:26 +1000
+Subject: RE: [Caml-list] strange behaviour  with variants and "cannot be g
+	eneralized"
+From: skaller <skaller@ozemail.com.au>
+Reply-To: skaller@ozemail.com.au
+To: "Beck01, Wolfgang" <BeckW@t-systems.com>
+Cc: caml-list@inria.fr
+In-Reply-To: <ADD42C8394EBD4118A3D0003470C18F00950F3D8@G9JJT.mgb01.telekom.de>
+References: 
+	 <ADD42C8394EBD4118A3D0003470C18F00950F3D8@G9JJT.mgb01.telekom.de>
+Content-Type: text/plain
+Message-Id: <1063187322.2119.118.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 10 Sep 2003 19:48:42 +1000
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 ozemail:01 didier:01 morgon:01 3.06:01 orthogonal:01 implemented:01 3.07:01 omitted:01 backquote:01 3.06.:01 uglier:01 compiles:01 extensively:01 backquote:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, 2003-09-10 at 17:10, Beck01, Wolfgang wrote:
+> Didier Remy [mailto:remy@morgon.inria.fr] wrote:
+> 
+> > Here is some explanation of 
+> > 
+> >  1) what happened in version 3.06 and 
+> >  2) how this is related to a relaxed form of value restriction, 
+> >  3) which is actually orthogonal to the solution implemented in 3.07
+> > 
+> > [detailed explanation omitted]
+> 
+> well, I was not aware that compilation of polymorphic variants is an area
+> of ongoing research. In the OCaml manual, they are not mentioned under
+> "Language extensions" but as a section in the chapter "An introduction to
+> Objective Caml". There is a statement
+> 
+>     "In programs, polymorphic variants work like usual ones. You just
+>     have to prefix their names with a backquote character `."
+> 
+> and this is not true, at least in 3.06. After spending another evening
+> with weird type errors, I replaced polymorphic variants with ordinary
+> ones. My project looks uglier now since I had to split up some files,
+> but at least it compiles and runs.
+
+I use polymorphic variants extensively. Technically, you have to add
+the backquote ` and also [] in the type definitions:
+
+	type x = X of int
+
+becomes
+
+	type x = [ `X of int ]
+
+If you do both these changes, everything should work, plus
+or minus some casts. Occasionally, you will have to
+cast some value using single or double coercions:
+
+	(a:t)   (* annotation only *)
+	(a:>t)  (* conversion *)
+	(a:u:>t) (* double conversion *)
+
+
+This is quite rare, but it is sometimes necessary
+when you have wildcard matches like:
+
+let f e = 
+	match e with
+	| `A -> ..
+	| _ -> ...
+
+How can the compiler know what the type here really is 
+supposed to be? Unlike ordinary variants, the tag `A can
+occur in any number of types.
+
+if you now use that expression in a context requiring
+type [`A | `B] you'll get an error. Perhaps e contained
+the tag `C?
+
+So with polymorphic variants, because the typing is so
+flexible, you have to use type
+annotations and casts a bit more often than ordinary variants.
+
+The situation is entirely different if your code has an
+error in it! In this case, you will often get
+vvvvvvvveeeeeeeerrrrrrrryyyyyyy long error messages:
+in my case hundreds of lines long usually.
+
+This really is a problem, particularly when the source
+of the problem could easily be diagnosed in some
+cases: for example a missing tag, or a tag with
+an incompatible argument. The compiler *does* detect
+some of these cases (but not enough yet).
+
+You are therefore advised to make smaller changes to
+your program before recompiling, since then you know
+the error is in a place you just changed.
+
+Are polymorphic variants worth it?
+
+For simple uses, the answer is no. However,
+in a complex program such as a compiler which
+can benefit from a large number of types which
+are typing different subsets of a universal term
+type, polymorphic variants are indispensible.
+
+They not only allow more accurate typing,
+they're also *faster*. For example,
+consider a restriction of a term type
+in which rewriting rules reduce some 
+sugars to lower level primitive
+(for example macro expansion).
+
+Either you forgoe a typing in which macros
+cannot be in the output type of the rewriting,
+or you have to convert all the terms from one
+variant type to another like
+
+	match e with 
+	| A -> AA
+	| B -> BB
+	| C i -> CC i
+	| Macro x -> f x..
+	
+which is slower than the polymorphic variant version:
+
+	match e with
+	| `Macro x -> f x
+	| #nonmacro as x -> x
+
+since there is no need deconstruct and reconstruct
+the isomorphic terms, since the isomorphism is
+represented by value equality: the same tags
+
+	`A, `B, `C of int
+
+can occur in both the input and output types.
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

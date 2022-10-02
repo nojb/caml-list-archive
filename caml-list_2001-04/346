@@ -1,0 +1,113 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA28485; Sat, 28 Apr 2001 23:50:40 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA28368 for <caml-list@pauillac.inria.fr>; Sat, 28 Apr 2001 23:50:38 +0200 (MET DST)
+Received: from mta7.pltn13.pbi.net (mta7.pltn13.pbi.net [64.164.98.8])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f3SLoar16624
+	for <caml-list@inria.fr>; Sat, 28 Apr 2001 23:50:36 +0200 (MET DST)
+Received: from checkerlap.d6.com ([64.160.53.33])
+ by mta7.pltn13.pbi.net (Sun Internet Mail Server
+ sims.3.5.2000.03.23.18.03.p10) with ESMTP id
+ <0GCI0094AV9GZ1@mta7.pltn13.pbi.net> for caml-list@inria.fr; Sat,
+ 28 Apr 2001 14:48:54 -0700 (PDT)
+Date: Sat, 28 Apr 2001 14:50:39 -0700
+From: Chris Hecker <checker@d6.com>
+Subject: Re: [Caml-list] ocamlmktop and includes
+In-reply-to: <Pine.BSF.3.96.1010428104723.97098B-100000@fledge.watson.or g>
+X-Sender: def6@shell16.ba.best.com
+To: Patrick M Doane <patrick@watson.org>, caml-list@inria.fr
+Message-id: <4.3.2.7.2.20010428103832.00e244c0@shell16.ba.best.com>
+MIME-version: 1.0
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Content-type: text/plain; charset="us-ascii"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+>Alternatively, it would be really nice to make stand-alone byte code
+>interpreters which have the .cmo files builtin.
+
+Do you just mean a standalone executable (with no need for ocamlrun)?  If so, use the "-custom" flag to ocamlc and it'll put the intepreter inside the output file (and it appears the file is still recognized as a bytecode file by ocamlrun, so it's still portable as long as you don't link any C objects into it).  Maybe that's not what you meant...
+
+Putting the include paths in the generated toplevel sounds like a good idea to me.  I decided to implement this.  I've attached the new tools/ocamlmktop.ml below.  You should be able to build this by itself with "ocamlc -o ocamlmktop ocamlmktop", without building the compiler or even having the compiler source installed.
+
+Random Notes & Issues:
+
+- I need to build a temp .ml file and compile it, which assumes the ocamlc compiler is around.  Of course, ocamlmktop already assumes this.
+
+- Filename.temp_file does not seem safe to me since it doesn't return an open handle, but I'm not a security expert.  I play kind of fast and loose with the temp files.  I create the *.ml file with temp_file, but I don't check for *.cmi or *.cmo before compiling it.  I wouldn't run this setuid root.  :)
+
+- I use Topdirs.dir_directory to add the include directories...I doubt it's supposed to be an exposed API.
+
+- It expands directories at runtime, so if you add -I +foo it'll work even if you move CAMLLIB.
+
+- What you probably really want here is a new command line parm so you can differentiate betwen include dirs that should be added to the toplevel and those that shouldn't.
+
+Let me know if anybody has problems with this.
+
+Chris
+
+------- tools/ocamlmktop.ml --------
+
+(***********************************************************************)
+(*                                                                     *)
+(*                           Objective Caml                            *)
+(*                                                                     *)
+(*            Xavier Leroy, projet Cristal, INRIA Rocquencourt         *)
+(*                                                                     *)
+(*  Copyright 1996 Institut National de Recherche en Informatique et   *)
+(*  en Automatique.  All rights reserved.  This file is distributed    *)
+(*  under the terms of the Q Public License version 1.0.               *)
+(*                                                                     *)
+(***********************************************************************)
+
+(* $Id: ocamlmktop.ml,v 1.3 1999/11/17 18:58:48 xleroy Exp $ *)
+
+(* stolen from Misc so we don't have to modify the tools/ makefile *)
+let remove_file filename =
+  try
+    Sys.remove filename
+  with Sys_error msg ->
+    ()
+  
+let _ =
+  let args =
+    String.concat " " (List.tl (Array.to_list Sys.argv)) in
+
+  (* capture all the -I include dirs, ignoring everything else *)
+  (* I can't use Arg.parse because we don't know all the parms *)
+  let dirs = ref [] in
+  for i = 1 to Array.length Sys.argv - 1 do
+    if Sys.argv.(i) = "-I" then
+      dirs := Sys.argv.(i+1) :: !dirs;  (* this throws on ending -I *)
+  done;
+
+  (* make a temporary .ml file and have it include the directories *)
+  let ml_ext = ".ml" and cmo_ext = ".cmo" and cmi_ext = ".cmi" in
+  let tmp_ml = Filename.temp_file "mktopinc" ml_ext in
+  let tmp_oc = open_out tmp_ml in
+  output_string tmp_oc "let _ = \n";
+  output_string tmp_oc "List.iter Topdirs.dir_directory [\n";
+  List.iter (fun dir -> output_string tmp_oc
+      ("\"" ^ (String.escaped dir) ^ "\"; ")) !dirs;
+  output_string tmp_oc "\n]";
+  close_out tmp_oc;
+
+  (* compile the temp file *)
+  let tmp_root = String.sub tmp_ml 0
+      (String.length tmp_ml - String.length ml_ext) in 
+  let tmp_cmo = tmp_root ^ cmo_ext in
+  let ec = ref (Sys.command ("ocamlc -c " ^ tmp_ml)) in
+  if !ec = 0 then
+    (* link the new toplevel *)
+    ec := Sys.command("ocamlc -linkall toplevellib.cma "
+                     ^ args ^ " " ^ tmp_cmo ^ " topmain.cmo");
+  remove_file tmp_ml;
+  remove_file tmp_cmo;
+  remove_file (tmp_root ^ cmi_ext);
+  exit !ec
+    
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

@@ -1,0 +1,138 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 4871EBC8E
+	for <caml-list@yquem.inria.fr>; Mon, 21 Feb 2005 01:00:40 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j1L00dpm000915
+	for <caml-list@yquem.inria.fr>; Mon, 21 Feb 2005 01:00:39 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA02108 for <caml-list@pauillac.inria.fr>; Mon, 21 Feb 2005 01:00:39 +0100 (MET)
+Received: from smtp815.mail.sc5.yahoo.com (smtp815.mail.sc5.yahoo.com [66.163.170.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with SMTP id j1L00bHP030568
+	for <caml-list@inria.fr>; Mon, 21 Feb 2005 01:00:38 +0100
+Received: from unknown (HELO ?192.168.1.100?) (rftp@pacbell.net@63.194.18.166 with plain)
+  by smtp815.mail.sc5.yahoo.com with SMTP; 21 Feb 2005 00:00:36 -0000
+Message-ID: <421924B5.6030108@rftp.com>
+Date: Sun, 20 Feb 2005 16:00:53 -0800
+From: Robert Roessler <roessler@rftp.com>
+Organization: Robert's High-performance Software
+User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.7.5) Gecko/20041217
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Erik de Castro Lopo <ocaml-erikd@mega-nerd.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Need for a built in round_to_int function
+References: <20050221072255.29055ee4.ocaml-erikd@mega-nerd.com>
+In-Reply-To: <20050221072255.29055ee4.ocaml-erikd@mega-nerd.com>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 421924A7.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 421924A5.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 wrote:01 o'caml:01 rounding:01 converts:01 o'caml:01 compiler:01 rounding:01 unreasonable:01 compiler:01 powerpc:01 sardes:01 inrialpes:01 aschmitt:01 ocamlopt:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Erik de Castro Lopo wrote:
+
+> I am about to port some code from C to O'caml. This code uses the 
+> C99 function :
+> 
+>     long int lrint (double d) ;
+> 
+> which performs rounding on the double and then converts that to
+> a long int.
+> 
+> In O'caml the only option seems to be:
+> 
+>     let round_to_int f = int_of_float (f +. 0.5) ;;
+> 
+> The problem is that this code on i386 produces really slow code:
+> 
+>     804b385:    dd 44 98 fc        fldl   0xfffffffc(%eax,%ebx,4)
+>     804b389:    de c1              faddp  %st,%st(1)
+>     804b38b:    83 ec 08           sub    $0x8,%esp
+>     804b38e:    d9 7c 24 04        fnstcw 0x4(%esp)
+>     804b392:    66 8b 44 24 04     mov    0x4(%esp),%ax
+>     804b397:    b4 0c              mov    $0xc,%ah
+>     804b399:    66 89 44 24 00     mov    %ax,0x0(%esp)
+>     804b39e:    d9 6c 24 00        fldcw  0x0(%esp)
+>     804b3a2:    db 1c 24           fistpl (%esp)
+>     804b3a5:    8b 04 24           mov    (%esp),%eax
+>     804b3a8:    d9 6c 24 04        fldcw  0x4(%esp)
+>     804b3ac:    83 c4 08           add    $0x8,%esp
+> 
+> The killer here is the two fldcw (floating point load control word)
+> instructions, around the fistpl (which actually does the float to int 
+> conversion). Loading the FP control work causes a flush of the FPU
+> pipeline. In code with a lot of floating point code interspersed
+> with a round to int, there can be a significant slow down due to
+> the fldcw instructions.
+
+I will preface this by a Slashdot-like "IANANA" (I Am Not A Numerical 
+Analyst).
+
+The above approach is more or less what you expect if you (as a 
+compiler code generator) a) want to do rounding following C/C++ 
+standards ("Truncate (toward 0)"), and b) make no assumption regarding 
+the state of the IEEE hardware rounding setting...
+
+> The lrint function in C, replaces all the above with one fistpl
+> and a single mov instruction and leaves the floating point
+> control word intact. In C code that moved from:
+> 
+>     (int) floor (f + 0.5)
+> 
+> to
+>     lrintf (f)
+> 
+> I have seen an up to 4 fold increase in speed.
+
+You, on the other hand, are willing to make an assumption regarding 
+the hardware rounding mode - [presumably] that it is set to the 
+power-on default of "Round to nearest, or to even if equidistant", 
+which may not be unreasonable - it just needs to be explicit that this 
+*is* the assumption, and that you have a way of verifying (or at least 
+reason to believe) that other software components in your app's 
+environment are not invalidating this assumption.
+
+The fact that the default hardware rounding mode does NOT match "(int) 
+floor (f + 0.5)" should also be mentioned... the "+ 0.5" attempts to 
+do what the hardware would call "Round up (toward +infinity)" while 
+the "floor" would match the "Round down (toward -infinity)" mode. 
+Combining them does not equate to "Round to nearest, or to even if 
+equidistant". :)
+
+In case it isn't obvious, the IEEE hardware default rounding behavior 
+is chosen to minimize the effects of accumulated rounding errors in a 
+series of calculations involving rounding.
+
+> I've looked at the code for the O'Caml compiler and I think I 
+> know how to implement this, at least for x86 and PowerPC, the two
+> architectures I have access to. If I was to supply a patch would
+> it be accepted?
+> 
+> 
+> I know other suggestions like this one :
+> 
+>     http://sardes.inrialpes.fr/~aschmitt/cwn/2003.11.18.html#1
+> 
+> were not viewed favourably, but the addition of a single function
+> with an explicit behaviour is a far neater solution.
+
+This could take the form of a compiler switch exactly like "/QIfist", 
+which was added to VC7 (and VC6 with the "Processor Pack").  Using 
+this switch means you are aware of (or should be) and happy with the 
+above detailed assumption.
+
+Of course, if something like this were to added to ocamlopt (for 
+target architectures using IEEE floating point), code (an additional 
+bytecode op?) emulating the same behavior could be added to the 
+runtime to maintain consistency across the interpreted and native 
+operating environments - or not.
+
+Robert Roessler
+roessler@rftp.com
+http://www.rftp.com
+

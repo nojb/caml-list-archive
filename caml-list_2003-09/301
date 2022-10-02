@@ -1,0 +1,230 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA08225; Sat, 27 Sep 2003 22:40:36 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA06550 for <caml-list@pauillac.inria.fr>; Sat, 27 Sep 2003 22:40:35 +0200 (MET DST)
+Received: from mail3.tpgi.com.au (mail.tpgi.com.au [203.12.160.59])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h8RKeXH28639
+	for <caml-list@pauillac.inria.fr>; Sat, 27 Sep 2003 22:40:33 +0200 (MET DST)
+Received: from 203-213-81-237-syd-ts13-2600.tpgi.com.au (203-213-81-237-syd-ts13-2600.tpgi.com.au [203.213.81.237])
+	by mail3.tpgi.com.au (8.11.6/8.11.6) with ESMTP id h8RKeT326068
+	for <caml-list@pauillac.inria.fr>; Sun, 28 Sep 2003 06:40:29 +1000
+Subject: [Caml-list] questions on type representations
+From: skaller <skaller@ozemail.com.au>
+Reply-To: skaller@ozemail.com.au
+To: caml-list@pauillac.inria.fr
+Content-Type: text/plain
+Message-Id: <1064695222.12048.53.camel@pelican>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 28 Sep 2003 06:40:22 +1000
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; ozemail:01 generic:01 exhibit:01 typecode:01 inst:99 typecode:01 btypecode:01 btypecode:01 'int':01 generative:01 inst:99 generative:01 inverted:01 fixpoint:01 recursion:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I have some questions on typing:
+one is Ocaml specific and the others seek generic
+design advice.
+
+First I exhibit my encoding of types in Felix:
+
+(** value typing *)
+type 't b0typecode_t' = 
+  [
+  | `BTYP_name of bid_t         
+  | `BTYP_inst of bid_t * 't list 
+  | `BTYP_tuple of 't list         
+  | `BTYP_sum of 't list            
+  | `BTYP_function of 't * 't
+  | `BTYP_pointer  of 't 
+  | `BTYP_void                       
+  | `BTYP_binding of 't * 't 
+  | `BTYP_fix of int      
+  | `BTYP_var of bid_t     
+  ]
+
+(** meta typing *)
+type 't b1typecode_t' =
+  [
+  | `BTYP_apply of 't * 't 
+  | `BTYP_typefun of (int * 't) list * 't * 't
+  | `BTYP_type
+  | `BTYP_type_tuple of 't list
+  ]
+
+(** general typing *)
+type 't btypecode_t' =
+  [
+  | 't b0typecode_t'
+  | 't b1typecode_t'
+  ]
+
+type b0typecode_t = 't b0typecode_t' as 't
+type btypecode_t = 't btypecode_t' as 't
+
+--------------------------------------------
+Some notes. a bid_t is a unique identifier,
+actually an alias for 'int'. It is used to
+refer to generative types.
+
+`BTYP_inst (index, [t1, t2, .. tn])
+
+refers to an instance of a generative type which has been
+indexed by types, for example vector[int]: the current instantiation
+is like a C++ template -- done entirely at compile time.
+
+`BTYP_fix depth
+
+is my inverted fixpoint binder. It specifies the 
+point of recursion, with an implicit fixpoint binder
+'depth' levels up in the structure. (well, -depth actually :(
+
+Finally: Felix doesn't have type inference, only
+synthetic deduction: function argument types must
+always be given, although return types may be omitted.
+This is because Felix supports overloading.
+
+QUESTION 1. (polymorphic variant issue)
+----------------------------------------
+
+For this system, the Ocaml typing using a parameter
+works fine to obtain covariant typing for plain types
+and types extended with meta types.
+
+Unfortunately, i need the equivalent mechanism in 
+other places, for example I have statements, and 
+statements extended by macro statemants. The problem
+is that there are about 6 other types involved:
+patterns and expressions being two of them.
+
+This makes the above trick with fixpoints to obtain
+covariance very ugly. Is there another way?
+Could there be some syntactic sugar OR language
+extension to alleviate this problem?
+
+[I actually tried to apply the technique to statements
+and i got so totally lost I gave up. The transformation
+is purely mechanical, but the result is totally unreadable.]
+
+
+QUESTION 2 (design issue)
+-------------------------
+
+There are actually 2 types of type variable in use
+in Felix, but they are not distinguished in the type
+encoding shown above. They are:
+
+(a) unknown types of variables and function returns
+(b) instantiable type variables
+
+Variables of type (a) must be calculated by the compiler.
+They're unknowns, not variables. Variables of type (b)
+must be instantiated by the user. [explicitly or by 
+unification of an argument with a generic function
+signature]
+
+In addition, I plan 2 other kinds of variables:
+
+(c) dynamic variables under pointers. which can't be dereferenced
+(d) fully dynamic variables
+
+Variables under pointers which can't be dereferenced
+are equivalent to Ocaml boxed types. The C++ representation
+will be void*. This allows run time polymorphism of the kind
+for which the following algorithm admits a single encoding:
+
+	fun [T1, T2] swap (a : &T1, b : &T2) = { return (b,a); }
+
+Fully dynamic variables remove the 'under a pointer' restriction.
+They will work by passing Run Time Type Information [RTTI]
+in the form of a descriptor which allows an object to be
+copied (assigned, etc ..).
+
+Thus I have 4 distinct kinds of type variables,
+but only one encoding. Should I use distinct encodings?
+
+There is a clear downside, namely routines such as unification
+become considerably more complex with 4 kinds of type variable.
+On the other hand the lack of distinction makes it harder to
+detect errors and implement the representation.
+
+QUESTION 3 . (design issue)
+--------------------------
+
+I have unified the ordinary type encoding
+with both lambda expressions and meta typing 
+(kinding). Should I? Or is it better to make one or
+both of these distinct types?
+
+Note: `BTYP_type is the kind of an ordinary type,
+so that, `BTYP_type -> `BTYP_type is the kind
+of a type function. encoded `BTYP_typefun _ ..
+
+I can't kind that at the moment: Should `BTYP_type 
+should have a level argument: 
+
+	`BTYP_type of int
+
+or is it better (possible?) to avoid a heirarchy
+of kinding levels?
+
+Another question is: is there an advantage
+to lazy evaluation of type lambdas?
+[I currently use eager evaluation]
+
+QUESTION 4 (design issue)
+-------------------------
+
+Felix has Modules and Interfaces,
+and also Functors (a module parameterised
+by an Interface). Both modules and interfaces
+are currently generative, however function
+instances are not: like C++, you can use
+an anonymous functor application, the system
+tracks all the instantiations.
+
+[Note to anyone examining the actual code: 
+I got it wrong. I track the module and interface,
+instead of the module and functor.
+
+the typing:
+
+	`BTYP_binding (upper,lower)
+
+is used for a module:interface coercion
+so that the type checking is done with
+component 'upper', but the code generator
+uses the representation type 'lower'.
+Unlike Ocaml, I can't discard the representation
+because not all type in Felix have a uniform
+representation (no boxing ..)]
+
+I think I actually need:
+
+	`BTYP_binding (binding_index, interface_index)
+
+where binding_index specifies the interface -> module
+mapping. (eg 'type t -> int')
+
+In Ocaml, on the other hand, modules and functors
+are generative, but interfaces (signatures) are not.
+Ocaml requires a functor application to be named
+to make the functor/argument binding generative.
+
+I think it is possible to track functor/argument
+pairs, bypassing this restriction. Why doesn't
+Ocaml do that? [Separate compilation problem?]
+
+--------------------------------
+Any comments appreciated on any of this.
+Also any pointers to papers or actual code
+that may be useful (especially for the kinding
+and lamba calculations)
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

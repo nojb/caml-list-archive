@@ -1,0 +1,173 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id DC093BC88
+	for <caml-list@yquem.inria.fr>; Tue,  1 Feb 2005 07:58:25 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j116wPHs006082
+	for <caml-list@yquem.inria.fr>; Tue, 1 Feb 2005 07:58:25 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA14862 for <caml-list@pauillac.inria.fr>; Tue, 1 Feb 2005 07:58:25 +0100 (MET)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j116wMCo031439
+	for <caml-list@inria.fr>; Tue, 1 Feb 2005 07:58:24 +0100
+Received: from [192.168.1.200] (ppp212-197.lns2.syd3.internode.on.net [203.122.212.197])
+	by smtp3.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id j116wCMe049383;
+	Tue, 1 Feb 2005 17:28:20 +1030 (CST)
+Subject: Re: [Caml-list] type inference for python
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: Philippe Fremy <pfremy@inseal.com>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <41FF1305.30308@inseal.com>
+References: <41FF1305.30308@inseal.com>
+Content-Type: text/plain
+Message-Id: <1107241087.23973.242.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 01 Feb 2005 17:58:08 +1100
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 41FF2891.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 41FF288E.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 inference:01 sourceforge:01 wrote:01 inference:01 ocaml:01 initialise:01 garbage:01 ocaml:01 finalisers:01 finalisers:01 synchronous:01 non-cyclic:01 compiler:01 bytecode:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+On Tue, 2005-02-01 at 16:26, Philippe Fremy wrote:
+> 	Hi,
+> 
+> I would like to implement something similar to the type inference of 
+> ocaml for the python language. I have always found it very impressive 
+> (although I have only used caml light).
+> 
+> I have no experience with the topic, 
+
+I do. I did considerable work on this. The project
+was called Vyper. The key idea was to build an 
+interpreter which was used to initialise all the
+dictionaries, then analyse them for type information,
+and generate code that used that type information.
+
+I got as far as getting the interpreter to work very well,
+running most standard pure python plus some emulations of
+popular C extensions, and with reasonable performance.
+In addition, I made some extensions, many of which
+got into later versions of Python .. including proper
+lexical scoping, garbage collection (well, my version
+used Ocaml for that .. ) and a few other things.
+
+However, the type analysis was never done, and I lost
+interest in the project, primarily because it would
+never support continuation passing in the style of 
+Stackless Python. (And the source is lost now).
+
+A few technical problems also got in the way:
+
+(1) I needed finalisers for __del__ methods.
+Ocaml has Ocaml finalises today as a consequence.
+(C finalisers existed, but I needed Ocaml ones).
+
+Unfortunately, Python uses ref counting and finalisation
+is therefore synchronous and well ordered for non-cyclic
+references, whereas my implementation just used GC.
+This meant certain programs didn't quite work as
+they did in CPython.
+
+(2) Ocaml native code compiler can't generate shared libraries,
+so compiling Python to Ocaml will never emulate dynamic
+loading. Perhaps you could do this with Ocaml bytecode,
+but the interpreter needed to be fast.
+
+This was a very serious obstacle, since every Python
+C extension I wanted to emulate had to be hardwired
+into the program (even though using it emulated
+the usual import semantics).
+
+(3) Python specs weren't written by someone knowing about
+languages and standardisation. By far the worst problem
+was exceptions. In many cases errors are specified
+to throw exceptions... which means the behaviour is well
+defined.
+
+This alone make static type analysis almost impossible.
+To do static typing you need a specification that
+says the result of a wrong typing is undefined.
+Otherwise the program can *rely* on catching an exception,
+and a type error isn't an error (since the behaviour is
+well defined). Trying to explain that to Pythonistas and
+van Rossum in particular proved difficult.. although they
+seemed to understand the problem which dynamic mutations
+to modules caused and considered 'freezing' modules after
+they'd been imported. This may have been done in later
+versions of Python: some changes to 'eval' and friends
+were made for his reason (you have to specify the dictionary
+to use for an eval now).
+
+> 1. analyse all the constraints of the code
+> Ex:
+> def f(a): a.append(1)
+> def g(a): a=a+1; f(a)
+> g('coucou')
+> 
+> => a must support append
+
+No, you cannot assume that due to the 'exception' problem
+mentioned above.
+
+> => a must also be an int
+
+And you can't assume that either. A could be a class
+with an __add__ method. Alternatively, it could be anything,
+and the called of g() is again relying on a type error
+to throw an exception.
+
+
+> 2. cross-validate the constraints consistency
+> => inconsistent assertions
+
+Python variables are all polymorphic. It isn't
+inconsistent to have
+
+	a is an int
+	a is a string
+
+This is possible, at different times .. as an example:
+
+	for i in [1,"string"]: ..
+
+i is first an int then a string.
+
+> The 2. and 3. looks like the most difficult aspect of it.
+
+Actually the difficulty is deciding how to modify
+the semantics of Python so analysis is possible.
+This will break some programs, so you need to choose
+a reasonable set of constraints.
+
+You would typically assume that modules were immutable
+after loading, whilst class objects remained dynamic.
+This means you can apply some static analysis
+by actually executing the program up to the main
+function call, then examining what got imported.
+At least that was my theory .. in particular,
+you can type module level variables, and you can
+actually lookup functions defined in modules and
+examine the code. By using global analysis, you can
+then optimise some functions. For example,
+you might determine that some function
+
+	def f(a): return a+1
+
+really is always called with an int argument,
+and thus optimise it.
+
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+

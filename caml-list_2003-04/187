@@ -1,0 +1,109 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id GAA05822; Thu, 10 Apr 2003 06:58:36 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA05086 for <caml-list@pauillac.inria.fr>; Thu, 10 Apr 2003 06:58:34 +0200 (MET DST)
+Received: from pacific-carrier-annex.mit.edu (PACIFIC-CARRIER-ANNEX.MIT.EDU [18.7.21.83])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h3A4wX923751
+	for <caml-list@inria.fr>; Thu, 10 Apr 2003 06:58:33 +0200 (MET DST)
+Received: from central-city-carrier-station.mit.edu (CENTRAL-CITY-CARRIER-STATION.MIT.EDU [18.7.7.72])
+	by pacific-carrier-annex.mit.edu (8.12.4/8.9.2) with ESMTP id h3A4wTQJ013604;
+	Thu, 10 Apr 2003 00:58:29 -0400 (EDT)
+Received: from melbourne-city-street.mit.edu (MELBOURNE-CITY-STREET.MIT.EDU [18.7.21.86])
+	by central-city-carrier-station.mit.edu (8.12.4/8.9.2) with ESMTP id h3A4wP8d015348;
+	Thu, 10 Apr 2003 00:58:28 -0400 (EDT)
+Received: from mit.edu (MFLIN.MIT.EDU [18.194.0.116])
+	)
+	by melbourne-city-street.mit.edu (8.12.4/8.12.4) with ESMTP id h3A4wLU8006782;
+	Thu, 10 Apr 2003 00:58:22 -0400 (EDT)
+Date: Thu, 10 Apr 2003 00:58:20 -0400
+Subject: Re: Parallel CPS? (was Re: [Caml-list] stack overflow)
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+Mime-Version: 1.0 (Apple Message framework v551)
+Cc: caml-list@inria.fr
+To: Yang Shouxun <yangsx@fltrp.com>
+From: Mike Lin <mikelin@MIT.EDU>
+In-Reply-To: <200304101213.02268.yangsx@fltrp.com>
+Message-Id: <0CF60E04-6B11-11D7-AC6E-000393AE4242@mit.edu>
+Content-Transfer-Encoding: 7bit
+X-Mailer: Apple Mail (2.551)
+X-Spam: no; 0.00; mikelin:01 caml-list:01 tail-call:01 tree':01 kont:01 workings:01 digging:01 -mike:01 compiler:01 closure:01 int:01 overflow:02 continuation:02 binary:02 tree:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>
+>>> I've learned this style in Scheme. Yet I feel paralyzed when trying 
+>>> to
+>>> write in it to build trees. The type declaration may make my point
+>>> clearer. --8<--
+>>> type  dtree = Dnode of dnode | Dtree of (dnode * int * dtree list)
+>>> --8<--
+>>> The problems are that unless the next call returns, the tree is not
+>>> complete yet and it may have several calls on itself.
+>
+
+> What if the continuation is not sequential, but parallel? If the tree 
+> is
+> uniformly binary branching, I guess it would be easier.
+
+> Thanks for other listers as well. The major problem is what if the
+> continuation is not singular (sequential) but parallel?
+
+I'm not exactly sure what you mean by 'parallel' here. The observation 
+I'll make is that I'm assuming you're not designing your code to only 
+work on SMP or distributed machines, so that there must exist an 
+equivalent sequential control structure for it.
+
+I'll describe a problem which I hope is related to yours.
+
+Say we had code structured like:
+
+type  tree =
+	  Leaf of int
+	| Tree of tree * tree (* left and right branches *)
+
+let build_tree (data:some_type) =
+	Tree(build_left_subtree data, build_right_subtree data)
+
+...and we wanted to CPS it. So assume we are given:
+
+build_left_subtree' : some_type -> (Tree->unit) -> unit
+build_right_subtree' : some_type -> (Tree->unit) -> unit
+
+So sometimes people get confuzled because they have to issue a 
+tail-call to build_left_subtree to be good CPSers, but they still need 
+additional information to finish constructing the tree.
+
+The solution is to use an intermediate closure as follows:
+
+let build_tree' (data:some_type) (kont:(Tree->unit)) =
+	build_left_subtree data
+		(fun (left:tree) ->
+			build_right_subtree data
+				(fun (right:tree) ->
+					kont (left,right)))
+
+Again, I hope I understood your problem correctly.
+
+By the way, if there's anyone reading who understands the workings of 
+the compiler better than I do. In the above example, left (the argument 
+to the first closure) should get stack-allocated since it is an 
+argument. Thereafter, we issue a tail-call with a downward funarg that 
+references that argument. On the one hand, you want to blow away the 
+activation record and allocate the closure on the heap in order to be a 
+constant-stack-space tail call. On the other hand, you want to allocate 
+the closure on the stack, since it's a downward funarg and you don't 
+want to go digging around for memory in the heap. Which does the 
+compiler do? I hope the former, or else there's a big problem with my 
+technique...
+
+-Mike
+
+
+--
+Mike Lin
+mikelin@mit.edu
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,126 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id C81A8BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 17:59:14 +0200 (CEST)
+Received: from pih-relay06.plus.net (pih-relay06.plus.net [212.159.14.133])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5RFxE41012242
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 17:59:14 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by pih-relay06.plus.net with esmtp (Exim) id 1I3ZvF-00008x-Ho
+	for caml-list@yquem.inria.fr; Wed, 27 Jun 2007 16:59:13 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] The Implicit Accumulator: a design pattern using optional arguments
+Date: Wed, 27 Jun 2007 16:53:26 +0100
+User-Agent: KMail/1.9.7
+References: <200706271314.35134.jon@ffconsultancy.com> <46826C69.5060802@functionality.de> <F2BC247F-45B1-4BD3-A006-D214D635ABC6@lrde.epita.fr>
+In-Reply-To: <F2BC247F-45B1-4BD3-A006-D214D635ABC6@lrde.epita.fr>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+Message-Id: <200706271653.27116.jon@ffconsultancy.com>
+X-Miltered: at concorde with ID 46828952.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; computations:01 ocaml:01 mutation:01 mutable:01 hashtbl:01 sig:01 val:01 val:01 struct:01 struct:01 hashtbl:01 erroneously:01 hash:01 statically:01 ocaml:01 
+
+On Wednesday 27 June 2007 16:06:51 Qu=F4c Peyrot wrote:
+> I mean, for someone like me, with quite some experience in the asm/c/c
+> ++ world (i.e. a garbage collector-less world) but not much in other
+> languages, it's easy to naively think of a garbage collector as a
+> fancy feature to prevent from having to call "free/delete". But I'm
+> starting to realize there is a whole new set of powerful design
+> patterns which come along. It has been said multiple times on this
+> mailing list, but I think we really miss a book about these design
+> patterns and optimization tricks often specific to a given (or a set
+> of) feature (functional, lazy computations, garbage collector...).
+
+This is an excellent idea. I'll write an OCaml Journal article on design=20
+patterns! :-)
+
+> > Other advanced optimization techniques that can be used for benefit
+> > in very specialized situations include (explicit) continuation coding:
+> > rather than returning a value (e.g. a tuple), you take as an argument
+> > a function to which you then pass on your return value(s). This is
+> > quite
+> > useful whenever "execution flow branches out into multiple paths that
+> > have to be taken", and may sometimes (though rarely) also be used for
+> > good as a poor man's VALUES/MULTIPLE-VALUE-BIND substitute.
+>
+> I didn't get that part at all. I think I would need an example to
+> understand
+> why it is interesting to pass the function instead of just returning
+> the tuple
+> and processing it.
+
+I think Thomas is referring to continuation passing style (CPS). That isn't=
+ an=20
+optimization though (it slows things down) but it does let you abstract awa=
+y=20
+mutation. However, it is not entirely safe in the absence of linear types.
+
+=46or example, the immutable Map and mutable Hashtbl both map keys to value=
+s. If=20
+you wrap them with an API written in CPS then you can switch between Maps a=
+nd=20
+Hashtbls transparently:
+
+module type MAP =3D sig
+  type t
+  val create : unit -> t
+  val add : string -> string -> t -> (t -> 'a) -> 'a
+  val remove : string -> t -> (t -> 'a) -> 'a
+  val copy : t -> (t * t -> 'a) -> 'a
+end;;
+
+module Pure : MAP =3D struct
+  module Map =3D Map.Make(String)
+
+  type t =3D string Map.t
+
+  let create() =3D Map.empty
+
+  let add k v m f =3D f(Map.add k v m)
+  let remove k m f =3D f(Map.remove k m)
+  let copy m f =3D f(m, m)
+end;;
+
+module Impure : MAP =3D struct
+  type t =3D (string, string) Hashtbl.t
+
+  let create() =3D Hashtbl.create 1
+
+  let add k v m f =3D
+    Hashtbl.replace m k v;
+    let f_m =3D f m in
+    Hashtbl.remove m k;
+    f_m
+
+  let remove k m f =3D
+    let v =3D Hashtbl.find m k in
+    Hashtbl.remove m k;
+    let f_m =3D f m in
+    Hashtbl.add m k v;
+    f_m
+
+  let copy m f =3D f(m, Hashtbl.copy m)
+end;;
+
+However, this is not completely safe because you might erroneously return a=
+=20
+map or hash table from the continuation "f" passed to these functions.=20
+Enforcing this statically requires linear types.
+
+=2D-=20
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+The OCaml Journal
+http://www.ffconsultancy.com/products/ocaml_journal/?e
+

@@ -1,0 +1,116 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA26591 for caml-red; Tue, 16 Jan 2001 11:42:20 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA31762 for <caml-list@pauillac.inria.fr>; Mon, 15 Jan 2001 16:22:30 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f0FFMRT16824;
+	Mon, 15 Jan 2001 16:22:27 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA31721; Mon, 15 Jan 2001 16:22:21 +0100 (MET)
+Date: Mon, 15 Jan 2001 16:22:21 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Charles Martin <martin@chasm.org>
+Cc: caml-list@inria.fr
+Subject: Re: live variables
+Message-ID: <20010115162221.A29646@pauillac.inria.fr>
+References: <5.0.0.25.0.20010112095330.00a39eb0@chasm.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <5.0.0.25.0.20010112095330.00a39eb0@chasm.org>; from martin@chasm.org on Fri, Jan 12, 2001 at 10:02:46AM -0800
+Sender: weis@pauillac.inria.fr
+
+> I would like to follow up to the mailing list a series of posts on 
+> comp.lang.functional.  Jerome Vouillon explained that the native code 
+> compiler compiles
+> 	let rec foldl f q = function
+> 	| [] -> q
+> 	| x :: xx -> foldl f (f q x) xx
+> as if it were written
+> 	let rec foldl f q = function
+> 	| [] -> q
+> 	| l ->
+> 	  let x = List.hd l in
+> 	  let r = f q x in
+> 	  let xx = List.tl l in
+> 	  foldl f r xx
+> As Daniel Wang points out, this does not preserve the basic liveness 
+> properties of the original program.  As he asked on the newsgroup, is there 
+> a deep reason for this, or is this just a bug that has yet to be fixed?
+
+There are two notions of "liveness":
+- GC liveness: when is the value of a local variable treated as a
+  memory root for the garbage collector?
+- Dataflow liveness: is the value of a local variable going to be used
+  again later in the same activation of the same function?
+
+For the bytecode interpreter, everything that is stored in the
+evaluation stack is a GC root, i.e. live for the GC.  This roughly
+means that a variable is GC live at every point in its lexical scope
+(with obvious exceptions for tail-calls and for function
+abstractions).  Hence, the second version of foldl above
+behaves exactly like the alternative version below:
+
+ 	let rec foldl f q = function
+ 	| [] -> q
+ 	| l ->
+ 	  let x = List.hd l in
+ 	  let xx = List.tl l in
+ 	  let r = f q x in
+ 	  foldl f r xx
+
+I.e. the variable "l" remains GC live until foldl tail-calls in both
+cases.
+
+The native-code compiler actually ties GC liveness with the result of
+its dataflow liveness analysis: only local variables that have been
+determined dataflow live at a GC point are treated as memory roots.
+This is an optimization that may allow earlier deallocation.
+For instance, "l" is not live during the call to "f" in the
+third version of "foldl" above, but "l" is live during the call to "f"
+in the second version.  The head of "l" as well as its head cons could
+therefore be reclaimed earlier in the former case than in the latter.
+
+But this is just an optimization, not a guaranteed property.  Indeed,
+"the basic liveness properties of the original programs" are quite
+hard to define independently of a particular execution model and
+liveness analysis algorithm.  So, I certainly don't see this behavior
+(no early deallocation of the head of l in the second form above)
+as a bug; at most, it's a quality of implementation issue.
+
+Now, why is it that "foldl" is translated to the second form above and
+not the third?  This is due to one of the "let" optimizations performed by
+ocamlc and ocamlopt:
+        let x = e in ... x ... (* one occurence of x only *)
+is replaced by
+        ... e ...
+(This is performed only for certain compiler-generated lets where "e"
+is guaranteed to be side-effect free.  There are similar optimizations
+when "x" does not occur in the body of the let, and also when "e" is
+another variable "y".)  So, for "foldl", the pattern-matcher compiler
+first generate something very naive with lots of intermediate lets:
+        let rec foldl f q t1 =
+          let t2 = t1 in
+          match t2 with
+            [] -> q
+          | _::_ -> let t3 = hd t2 and t4 = tl t2 in
+                    foldl f (f q t3) t2
+which then gets transformed to:
+        let rec foldl f q t1 =
+          match t1 with
+            [] -> q
+          | _::_ -> foldl f (f q (hd t1)) (tl t1)
+
+These optimizations on compiler-generated "let"s is a big win for the
+bytecode compiler, both in terms of code size and execution speed, and
+also help the native-code compiler to some extent by decreasing
+register pressure and workload on the register allocator.
+
+Unfortunately, this can conflict with early reclaimation of data
+structures in some cases (for the native-code compiler).  It's really
+a code size/speed vs. memory usage conflict.
+
+Ideally, the "let" optimizations should take the life span of
+variables into account, at least for the native-code compiler, but I
+really don't know how to do this.
+
+- Xavier Leroy
+
+

@@ -1,0 +1,125 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA03053; Thu, 1 Aug 2002 11:32:01 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA03348 for <caml-list@pauillac.inria.fr>; Thu, 1 Aug 2002 11:32:00 +0200 (MET DST)
+Received: from mail-r1.hw.ac.uk (mail-r.hw.ac.uk [137.195.101.211])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g719VxL17598
+	for <caml-list@inria.fr>; Thu, 1 Aug 2002 11:31:59 +0200 (MET DST)
+Received: from [137.195.12.107] (helo=localhost)
+	by mail-r1.hw.ac.uk with esmtp (Exim 3.36 #1)
+	id 17aCJ5-0001pV-00
+	for caml-list@inria.fr; Thu, 01 Aug 2002 10:31:43 +0100
+Date: Thu, 1 Aug 2002 10:26:52 +0100
+Mime-Version: 1.0 (Apple Message framework v482)
+Content-Type: multipart/mixed; boundary=Apple-Mail-1-494688879
+Subject: [Caml-list] Sys.command is broken on MacOS X
+From: =?ISO-8859-1?Q?S=E9bastien_Carlier?= <sebc@cee.hw.ac.uk>
+To: caml-list@inria.fr
+Message-Id: <D0697156-A530-11D6-9425-00306546978E@cee.hw.ac.uk>
+X-Mailer: Apple Mail (2.482)
+X-MailScanner: Found to be clean
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--Apple-Mail-1-494688879
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/plain;
+	charset=ISO-8859-1;
+	format=flowed
+
+
+The system(3) C library function is seriously broken on MacOS X.
+It may return with an Interrupted System Call error before the child
+process has finished its execution, leaving a zombie process.
+
+The Ocaml function Sys.command uses the system(3) function,
+and thus is broken too.  Active DVI is one of the applications greatly
+impacted by this bug, but there may be others.
+
+The attached patch, to be applied to the Ocaml compiler, provides a
+working implementation of the system(3) function.  If an Ocaml
+application uses Sys.command, and unexpectedly fails on MacOS X
+with "Interrupted System Call" errors, you should apply this patch.
+
+--
+S=E9bastien Carlier
+
+
+--Apple-Mail-1-494688879
+Content-Disposition: attachment;
+	filename=ocaml-macosx-system.patch
+Content-Transfer-Encoding: 7bit
+Content-Type: application/octet-stream;
+	x-unix-mode=0644;
+	name="ocaml-macosx-system.patch"
+
+Index: byterun/sys.c
+===================================================================
+RCS file: /caml/ocaml/byterun/sys.c,v
+retrieving revision 1.59
+diff -r1.59 sys.c
+256a257,298
+> #if defined(SYS_rhapsody)
+> int rhapsody_system(const char *string) {
+>     int old_sigmask;
+>     pid_t pid;
+> 
+>     if (string == 0)
+> 	return 1;
+>     old_sigmask = sigblock(sigmask(SIGQUIT));
+>     pid = vfork();
+>     if (pid < 0) {
+> 	/* vfork failed */
+> 	sigsetmask(old_sigmask);
+> 	return -1;
+>     } else if (pid == 0) {
+> 	/* We are in the child process */
+> 	sigsetmask(old_sigmask);
+> 	execl("/bin/sh", "sh", "-c", string, 0);
+> 	_exit(127);
+> 	return -1;
+>     } else {
+> 	/* We are in the parent process */
+> 	int status = 0;
+> 	void* old_sigint;
+> 	void* old_sigquit;
+> 	int result;
+> 
+> 	old_sigint = signal(SIGINT, 0);
+> 	old_sigquit = signal(SIGQUIT, 0);
+> 	do {
+> 	    result = waitpid(pid, &status, 0);
+> 	} while (result < 0 && errno == EINTR);
+> 	signal(SIGINT, old_sigint);
+> 	signal(SIGQUIT, old_sigquit);
+> 	sigsetmask(old_sigmask);
+> 	if (result < 0)
+> 	    return -1;
+> 	else
+> 	    return status;
+>     }
+> }
+> #endif
+> 
+262a305,307
+> #if defined(SYS_rhapsody)
+>   status = rhapsody_system(String_val(command));
+> #else
+263a309
+> #endif
+
+--Apple-Mail-1-494688879
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain;
+	charset=US-ASCII;
+	format=flowed
+
+
+
+--Apple-Mail-1-494688879--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

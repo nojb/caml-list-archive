@@ -1,0 +1,82 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA22785; Thu, 31 Jan 2002 12:12:54 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA22914 for <caml-list@pauillac.inria.fr>; Thu, 31 Jan 2002 12:12:52 +0100 (MET)
+Received: from fichte.ai.univie.ac.at (fichte.ai.univie.ac.at [131.130.174.156])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g0VBCpD04754
+	for <caml-list@inria.fr>; Thu, 31 Jan 2002 12:12:51 +0100 (MET)
+Received: from chopin.ai.univie.ac.at (root@chopin.ai.univie.ac.at [131.130.174.170])
+	by fichte.ai.univie.ac.at (8.9.3/8.9.3/Debian 8.9.3-21) with ESMTP id MAA26173;
+	Thu, 31 Jan 2002 12:12:51 +0100
+Received: (from markus@localhost)
+	by chopin.ai.univie.ac.at (8.9.3/8.9.3/Debian 8.9.3-21) id MAA28637;
+	Thu, 31 Jan 2002 12:12:51 +0100
+Date: Thu, 31 Jan 2002 12:12:51 +0100
+From: Markus Mottl <markus@oefai.at>
+To: Tomasz Zielonka <zielony@cs.net.pl>
+Cc: CAML list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Using C values in ocaml code
+Message-ID: <20020131111251.GA27804@chopin.ai.univie.ac.at>
+Mail-Followup-To: Tomasz Zielonka <zielony@cs.net.pl>,
+	CAML list <caml-list@inria.fr>
+References: <20020131101112.GA30020@cs.net.pl>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20020131101112.GA30020@cs.net.pl>
+User-Agent: Mutt/1.3.26i
+Organization: Austrian Research Institute for Artificial Intelligence
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 31 Jan 2002, Tomasz Zielonka wrote:
+>   value
+>   get_some_value(value unit)
+>   {
+>     CAMLparam1(unit);
+>     Datum x;
+>     x = foo();
+>     CAMLreturn((value) x)
+>   }
+
+You can't just cast 'x' to an OCaml-value: if it is an integer, you'll
+have to use the "Val_int"-macro. Otherwise the integer might exceed the
+range allowed by OCaml and could be interpreted as a pointer by the GC,
+possibly resulting in a crash (integers need to be tagged).
+
+If it is a pointer to something allocated by C, you could return it
+directly, but this may cause troubles if you deallocate this region of
+memory while the value is still reachable from the OCaml-world (read
+section 17.2.3 to learn what can happen).
+
+Therefore you should use a more appropriate encoding. If you don't want
+the GC to notify your C-program that the value is not reachable from your
+program anymore (i.e. can be finalized/deallocated), then just allocate
+a block tagged abstract of size 1, e.g:
+
+  value v = alloc_small(1, Abstract_tag);
+
+and write your pointer into its (only) field using the Field-macro:
+
+  Field(v, 0) = foo();
+
+The above works with integers (no need for conversions then), too, btw.
+
+If you want to have a function for finalization/deallocation called by
+the GC but don't want to handle custom blocks in their full generality,
+just use "alloc_final". It allows you to pass a finalization function
++ some GC-parameters and creates a custom block with the other custom
+functions (hashing, etc.), set to default values.
+
+See the manual for details...
+
+Regards,
+Markus Mottl
+
+-- 
+Markus Mottl                                             markus@oefai.at
+Austrian Research Institute
+for Artificial Intelligence                  http://www.oefai.at/~markus
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

@@ -1,0 +1,107 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA19041 for caml-redistribution; Fri, 21 May 1999 20:23:55 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA04680 for <caml-list@pauillac.inria.fr>; Thu, 20 May 1999 10:54:07 +0200 (MET DST)
+Received: from carabosse.oleane.net (carabosse.oleane.net [194.2.28.5])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id KAA24211
+	for <caml-list@inria.fr>; Thu, 20 May 1999 10:54:07 +0200 (MET DST)
+Received: from tom.oleane.net  (smtp.dial.oleane.com [194.2.0.54])  by carabosse.oleane.net  with ESMTP id KAA18251; Thu, 20 May 1999 10:54:03 +0200
+Received: from hoedic.trusted-logic.fr (dyn-1-2-075.Def.dialup.oleane.fr [195.25.27.75])
+	by tom.oleane.net (8.8.8/8.8.8) with ESMTP id KAA01469;
+	Thu, 20 May 1999 10:54:00 +0200
+Received: (from xleroy@localhost)
+	by hoedic.trusted-logic.fr (8.8.7/8.8.7) id KAA26085;
+	Thu, 20 May 1999 10:51:47 +0200
+Date: Thu, 20 May 1999 10:51:47 +0200
+From: Xavier Leroy <Xavier.Leroy@trusted-logic.fr>
+To: Joerg Czeranski <jc@joerch.org>
+Cc: caml-list@inria.fr
+Subject: Re: yet another signal mask patch and: what's the indended semantics?
+Message-ID: <19990520105147.A26080@hoedic.trusted-logic.fr>
+References: <5vbInDAh9$2ip$1@joerch.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.95.4us
+In-Reply-To: <5vbInDAh9$2ip$1@joerch.org>; from Joerg Czeranski on Wed, May 19, 1999 at 07:44:57PM +0200
+Sender: weis
+
+> These patches are again incremental.  I think most of the signal
+> stuff is now working.  Stream output isn't reentrant and thus must
+> not be used in handlers.
+
+I'm getting totally lost among your various patches, and so are most
+of the readers of this list, I believe.
+
+If you have time, it would be great if you could provide the
+implementors (caml-light@inria.fr, not caml-list@inria.fr) with some
+explanations of what problem you're trying to fix, and how you propose
+to fix them.  I know, I could just read your patches, but I'm not sure
+I have the time and willingness to do so.
+
+> Generally, what's the meaning of enter_blocking_section()/
+> leave_blocking_section()?
+
+Well, you could always read the code :-), but I'll try to explain
+anyway.  The intention is that a enter_blocking_section and
+leave_blocking_section delimit pieces of C code that can block for
+extended periods of time, but are guaranteed not to call any Caml
+runtime functions (e.g. no heap allocation and no GC).  This affects
+both signal handling and OS-level threads:
+
+- Signal handling is synchronous outside of enter_b_s/leave_b_s:
+pending signals are just recorded, and tested from time to time by the
+Caml code so that exception handlers are called only at "safe" points.
+Inside enter_b_s/leave_b_s, signals will be processed immediately
+by doing a C-to-Caml callback in the signal handler.
+
+- For OS-level threads (the systhreads package), enter_b_s releases
+the Caml masterlock (the one that ensures that only one thread can
+execute Caml code at a time), and leave_b_s reacquires it.  Again,
+enter_b_s/leave_b_s bracket blocking C code that does not use the Caml
+runtime, i.e. with which other Caml threads may run concurrently.
+
+> Were they intended to be only used in
+> reentrant C functions?
+
+I've heard about three different definitions of "reentrant".  What is
+your question exactly?
+
+> And what's the semantics of the Unix.xxx functions supposed to be?
+> While the Single Unix C write() function never blocks are a successful
+> select(), Unix.write will block until all data is written unless the
+> descriptor is set to non-blocking mode.
+> So far I assumed that the semantics should be the same for C and Caml-Unix
+> functions with the same name.  I didn't yet try to check which functions
+> are merely wrappers and which implement a higher level semantics.
+
+The Unix library was designed in pre-POSIX times (around 1991-1992),
+in an environment containing a mixture of BSD Unix and System V.  Some
+of the wrappers tried to hide some of the semantic differences between
+the two.  Also, some features weren't there initially
+(e.g. non-blocking mode) and were added later, perhaps not in a fully
+consistent way.
+
+Now that we have POSIX and Unix 98, it would certainly be worthwhile
+to go through the library again and make it as close as possible to
+the specs.  Volunteers are most welcome.
+
+> These questions make me hesitate to use O'Caml "in anger" for low level
+> Unix programming.
+
+The original goal of the Unix library wasn't to give full access to
+all Unix system calls in Caml, but rather to provide a reasonable
+subset for medium- to high-level systems programming.
+
+There are some truly low-level Unix programming that you can't do with
+the current Unix library, e.g. ioctl(), some signal hacks, and perhaps
+some non-blocking I/O stuff.  Some of those restrictions are due to
+the Caml language itself (e.g. ioctl() can't be done in a type-safe
+way); others, to limitations of the OCaml runtime (e.g. signal
+handling is severely constrained by runtime system invariants).
+
+One could also argue that there are POSIX features that you really
+don't want to use because they are a mess and better alternative
+exists (e.g. use threads, not non-blocking I/O).
+
+- Xavier Leroy
+
+
+

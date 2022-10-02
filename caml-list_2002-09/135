@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA25373; Mon, 9 Sep 2002 08:20:48 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA25533 for <caml-list@pauillac.inria.fr>; Mon, 9 Sep 2002 08:20:47 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g896Ki917844
+	for <caml-list@inria.fr>; Mon, 9 Sep 2002 08:20:45 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id PAA17950;
+	Mon, 9 Sep 2002 15:20:34 +0900 (JST)
+To: tim@fungible.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] When do you need a subtype before :>?
+In-Reply-To: <20020909053906.6D8647F4F@lobus.fungible.com>
+References: <20020909053906.6D8647F4F@lobus.fungible.com>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020909152033C.garrigue@kurims.kyoto-u.ac.jp>
+Date: Mon, 09 Sep 2002 15:20:33 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 85
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: tim@fungible.com (Tim Freeman)
+
+> It seems that sometimes when I use :> I need to use the form
+> 
+>    (e :> t)
+> 
+> and sometimes I need to use this form:
+> 
+>    (e : t1 :> t2)
+> 
+> Can anyone tell me how to predict when I need the more complicated
+> version?  I needed it in the code below, and that surprised me.
+
+There are now lots of explanations in the tutorial (first part of the
+reference manual). The basic has always been: with (e : t1 :> t2), the
+system checks wether t1 is a subtype of t2, but with (e :> t) the
+system builds a "generic enough" subtype of t (completely
+independently of e!), and then unifies this type with the type of e.
+Clearly, the first version is going to work more often.
+
+While the above is enough to define (e : t1 :> t2), it is not enough
+to define (e :> t); which "generic enough" subtype should be chosen?
+To avoid exponential behaviour, the strategy was changed in 3.05,
+and the rule is now: expand up to 2 object/variant + type abbreviation
+sequences. That is, starting from the root of the type you are going
+to subtype, you can only visit a branch which is a prefix of
+   S* E* S* E* S*
+where S represent subtypable types (objects or variants) and E the
+expansion of a type abbreviation.
+Additionally, if one of the expanded abbreviations is that of a
+recursive class type, the recursion is kept in the newly built type.
+
+Looks confusing? It is, but it happens to solve many cases, and to
+produce readable types, which should be helpful whenever the
+unification with the so-produced subtype fails.  It is also fast
+enough that you shouldn't bother to use (e : t1 :> t2) when (e :> t2)
+works. And hopefully we shouldn't have to change the definition
+anymore.
+
+Now, what happen in your case: in the first case you need to expand
+eventdesc and eventtype, 2 expansions are OK. But in the second case
+described_event is expanded first so you won't expand eventtype at all,
+so you cannot subtype it. Too bad.
+Note that this would be ok if eventdesc and described_event were not
+object types, but either datatypes or abstract types: then they would
+not be counted as (useless) subtyping themselves.
+
+If you're going to use lots of object types in this way, then expect
+to need lots of double coercions.
+
+Cheers,
+
+        Jacques
+
+
+> module type CONSCIOUS = sig
+>   type eventtype = [`VECTOR | `SCALAR | `UNIT]
+>   type +'a type_constraint
+>   class type [+'a] eventdesc =
+>   object
+>     method type_constraining_field: 'a type_constraint
+>   end
+>             
+>   class type [+'a] described_event =
+>   object
+>     method desc: 'a eventdesc
+>   end
+>                           
+> end
+> 
+> module Foo = functor (C: CONSCIOUS) -> struct
+>   let _ =
+>     let e: [`SCALAR] C.eventdesc = failwith "x" in
+>     let f = (e (* No subtype needed here. *) :> C.eventtype C.eventdesc) in
+>       ()
+>       
+>   let _ =
+>     let e: [`SCALAR] C.described_event = failwith "ouch" in
+>     (* The : [`SCALAR] C.described_event on the next non-comment line is
+>        required, even though the same type appears on the previous
+>        non-comment line. *)
+>     let f = (e: [`SCALAR] C.described_event :> C.eventtype C.described_event)
+>     in
+>       ()
+> end
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

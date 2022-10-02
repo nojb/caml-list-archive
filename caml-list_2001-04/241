@@ -1,0 +1,91 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA25765; Fri, 20 Apr 2001 00:32:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA25824 for <caml-list@pauillac.inria.fr>; Fri, 20 Apr 2001 00:32:43 +0200 (MET DST)
+Received: from ext-ch1gw-3.online-age.net (ext-ch1gw-3.online-age.net [216.34.191.37])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f3JMWfr25343
+	for <caml-list@inria.fr>; Fri, 20 Apr 2001 00:32:41 +0200 (MET DST)
+Received: from int-ch1gw-2.online-age.net (int-ch1gw-2 [3.159.232.66])
+	by ext-ch1gw-3.online-age.net (8.9.3+Sun/8.9.1/990426-RLH) with ESMTP id SAA12752;
+	Thu, 19 Apr 2001 18:32:36 -0400 (EDT)
+Received: from uswaumsxb4medge.med.ge.com (localhost [127.0.0.1])
+	by int-ch1gw-2.online-age.net (8.9.3+Sun/8.9.1/990426-RLH) with ESMTP id SAA12547;
+	Thu, 19 Apr 2001 18:32:31 -0400 (EDT)
+Received: by USWAUMSXB4MEDGE with Internet Mail Service (5.5.2653.19)
+	id <20VN6D1W>; Thu, 19 Apr 2001 17:33:08 -0500
+Received: from mrs.mrs.med.ge.com (MRS [3.57.196.1]) by uswaumsxbhmedge.med.ge.com with SMTP (Microsoft Exchange Internet Mail Service Version 5.5.2653.13)
+	id 20WCT0C1; Thu, 19 Apr 2001 17:33:00 -0500
+Received: (from gurr@localhost)
+	by mrs.mrs.med.ge.com (8.9.3+Sun/8.9.3) id PAA21666;
+	Thu, 19 Apr 2001 15:31:41 -0700 (PDT)
+From: David Gurr <gurr@mrs.med.ge.com>
+To: frisch@clipper.ens.fr
+Cc: caml-list@inria.fr, gurr@mrs.mrs.med.ge.com
+Date: Thu, 19 Apr 2001 15:31:41 -0700 (PDT)
+Message-Id: <200104192231.PAA21666@mrs.mrs.med.ge.com>
+Subject: GC of custom blocks Re: [Caml-list] User-defined equality on types?
+X-Sun-Charset: US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Alain Frisch:
+
+> I support this suggestion. The standard equality/ordering/hashing
+> functions are often adequate for most of the data structures, and it would
+> be useful to use them and just place a hook on specific types to provide
+> specialized implementation. It could almost be done with
+> the "custom" block tag; the problem is that such blocks are not garbage
+> collected.  What about "custom Caml blocks" ?
+ 
+The memory manager Cmm (not to be confused with the IL in ocamlopt)
+gives a generic garbage collection interface that allows custom garbage
+collectors and custom heaps in such a way that one can use multiple
+collectors with multiple heaps including collection of cross heap
+pointers.  It is designed to do garbage collection of C++ so it is
+complicated by C++ details.  But the basic design is good.  To use the
+Cmm design with custom blocks would require 
+
+-- defining a heap interface type
+
+struct heap_operations {
+	value (*alloc)(heap h, unsigned long size, mlsize_t mem, mlsize_t max);
+	value (*alloc_block)(heap h, tag_t tag, mlsize_t size, mlsize_t mem, mlsize_t max);
+	void (*register_root)(heap h, value r);
+	void (*unregister_root)(heap h, value r);
+	void (*scavenge)(heap h, value v);  /* ie mark, copy, etc */
+	void (*collect)(heap h);
+	void (*collect_slice)(heap h); /* may need more parameters */
+	void (*compact)(heap h);
+}; 
+
+-- an addtional operation pointer: 
+
+struct custom_operations {
+	...
+	void (*traverse)(value v); /* walks v calling scavenge on its pointers */
+};
+
+-- using the existing minor and major heaps to implement heap interfaces
+
+value alloc_shr_prime(heap h, tag_t tag, mlsize_t size, mlsize_t mem, mlsize_t max){
+	return alloc_shr(tag,size);
+}
+
+...
+
+struct heap_operations major_heap = { 
+	0, /* you can only alloc standard blocks in the major heap */
+	&alloc_shr_prime, 
+	&register_global_root_prime,
+	... };
+	
+	
+See
+
+	ftp://ftp.di.unipi.it/pub/project/posso/cmm/ 
+	
+for Cmm papers and source.  Kaffe (an open source Java implementation)
+also has custom allocators and collectors but I have forgotten the details.
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

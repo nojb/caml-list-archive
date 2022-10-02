@@ -1,0 +1,180 @@
+Received: by margaux.inria.fr, Fri, 12 Feb 93 11:12:48 +0100
+Received: by margaux.inria.fr, Thu, 11 Feb 93 16:17:36 +0100
+From: Valerie.Menissier@inria.fr (Vale'rie Me'nissier-Morain)
+Message-Id: <9370.732388389@margaux.inria.fr>
+Sender: weis@margaux
+To: salinier@aquilon.greco-prog.fr
+Cc: caml-list@margaux
+Subject: caml.el
+Status: O
+
+Here is a preceding message about caml.el in the caml-list:
+
+From: Xavier Leroy <xleroy@pomerol>
+Subject: Re: Emacs support for camllight
+
+This caml-mode provides the correct syntax-table definitions for Caml,
+and the ability to run a Caml Light toplevel as a subprocess. The
+auto-indenting facility is, uh, simplistic: pressing TAB indents the
+line like the line above.  It would be great to have a more clever
+automatic indentation, but the Caml syntax doesn't lend itself well to
+the kind of lexical-based pretty-printing that's typical of language
+modes in Emacs. If anybody comes up with something better, please let
+us know.
+
+- Xavier
+
+------------------------ caml.el ------------------------------
+
+;;; CAML mode for GNU Emacs
+
+(defvar caml-mode-syntax-table nil
+  "Syntax table in use in CAML-mode buffers.")
+
+(defvar caml-mode-map nil
+  "Keymap used in CAML mode.")
+
+(if caml-mode-syntax-table ()
+  (setq caml-mode-syntax-table (make-syntax-table))
+  (modify-syntax-entry ?\( "()1" caml-mode-syntax-table)
+  (modify-syntax-entry ?* ". 23" caml-mode-syntax-table)
+  (modify-syntax-entry ?\) ")(4" caml-mode-syntax-table)
+  (modify-syntax-entry ?' "w" caml-mode-syntax-table)
+  (modify-syntax-entry ?_ "w" caml-mode-syntax-table)
+  (modify-syntax-entry ?` "\"" caml-mode-syntax-table))
+
+(if caml-mode-map ()
+  (setq caml-mode-map (make-sparse-keymap))
+  (define-key caml-mode-map "\C-x\C-l" 'caml-send-phrase)
+  (define-key caml-mode-map "\C-x\C-k" 'caml-kill-phrase)
+  (define-key caml-mode-map "\C-x-C" 'caml-comment-out-phrase))
+
+(defun caml-mode ()
+  "Major mode for editing CAML code."
+  (interactive)
+  (kill-all-local-variables)
+  (setq major-mode 'caml-mode)
+  (setq mode-name "caml")
+  (use-local-map caml-mode-map)
+;; TO DO  (setq local-abbrev-table caml-mode-abbrev-table)
+  (set-syntax-table caml-mode-syntax-table)
+  (make-local-variable 'paragraph-start)
+  (setq paragraph-start (concat "^$\\|" page-delimiter))
+  (make-local-variable 'paragraph-separate)
+  (setq paragraph-separate paragraph-start)
+  (make-local-variable 'paragraph-ignore-fill-prefix)
+  (setq paragraph-ignore-fill-prefix t)
+  (make-local-variable 'indent-line-function)
+  (setq indent-line-function 'caml-indent-line)
+  (make-local-variable 'indent-tabs-mode)
+  (setq indent-tabs-mode nil)
+  (make-local-variable 'caml-tab-width)
+  (setq caml-tab-width 2)
+  (make-local-variable 'require-final-newline)
+  (setq require-final-newline t)
+  (make-local-variable 'comment-start)
+  (setq comment-start "(* ")
+  (make-local-variable 'comment-end)
+  (setq comment-end " *)")
+  (make-local-variable 'comment-column)
+  (setq comment-column 40)
+  (make-local-variable 'comment-start-skip)
+  (setq comment-start-skip "(\\*+ *")
+  (make-local-variable 'comment-indent-hook)
+  (setq comment-indent-hook 'c-comment-indent)
+  (make-local-variable 'parse-sexp-ignore-comments)
+  (setq parse-sexp-ignore-comments nil)
+  (run-hooks 'caml-mode-hook))
+
+(defun caml-insert-tab ()
+  (indent-to (* caml-tab-width
+		(1+ (/ (current-column) caml-tab-width)))))
+
+(defun caml-indent-line ()
+  "Indent the current line like previous line, or insert a tab if not
+at beginning of line, or if previous line is not indented. Tab size is
+given by the variable caml-tab-width."
+  (interactive)
+  (if (bolp)
+      (let ((previous-indentation
+	     (save-excursion
+	       (forward-line -1)
+	       (current-indentation))))
+	(if (eq previous-indentation 0)
+	    (caml-insert-tab)
+	  (indent-to previous-indentation)))
+    (caml-insert-tab)))
+
+(defun caml-find-phrase ()
+  "Find the CAML phrase containing the point.
+Sets the mark at the beginning of the phrase, and the point at the end."
+  (interactive)
+  (if (and (eolp) (>= (point) 2))
+      (progn
+        (backward-char 2)
+        (if (looking-at ";;") () (forward-char 2))))
+  (if (search-backward ";;" nil 1) (forward-char 2))
+  (skip-chars-forward " \t\n*)%")
+  (push-mark)
+  (search-forward ";;")
+  (if (eobp) (newline)))
+
+(defvar caml-buffer ())
+
+(defvar caml-command "camllight")
+
+(defun caml ()
+  "Run a CAML subprocess"
+  (interactive)
+  (require 'shell)
+  (setq caml-buffer (make-shell "caml" caml-command))
+  (switch-to-buffer caml-buffer)
+  (make-local-variable 'shell-prompt-pattern)
+  (setq shell-prompt-pattern "#")
+  (shell-send-input))
+
+
+(defun caml-send-region (start end)
+  "Send the region to the CAML process."
+  (interactive "r")
+  (let ((proc (get-buffer-process caml-buffer)))
+    (if (and proc (memq (process-status proc) '(run stop)))
+	()
+      (error "No active CAML process")))
+  (let ((source (current-buffer)))
+    (save-excursion
+      (set-buffer caml-buffer)
+      (insert-buffer-substring source start end)
+      (shell-send-input))))
+
+(defun caml-send-phrase ()
+  "Send the phrase containing the point to the CAML process."
+  (interactive)
+  (show-caml-buffer)
+  (save-excursion
+    (caml-find-phrase)
+    (caml-send-region (region-beginning) (region-end))))
+
+(defun caml-kill-phrase ()
+  "Kill the CAML phrase containing the point."
+  (interactive)
+  (save-excursion
+    (caml-find-phrase)
+    (kill-region (region-beginning) (region-end))))
+
+(defun caml-comment-out-phrase ()
+  "Comments out the CAML phrase containing the point."
+  (interactive)
+  (save-excursion
+    (caml-find-phrase)
+    (insert " *)")
+    (exchange-point-and-mark)
+    (insert "(* ")))
+
+
+-------------------------- End of caml.el ------------------------------
+
+
+
+
+

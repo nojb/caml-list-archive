@@ -1,0 +1,183 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA22838; Wed, 19 Nov 2003 17:15:23 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA22824 for <caml-list@pauillac.inria.fr>; Wed, 19 Nov 2003 17:15:22 +0100 (MET)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hAJGFL122972
+	for <caml-list@inria.fr>; Wed, 19 Nov 2003 17:15:21 +0100 (MET)
+Received: from ibm3.cicrp.jussieu.fr (ibm3.cicrp.jussieu.fr [134.157.15.3])
+          by shiva.jussieu.fr (8.12.10/jtpda-5.4) with ESMTP id hAJGFKqY007029
+          for <caml-list@inria.fr>; Wed, 19 Nov 2003 17:15:20 +0100 (CET)
+Received: from ibm1.cicrp.jussieu.fr (ibm1.cicrp.jussieu.fr [134.157.15.1])
+          by ibm3.cicrp.jussieu.fr (8.8.8/jtpda/mob-V8) with ESMTP id RAA28260
+          for <caml-list@inria.fr>; Wed, 19 Nov 2003 17:14:23 +0100
+Received: from localhost (fernande@localhost)
+          by ibm1.cicrp.jussieu.fr (8.8.8/jtpda/mob-v8) with ESMTP id RAA1957976
+          for <caml-list@inria.fr>; Wed, 19 Nov 2003 17:14:21 +0100
+Date: Wed, 19 Nov 2003 17:14:18 +0100 (NFT)
+From: Diego Olivier Fernandez Pons <Diego.FERNANDEZ_PONS@etu.upmc.fr>
+To: caml-list@inria.fr
+Subject: [Caml-list] try ... with and stack overflow
+Message-ID: <Pine.A41.4.44.0311191455180.1237114-100000@ibm1.cicrp.jussieu.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; pons:01 pons:01 etu:99 semantical:01 closures:01 closures:01 recursion:01 compiler:01 fernandez:01 fernandez:01 caml:01 closure:01 closure:01 rec:01 rec:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+    Bonjour,
+
+I cannot figure what is puzzling the Caml compiler in some code I
+wrote. It seems to be related to the try ... with construction against
+tail-recursive optimization. Or am I doing a semantical mistake (that
+is to say that I am believing the two codes to be equivalent when they
+are not) ?
+
+Some explanations : I first wrote an optimized search procedure (for a
+branch and bound) and then wanted to compare it against the naive
+version.
+
+It works in the following way :
+- goes down the tree by the left branch until reaches a leaf
+- if the leaf is a solution, all the inexplorated branches are put in
+closures and added to the 'continuation queue'
+- if the leaf fails, an exception is raised and the deepest
+unexplorated right branch is taken instead (try ... left_branch ...
+with Failed -> ... right_branch ...)
+
+
+
+exception Failed
+
+type location = Left | Right
+
+
+(* Optimized depth-first search *)
+
+type 'a goal = Goal of ('a goal list -> 'a * 'a goal list)
+
+let rec solve = function
+  | [] -> []
+  | Goal g :: tail ->
+      try
+	let (result, continuations) = g tail in
+	  result :: solve continuations
+      with Failed -> solve tail
+
+let rec dfs continuations = fun f data level ->
+  match level with
+    | 0 -> (f data, continuations)
+    | n ->
+	try
+	  let
+              right = Goal (fun c -> dfs c f (Right :: data) (n - 1))
+          in
+	    dfs (right :: continuations) f (Left :: data) (n - 1)
+	with Failed -> dfs continuations f (Right :: data) (n - 1)
+
+let make_dfs = fun f n -> Goal (function c -> dfs c f [] n)
+
+
+The naive version works in the same way but closures are
+systematically constructed for both left and right branches.
+
+
+(* Simple depth-first search *)
+
+
+type 'a simpleGoal =
+  | Result of 'a
+  | Closure of ('a simpleGoal list -> 'a simpleGoal list)
+
+let rec simple_solve = function
+  | [] -> []
+  | Result x :: tail -> x :: simple_solve tail
+  | Closure f :: tail ->
+      try
+	simple_solve (f tail)
+      with Failed -> simple_solve tail
+
+let rec simple_dfs continuations = fun f data level ->
+  match level with
+    | 0 -> Result (f data) :: continuations
+    | n ->
+ let
+   left = Closure (fun c -> simple_dfs c f (Left :: data) (n - 1)) and
+   right = Closure (fun c -> simple_dfs c f (Right :: data) (n - 1))
+ in
+    left :: right :: continuations
+
+let make_simple_dfs = fun f n ->
+  Closure (function c -> simple_dfs c f [] n)
+
+
+Both seem to be working well
+
+let rec print_location = function
+  | [] -> ()
+  | Left :: tail -> print_location tail ; print_string "Left  "
+  | Right :: tail -> print_location tail ; print_string "Right "
+
+let all_fail_trace = function location ->
+  print_location location ;
+  print_newline();
+  raise Failed
+
+# solve [make_dfs all_fail_trace 2];;
+Left  Left
+Left  Right
+Right Left
+Right Right
+- : '_a list = []
+
+# simple_solve [make_simple_dfs all_fail_trace 2];;
+Left  Left
+Left  Right
+Right Left
+Right Right
+- : '_a list = []
+
+But the naive version seems to have a tail-recursion problem
+
+# solve [make_dfs (fun loc -> raise Failed) 15];;
+- : '_a list = []
+
+# simple_solve [make_simple_dfs (fun loc -> raise Failed) 15];;
+Stack overflow during evaluation (looping recursion?).
+
+
+Then I changed the following code
+
+
+let rec simple_solve = function
+  | [] -> []
+  | Result x :: tail -> x :: simple_solve tail
+  | Closure f :: tail ->
+      try
+	simple_solve (f tail)
+      with Failed -> simple_solve tail
+
+by
+
+  | Closure f :: tail ->
+      simple_solve (try
+                        f tail
+                    with Failed -> tail)
+
+and this time it worked
+
+# solve [make_dfs (fun loc -> raise Failed) 15];;
+- : '_a list = []
+
+# simple_solve [make_simple_dfs (fun loc -> raise Failed) 15];;
+- : '_a list = []
+
+
+    Diego Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

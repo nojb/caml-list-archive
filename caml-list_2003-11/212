@@ -1,0 +1,109 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA29210; Thu, 13 Nov 2003 21:19:02 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA29603 for <caml-list@pauillac.inria.fr>; Thu, 13 Nov 2003 21:19:01 +0100 (MET)
+Received: from igloo.phubuh.org (c-50b670d5.028-10-67766c2.cust.bredbandsbolaget.se [213.112.182.80])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hADKJ0110764
+	for <caml-list@inria.fr>; Thu, 13 Nov 2003 21:19:00 +0100 (MET)
+Received: from localhost (localhost [127.0.0.1])
+	by igloo.phubuh.org (Postfix) with ESMTP id 0D5EBA46CF
+	for <caml-list@inria.fr>; Thu, 13 Nov 2003 21:18:21 +0100 (CET)
+Subject: Re: [Caml-list] GC and file descriptors
+From: Mikael Brockman <phubuh@phubuh.org>
+To: caml-list@inria.fr
+In-Reply-To: <347A7A46-1612-11D8-8F93-000393CFE6B8@spy.net>
+References: <6CF992BC-1573-11D8-A660-000393CFE6B8@spy.net>
+	 <87smkstkhg.fsf@igloo.phubuh.org>
+	 <347A7A46-1612-11D8-8F93-000393CFE6B8@spy.net>
+Content-Type: text/plain
+Organization: Smug Haskell Weenies
+Message-Id: <1068754700.4794.16.camel@localhost>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.4.5 
+Date: Thu, 13 Nov 2003 21:18:20 +0100
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 deallocated:01 constants:01 immutable:01 passing:01 finalizer:01 prerr:01 endline:01 val:01 sigkill:01 arrays:01 bin:01 compiler:01 handler:01 descriptors:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, 2003-11-13 at 20:47, Dustin Sallings wrote:
+> On Nov 13, 2003, at 6:24, Mikael Brockman wrote:
+> 
+> > \If the in_channel is heap allocated, you can do
+> >
+> >   let close o = ignore (Unix.close_process_in o)
+> >
+> >   let open_process_in str =
+> >     let r = Unix.open_process_in str in
+> >       Gc.finalise close r;
+> >       r
+> >
+> >   let tput x =
+> >     let buf = String.create 8 in
+> >       String.sub buf 0 (input (open_process_in ("tput " ^ x)) buf 0 8)
+> >
+> > If it is not, you could probably create a wrapper type that has to be
+> > heap allocated.
+> 
+> 	That's very interesting.  You answered some questions, but brought up 
+> some new ones.  Are there things that are not heap allocated, and how 
+> will I recognize these?
+
+Yes, there are values that are not heap allocated.  The Gc manual has
+this to say:
+
+> Some examples of values that are not heap-allocated are integers,
+> constant constructors, booleans, the empty array, the empty list, the
+> unit value. The exact list of what is heap-allocated or not is
+> implementation-dependent. Some constant values can be heap-allocated
+> but never deallocated during the lifetime of the program, for example
+> a list of integer constants; this is also implementation-dependent.
+> You should also be aware that compiler optimisations may duplicate
+> some immutable values, for example floating-point numbers when stored
+> into arrays, so they can be finalised and collected while another copy
+> is still in use by the program.
+
+I think it is pretty safe to assume that objects are heap allocated, so
+if the function passing idiom suggested earlier is insufficient, you can
+wrap the Unix process in an object that sets a finalizer in
+initialization.
+
+  let close_unix_process o =
+    prerr_endline "closing unix process";
+    ignore (o#close ())
+
+  class unix_process cmd =
+  object (self)
+    val stream = Unix.open_process_in cmd
+
+    initializer
+      Gc.finalise close_unix_process self
+  
+    method input = input stream
+    method close () = Unix.close_process_in stream
+  end
+
+  let read_some proc =
+    let buf = String.create 2048 in
+      String.sub buf 0 (proc#input buf 0 2048)
+
+> # read_some (new unix_process "ls /");;
+> - : string =
+> "bin\nboot\ndev\netc\nhome\nlib\nmnt\nproc\nroot\nsbin\ntmp\nusr\nvar\n"
+> # Gc.full_major ();;
+> closing unix process
+> - : unit = ()
+> #
+
+Also, I don't think the default signal handler for SIGKILL forces a major
+cycle, but that's easily fixed with Sys.signal or Sys.set_signal.
+
+--
+Mikael Brockman
+<phubuh@phubuh.org>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

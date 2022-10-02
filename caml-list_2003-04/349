@@ -1,0 +1,188 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA27368; Mon, 28 Apr 2003 19:13:21 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA05681 for <caml-list@pauillac.inria.fr>; Mon, 28 Apr 2003 19:13:20 +0200 (MET DST)
+Received: from nitro.isi.edu (nitro.isi.edu [128.9.208.207])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h3SHDJH11382
+	for <caml-list@inria.fr>; Mon, 28 Apr 2003 19:13:19 +0200 (MET DST)
+Received: from moussor.isi.edu (moussor.isi.edu [128.9.208.41])
+	by nitro.isi.edu (8.11.6p2/8.11.2) with ESMTP id h3SHDIv26633
+	for <caml-list@inria.fr>; Mon, 28 Apr 2003 10:13:18 -0700 (PDT)
+Received: from localhost (hdaume@localhost)
+	by moussor.isi.edu (8.9.3/8.8.6) with ESMTP id KAA20308
+	for <caml-list@inria.fr>; Mon, 28 Apr 2003 10:13:17 -0700 (PDT)
+X-Authentication-Warning: moussor.isi.edu: hdaume owned process doing -bs
+Date: Mon, 28 Apr 2003 10:13:17 -0700 (PDT)
+From: Hal Daume III <hdaume@ISI.EDU>
+To: Caml Mailing List <caml-list@inria.fr>
+Subject: [Caml-list] speed, loops vs. hofs
+Message-ID: <Pine.GSO.4.21.0304280958590.20131-100000@moussor.isi.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Spam: no; 0.00; hofs:01 datatype:01 speedups:01 printf:01 inserts:01 let-bound:01 timings:01 bool:01 million:98 ocaml:01 null:01 int:01 nodes:02 imply:02 node:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+One of the primary reasons I use OCaml is because it offers speed,
+together with nice functional stuff, like HOFs.  However, it seems that
+using these together might be impossible.
+
+I have a module which allows iteration over a particular datatype.  I have
+a method of doing this iteration very quickly using for loops.  In
+particular, I have a function of type:
+
+  loopPre : hmm -> node -> (node -> int -> bool -> unit) -> unit
+
+which loops over the predecessors of the given node in the HMM.  The
+implementation basically looks like:
+
+  let loopPre hmm node action = 
+    let ... some definitions ...
+      begin
+        action {...make the node...} 0 (...make the bool...);
+        for i = 0 to num_nodes do
+          action {...make the node...} i (...make the bool...);
+          for j = 0 to {something} do
+            action {...make the node...} j (...make the bool...);
+          done;
+        done;
+
+basically, there are a few calls to 'action' in a pair of nested
+loops.  Then, at the usage point, I do something like:
+
+  ...1...
+  loopPre hmm node_j
+    (fun nd len null ->
+      ...2...
+    )
+  ...3...
+
+I had a sneaking feeling that if I actually stuck the for loops into the
+original code I would get speedups.  However, "...2..." is pretty long, so
+there were be (a) a bunch of code duplication and (b) it would be hard to
+maintain.
+
+In order to test this, I wrote the following program:
+
+% cat loops.ml
+let loop low high f =
+  begin
+    f 0 true;
+
+    for i=low to high do
+      f i false;
+    done;
+
+    f (-1) true;
+  end
+
+% cat useLoops.ml
+open Loops
+
+let top = 500000000
+
+let cnt = ref 0
+let pre1 = Sys.time ()
+let _ = loop 1 top (fun i b -> if not b then cnt := !cnt + 1)
+let pst1 = Sys.time ()
+
+let cnt = ref 0
+let pre2 = Sys.time ()
+let _ = 
+  let f i b = if not b then cnt := !cnt + 1 in
+    loop 1 top f
+let pst2 = Sys.time ()
+
+
+let cnt = ref 0
+let pre3 = Sys.time ()
+let _ = 
+  begin
+    let i = 0 in let b = true in
+      if not b then cnt := !cnt + 1;
+      
+      for i=1 to top do
+        let b = false in
+          if not b then cnt := !cnt + 1;
+      done;
+
+      let i = -1 in let b = true in
+        if not b then cnt := !cnt + 1;
+  end
+let pst3 = Sys.time ()
+
+let cnt = ref 0
+let pre4 = Sys.time ()
+let _ = 
+  let f i b = if not b then cnt := !cnt + 1 in
+    begin
+      let i = 0 in let b = true in
+        f i b;
+
+        for i=1 to top do
+          let b = false in
+            f i b;
+        done;
+
+        let i = -1 in let b = true in
+          f i b;
+    end
+let pst4 = Sys.time ()
+
+let _ = Printf.printf "Time 1 = %f sec\n" (pst1-.pre1)
+let _ = Printf.printf "Time 2 = %f sec\n" (pst2-.pre2)
+let _ = Printf.printf "Time 3 = %f sec\n" (pst3-.pre3)
+let _ = Printf.printf "Time 4 = %f sec\n" (pst4-.pre4)
+
+%
+
+
+Here, there are four loops done.  The first two use the HO loop function
+from the Loops module (which is very much like my iterPre function); the
+last two use loops.  One of them inserts the funciton definition at every
+usage; the second does a let-bound definition.
+
+For loops of 500 million elements, the timings come out:
+
+Time 1 = 10.230000 sec
+Time 2 = 10.230000 sec
+Time 3 = 2.610000 sec
+Time 4 = 7.020000 sec
+
+on my x86 linux box.
+
+I find these numbers very disturbing.  First, just looking at the
+discrepency between 3 and 4.  I'd imagine this happens because in (3), the
+"let b = false in if not b..." gets folded down to just "cnt := !cnt + 1".  
+To test, this I also ran:
+
+let _ = 
+  let f i b = cnt := !cnt + 1 in
+  let g i b = () in
+    begin
+      let i = 0 in let b = true in
+	g i b;
+	
+	for i=1 to top do
+	  let b = false in
+	    f i b;
+	done;
+	
+	let i = -1 in let b = true in
+	  g i b;
+    end
+
+where the unfolding is done manually.  This implementation came in at:
+
+Time 5 = 3.570000 sec
+
+This seems to imply that I will triple the speed of my program by making
+it (a) non-functional and (b) unreadable.  Is this true?  Is there another
+way to get around this problem?
+
+ - Hal
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

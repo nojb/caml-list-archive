@@ -1,0 +1,114 @@
+Return-Path: <dawid.toton@uj.edu.pl>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id BAD14BBAF
+	for <caml-list@yquem.inria.fr>; Fri, 25 Jul 2008 21:29:14 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjMCAFvGiUiVnFmTiGdsb2JhbACSWAEBAQ8gnS0
+X-IronPort-AV: E=Sophos;i="4.31,253,1215381600"; 
+   d="scan'208";a="27680157"
+Received: from mail.uj.edu.pl ([149.156.89.147])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 25 Jul 2008 21:29:14 +0200
+MIME-version: 1.0
+Content-transfer-encoding: 7BIT
+Content-type: text/plain; charset=ISO-8859-1; format=flowed
+Received: from [137.73.5.196] by mail.uj.edu.pl
+ (Sun Java(tm) System Messaging Server 6.3-5.02 (built Oct 12 2007; 32bit))
+ with ESMTPA id <0K4K007HZU4OA0E0@mail.uj.edu.pl> for caml-list@yquem.inria.fr;
+ Fri, 25 Jul 2008 21:29:13 +0200 (CEST)
+Message-id: <488A2988.3070402@uj.edu.pl>
+Date: Fri, 25 Jul 2008 20:29:12 +0100
+From: Dawid Toton <dawid.toton@uj.edu.pl>
+User-Agent: Thunderbird 1.5.0.12 (X11/20080430)
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] 'Nondeterministic' evaluation wrt exceptions
+References: <4889F16B.3020903@uj.edu.pl> <4889FD30.9070005@inria.fr>
+In-reply-to: <4889FD30.9070005@inria.fr>
+X-Spam: no; 0.00; computations:01 foo:01 foo:01 granularity:01 threading:01 incrustation:98 integer:01 exception:01 exception:01 caml-list:01 functions:01 functions:01 computation:01 exceptions:01 hangs:01 
+
+Thank you all for quick answers!
+
+Let me show an example of what I exactly mean. I start with a code:
+
+1: let a = heavy 1
+2: let b = heavy 2
+3: let c = report (a + b)
+4: let d = heavy 4
+5: let e = heavy d
+
+Then I want to translate it automatically so that three applications of
+heavy are evaluated (lines 1, 2, 4). The addition a + b won't be
+evaluated untill a and b are successfully returned.
+
+It's easier to get only two heavy operations started at once:
+
+0: type 'a future_t = 'a Lazy.t
+1: let a = future heavy 1
+2: let b = future heavy 2
+3: let c = report ((force a) + (force b))
+4: let d = future heavy 4
+5: let e = future heavy (force d)
+
+Computation of c hangs or throws an exception. Hence lines 4 an 5 are
+not executed. So I think I need some more invasive transformarion:
+
+0: type 'a future_t = 'a Lazy.t
+1: let a = future heavy 1
+2: let b = future heavy 2
+3: let c = lazy (report (force a) + (force b))
+4: let d = future heavy 4
+5: let e = future heavy (force d)
+6: let _ = force c
+
+In this case we have a problem: line 5 throws an exception, so report in
+line 3 is not executed even if first two heavy operations are finished.
+The function report could even contain some other heavy operations that
+need to be started as soon as possible.
+
+So I can conctruct a tree of deferred computations, but probably I can't
+force it to do as much as possible. Forcing is governed by total order.
+Let's consider:
+
+7: let f = foo (force c) (force e)
+
+If one of arguments fails first, the other is not forced. This is bad.
+
+So I go to the original idea: thread the exception across everything.
+Wrap with variant instead of Lazy.t.
+
+0: type 'a lifted_t = Exception | Value 'a
+1: let a = start heavy 1
+2: let b = start heavy 2
+3: let c = bind2 (fun a b -> return (report (a+b))) a b
+4: let d = start heavy 4
+5: let e = bind1 (fun d -> start heavy d) d
+7: let f = bind2 (fun c e -> return (foo c e)) c e
+
+Function 'start' starts calculation and returns Exception or returns
+Value result if it's available.
+bindX functions evaluate the function passed as a parameter if all
+arguments are Values.
+
+Is is easy to lift every heavy call to 'start heavy arg arg arg ...' -
+since in any case I have to distinguish heavy functions manually.
+I need to decide about granularity of bindX incrustation. I can have
+some modules marked as 'nondeterministic' and leave the other ones
+untouched.
+I could wrap into lifted_t all single values in 'nondeterministic'
+modules. This would mean placing bindX for every integer addition, every
+string concatenation...
+
+I need rules: where should I place bindX and return in the original
+code. At the moment I don't know.
+
+I have looked at the Lwt library - as far as I understand in my case the
+idea boils down to threading something across all expressions.
+
+Dawid
+
+

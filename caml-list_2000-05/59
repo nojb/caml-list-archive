@@ -1,0 +1,118 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA22270 for caml-redist@pauillac.inria.fr; Sun, 14 May 2000 23:20:35 +0200 (MET DST)
+Resent-Message-Id: <200005142120.XAA22270@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA29332 for <weis@pauillac.inria.fr>; Sun, 14 May 2000 16:33:36 +0200 (MET DST)
+Received: from localhost.localdomain (brian-boitano162.zip.com.au [210.23.147.162])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e4EEXUr02530;
+	Sun, 14 May 2000 16:33:32 +0200 (MET DST)
+Received: from maxtal.com.au (IDENT:root@localhost [127.0.0.1])
+	by localhost.localdomain (8.9.3/8.8.7) with ESMTP id AAA24238;
+	Mon, 15 May 2000 00:37:48 +1000
+Sender: root@localhost.localdomain
+Message-ID: <391EBA3B.26824324@maxtal.com.au>
+Date: Mon, 15 May 2000 00:37:48 +1000
+From: John Max Skaller <skaller@maxtal.com.au>
+X-Mailer: Mozilla 4.7 [en] (X11; I; Linux 2.2.12-20 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Pierre Weis <Pierre.Weis@inria.fr>
+CC: Hongwei Xi <hwxi@ececs.uc.edu>, caml-list@inria.fr
+Subject: Re: reference initialization
+References: <200005121707.TAA26883@pauillac.inria.fr>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Sun, 14 May 2000 23:20:35 +0200
+Resent-To: caml-redist@pauillac.inria.fr
+
+Pierre Weis wrote:
+ 
+> You should consider that there is a general initialisation function in
+> the Array module, named Array.init, that allocates for you a fresh
+> array then fill it with values obtained by calling an arbitrary
+> supplied function:
+> 
+> # Array.init;;
+> - : int -> f:(int -> 'a) -> 'a array = <fun>
+> 
+> Using it, you don't need to bother with any dummy initialization value:
+> 
+> let combine_arrays a b =
+>   let alen = Array.length a in
+>   let blen = Array.length b in
+>   let init i = if i < alen then a.(i) else b.(i) in
+>   Array.init (alen + blen) init
+> 
+> This code ensures the ``always initialized strategy'' of ML, and seems
+> to me elegant and clear (but note that it uses higher-order
+> functionality). Have I missed something ?
+
+I think so: the init function is a callback; code which
+'naturally' initialises an array by storing into it needs
+to be 'control inverted': in general this is very hard,
+if not impossible, to do by hand. The general case requires
+the client to write an 'interpreter' for the initialisation
+algorithm, maintaining state in the callback's closure.
+
+If we consider a simple initialisation like:
+
+	for i=0 to n-1 do x.(i) <- i done
+
+the control inverse is
+
+	fun i -> i
+
+which is simple. However, for more complex algorithms,
+such as a sort, this seems non-trivial. For example,
+the naive functional solution to fibonacci:
+
+	let rec fib i = match i with 
+		| 0 | 1 -> 1 
+		| _ -> fib (i-1) + fib (i-2)
+
+works, but is unacceptably inefficient. The actual control
+inverse of the usual procedural array initialisation algorithm,
+which keeps track of the last two fibonacci numbers, requires
+a wrapper function to create the storage in a closure:
+
+	let fib_creator () =
+		let a = ref 1 and b = ref 1 in
+		let fib i = (* ignore the i *)
+			let result = !a + !b in
+			b := !a; a := result;
+			result
+		in fib
+
+Here, fib_creator is a lazy data structure, and fib an iterator
+over it. A 'purer' solution could be constructed
+using streams I think.
+
+I have written a tool which performs control inversion mechanically,
+although in a different context (procedural code 'reading' messages
+is control inverted to be event driven). There is some sort of
+deep duality theorem here.
+
+But I think the effect is: code which is easy to write procedurally
+must be converted to use continuation passing, and that isn't
+a trivial task.
+
+[On the other hand, it is usually easy to write a dispatcher for
+callback driven code, provided it is the control inverse of
+a single thread of control]
+
+So I think you are missing something: iter provides a reasonable
+solution for only 'half' of those problems where the callback
+driven style is 'natural'. In ocaml, the only way I'm aware of
+to encode continuations 'naturally' requires using (hardware
+or bytecode) threads.
+
+[BTW: if we had this duality theorem, we would know how to
+mix functional and stateful code in the same language seamlessly:
+it would seem Charity offers some hints here]
+
+-- 
+John (Max) Skaller, mailto:skaller@maxtal.com.au
+10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+checkout Vyper http://Vyper.sourceforge.net
+download Interscript http://Interscript.sourceforge.net
+
+

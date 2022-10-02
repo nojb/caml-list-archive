@@ -1,0 +1,122 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id CF222BBAF
+	for <caml-list@yquem.inria.fr>; Thu,  5 Nov 2009 03:01:04 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlkCACPB8UrZSMDdi2dsb2JhbACBTpoPAQEBCgsKBxEFwjmEPQSBZQ
+X-IronPort-AV: E=Sophos;i="4.44,683,1249250400"; 
+   d="scan'208";a="36190234"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 05 Nov 2009 03:01:04 +0100
+Received: from smtp07.web.de (fmsmtp07.dlan.cinetic.de [172.20.5.215])
+	by fmmailgate01.web.de (Postfix) with ESMTP id 15291137F93A1
+	for <caml-list@inria.fr>; Thu,  5 Nov 2009 03:00:38 +0100 (CET)
+Received: from [95.208.117.111] (helo=frosties.localdomain)
+	by smtp07.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #314)
+	id 1N5reP-0001RQ-00
+	for caml-list@inria.fr; Thu, 05 Nov 2009 03:00:38 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.69)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1N5reM-0000KS-6y
+	for caml-list@inria.fr; Thu, 05 Nov 2009 03:00:34 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Subject: Compiler bug with bigarray
+Date: Thu, 05 Nov 2009 03:00:33 +0100
+Message-ID: <87aaz1pw72.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) XEmacs/21.4.22 (linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1+zYlcEDeUEM5/4nsRhH2fjGaDU2jFK16EywtmV
+	4hpcW+PUI35LnzKYIYu/6qSPKPr+giyt0+V9Prj8Cq4is18V0g
+	5NeZPdUVM=
+X-Spam: no; 0.00; compiler:01 bug:01 bigarray:01 elt:01 bigarray:01 byte:01 integers:01 foo:01 elt:01 foo:01 rax:01 rax:01 rsp:01 rsp:01 compiler:01 
+
+Hi,
+
+I just finished adding a (int, int31_elt) Bigarray.kind for 4 byte
+taged integers independent of the architecture to Bigarray. While
+testing it I noticed that the generated assembler consists of this:
+
+open Bigarray
+let get_foo (a : (int, int31_elt, c_layout) Array1.t) x = Array1.unsafe_get a x
+let get_bar (a : (int, int, c_layout) Array1.t) x = Array1.unsafe_get a x
+
+0000000000404aa0 <camlTest__get_foo_127>:
+  404aa0:       48 d1 fb                sar    %rbx
+  404aa3:       48 8b 40 08             mov    0x8(%rax),%rax
+  404aa7:       48 63 04 98             movslq (%rax,%rbx,4),%rax
+  404aab:       48 d1 e0                shl    %rax
+  404aae:       48 83 c8 01             or     $0x1,%rax
+  404ab2:       c3                      retq   
+  404ab3:       66 66 66 66 2e 0f 1f    nopw   %cs:0x0(%rax,%rax,1)
+  404aba:       84 00 00 00 00 00 
+
+0000000000404ac0 <camlTest__get_bar_130>:
+  404ac0:       48 83 ec 08             sub    $0x8,%rsp
+  404ac4:       48 89 c7                mov    %rax,%rdi
+  404ac7:       48 89 de                mov    %rbx,%rsi
+  404aca:       48 8b 05 bf af 21 00    mov    0x21afbf(%rip),%rax        # 61fa90 <_DYNAMIC+0x790>
+  404ad1:       e8 7a 27 01 00          callq  417250 <caml_c_call>
+  404ad6:       48 83 c4 08             add    $0x8,%rsp
+  404ada:       c3                      retq   
+  404adb:       0f 1f 44 00 00          nopl   0x0(%rax,%rax,1)
+
+As you can see in get_foo the compiler optimizes and inlines the
+memory access directly. In get_bar on the other hand this optimization
+fails and the generic bigarray get function is invoked as caml_c_call.
+
+Looking at my patch for int31 I could not figure out any difference
+that would explain this behaviour of the compiler. So I added a few
+Printf.printf to see what the compiler does.
+
+In the (int, int31) case the compiler ends up in cmmgen.ml: transl in the
+case for
+
+      | (Pbigarrayref(unsafe, num_dims, elt_kind, layout), arg1 ::
+argl) ->
+          let elt =
+            bigarray_get unsafe elt_kind layout
+              (transl arg1) (List.map transl argl) dbg in
+          begin match elt_kind with
+          | Pbigarray_int31 -> Printf.printf "Pbigarray_int31\n"; force_tag_int elt
+          | Pbigarray_caml_int -> Printf.printf "Pbigarray_caml_int\n"; force_tag_int elt
+
+In the (int, int) case the compiler never reaches that point. Instead
+it ends up in cmmgen.ml: simplif_primitive
+
+let simplif_primitive p =
+  match p with
+  | Pbigarrayref(unsafe, n, Pbigarray_unknown, layout) ->
+      Printf.printf "caml_ba_get_ for Pbigarray_unknown\n";
+      Pccall (default_prim ("caml_ba_get_" ^ string_of_int n))
+
+So something is horribly wrong here. This should contain
+
+   Pbigarrayref(unsafe, n, Pbigarray_caml_int, layout)
+
+Somewhere during compilation the wrong Pbigarrayref gets created for
+an (int, int, c_layout) Bigarray.Array1.t. It is created as unknown /
+polymorphic ('a, 'b, 'c) Bigarray.Array1.t. The knowledge that it is
+(int, int, c_layout) Bigarray.Array1.t is lost or never added to the
+type and I am at a loss where that type is created at all. I tried
+adding some more Printf.printf lines in places where Pbigarrayref gets
+created but none of them get triggered.
+
+
+So does anyone know where the Pbigarrayref gets created during
+compilation and why it remains Pbigarray_unknown? The same problem
+arises for Pbigarray_int32, Pbigarray_int64 and Pbigarray_native_int.
+All three of which look like they should get optimized on 64bit or at
+least keep their type information.
+
+MfG
+        Goswin
+
+PS: This is debians ocaml 3.11.1-3
+

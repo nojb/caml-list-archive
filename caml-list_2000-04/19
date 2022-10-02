@@ -1,0 +1,73 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA12072 for caml-redistribution@pauillac.inria.fr; Thu, 6 Apr 2000 15:14:39 +0200 (MET DST)
+Resent-Message-Id: <200004061314.PAA12072@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA13860 for <caml-list@pauillac.inria.fr>; Mon, 3 Apr 2000 14:58:36 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id OAA06244
+	for <caml-list@inria.fr>; Mon, 3 Apr 2000 14:58:35 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id OAA29741;
+	Mon, 3 Apr 2000 14:57:19 +0200 (MET DST)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <200004031257.OAA29741@miss.wu-wien.ac.at>
+Subject: Re: cyclic value construction ("let rec")
+To: debourse@pascal.enst.fr (Benoit Deboursetty)
+Date: Mon, 3 Apr 2000 14:57:19 +0200 (MET DST)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <Pine.GSO.4.02.10003282041400.6520-100000@pascal.enst.fr> from "Benoit Deboursetty" at Mar 30, 2000 10:12:33 PM
+X-Mailer: ELM [version 2.5 PL2]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Thu, 6 Apr 2000 15:14:39 +0200
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+> It would be interesting to know whether people have other workarounds.
+> Also, a generic graph module which would implement "map", "iter" etc. in a 
+> cycle-safe way (like Marshal) would perhaps be interesting in the
+> 'user-contributed stdlib extension'...
+
+You will probably always have to rely on "unsafe" things for such
+purposes.  My quick hack for problems like this looks as follows:
+
+  type 'a node = { data : 'a; next : 'a node }
+
+  let make_circle n : 'a node =
+    let module Dummy = struct
+      type 'a t = { data : 'a; mutable next : 'a t } end in
+    let res = { Dummy.data = n; Dummy.next = Obj.magic 0 } in
+    res.Dummy.next <- res;
+    Obj.magic res
+
+  let rec iter f node = f node.data; iter f node.next
+
+  let _ = iter (fun x -> print_int x; print_newline ()) (make_circle 42)
+
+Type "'a node" is immutable from the outside. However, exploiting the
+undocumented (good reason for this ;-) type casting features of OCaml,
+one can cheat and define an identical type within a local module -
+which is mutable!
+
+Initialisation, too, relies on "unsafe" features - we simply put a
+reference to a dummy value into the slot until it can be filled with the
+"right" value. The return value is cast back again to the "global type"
+as indicated in the type restriction in the definition of "make_circle"
+- this is important, because otherwise you can crash your program (it
+would have "any" type).
+
+As far as I know, this should be safe, because the GC doesn't care
+about the static types of the values - it only looks at the value tags
+at runtime. Of course, the above will only work as long as the memory
+layout of the "local" type agrees with the one of the "global type".
+
+Thus, you can confine the "unsafe" part to specific functions (e.g.
+"make_circle"). The iteration function "iter" does not change anything
+and can therefore work on the "global" type.
+
+Best regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+

@@ -1,0 +1,108 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.8 required=5.0 tests=AWL,NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 95B5DBBAF
+	for <caml-list@yquem.inria.fr>; Fri, 19 Sep 2008 01:35:49 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtEDAISC0kjAXQIniGdsb2JhbACLewGGH4EQAQEBDyCnEYFl
+X-IronPort-AV: E=Sophos;i="4.32,424,1217800800"; 
+   d="scan'208";a="29349156"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 19 Sep 2008 01:35:49 +0200
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id m8INZmfE001134
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Fri, 19 Sep 2008 01:35:48 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiMBAISC0kjAEKcgmmdsb2JhbACLewGGH4EQAQEBAQEIBQgHEQWnDIFl
+X-IronPort-AV: E=Sophos;i="4.32,424,1217800800"; 
+   d="scan'208";a="15113906"
+Received: from selenite.metnet.navy.mil ([192.16.167.32])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 19 Sep 2008 01:35:47 +0200
+Received: (qmail 19948 invoked by uid 107); 18 Sep 2008 23:35:44 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 18 Sep 2008 23:35:44 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id 21865AE54; Thu, 18 Sep 2008 16:34:10 -0700 (PDT)
+From: oleg@okmij.org
+To: David.Teller@ens-lyon.org
+Cc: caml-list@inria.fr
+Subject: Re: Keeping local types local?
+Message-Id: <20080918233410.21865AE54@Adric.metnet.fnmoc.navy.mil>
+Date: Thu, 18 Sep 2008 16:34:10 -0700 (PDT)
+X-Miltered: at concorde with ID 48D2E5D4.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; oleg:01 invariants:01 ocaml:01 monadic:01 semantics:01 well-typed:01 subsection:01 ocaml:01 higher-order:01 statically:01 checker:01 checker:01 monadic:01 haskell's:01 notation:01 
+
+
+It seems the following section might be relevant to the present
+discussion. It deals with a related problem: a function yield ()
+should _not_ be invoked within the dynamic extent of the function
+irq_disable. The latter takes a thunk and executes it with disabled
+interrupts. This is a so-called yield problem in operating systems:
+
+	Hao Chen and Jonathan S. Shapiro,
+	Using Build-Integrated Static Checking to Preserve Correctness 
+	Invariants, CCS2004, pp. 288--297
+	http://www.eros-os.org/papers/ccs04.pdf
+
+The problem is quite like the one we've discussed, up to the inverse:
+you wish to enforce that set() and get() are only invoked within the
+dynamic extent of the initialization function. The yield problem is to
+prevent yield() from being invoked, within the specified dynamic extent.
+
+The section below was present in an earlier draft of the regions IO
+paper written with Chung-chieh Shan. The section discusses two other
+OCaml solutions to the problem, which haven't been mentioned yet. The
+yield.ml code discussed at the end is available here:
+
+	http://okmij.org/ftp/Computation/resource-aware-prog/yield.ml
+
+I should also point out the file yield.elf in the same directory. It
+formally proves the safety of the monadic solution to the problem. The
+safety is the corollary to the Progress theorem. The dynamic semantics
+does not define the transition for yield() executed with any level of
+disabled interrupts. Thus the evaluation of yield() in that context
+gets stuck. The formally proven Progress theorem states that the
+evaluation of the well-typed term does not get stuck.
+
+
+Begin excerpt:
+\subsection{Types versus effects}
+
+This approach cannot be embedded in direct style in an impure language
+such as OCaml to provide the same static safety guarantees. We can
+easily define a higher-order function |irq_disable| that takes a thunk
+as argument and executes it with interrupts disabled. However, using ML
+facilities alone without external tools, we cannot statically prevent
+invoking this function as 
+\begin{code}
+irq_disable (fun () -> yield (); ())
+\end{code}
+and thus executing |yield| with interrupts disabled.  This is because
+the safe expression |()| and the unsafe one |(yield (); ())| have the same
+type no matter what type we assign to |yield|. 
+
+We need an effect system, such as \citearound{'s exception checker for
+OCaml}\citet{leroy-type-based}. If the desired safety property were to
+invoke |yield| only when interrupts are disabled (which is the opposite
+of our problem), we could encode the property in terms of exceptions by
+pretending that |yield| might raise an exception.
+\begin{code}
+let yield () = 
+  if false then raise YieldExc else do_yield ()
+\end{code}
+The |irq_disable| function would then catch the exception.  Alas, our
+problem is different, and the exception checker is external to OCaml.
+An unappealing alternative is to abandon direct style and program
+instead in continuation\hyp passing or monadic style, perhaps using some
+syntactic sugar analogous to Haskell's |do| notation.  A third approach
+is to use MetaOCaml to synthesize the interrupt handling code in direct
+style, ensuring the yield property along the way.  Some microkernels
+\citep{gabber-pebble} use this idea of run-time code generation, but it
+is too static for our needs (see |yield.ml|).
+

@@ -1,0 +1,272 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA25656 for caml-redistribution; Tue, 2 Dec 1997 19:19:34 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA22995 for <caml-list@pauillac.inria.fr>; Tue, 2 Dec 1997 18:02:44 +0100 (MET)
+Received: from relay5.eunet.fr (relay5.eunet.fr [193.107.193.102])
+	by nez-perce.inria.fr (8.8.7/8.8.5) with SMTP id SAA21909;
+	Tue, 2 Dec 1997 18:02:35 +0100 (MET)
+Received: from relay2.eunet.fr by relay5.eunet.fr (5.65c8d/96.05.03)
+	via EUnet-France id AA25282; Tue, 2 Dec 1997 18:02:31 +0100 (MET)
+Received: from dassav (dassav.dassault-aviation.fr [193.106.72.131])
+	by relay2.eunet.fr (8.8.5/8.8.5) with SMTP id SAA00574;
+	Tue, 2 Dec 1997 18:02:26 +0100 (MET)
+Received: from fnet-ia1.dassault-aviation.fr by dassav (5.x/SMI-SVR4)
+	id AA29167; Tue, 2 Dec 1997 17:58:28 +0100
+Received: from fnet-ia1 by fnet-ia1.dassault-aviation.fr (SMI-8.6/SMI-SVR4)
+	id SAA10047; Tue, 2 Dec 1997 18:03:53 +0100
+Message-Id: <34843F79.15C2@dassault-aviation.fr>
+Date: Tue, 02 Dec 1997 18:03:53 +0100
+From: Thierry Bravier <thierry.bravier@dassault-aviation.fr>
+Organization: Dassault Aviation DGT/DTN/ELO/EAV
+X-Mailer: Mozilla 3.01Gold (X11; I; SunOS 5.5.1 sun4u)
+Mime-Version: 1.0
+To: caml-list@inria.fr
+Cc: daniel.de_rauglaudre@inria.fr
+Subject: Re: hacks using camlp4
+References: <199711271945.UAA26631@jaune.inria.fr>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+Daniel de Rauglaudre wrote:
+> 
+> > I lately checked the camlp4 preprocessor. I think this tool may have lots
+> > of useful applications, since it allows especially custom syntaxes for the
+> > input of certain kind of objects, in a more programmer-friendly fashion
+> > than just inputting raw data structures into the source code.
+> >
+> 
+> A solution is partial evaluation. I have implemented a syntax solution
+> below (working with ocaml syntax, not righteous one). The idea is to
+> automatically generate global declarations.
+> 
+(*
+============================================================================
+ *        File: camlp4/fold.ml
+ *    Language: caml
+ *      Author: Thierry Bravier
+ *  Time-stamp: <97/12/02 17:41:28 tb>
+ *     Created:  97/12/02 14:18:53 tb
+ *
+=========================================================================
+*)
+(*
+  Dear ocaml users,
+ 
+  Smart as Ocaml is, camlp4 makes it even smarter.
+  
+  Here is a small constant folding camlp4 module that can be useful to
+  efficiently parse ocaml (standard syntax) code.
+ 
+  This extension is adapted from [mkumin] in etc/pa_o.ml which can be
+  seen as a minimal constant folding algorithm on its own.
+ 
+  It is also a degenerated case of pre-compiled expressions as
+  was discussed on the ocaml mailing list.
+ 
+  In this precise case, the smart [partial.ml] module presented by
+  Daniel de Rauglaudre is too powerful, since there is no need to
+  store folded values in global variables, folded values are put in
+  new literals instead.
+ 
+  Example:
+  ocamlc -pp "camlp4o pa_extend.cmo q_MLast.cmo" -I `camlp4 -where` -c
+fold.ml
+  cat foldable.ml
+  let f x = "foo"^"bar"^"gee", 50 - 100 -10 * x + 4 * 8
+  camlp4o pr_o.cmo ./fold.cmo foldable.ml
+  let f x = "foobargee", -50 - 10 * x + 32;;
+ 
+  Unfortunately, THIS MODULE IS NOT FULLY SAFE, since it relies on
+  the dangerous assumption that ( + ) is the integer addition, ( ** )
+  is the floating point power operator, etc.
+  This is not always true:
+  let (+) x y = y - x;;
+  let x = 10 + 100;;
+  x is 90, not 110 !
+  Or even:
+  let f (^) = "foo" ^ "bar"
+  val f : (string -> string -> 'a) -> 'a
+
+  So please, first check the lexical environment in which expressions
+  are to be expanded.
+ 
+  Thierry Bravier         Dassault Aviation - DGT / DTN / ELO / EAV
+  78, Quai Marcel Dassault       F-92214 Saint-Cloud Cedex - France
+  Telephone : (33) 01 47 11 53 07   Telecopie : (33) 01 47 11 52 83
+  E-Mail :              mailto:thierry.bravier@dassault-aviation.fr
+*)
+(*
+=========================================================================
+*)
+open Pcaml
+;;
+ 
+(*
+=========================================================================
+*)
+type literal =
+  | Int of int
+  | Flo of float
+  | Str of string
+  | Chr of char
+ 
+let get_literal loc = function
+  | <:expr< $int:i$ >> -> Some (Int (int_of_string   i))
+  | <:expr< $flo:f$ >> -> Some (Flo (float_of_string f))
+  | <:expr< $str:s$ >> -> Some (Str s)
+  | <:expr< $chr:c$ >> -> Some (Chr c)
+  | _ -> None
+and put_literal loc = function
+  | Int i -> <:expr< $int:string_of_int   i$ >>
+  | Flo f -> <:expr< $flo:string_of_float f$ >>
+  | Str s -> <:expr< $str:s$ >>
+  | Chr c -> <:expr< $chr:c$ >>
+ 
+(*
+=========================================================================
+*)
+let fold_1 (nop, fop) loc e1 =
+  match get_literal loc e1 with
+  | Some l1 -> <:expr< $fop l1$ >>
+  | _ -> <:expr< $lid:nop$ $e1$ >>
+and fold_2 (nop, fop) loc e1 e2 =
+  match get_literal loc e1, get_literal loc e2 with
+  | Some l1, Some l2 -> <:expr< $fop l1 l2$ >>
+  | _ -> <:expr< $lid:nop$ $e1$ $e2$ >>
+ 
+(*
+=========================================================================
+*)
+let dont_fold_1 nop loc =
+  fold_1
+    (nop, (fun l1 -> <:expr< $lid:nop$ $put_literal loc l1$ >>))
+    loc
+and fold_int_1 (nop, fop) loc =
+  fold_1
+    (nop,
+     (function
+       | Int i1 -> put_literal loc (Int (fop i1))
+       | l1 -> <:expr< $lid:nop$ $put_literal loc l1$ >>))
+    loc
+and fold_flo_1 (nop, fop) loc =
+  fold_1
+    (nop,
+     (function
+       | Flo f1 -> put_literal loc (Flo (fop f1))
+       | l1 -> <:expr< $lid:nop$ $put_literal loc l1$ >>))
+    loc
+ 
+let fold_int_2 (nop, fop) loc =
+  fold_2
+    (nop,
+     (fun l1 l2 ->
+       match l1, l2 with
+       | Int i1, Int i2 -> put_literal loc (Int (fop i1 i2))
+       | _ -> <:expr< $lid:nop$ $put_literal loc l1$ $put_literal loc
+l2$ >>))
+    loc
+and dont_fold_2 nop loc =
+  fold_2
+    (nop,
+     (fun l1 l2 ->
+       <:expr< $lid:nop$ $put_literal loc l1$ $put_literal loc l2$ >>))
+    loc
+and fold_flo_2 (nop, fop) loc =
+  fold_2
+    (nop,
+     (fun l1 l2 ->
+       match l1, l2 with
+       | Flo f1, Flo f2 -> put_literal loc (Flo (fop f1 f2))
+       | _ -> <:expr< $lid:nop$ $put_literal loc l1$ $put_literal loc
+l2$ >>))
+    loc
+and fold_str_2 (nop, fop) loc =
+  fold_2
+    (nop,
+     (fun l1 l2 ->
+       match l1, l2 with
+       | Str s1, Str s2 -> put_literal loc (Str (fop s1 s2))
+       | _ -> <:expr< $lid:nop$ $put_literal loc l1$ $put_literal loc
+l2$ >>))
+    loc
+ 
+(*
+=========================================================================
+*)
+type folder_1 =
+  | Dont_Fold_1
+  | Fold_Int_1 of (int -> int)
+  | Fold_Flo_1 of (float -> float)
+and folder_2 =
+  | Dont_Fold_2
+  | Fold_Int_2 of (int -> int -> int)
+  | Fold_Flo_2 of (float -> float -> float)
+  | Fold_Str_2 of (string -> string -> string)
+ 
+let make_folder_1 = function
+  | nop, Dont_Fold_1     -> dont_fold_1 nop
+  | nop, Fold_Int_1  fop -> fold_int_1  (nop, fop)
+  | nop, Fold_Flo_1  fop -> fold_flo_1  (nop, fop)
+and make_folder_2 = function
+  | nop, Dont_Fold_2     -> dont_fold_2 nop
+  | nop, Fold_Int_2  fop -> fold_int_2  (nop, fop)
+  | nop, Fold_Flo_2  fop -> fold_flo_2  (nop, fop)
+  | nop, Fold_Str_2  fop -> fold_str_2  (nop, fop)
+;;
+ 
+(*
+=========================================================================
+*)
+EXTEND
+        expr: LEVEL "^"
+        [ [ e1 = SELF;
+            f = [ op = "^" -> op, Fold_Str_2 ( ^ )
+                | op = "@" -> op, Dont_Fold_2 ];
+            e2 = SELF -> make_folder_2 f loc e1 e2 ] ]
+        ;
+      expr: LEVEL "+"
+        [ [ e1 = SELF;
+            f = [ op = "+"  -> op, Fold_Int_2 ( +  )
+                | op = "-"  -> op, Fold_Int_2 ( -  )
+                | op = "+." -> op, Fold_Flo_2 ( +. )
+                | op = "-." -> op, Fold_Flo_2 ( -. ) ];
+            e2 = SELF -> make_folder_2 f loc e1 e2 ] ]
+        ;
+      expr: LEVEL "*"
+        [ [ e1 = SELF;
+            f = [ op = "*"    -> op, Fold_Int_2 ( *    )
+                | op = "/"    -> op, Fold_Int_2 ( /    )
+                | op = "*."   -> op, Fold_Flo_2 ( *.   )
+                | op = "/."   -> op, Fold_Flo_2 ( /.   )
+                | op = "land" -> op, Fold_Int_2 ( land )
+                | op = "lor"  -> op, Fold_Int_2 ( lor  )
+                | op = "lxor" -> op, Fold_Int_2 ( lxor )
+                | op = "mod"  -> op, Fold_Int_2 ( mod  ) ];
+            e2 = SELF -> make_folder_2 f loc e1 e2 ] ]
+        ;
+      expr: LEVEL "**"
+        [ [ e1 = SELF;
+            f = [ op = "**"  -> op, Fold_Flo_2 ( **  )
+                | op = "asr" -> op, Fold_Int_2 ( asr )
+                | op = "lsl" -> op, Fold_Int_2 ( lsl )
+                | op = "lsr" -> op, Fold_Int_2 ( lsr ) ];
+            e2 = SELF -> make_folder_2 f loc e1 e2 ] ]
+        ;
+      expr: LEVEL "unary minus"
+        [ [ f = [ op = "-"  -> "~-",  Fold_Int_1 ( ~-  )
+                | op = "-." -> "~-.", Fold_Flo_1 ( ~-. ) ];
+            e = SELF -> make_folder_1 f loc e ] ]
+        ;
+      expr: LEVEL "~-"
+        [ [ f = [ op = "~-"  -> op, Fold_Int_1 ( ~-  )
+                | op = "~-." -> op, Fold_Flo_1 ( ~-. ) ];
+            e = SELF -> make_folder_1 f loc e ] ]
+        ;
+END
+ 
+(*
+=========================================================================
+*)
+
+
+
+

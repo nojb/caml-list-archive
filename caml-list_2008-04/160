@@ -1,0 +1,146 @@
+Return-Path: <luc.maranget@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 27E8BBBC1
+	for <caml-list@yquem.inria.fr>; Fri, 11 Apr 2008 14:22:16 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApoEAIr0/kfAXQIn/2dsb2JhbACrVA
+X-IronPort-AV: E=Sophos;i="4.25,641,1199660400"; 
+   d="scan'208";a="9471993"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 11 Apr 2008 14:22:15 +0200
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id m3BCMD2Q016567
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Fri, 11 Apr 2008 14:22:15 +0200
+From: luc.maranget@inria.fr (Luc Maranget)
+X-IronPort-AV: E=Sophos;i="4.25,641,1199660400"; 
+   d="scan'208";a="9471991"
+Received: from yquem.inria.fr ([128.93.8.37])
+  by mail2-relais-roc.national.inria.fr with ESMTP; 11 Apr 2008 14:22:13 +0200
+Received: by yquem.inria.fr (Postfix, from userid 18041)
+	id 3B944BBC1; Fri, 11 Apr 2008 14:22:13 +0200 (CEST)
+Date: Fri, 11 Apr 2008 14:22:13 +0200
+To: Sanghyeon Seo <sanxiyn@gmail.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Static exception in lambda code
+Message-ID: <20080411122213.GA32623@yquem.inria.fr>
+References: <5b0248170804110304q2a968b94uf0402cd3a54ad0df@mail.gmail.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <5b0248170804110304q2a968b94uf0402cd3a54ad0df@mail.gmail.com>
+User-Agent: Mutt/1.5.9i
+X-Miltered: at concorde with ID 47FF57F5.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; maranget:01 maranget:01 lambda:01 lambda:01 bytecomp:01 simplif:01 seq:01 seq:01 semantics:01 semantics:01 compiler:01 lambda-code:01 compiler:01 bytecode:01 simplif:01 
+
+> Luc Maranget suggested that static exception mechanism in lambda code,
+> namely Lstaticcatch and Lstaticraise, could be used to implement break
+> and continue.
+> 
+> However, this doesn't work right now. In bytecomp/simplif.ml,
+> simplify_exits simplify
+> (catch (seq (exit 1) (assign a b)) with (1) unit) to
+> (seq unit (assign a b))
+> which is not appropriate.
+
+Interesting.
+
+> 
+> The comment says: "simplify catch body with (i ...) handler ... if
+> (exit i ...) occurs exactly once in body, substitute it with handler".
+> simplify_exits suppress catch if no exit occurs in body, which is
+> nice, but this simplification is dangerous if one is to use this
+> mechanism to implement break and continue.
+> 
+> So, which is the case?
+> 1. The simplification is not safe, so it should be removed.
+> 2. The simplification is consistent with intended semantics of static
+> catch/raise, so static catch/raise is not directly useful to implement
+> break/continue or for that matter, return.
+
+Point 2, I guess. Simplifiation assumes a local-function semantics
+
+(exit 1 e) is (apply f1 e)
+(catch e1 (1 x) e2) is let f x = e1 in e1
+[additionally, (exit i e) always occur in terminal position in e1]
+
+This is the semantics assumed by the pattern-matching compiler, which
+introduces all those exit/catch in the lambda-code.
+
+However, later in the compiler (eg bytecode production)
+(remaining) exit/catch pairs are compiled
+as follows (informaly)
+
+(exit i) ->
+  branch labi
+
+(catch e1 with (1 x) e2) ->
+   [[ e1 ]]
+   branch end 
+ labi:
+    [[ e2 ]]
+ end: 
+(actual code may be slightly different, with additional
+stack adjustments)
+
+Hence my idea to compile break with exit/catch
+
+
+But, as you discovered, optimizing away break is wrong,
+because you loose the branch/label effect.
+
+There may be a simple solution :
+add a flag to Lstaticatch, so as to inform simplif
+wether the problematic optimization apply to it or not.
+
+There is a similar trick in simplif for let's,
+let's are tagged for simplif to know what kind of
+optimisation are applicable to them.
+
+Cf. <bytecomp/lambda.mli>
+
+
+type let_kind = Strict | Alias | StrictOpt | Variable
+
+(* Meaning of kinds for let x = e in e':
+    Strict: e may have side-effets; always evaluate e first
+      (If e is a simple expression, e.g. a variable or constant,
+       we may still substitute e'[x/e].)
+    Alias: e is pure, we can substitute e'[x/e] if x has 0 or 1 occurrences
+      in e'
+    StrictOpt: e does not have side-effects, but depend on the store;
+      we can discard e if x does not appear in e'
+    Variable: the variable x is assigned later in e' *)
+
+
+catch's from the match compiler should probably be something
+like Alias, which catch's from break/continue should
+probably be something like StrictOpt.
+
+
+Finally, there remains a (potential) pitfall in the
+semantics assumed by the match compiler :
+  (exit 1 e) is (apply f1 e)
+  (catch e1 (1 x) e2) is let f x = e1 in e1
+  [additionally, (exit i e) always occur in tail-call position in e1]
+
+This is [...]
+
+I assume that you think the following to be  valid code :
+
+  for k=1 to n do
+    f (if .. then break else ())
+  done
+
+Then break is not in tail call position. I have the feeling it does
+not hurt, but such things require more investigation.
+
+-- 
+Luc
+

@@ -1,0 +1,173 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA10360; Mon, 14 Jan 2002 11:01:51 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA10157 for <caml-list@pauillac.inria.fr>; Mon, 14 Jan 2002 11:01:50 +0100 (MET)
+Received: from verdot.inria.fr (verdot.inria.fr [128.93.11.7])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g0EA1nf24040
+	for <caml-list@inria.fr>; Mon, 14 Jan 2002 11:01:49 +0100 (MET)
+Received: (from ddr@localhost)
+	by verdot.inria.fr (8.9.3/8.9.3) id LAA06432
+	for caml-list@inria.fr; Mon, 14 Jan 2002 11:01:49 +0100
+Date: Mon, 14 Jan 2002 11:01:49 +0100
+From: Daniel de Rauglaudre <daniel.de_rauglaudre@inria.fr>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] record labels of record scope using camlp4
+Message-ID: <20020114110149.B6175@verdot.inria.fr>
+References: <000101c19ccc$ffe8e8c0$0b01a8c0@mit.edu>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="zYM0uCDKw75PZbzx"
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+In-Reply-To: <000101c19ccc$ffe8e8c0$0b01a8c0@mit.edu>; from jehenrik@yahoo.com on Mon, Jan 14, 2002 at 02:28:02AM -0500
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--zYM0uCDKw75PZbzx
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+Hi,
+
+On Mon, Jan 14, 2002 at 02:28:02AM -0500, Jeff Henrikson wrote:
+
+> First bad news: the code runs great in the toplevel, but that's
+> because camlp4 extends grammars interactively there.  Apparently in
+> batch compilation, any EXTEND construct only takes effect at the end
+> of the file, not at the end of a statement.
+
+It works in batch mode, but syntax extensions must be given to camlp4
+as cmo or cma files. Find attached your program and its two examples.
+First compile your extension by:
+      ocamlc -pp camlp4o -I +camlp4 -c my_extension.ml
+
+And your two examples by:
+      ocamlc -pp camlp4o -c my_file.ml
+      ocamlc -pp camlp4o -c my_file2.ml
+
+You can also pretty print the corresponding pure OCaml code, to see
+what the syntax extension did, by:
+      camlp4o pr_o.cmo my_file.ml
+      camlp4o pr_o.cmo my_file2.ml
+
+-- 
+Daniel de RAUGLAUDRE
+daniel.de_rauglaudre@inria.fr
+http://cristal.inria.fr/~ddr/
+
+--zYM0uCDKw75PZbzx
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="my_extension.ml"
+
+#load "q_MLast.cmo";;
+#load "pa_extend.cmo";;
+
+open Pcaml;;
+
+let loc = (0,0);;        (* toploop only *)
+
+let prepend_id name labels =
+  let helper2 v =
+    match v with
+    <:patt<$lid:x$>> ->
+      let y = name ^ "_" ^ x in
+      <:patt<$lid:y$>>
+  | _ -> v in
+  let helper1 = fun
+    (patt,expr) -> (helper2 patt,expr) in
+  List.map helper1 labels;;
+
+
+
+let make_record_constructor name =
+  let lname = String.uncapitalize name in
+  let uname = String.capitalize name in
+  let lbl_expr_list =
+    (Obj.magic (Grammar.Entry.find expr "lbl_expr_list") :
+       (MLast.patt * MLast.expr) list Grammar.Entry.e) in
+  let lbl_patt_list =
+    (Obj.magic (Grammar.Entry.find patt "lbl_patt_list") :
+       (MLast.patt * MLast.patt) list Grammar.Entry.e) in
+  EXTEND
+    expr: LEVEL "simple"
+    [ [ $uname$; "{"; memb = LIST1 lbl_expr_list SEP ";" ; "}" ->
+          (let memb0= prepend_id lname (List.hd memb) in
+          <:expr<{$list:memb0$}>>) ] ];
+    patt: LEVEL "simple"
+    [ [ $uname$; "{"; memb = LIST1 lbl_patt_list SEP ";" ; "}" ->
+          (let memb0= prepend_id lname (List.hd memb) in
+          <:patt<{$list:memb0$}>>) ] ];
+  END;
+;;
+
+(* test:
+make_record_constructor "bogus";;
+
+type bogus = {bogus_foo:string;bogus_bar:string};;
+
+Bogus{foo="happy";bar="sad"};;
+*)
+
+let type_declaration =
+    (Obj.magic (Grammar.Entry.find str_item "type_declaration") :
+       MLast.type_decl Grammar.Entry.e);;
+let type_parameters =
+    (Obj.magic (Grammar.Entry.find type_declaration "type_parameters") :
+       ((string * (bool * bool)) list) Grammar.Entry.e);;
+let type_patt =
+    (Obj.magic (Grammar.Entry.find type_declaration "type_patt") :
+       (MLast.loc * string) Grammar.Entry.e);;
+let type_kind =
+    (Obj.magic (Grammar.Entry.find type_declaration "type_kind") :
+        MLast.ctyp Grammar.Entry.e);;
+let constrain =
+    (Obj.magic (Grammar.Entry.find type_declaration "constrain") :
+        ((MLast.ctyp * MLast.ctyp)) Grammar.Entry.e);;
+
+
+let prepend_id_t name tk =
+  let helper = fun
+    (loc,s,b,t) -> (loc,name ^ "_" ^ s,b,t) in
+  match tk with
+    <:ctyp< { $list:ldl$ }>> ->
+      let ldl2 = List.map helper ldl in <:ctyp< { $list:ldl2$ }>>
+  | _ -> tk;;
+
+
+
+EXTEND
+  type_declaration:
+    [ [ tpl = type_parameters; n = type_patt; "="; "LOCAL"; tk = type_kind;
+        cl = LIST0 constrain ->
+	  match n with (loc,s) ->
+	    make_record_constructor s;
+	    (n, tpl, prepend_id_t s tk,  cl) ] ]
+  ;
+END;;
+
+--zYM0uCDKw75PZbzx
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="my_file.ml"
+
+#load "./my_extension.cmo";;
+
+(* example: *)
+type person = LOCAL {name:string; addr: string};;
+let p = Person{name="Joe";addr="1 Broadway Ave"};;
+match p with
+  Person{name=n;addr=a} -> (n,a);;
+
+--zYM0uCDKw75PZbzx
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="my_file2.ml"
+
+#load "./my_extension.cmo";;
+
+(* this sort of thing works too: *)
+type person = LOCAL {name:string; addr:string; friends:plist}
+and plist = Plist_person of (person * plist) | List_End;;
+
+--zYM0uCDKw75PZbzx--
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

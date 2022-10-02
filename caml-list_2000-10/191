@@ -1,0 +1,137 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA32620 for caml-red; Fri, 27 Oct 2000 08:45:35 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA16973 for <caml-list@pauillac.inria.fr>; Thu, 26 Oct 2000 23:10:02 +0200 (MET DST)
+Received: from math.berkeley.edu (gold.Math.Berkeley.EDU [169.229.58.61])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id e9QLA0v06350
+	for <caml-list@inria.fr>; Thu, 26 Oct 2000 23:10:01 +0200 (MET DST)
+Received: from yuban-c.math.berkeley.edu (blue1.Math.Berkeley.EDU [169.229.58.58])
+	by math.berkeley.edu (8.9.3/8.9.3) with ESMTP id OAA16588;
+	Thu, 26 Oct 2000 14:09:59 -0700 (PDT)
+Received: (from datta@localhost)
+	by yuban-c.math.berkeley.edu (8.9.3/8.9.3) id OAA16256;
+	Thu, 26 Oct 2000 14:09:46 -0700 (PDT)
+Date: Thu, 26 Oct 2000 14:09:46 -0700
+From: Ruchira Datta <datta@math.berkeley.edu>
+To: caml-list@inria.fr
+Subject: Re: Why Not Tail-Recursive?
+Message-ID: <20001026140946.A16221@blue1.berkeley.edu>
+Reply-To: datta@math.berkeley.edu
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+Sender: weis@pauillac.inria.fr
+
+
+Thanks very much to everyone who replied.  The exception handler in deepen
+prevented it from being tail-recursive.  Two different fixes were proposed:
+putting the "try...with..." around the call to deepen in
+find_subsets_of_total_weight instead of within deepen; and having next_path
+return an option.  Both work.  The former was simpler, but I chose to go
+with the latter so I could put the accumulating parameter subsets back in
+deepen and return the list of subsets as the final result.  (With the
+former method, deepen never returns normally.)  In case anyone is
+interested, here is the revised sample code.  I really appreciate
+everyone's help!
+
+Ruchira Datta
+datta@math.berkeley.edu
+
+-----------------------------electors.ml-----------------------------
+
+let sort_elts_by_wgt all_elts wgt_fn =
+  let compare_wgt x y = compare (wgt_fn x) (wgt_fn y) in
+  List.sort ~cmp:compare_wgt all_elts
+
+(* invariant for next_path and deepen: 
+  weight_so_far is the sum of the weights of the elements marked true in
+  elts_so_far; also weight_so_far < desired_wgt *)
+(* next_path *cannot* be called to find the initial path *)
+
+let find_subsets_of_total_weight all_elts wgt_fn print_fn desired_wgt =
+  let elts_sorted_by_wgt = sort_elts_by_wgt all_elts wgt_fn in
+  let rec next_path ( elts_so_far, wgt_so_far, undecided_elts ) =
+    match elts_so_far with
+    | [] -> None (* no paths left *)
+    | ( elt, true ) :: other_elts ->
+        let new_wgt = wgt_so_far -. wgt_fn elt in
+        Some ( ( elt, false ) :: other_elts, new_wgt, undecided_elts )
+    | ( elt, false ) :: other_elts ->
+        next_path ( other_elts, wgt_so_far, elt :: undecided_elts )
+  in
+  let rec deepen subsets ( elts_so_far, wgt_so_far, undecided_elts ) =
+    match undecided_elts with
+    | [] -> 
+      let new_path = next_path ( elts_so_far, wgt_so_far, undecided_elts ) in 
+      ( match new_path with
+        | None -> subsets
+        | Some path -> deepen subsets path )
+    | elt :: elts ->
+      let new_wgt = wgt_so_far +. wgt_fn elt in
+      if new_wgt < desired_wgt then
+        deepen subsets ( ( ( elt, true ) :: elts_so_far ), new_wgt, elts )
+      else if new_wgt = desired_wgt then
+        let new_subset = ( ( elt, true ) :: elts_so_far ) in
+        let _ = print_fn new_subset in
+        let new_subsets = new_subset :: subsets in
+        let new_path = ( ( ( elt, false ) :: elts_so_far ), wgt_so_far, elts )
+        in deepen new_subsets new_path
+      else (* new_wgt > desired_wgt *)
+        let new_path = next_path ( elts_so_far, wgt_so_far, undecided_elts ) in 
+        ( match new_path with
+          | None -> subsets
+          | Some path -> deepen subsets path )
+  in deepen [] ( [], 0., elts_sorted_by_wgt )
+
+let states = [
+	( "arkansas", 6. );
+	( "california", 54. );
+	( "delaware", 3. );
+	( "florida", 25. );
+	( "illinois", 22. );
+	( "maine", 4. );
+	( "michigan", 18. );
+	( "minnesota", 10. );
+	( "missouri", 11. );
+	( "new_mexico", 5. );
+	( "pennsylvania", 23. );
+  ( "safe_bush_block", 238. );
+  ( "safe_gore_block", 92. );
+	( "tennessee", 11. );
+	( "washington", 11. );
+	( "west_virginia", 5. );
+]
+
+let states_by_wgt = sort_elts_by_wgt states snd
+
+let total =
+  let accum total_so_far state = total_so_far +. snd state in
+  List.fold_left ~f:accum ~init:0. states_by_wgt
+
+let tie_num = float_of_int ( int_of_float total / 2 )
+
+let subsets = 
+  let cout = open_out "ways_to_tie.txt" in
+  let print_state ( name, num_votes ) =
+    Printf.fprintf cout "\t%s\t\t\t%d\n" name (int_of_float num_votes) 
+  in
+  let print_path = function
+  (* Each "way" of producing an electoral college tie corresponds to two
+    disjoint subsets of equal weight; since we are only interested in the
+    ways, we only print half the subsets (omitting their complements). *)
+  | ( ( "safe_bush_block", _ ) as state, true ) :: elts ->
+    let _ = Printf.fprintf cout "Way:\n" in
+    let _ = print_state state in
+    let rec print_states = function
+    | [] -> ()
+    | ( state, true ) :: states -> ( print_state state; print_states states )
+    | ( state, false ) :: states -> print_states states
+    in print_states elts
+  | _ -> ()
+  in
+  let encoded_subsets =
+    find_subsets_of_total_weight states_by_wgt snd print_path tie_num
+  in
+  let _ = close_out cout in
+  List.map (fun ls -> fst (List.split (List.filter snd ls))) encoded_subsets
+
+

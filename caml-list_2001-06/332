@@ -1,0 +1,132 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id FAA27930; Wed, 20 Jun 2001 05:17:04 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA27899 for <caml-list@pauillac.inria.fr>; Wed, 20 Jun 2001 05:17:02 +0200 (MET DST)
+Received: from shell5.ba.best.com (shell5.ba.best.com [206.184.139.136])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f5K3H1P05940
+	for <caml-list@inria.fr>; Wed, 20 Jun 2001 05:17:01 +0200 (MET DST)
+Received: from localhost (bpr@localhost)
+	by shell5.ba.best.com (8.9.3/8.9.2/best.sh) with ESMTP id UAA26142
+	for <caml-list@inria.fr>; Tue, 19 Jun 2001 20:17:00 -0700 (PDT)
+Date: Tue, 19 Jun 2001 20:16:59 -0700 (PDT)
+From: Brian Rogoff <bpr@best.com>
+To: caml-list@inria.fr
+Subject: [Caml-list] A G'Caml question
+Message-ID: <Pine.BSF.4.21.0106192012390.24429-100000@shell5.ba.best.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+    One of the important issues with overloading is whether one has 
+to define a "generic" function all in one place or if you can build it up 
+piecemeal from already existing generic functions. I played a bit, learned 
+some things, and now I have some questions. 
+
+I start with the obvious "plus" function, and extend it so that in 
+concatenates strings. 
+
+# generic plus = case
+    int -> int -> int => (+)
+  | float -> float -> float => (+.) ;;  
+val plus : $a -> $a -> $a [ int -> int -> int 
+                          | float -> float -> float  ] =
+  <fun>
+# plus 1 2;;
+- : int = 3
+# plus 1.0 2.0;;
+- : float = 3
+# plus "1" "2";;
+This generic full instance is used with type string -> string -> string
+ which is not its valid instance of 
+$a -> $a -> $a [ int -> int -> int 
+               | float -> float -> float  ]
+# generic plus = case 
+  string -> string -> string => (^) 
+  | $a -> $a -> $a => plus ;;  
+val plus : $a -> $a -> $a
+  [ string -> string -> string 
+  | $a -> $a -> $a && plus : $a -> $a -> $a  ] = <fun>
+# plus 1 1;;
+- : int = 2
+# plus "1" "2.0";;
+- : string = "12.0"
+
+Cool, for some very simple cases, it we can incrementally build up a 
+generic function from pieces. I think it's obvious that we'll get into 
+trouble with recursive generics. 
+
+# generic rec print = case 
+  | int -> unit => print_int
+  | string -> unit => print_string
+  | $a list -> unit => 
+      function [] -> ()
+      |   x :: xs -> print x; print xs
+  ;;            
+  val print : $a -> unit
+  [ int -> unit 
+  | string -> unit 
+  | $a list -> unit && print : $a -> unit && print : $a list -> unit  ] =
+  <fun>
+# print 23;;
+23- : unit = ()
+# print 23.0;;
+This generic full instance is used with type float -> unit
+ which is not its valid instance of 
+$a -> unit
+[ int -> unit 
+| string -> unit 
+| $a list -> unit && print : $a -> unit && print : $a list -> unit  ]
+
+OK, lets try the same thing as before, 
+
+# generic rec print = case float -> unit => print_float | $a -> unit =>
+print;;
+val print : $a -> unit
+  [ float -> unit 
+  | $a -> unit && print : $a -> unit  ] = <fun>
+
+# print 1.0;;
+1- : unit = ()
+# print 1 (* infinite loop! *)
+
+Well, that should be expected, since we try and print an int, which isn't
+a float, so we try (from $a -> unit => print) to print, ad infinitum. Is
+there a way out? If we try and rename print and call that, it still won't work, 
+since we want a form of "open recursion" here: if I add a case for float I 
+want to be able to print float lists. With the original print
+reinstalled...
+
+# let print' = print ;;
+val print' : $a -> unit [ $a -> unit && print : $a -> unit  ] = <fun>
+# generic rec print = case float -> unit => print_float | $a -> unit =>
+print';;
+val print : $a -> unit
+  [ float -> unit 
+  | $a -> unit && print' : $a -> unit  ] = <fun>
+# print 1.0;;
+1- : unit = ()
+# print [1;2;3];;
+123- : unit = ()
+# print [1.0;2.0;3.0];; 
+This generic full instance is used with type float list -> unit
+ which is not its valid instance of 
+$a -> unit [ float -> unit 
+           | $a -> unit && print' : $a -> unit  ]
+
+Is there some trick to build up recursive generics by parts? One thing 
+to do is to break the recursive generic into a non-recursive generic
+and a recursive function which applies the generic to the elements, 
+but that feels like cheating. Maybe open recursion for generics would 
+be desirable, so that I can add a new case and have the recursive call in 
+an existing case call the new one? Yes, it's a half baked idea, but maybe 
+a better cook can finish baking...
+
+-- Brian
+
+
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

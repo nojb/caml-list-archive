@@ -1,0 +1,76 @@
+Return-Path: <rixed@happyleptic.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 183C8BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 24 Nov 2010 01:22:04 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtEBADrp60zUGyoFkWdsb2JhbACUaI4EFQEBAQEJCwoHEQMfvgKFSwSNeA8
+X-IronPort-AV: E=Sophos;i="4.59,245,1288566000"; 
+   d="scan'208";a="89215478"
+Received: from smtp5-g21.free.fr ([212.27.42.5])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 24 Nov 2010 01:22:02 +0100
+Received: from yeeloong (unknown [82.67.194.89])
+	by smtp5-g21.free.fr (Postfix) with SMTP id A5E7AD48070
+	for <caml-list@inria.fr>; Wed, 24 Nov 2010 01:21:55 +0100 (CET)
+Received: by yeeloong (sSMTP sendmail emulation); Wed, 24 Nov 2010 01:20:31 +0100
+Date: Wed, 24 Nov 2010 01:20:30 +0100
+From: rixed@happyleptic.org
+To: caml-list@inria.fr
+Subject: Segfault in ARM EABI for programm compiled with ocamlopt 3.12.0
+Message-ID: <20101124002030.GA9493@yeeloong>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-06-14)
+X-Spam: no; 0.00; segfault:01 ocamlopt:01 bug:01 ocaml:01 segfaults:01 oldify:01 oldify:01 segfault:01 assertion:01 gdb:01 bug:01 alignment:01 aligned:01 recompile:01 ocaml:01 
+
+For some time now I'm after a bug hitting a program of mine when
+compiled on ARM with ocaml 3.12.0.
+I initially though my own C code was misbehaving but the program keep
+crashing, although not as early, if I comment out all calls to the C
+functions.
+
+The segfaults happen frequently during the GC, in oldify_one or
+oldify_mopup, but also in a few other places such as camlList__rev_append
+or caml__apply2 or any other places as well. In caml_oldify_one, for
+instance, the segfault always happen at the same location : the
+assertion that sz is not 0 (and of course when you read the code it's
+pretty clear that sz=0 correspond to the case "already forwarded" that's
+handled at the beginning of the function).
+
+The pattern, then, is that a register (usually r0, r2 or r5) is
+restored from the stack after a call to a function that might call the
+GC (or to a call to the GC itself), then dereferenced. It's obvious
+inspecting the stack with gdb that this very word was changed during the
+call and a value like 0, 3 or 1024 is read back into the register
+instead of an mlvalue.
+
+I didn't managed (yet) to reduce the size of the program to a small show
+case, and I am under the impression that all these components are
+required in order for the bug to happen 'fast enough' :
+
+- threads
+- floats
+- call to C function (greatly reduce the time to wait before the crash)
+
+I am also under the impression that the bug is affected by the new stack
+alignment requirement (because in one occurrence, calling or not a
+function that does nothing from within a function hit by the bug reduced
+drastically the probability of the bug, and the major difference I saw
+was that on one version of the function the stack size was 16 bytes and
+the other 24 bytes (16+4 apparently for the address of a "module"
+structure, aligned up to 24 bytes). I thus manually checked the
+generated framesets but they were allright as far as I understand them.
+
+Now I'm a little desperate since each recompile+test takes about 20
+minutes and the bug is so erratic ; so if someone here is familiar with
+ARM arch and in particular the difference between old and new ABI please
+suggest me what I should check, or any hint whatsoever. I'd be very much
+grateful as this consumes a lot of my spare time.
+
+Also, I'm compiling ocaml with gcc 4.2.1 - do you think it may be a
+problem with gcc not following the very same ABI ?
+
+Also I've run the testsuite but it did not reveal anything.
+

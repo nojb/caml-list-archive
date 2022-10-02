@@ -1,0 +1,93 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA21153; Fri, 4 Oct 2002 12:26:28 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA21149 for <caml-list@pauillac.inria.fr>; Fri, 4 Oct 2002 12:26:08 +0200 (MET DST)
+Received: from relay.pair.com (relay1.pair.com [209.68.1.20])
+	by concorde.inria.fr (8.11.1/8.11.1) with SMTP id g94AQ7506203
+	for <caml-list@inria.fr>; Fri, 4 Oct 2002 12:26:07 +0200 (MET DST)
+Received: (qmail 6619 invoked from network); 4 Oct 2002 10:26:05 -0000
+Received: from adsl-host-sf-228.apexworld.net (HELO checkerlap.d6.com) (66.114.212.228)
+  by relay1.pair.com with SMTP; 4 Oct 2002 10:26:05 -0000
+X-pair-Authenticated: 66.114.212.228
+Message-Id: <4.3.2.7.2.20021004000748.030bd2c0@mail.d6.com>
+X-Sender: checker@mail.d6.com
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Date: Fri, 04 Oct 2002 03:25:44 -0700
+To: caml-list@inria.fr
+From: Chris Hecker <checker@d6.com>
+Subject: [Caml-list] gc question: thread stacks, fibers, etc.
+Cc: buzzard@nothings.org
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"; format=flowed
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I'm looking at implementing fibers/coroutines/cooperative-threads 
+(described below for reference) in ocaml, and I've run into a small issue, 
+a question, and a couple confusions.
+
+First, the issue:  Because they're cooperative, there's no way a fiber can 
+run unless somebody tells it to do so using its handle/Fiber.t.  This means 
+that if a fiber's handle goes out of scope, the entire fiber, including its 
+stack, is garbage and should be able to be collected (unlike a thread, 
+where even if the Thread.t is gone, the thread is still 
+running/scheduled).  However, I can't figure out if it's possible to 
+implement fibers so they work like this.
+
+In more detail: a fiber is going to need a stack, as mentioned 
+below.  Following the systhreads code (win32.c & posix.c), I'll allocate 
+the stack outside the caml heap.  This stack will get scanned by the gc 
+using the scan_roots_hook from C, just like in the systhreads code.  The 
+problem is, this design treats the stack as a root, so the stack itself 
+can't be gc'd, even if it's orphaned.
+
+Is there a way to make the stack just another heap object?  I could easily 
+put the pointer to the stack in an Abstract_tag block, but then the stack 
+won't get scanned by the gc at all, which is bad.  It seems like what I 
+want is another kind of block or another function in the custom_operations 
+for "let me manually scan the opaque data in this block, which itself 
+points to data that contains values, and if it's all garbage, finalize me".
+
+Does that make sense?  The behavior I want is to not have to keep track of 
+the fibers if I don't care if they get gc'd, just like other objects.
+
+My next question is a clarification of the way caml works:  the stack can 
+contain values, but never blocks, right?  In C terms, it can contain 
+pointers but not actual objects that other people can point to?  All actual 
+boxed data is on the heap, right?  So, I can just delete a fiber's stack 
+and it'll work?  Put it yet another explicit way, the reason you have to 
+register roots when you work with values on the stack in C is because you 
+don't want the gc to free things you're pointing to, not because of any 
+funkiness of others pointing into your stack.
+
+Finally, a couple confusions:
+
+- final_fun in caml_thread_handle in win32.c is not used?
+
+- HANDLE in caml_thread_handle in win32 seems odd, since it's scanned by 
+the gc, yet it's a windows handle.  who's to say that it won't randomly end 
+up as a value that looks like a pointer into one of the caml heaps?
+
+Chris
+
+
+Fibers/Coroutines/Cooperative-Threads
+You can read a bunch about these on the net.  Basically, they're 
+lightweight nonpreemtive threads.  They allow you to yield back to the 
+creator (or a general scheduler) anywhere in the fiber with an explicit 
+yield(), and when the fiber is resumed it returns from the yield and 
+continues on.  They're very useful for breaking up long computations where 
+real threading is too complex to be worthwhile, but where breaking up the 
+computation into chunks is a mess (and generates a heinous FSM).  Game AIs 
+are a good example, network protocol negotiations are another.  In C, you 
+implement them by mallocing a stack and with a little snippet of asm, or 
+mucking with the jmpbuf fields.  They're pretty trivial to get working 
+fairly robustly (how you grow the stack is an issue).  I guess they're sort 
+of related to continuations (or at least, you can implement coroutines if 
+your language supports continuations), but they don't seem to be as heavy-duty.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

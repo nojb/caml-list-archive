@@ -1,0 +1,105 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA20729 for caml-redistribution; Fri, 29 Jan 1999 09:51:05 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA10954 for <caml-list@pauillac.inria.fr>; Fri, 29 Jan 1999 08:21:09 +0100 (MET)
+Received: from zarya.maya.com (zarya.maya.com [192.70.254.128])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id IAA02145
+	for <caml-list@inria.fr>; Fri, 29 Jan 1999 08:21:07 +0100 (MET)
+Received: (from prevost@localhost)
+	by zarya.maya.com (8.8.7/8.8.7) id CAA28558;
+	Fri, 29 Jan 1999 02:20:59 -0500
+Date: Fri, 29 Jan 1999 02:20:59 -0500
+Message-Id: <199901290720.CAA28558@zarya.maya.com>
+X-Authentication-Warning: zarya.maya.com: prevost set sender to prevost@maya.com using -f
+From: John Prevost <prevost@maya.com>
+To: caml-list@inria.fr
+Subject: Interesting behavior of "include"
+Sender: weis
+
+I started using the "include" directive in signatures recently, then
+realized that it's not actually documented anywhere (although it's
+quite useful at times.)
+
+I also discovered a little "problem" with it.
+
+module type test =
+  sig
+    type t
+    val a : t
+  end
+
+module type test2 =
+  sig
+    include test
+    val b : t
+  end
+
+module type test3 =
+  sig
+    include test
+    val c : t
+  end
+
+module type testbad =
+  sig
+    include test2
+    include test3 with type t = t
+  end
+
+    (* This would seem to imply that the new type t is the same as the old
+       when the above expands to:
+       sig
+         type t
+         val a : t
+         val b : t
+         type t = t (* just "type t" without the "with" part above. *)
+         val a : t
+         val c : t
+       end
+       So that a, b, and c would all have the same type.
+
+       If you try it without the with, you'll see that they do actually end up
+       all with the same type, but no matter how hard you try to constrain the
+       signature using "with", the second "type t" causes t to be abstract.
+
+       If you use the with above to try to constrain the second type t
+       in the signature to be the same as the first (you can't name
+       which t you mean, since include doesn't let you refer to the
+       first t as Test2.t), you get an even worse problem:
+
+         module type testbad =
+           sig type t val a : t val b : t type t = t val a : t val c : t end
+         # module Testbad : testbad with type t = int = struct
+	 #   type t = int
+	 #   let a = 1
+	 #   let b = 1
+	 #   let c = 1
+	 # end;;
+	 module Testbad :
+	   sig type t = int val a : t val b : t type t = t val a : t
+	       val c : t end
+         # Testbad.a;;
+	 - : Testbad.t = Uncaught exception: Stack overflow
+
+      This happens with or without the with in the module definition.
+
+      Pretty neat, eh?  The with definition is allowing you to define a
+      cyclic type abbreviation.  (This is correctly caught in all other
+      places you can use with as being an unbound type constructor.  But
+      in the include case, it must see that there is, in fact, a type t,
+      without being able to express in the form of a signature that in
+      the definition "type t = t", the second t refers to the previously
+      defined t.
+
+      This leaves two problems of course:  the first is "include ... with"
+      needs to check for cyclic type abbreviations, and the second is that
+      there's no way to constrain includes to be more "merging" than they
+      are (so that I can define "MONAD_ZERO_PLUS" in terms of "MONAD_ZERO"
+      and "MONAD_PLUS" instead of in terms of "MONAD", say.)
+
+      Of course, I probably shouldn't be using an undocumented feature
+      in the first place.
+    *)
+
+jmp
+
+
+

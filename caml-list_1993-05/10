@@ -1,0 +1,142 @@
+Received: by margaux.inria.fr, Thu, 6 May 93 10:55:19 +0200
+Received: from pauillac.inria.fr by margaux.inria.fr, Thu, 6 May 93 10:39:30 +0200
+Received: from localhost.inria.fr by pauillac.inria.fr; Thu, 6 May 93 10:39:27 +0200
+To: Xavier Leroy <xavier@theory.stanford.edu>
+Cc: remy@research.att.com (Didier Remy), caml-list@margaux
+Reply-To: pierce@margaux
+Subject: Re: new library modules (sets and maps) 
+In-Reply-To: Your message of Wed, 05 May 1993 17:37:01 -0700.
+             <9305060037.AA03305@Tamuz.Stanford.EDU> 
+Date: Thu, 06 May 1993 10:39:26 +0200
+Message-Id: <6822.736677566@pauillac.inria.fr>
+From: Benjamin Pierce <pierce@pauillac>
+Sender: weis@margaux
+Status: O
+
+Didier and Xavier write:
+> > Using an object oriented style, you could consider the functions on  sets as
+> > methods, and pack them with each set (instead of the stamp).
+> 
+> Please, no object-oriented nonsense. This is a matter of type
+> abstraction. I strongly doubt objects will help clarify anything here.
+> 
+> More to the point, the solution to which you finally arrive (storing
+> the ordering function in each set, and give it as argument to
+> set__empty), which is also the solution proposed by Damien Doligez,
+> solves the problem for functions that take only one set argument, but
+> fail on functions such as "union", which take two. In general you
+> can't decide whether the two orderings are the same ....
+
+While I agree with Xavier's other arguments about why an
+object-oriented approach is probably to be avoided here, it's worth
+remarking that a sufficiently powerful type system for objects can
+also handle cases like set union.
+
+Let Object be a type constructor that maps a description of an object
+interface (a vector of method types) to a description of the set of
+objects with this interface.  For example
+
+    SetI = Fun(Rep) { addElement: Rep->Int->Rep,
+                      member: Rep->Int->Bool }
+               
+describes the interface of simple set-of-integer objects.  (The
+reasons for the lambda-abstraction over the type variable Rep are
+technical, but they don't matter here; what's important is just the
+intuition that each of the methods implements a certain kind of
+transformation on a set-object's internal state: addElelement
+transforms an internal state and an integer into a new internal state
+and member maps an internal state and an integer into a boolean.)
+Then 
+
+    Set = Object(SetI)
+
+is the type of integer-set objects.  
+
+Now, a particular implementation of some set-objects with this type
+may be based on a binary tree representation and may have --
+internally -- a particular comparison function, but there is no way to
+make use of these facts to implement functions like union, because
+these aspects of the objects are not accessible through the public
+interface.  So let's make them accessible:
+
+    SetI' = Fun(Rep) { addElement: Rep->Int->Rep,
+                       member: Rep->Int->Bool,
+                       compare: Int->Int->Bool,
+                       asTree: Rep->IntTree }
+
+Now if
+
+    Set' = Object(SetI')
+
+then we can easily implement functions like union on elements of Set'.
+But there are two problems:
+  1) The asTree function is not somehing we want in the interface of
+     our sets, since we want to be free to reimplement them using some
+     different representation.
+  2) A function that takes two sets are arguments cannot be sure that
+     they were created with the same comparison function.
+
+Fortunately, we can solve both of these problems at the same time
+using a simple trick.
+
+Informally, 
+
+    SetI' < SetI
+    
+(the interface of Set' objects is richer than that of Set objects) and
+
+    Object(SetI') < Object(SetI).  
+
+[This is also true formally in a certain system, but that doesn't
+concern us here].  
+
+Now, for each comparison function, we want to build a type of sets
+based on that comparison function, where the only operations that show
+in the interface of these sets are addElement and member.  In other
+words, we want a function
+
+    buildSetPackage : (Int->Int->Bool) -> SetPackage
+
+where SetPackage is an existential type -- an implementation of an
+abstract data type:
+
+    SetPackage = Some(SetI' < SetI) {
+                   emptySet : Object(SetI'),
+                   union : Object(SetI') -> Object(SetI') -> Object(SetI')
+                   }
+
+>From the fact that the hidden representation type SetI' is declared to
+be smaller than SetI (this is a "partially abstract type," in Cardelli
+and Wegner's terminology), it follows that we can send the messages
+addElement and member to instances of Object(SetI') just as if they
+were instances of Object(SetI).  But the union operation must be
+applied to two arguments with the same hidden SetI', and the only way
+to obtain a new object with this hidden type is to use the emptySet
+provided by this package, so the implementation of union is justified
+in assuming that the comparison functions of its two arguments are
+identical.  (Indeed, the comparison function need not be stored with
+the sets any more: it can be stored in the package itself, which
+brings us essentially full-circle.)
+
+
+Well, there it is.  The punchline, in the end, is something like this: 
+
+  1) for things like set union and comparison, what you want is a
+     powerful system of abstract data types -- a higher-order module
+     system -- as Xavier suggested, and
+
+  2) such a module system interacts smoothly with a view of sets as
+     objects.  (In fact, you can even "inherit" things like union
+     functions, but that's a topic for another discussion!)
+
+Cheers,
+
+        Benjamin
+
+P.S.  Details of this construction are in a forthcoming tech report by
+David N. Turner and myself.  If anybody's interested I can send you a
+postscript file. 
+
+
+
+

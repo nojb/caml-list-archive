@@ -1,0 +1,120 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA17439 for caml-redistribution; Sun, 10 Oct 1999 22:24:19 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA31256 for <caml-list@pauillac.inria.fr>; Sun, 10 Oct 1999 20:00:42 +0200 (MET DST)
+Received: from beach.frankfurt.netsurf.de (beach.frankfurt.netsurf.de [194.64.181.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id UAA23952
+	for <caml-list@inria.fr>; Sun, 10 Oct 1999 20:00:41 +0200 (MET DST)
+Received: from ice.darmstadt.netsurf.de (board-109.darmstadt.netsurf.de [194.163.86.237])
+	by beach.frankfurt.netsurf.de (8.8.5/8.8.5) with ESMTP id UAA10478
+	for <caml-list@inria.fr>; Sun, 10 Oct 1999 20:00:39 +0200 (MET DST)
+Received: from localhost (localhost [[UNIX: localhost]])
+	by ice.darmstadt.netsurf.de (8.9.3/8.9.3) id SAA01091
+	for caml-list@inria.fr; Sun, 10 Oct 1999 18:27:23 +0200
+From: Gerd Stolpmann <Gerd.Stolpmann@darmstadt.netsurf.de>
+Reply-To: Gerd.Stolpmann@darmstadt.netsurf.de
+Organization: privat
+To: caml-list@inria.fr
+Subject: Re: speed versus C
+Date: Sun, 10 Oct 1999 18:27:12 +0200
+X-Mailer: KMail [version 1.0.21]
+Content-Type: text/plain
+References: <199910080026.BAA03378@toy.william.bogus>
+MIME-Version: 1.0
+Message-Id: <99101018244300.30629@ice>
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+On Fri, 08 Oct 1999, William Chesters wrote:
+
+>OK, how about this real life example from the Linux kernel:
+>
+>	error = file->f_op->read(inode,file,buf,count);
+>
+>Here, `file' is a faked object, with `vtbl' = `f_op' and `this' passed
+>in the second argument.  And what is a closure if not an object with
+>one method :-) ?  I think this is quite a natural idiom to use, even
+>in assembler---especially once one has seen how it can be given a nice
+>meaning within a higher level framework like C++ or indeed Caml.
+
+This is exactly what I mean because your example is not as general as a closure
+in Caml. As far as I understand, the "f_op" component of "file" contains
+pointers to the functions implementing the file operations of the various
+filesystems. When the file is opened, these pointers are initialized with the
+addresses of the functions of the file system where the file resides. Let me
+show the difference to Caml by porting the definitions:
+
+type file_operations =
+  { llseek : file -> loff_t -> int -> loff_t;
+    read   : file -> buffer -> loff_t -> size_t;
+    (* and many others *)
+  }
+and file =
+  { (* among other components: *)
+    f_op : file_operations;
+  }
+
+When the f_op component is initialized functions are assigned to the "llseek",
+"read" and the other components, e.g.
+
+f_op.read <- (fun f b offset -> ... code ...)
+
+Caml is more general because the code defining the function has access to EVERY
+variable of the current scope, not only the parameters and global variables.
+For example, you could use this to pass additional runtime configurations to
+the functions:
+
+let config = ... some value ... in
+f_op.read <- (fun f b offset -> ... code accessing 'config' ...)
+
+The value of 'config' is computed at the time the function is assigned, and it
+is stored in a private array of implicitly passed parameters such that it is
+still available when the function is actually called.
+
+This is a language feature which can always be replaced by simpler
+techniques. In this case you can simply extend the "file" struct by an
+additional "config" component. 
+
+If you wanted to have a fully general substitute of closures in C (or
+assembler), you could do it as follows: For every function store a function
+pointer and an array of implicit parameters, e.g.
+
+struct file_operations {
+        loff_t (*llseek) (struct file *, loff_t, int);
+	void  **llseek_implicit_params;
+        ssize_t (*read) (struct file *, char *, size_t, loff_t *);
+	void  **read_implicit_params;
+	...
+}
+
+When the function is assigned, you can now pass implicit parameters by
+storing them into the array; in the function definition you can access the
+parameters. The point is that every function definition can have its own array
+of implicit parameters with its own meaning; to the outer world this is fully
+abstract.
+
+There are many reasons not to paraphrase closures as described, most important
+you lose all type safety. For almost all situations in which closures would be
+adequate it is also possible to make the implicit parameters explicit, and I
+think most programmers do so.
+
+In object-oriented languages there is another way of paraphrasing closures.
+Define an abstract class with just one method (e.g. "read"); every
+implementation of this method is done in subclasses. You can then pass implicit
+parameters when the object is created and store them into instance variables.
+
+>(Though I'd argue that's because it sticks to
+>abstractions that "ornament" the low-level computational model without
+>"obscuring" it :-) .)
+
+I think this is exactly the point where we have different opinions.
+
+Gerd
+--
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   Gerd.Stolpmann@darmstadt.netsurf.de (privat)
+Germany                     
+----------------------------------------------------------------------------
+
+
+

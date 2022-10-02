@@ -1,0 +1,121 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q3Q7wvTZ021138
+	for <caml-list@sympa-roc.inria.fr>; Thu, 26 Apr 2012 09:58:57 +0200
+X-IronPort-AV: E=Sophos;i="4.75,485,1330902000"; 
+   d="scan'208";a="155681460"
+Received: from ver78-3-82-243-39-126.fbx.proxad.net (HELO MacBook-Pro-de-Xavier-ALLAMIGEON.local) ([82.243.39.126])
+  by mail1-relais-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-CAMELLIA256-SHA; 26 Apr 2012 09:58:52 +0200
+Message-ID: <4F99003B.9070001@inria.fr>
+Date: Thu, 26 Apr 2012 09:58:51 +0200
+From: Xavier ALLAMIGEON <xavier.allamigeon@inria.fr>
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.6; rv:11.0) Gecko/20120327 Thunderbird/11.0.1
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: [Caml-list] static C library of wrappers: compilation issues
+
+Dear caml-list,
+
+I'd like to build a static C library implementing an interface to an 
+OCaml library, but I get some compilation errors. Here's an example of 
+the problem.
+
+1) The ml_code.* files contain a hello_world function which I'd like to 
+provide in C.
+
+<ml_code.ml>
+let ml_hello_world () =
+   print_endline "Hello world!"
+
+let _ =
+   Callback.register "ml_hello_world" ml_hello_world
+
+<ml_code.mli>
+val ml_hello_world: unit -> unit
+
+2) On the C part, I created .c/.h files calling the ml function with 
+camlback:
+<c_code.c>
+#include <caml/callback.h>
+#include <caml/memory.h>
+
+void init(void) {
+   char* dummy = '\0';
+   caml_main(&dummy);
+}
+
+void c_hello_world(void) {
+   CAMLparam0();
+   static value *closure_ml_hello_world = NULL;
+   if (closure_ml_hello_world == NULL) {
+     closure_ml_hello_world = caml_named_value("ml_hello_world");
+   }
+   caml_callback(*closure_ml_hello_world, Val_unit);
+   CAMLreturn0;
+}
+
+<c_code.h>
+void init(void);
+void c_hello_world(void);
+
+3) Finally, I created a test file in C:
+<test.c>
+#include "c_code.h"
+
+int main(int argc, char **argv) {
+   init();
+   c_hello_world();
+}
+
+Here's the way I'm compiling everything. It builds a libhello_world.a 
+static library from ml_code.obj.o and c_code.o.
+ocamlc -c ml_code.mli
+ocamlopt -c ml_code.ml
+ocamlopt -output-obj ml_code.cmx -o ml_code.obj.o
+gcc -c c_code.c -I"`ocamlc -where`"
+ar rcs libhello_world.a ml_code.obj.o c_code.o
+gcc -o test -L. -L"`ocamlc -where`" test.c -lhello_world -lasmrun -lm -ldl
+
+The compilation error happens at the last line, where I get the 
+following messages:
+/home/allamigeon/Applications/godi/lib/ocaml/std-lib/libasmrun.a(startup.o): 
+In function `caml_main':
+startup.c:(.text+0x239): undefined reference to `caml_data_segments'
+startup.c:(.text+0x243): undefined reference to `caml_data_segments'
+startup.c:(.text+0x249): undefined reference to `caml_data_segments'
+startup.c:(.text+0x297): undefined reference to `caml_code_segments'
+startup.c:(.text+0x2a5): undefined reference to `caml_code_segments'
+startup.c:(.text+0x2b3): undefined reference to `caml_code_segments'
+startup.c:(.text+0x2c9): undefined reference to `caml_code_segments'
+startup.c:(.text+0x2ce): undefined reference to `caml_code_segments'
+/home/allamigeon/Applications/godi/lib/ocaml/std-lib/libasmrun.a(roots.o): 
+In function `caml_init_frame_descriptors':
+roots.c:(.text+0x22b): undefined reference to `caml_frametable'
+roots.c:(.text+0x23a): undefined reference to `caml_frametable'
+/home/allamigeon/Applications/godi/lib/ocaml/std-lib/libasmrun.a(roots.o): 
+In function `caml_do_roots':
+roots.c:(.text+0x3a6): undefined reference to `caml_globals'
+roots.c:(.text+0x3b2): undefined reference to `caml_globals'
+/home/allamigeon/Applications/godi/lib/ocaml/std-lib/libasmrun.a(roots.o): 
+In function `caml_oldify_local_roots':
+roots.c:(.text+0x505): undefined reference to `caml_globals'
+roots.c:(.text+0x511): undefined reference to `caml_globals'
+/home/allamigeon/Applications/godi/lib/ocaml/std-lib/libasmrun.a(amd64.o): 
+In function `caml_start_program':
+(.text+0x251): undefined reference to `caml_program'
+...
+
+Which is really weird is that the problem happens only with Linux, and 
+not with Mac OS. Of course, if I replace the last line by:
+gcc -o test -L"`ocamlc -where`" test.c ml_code.obj.o c_code.o -lasmrun 
+-lm -ldl
+then it works like a charm:
+./test
+"Hello world!"
+
+Any idea?
+
+Thanks in advance for your help!
+
+Xavier

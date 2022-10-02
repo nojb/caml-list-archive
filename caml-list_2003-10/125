@@ -1,0 +1,142 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA18047; Sun, 12 Oct 2003 10:58:53 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA11960 for <caml-list@pauillac.inria.fr>; Sun, 12 Oct 2003 10:58:51 +0200 (MET DST)
+Received: from zinc.btinternet.com (zinc.btinternet.com [194.73.73.148])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h9C8wo127550
+	for <caml-list@inria.fr>; Sun, 12 Oct 2003 10:58:51 +0200 (MET DST)
+Received: from host81-128-40-58.in-addr.btopenworld.com ([81.128.40.58] helo=beertje.william.bogus)
+	by zinc.btinternet.com with esmtp (Exim 3.22 #23)
+	id 1A8c3s-0003i5-00; Sun, 12 Oct 2003 09:58:48 +0100
+Received: by beertje.william.bogus (Postfix, from userid 501)
+	id AA95269460; Sun, 12 Oct 2003 10:01:40 +0100 (BST)
+From: William Chesters <williamc@paneris.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16265.6260.517524.854828@beertje.william.bogus>
+Date: Sun, 12 Oct 2003 10:01:40 +0100
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] extending a type with Marshal
+In-Reply-To: <1065777556.21150.15.camel@lulu.devinci.fr>
+References: <20031008212257.19628.qmail@web40606.mail.yahoo.com>
+	<1065777556.21150.15.camel@lulu.devinci.fr>
+X-Mailer: VM 7.04 under 21.4 (patch 8) "Honest Recruiter" XEmacs Lucid
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; chesters:01 williamc:01 paneris:01 caml-list:01 rinderknecht:01 foo:01 foo:01 interprets:01 interprets:01 subtyping:01 versioning:01 relaying:99 ber:99 decoding:01 ber:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Christian Rinderknecht writes:
+ > Hello Ker,
+ > 
+ > On Wed, 2003-10-08 at 23:22, Ker Lutyn wrote:
+ > > [...]
+ > > In other words, Foo sends message A to Bar. We'd like to be able to
+ > > handle two possibilities:
+ > > 
+ > > (1) Foo sends message A' to Bar, who interprets it as A.
+ > > (2) Foo sends message A to Bar, who interprets it as A'.
+ > > 
+ > > ...where A' is an extension of A.
+ > > 
+ > > To do this it would be necessary to 'extend' a type at one end [...]
+ > 
+ > This kind of concept is already present (subtyping, versioning,
+ > relaying) in a specification language called Abstract Syntax Notation
+ > One (ASN.1), and, at least, easily supported by one of its encoding rule
+ > called Basic Encoding Rule (BER).
+ > 
+ > The point of ASN.1 is sharing the same ASN.1 module between the two
+ > possibly hetereogeneous peers, also agreeing on an encoding/decoding
+ > scheme (e.g. BER) and then each peer compile the ASN.1 module into type
+ > definitions and codecs in his application language (obviously, you seems
+ > interested in O'Caml). Then compile and link.
+
+   I think it's only fair to point out that many people dislike ASN.1,
+and that it may not be a perfect match for what you're trying to
+achieve.
+
+   It's true that protocol forward compatibility and negotiation is
+supported, but to get it you have to use ASN.1, plus the encoding
+rules (nearly always BER, will be handled by the ASN.1 library if you
+find one), plus the OSI-inspired TCAP meta-protocol.  All of these are
+surprisingly complicated, obscure, and heavyweight given what they
+actually do; and of course it's ultimately left up to the client app
+to decide what to do when talking to an older server, so they don't
+magically solve all your problems.
+
+   And the much trumpted forward compatibility in ASN.1 basically
+boils down to the following facts:
+
+   -- Sum types (in ocaml terms) can be encoded in ASN.1 using
+so-called "explicit tags": a number is prefixed saying which variant
+is present, just like in ocaml's marshal representation.  Because you
+are required to give your own numeric values for these tags, you can
+achieve forward compatibility by adding new tag-values rather than
+re-using old ones when you extend the datatype.
+
+   -- Product types (records and tuples) can be encoded using
+"sequences"; again, the elements of the sequence are tagged, and
+forward compatibility comes from inventing new tags for new members.
+
+   That's all.  As I said TCAP adds a simple kind of "protocol
+negotiation protocol".
+
+   Why go to the trouble of constructing a mapping between the ocaml
+values you want to transmit and ASN.1, when you could just encode them
+directly in a homegrown encoding with less fuss?  In fact I think with
+care you could get upwards compatibility using marshal directly.
+Why not just write
+
+      (* version 2 *)
+
+      type foo = { a: string; b: int; extensions: unit option }
+
+      type bar = First of int
+               | Second
+               | Extended of unit
+
+      (* version 3 *)
+
+      type foo = { a: string; b: int; extensions: foo_v3 option }
+      and foo_v3 = { c: float }
+
+      type bar = First of int
+               | Second
+               | Extended of bar_v3
+      and bar_v3 = Third of string
+                 | Fourth
+
+This will work because of the way ocaml in practice lays things out,
+and automatically induces the right protocol-fallback structure in
+your code:
+
+     let doit (foo: foo) =
+       printf "a %s b %d " foo.a foo.b;
+       match foo.extensions with
+         | Some foo_v3 -> printf "c %f" foo_v3.c
+         | _ -> printf "(no v3 extensions")
+
+
+
+   What would be much more interesting than ASN.1 would be something
+that ensured upward compatibility but was (a) more tightly integrated
+with ocaml datatype declarations, perhaps via camlp4, so that it
+was closer to Marshal's trasparency, and (b) capable of preserving
+value identity/pointer aliasing relationships, which is a
+completely unknown concept to ASN.1, but a very useful feature of
+Marshal.
+
+   In summary my feeling is that unless ASN.1 is mandated for a
+certiain application it's best avoided because it creates problems
+of complexity and over-engineering without actually offering
+very much.  (It would be nice to think that at least the
+interoperability nightmares that used to arise because of everyone's
+differently broken implementations of the "standard" are a thing of
+the past nowadays, but I suspect they're not.)
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

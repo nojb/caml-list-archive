@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA25165; Fri, 25 Jul 2003 10:37:09 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA05850 for <caml-list@pauillac.inria.fr>; Fri, 25 Jul 2003 10:37:07 +0200 (MET DST)
+Received: from kraid.nerim.net (smtp-105-friday.nerim.net [62.4.16.105])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h6P8b7T22954
+	for <caml-list@inria.fr>; Fri, 25 Jul 2003 10:37:07 +0200 (MET DST)
+Received: from hector.lesours (lesours.starynkevitch.net [80.65.224.217])
+	by kraid.nerim.net (Postfix) with ESMTP
+	id 6740B40E31; Fri, 25 Jul 2003 10:37:06 +0200 (CEST)
+Received: from basile by hector.lesours with local (Exim 3.36 #1 (Debian))
+	id 19fy4Y-0004WW-00; Fri, 25 Jul 2003 10:37:06 +0200
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+Message-ID: <16160.60466.231363.674311@hector.lesours>
+Date: Fri, 25 Jul 2003 10:37:06 +0200
+To: caml-list@inria.fr
+Subject: [Caml-list] static linking behavior of Ocaml w.r.t Dbm
+X-Mailer: VM 7.17 under Emacs 21.3.2
+From: Basile STARYNKEVITCH <basile@starynkevitch.net>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; basile:01 poesia:01 sourceforge:01 statically:01 failwith:01 rdwr:01 printf:01 rdonly:01 vals:01 val:01 unexpected:01 printexc:01 usr:01 ocamlopt:01 -static:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Dear All,
+
+(I'm BCC the poesia-devel list, since the problem was first identified
+for compilation of POESIA monitor. See http://poesia.sourceforge.net
+and http://www.poesia-filter.org for more)
+
+on the Debian Sid systems I've got it is not possible to easily
+compile *statically* a program using Dbm. Consider the following (self
+contained but usable) test program:
+
+
+################################################################
+(* file testdbm.ml *)
+let dbopt = ref (None : Dbm.t option);;
+
+let keyref = ref "";;
+
+let dbpathref = ref "";;
+
+let get_db () = match !dbopt with 
+  None -> failwith "no db"
+| Some db -> db;;
+
+let main () =
+  Arg.parse 
+    [
+      "-C", Arg.String (fun path -> 
+			  let db = Dbm.opendbm path 
+				     [ Dbm.Dbm_create; Dbm.Dbm_rdwr ] 0o640 
+			  in 
+			    dbopt := (Some db); 
+			    dbpathref := path;
+			    Printf.printf "created dbm %S\n" path), 
+      "create a Dbm" ;
+      "-R", Arg.String (fun path -> 
+			  let db = Dbm.opendbm path 
+				     [ Dbm.Dbm_create; Dbm.Dbm_rdonly ] 0o640 
+			  in
+			    dbopt := (Some db); 
+			    dbpathref := path; 
+			    Printf.printf "reading dbm %S\n" path),
+      "open a readonly Dbm" ;
+      "-W", Arg.String (fun path -> 
+			  let db = Dbm.opendbm path 
+				     [ Dbm.Dbm_create; Dbm.Dbm_rdonly ] 0o640 
+			  in 
+			    dbopt := (Some db); 
+			    dbpathref := path; 
+			    Printf.printf "writing (&reading) dbm %S\n" path),
+      "open a readwrite Dbm" ;
+      "-K", Arg.String (fun key ->
+			  keyref := key),
+      "set the current key" ;
+      "-P", Arg.String (fun vals ->
+			  Dbm.add (get_db ()) !keyref vals;
+			  Printf.printf "put key=%S val=%S in dbm %S\n" 
+			    !keyref vals !dbpathref),
+      "put a value" ;
+      "-D", Arg.Unit (fun () ->
+			Dbm.remove (get_db ()) !keyref ;
+			Printf.printf "deleted key=%S in dbm %S\n"
+			  !keyref !dbpathref),
+      "delete a value" ;
+      "-G", Arg.Unit (fun () ->
+			let vals = Dbm.find (get_db ()) !keyref in
+			  Printf.printf "got key=%S val=%S in dbm %S\n"
+			    !keyref vals !dbpathref),
+      "get a value" ;
+      "-A", Arg.Unit (fun () ->
+			Dbm.iter 
+			(fun k v -> Printf.printf "has key=%S val=%S\n" k v) 
+			(get_db ())),
+      "dump all bindings" ]
+    (fun arg -> failwith (" unexpected arg " ^ arg))
+    "testdbm" ;
+  match !dbopt with 
+      None -> ()
+    | Some db -> Dbm.close db;;
+
+Printexc.print main ();;
+(* eof testdbm.ml *)
+################################################################
+
+Save the above in a file testdbm.ml; then run
+   /usr/bin/ocamlopt -cclib -static dbm.cmxa testdbm.ml -o testdbm
+
+You get a lot of messages like 
+/usr/lib/gcc-lib/i386-linux/3.3.1/../../../libgdbm_compat.a(dbmopen.o)(.text+0xc6): In function `dbm_open':
+: undefined reference to `gdbm_open'
+/usr/lib/gcc-lib/i386-linux/3.3.1/../../../libgdbm_compat.a(dbmopen.o)(.text+0x135): In function `dbm_open':
+
+Removing the -cclib -static or adding -cclib /usr/lib/libgdbm.a solves
+the problem
+
+I just got the latest Ocaml from CVS, compiled and installed it
+   /usr/local/bin/ocamlopt -v
+   The Objective Caml native-code compiler, version 3.07+beta 1
+   Standard library directory: /usr/local/lib/ocaml
+and it does not exhibit the above problem.
+
+I don't know if it is a problem of Debian packaging, or an Ocaml 3.06
+problem solved in 3.07
+
+As a temporary workaround across a bug in Ocaml 3.06 in Debian Sid
+(and perhaps other distributions), I suggest to Poesia users to add
+the required -cclib option to the OPTLIBS makefile variable.
+-- 
+
+Basile STARYNKEVITCH         http://starynkevitch.net/Basile/ 
+email: basile<at>starynkevitch<dot>net 
+aliases: basile<at>tunes<dot>org = bstarynk<at>nerim<dot>net
+8, rue de la Faïencerie, 92340 Bourg La Reine, France
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

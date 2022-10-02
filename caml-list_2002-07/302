@@ -1,0 +1,171 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA32544; Tue, 16 Jul 2002 10:13:08 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA32431 for <caml-list@pauillac.inria.fr>; Tue, 16 Jul 2002 10:13:07 +0200 (MET DST)
+Received: from laurelin.dementia.org ([208.167.88.73])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g6G8D6T08274
+	for <caml-list@inria.fr>; Tue, 16 Jul 2002 10:13:06 +0200 (MET DST)
+Received: by laurelin.dementia.org (Postfix, from userid 1001)
+	id 734FA70C7; Tue, 16 Jul 2002 04:19:50 -0400 (EDT)
+To: Alessandro Baretta <alex@baretta.com>
+Cc: John Prevost <j.prevost@cs.cmu.edu>,
+        zze-MARCHEGAY Michael stagiaire FTRD/DTL/LAN <michael.marchegay@rd.francetelecom.com>,
+        Ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Deep copy
+References: <0489A7888F080B4BA73B53F7E145F29A1B0AF5@LANMHS20.rd.francetelecom.fr>
+	<3D332851.1080909@baretta.com> <86sn2ksjq8.fsf@laurelin.dementia.org>
+	<3D3354C0.9040403@baretta.com>
+From: John Prevost <j.prevost@cs.cmu.edu>
+Date: 16 Jul 2002 04:19:50 -0400 (34.711 UMT)
+In-Reply-To: <3D3354C0.9040403@baretta.com>
+Message-ID: <86it3grsnt.fsf@laurelin.dementia.org>
+Lines: 139
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>>>>> "ab" == Alessandro Baretta <alex@baretta.com> writes:
+
+    {... asked about deep copy ...}
+
+In any case, here's a simple example of the appropriate way to
+implement deep copy:
+
+(* just for reference *)
+class type deep_copyable =
+  object ('s)
+    method deep_copy : 's
+  end
+
+class point =
+  object
+    val mutable x = 0
+    val mutable y = 0
+    method get_x = x
+    method get_y = y
+    method set_x x' = x <- x'
+    method set_y y' = y <- y'
+    method deep_copy = {< >}    (* no mutable slots *)
+  end
+
+class rect =
+  object
+    val mutable ul = new point
+    val mutable lr = new point
+    method get_ul = ul
+    method get_lr = lr
+    method set_ul ul' = ul <- ul'
+    method set_lr lr' = lr <- lr'
+    method deep_copy = {< ul = ul #deep_copy; lr = lr #deep_copy >}
+  end
+
+Note that this strategy works even if class rect doesn't have mutable
+slots--since it uses the special cloning with override construct.
+There is some awkwardness with inheritance in that an inheriting class
+really needs to have mutable values to work well.  You either have to
+do:
+
+class tri =
+  object
+    inherit rect as super_r
+    val mutable ur = new point
+    method get_ur = ur
+    method set_ur ur' = ur <- ur'
+    method deep_copy =
+      let c = super_r #deep_copy in begin
+        c #set_ur (ur #deep_copy);
+        c
+      end
+  end
+
+(* or *)
+
+class alt_tri =
+  object
+    inherit rect
+    val mutable ur = new point
+    method get_ur = ur
+    method set_ur ur' = ur <- ur'
+    method deep_copy =
+        {< ul = ul #deep_copy; lr = lr #deep_copy; ur = ur #deep_copy >}
+  end
+
+The first version has a problem if ur does not have a public "set_"
+method--since the copy is a different object, you cannot manipulate
+its slots directly.  The good thing about it is that it doesn't need
+to list all of the inherited slots directly, since the inherited
+deep_copy method takes care of that.  This problem will show up if you
+want to copy a field which is private state (not settable from
+outside.)
+
+The second version must list all of the slots to copy directly.  It
+doesn't require that the slot to be modified has a public set method.
+But: if the superclass changes to have more slots that must be
+duplicated, the subclass must also change.  If it does not, the
+internal invariants of the class inherited from may fail, since two
+objects now share a resource.
+
+A final version uses composition instead of inheritance (which can
+often be a good thing) to handle this:
+
+class comp_tri =
+  object
+    val comp_r = new rect
+    val mutable ur = new point
+    method get_ul = comp_r #get_ul
+    method set_ul = comp_r #set_ul
+    method get_lr = comp_r #get_lr
+    method set_lr = comp_r #set_lr
+    method get_ur = ur
+    method set_ur ur' = ur <- ur'
+    method deep_copy = {< comp_r = comp_r #deep_copy; ur = ur #deep_copy >}
+  end
+
+The composition version requires that each method you want to
+replicate be replicated by hand.  The drawback is that if the
+contained class which you're delegating for changes, you may not have
+all the methods which the composed class has.  The good thing about
+this approach is that if this causes real problems, the type system
+should pick up on it.  (i.e. calls to those methods on your class will
+fail.)  And--there is no chance that the internal invariants of the
+composed class will be broken: you use only the published interface to
+interact with it.  The drawback is that you cannot override behavior
+of the composed object's calls to itself.
+
+
+In summary:
+
+ * The mechanism used in "tri" is the most common case when classes do
+   not have internal (hidden) state that must be duplicated.  The
+   problem arises when the *inheriting class* has such state, not when
+   the *inherited* class has such state.  It allows overriding of self
+   method calls.
+
+* The mechanism used in "alt_tri" handles internal state in a way
+  which may break, but allows overriding of self method calls.  The
+  breakage may be difficult to detect.
+
+* The method used in comp_tri handles internal state in a safe
+  way--invariants are never broken--but does not allow overriding of
+  self method calls, since no subclassing is actually occuring.  This
+  mechanism is most appropriate in cases where the interface is only
+  extended, and no old methods are to be overridden.
+
+
+I hope this rundown is useful to you.  Although copying of state is
+particularly troublesome, these three patterns (call superclass do
+extra work, replace superclass, composition) also arise in other sorts
+of methods, with similar drawbacks and advantages.  In the end, it all
+comes down to the following observation: subclassing may lead to
+useful sharing of behavior, but it breaks modularity--whenever a
+superclass changes, all subclasses must be examined to be sure their
+behavior remains correct.
+
+
+John.
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

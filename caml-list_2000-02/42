@@ -1,0 +1,357 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA23231 for caml-redistribution@pauillac.inria.fr; Fri, 18 Feb 2000 00:36:58 +0100 (MET)
+Resent-Message-Id: <200002172336.AAA23231@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA30824 for <caml-list@pauillac.inria.fr>; Thu, 17 Feb 2000 04:07:23 +0100 (MET)
+Received: from beach.frankfurt.netsurf.de (beach.frankfurt.netsurf.de [194.64.181.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id EAA19200
+	for <caml-list@inria.fr>; Thu, 17 Feb 2000 04:07:21 +0100 (MET)
+Received: from ice.darmstadt.netsurf.de (board-77.darmstadt.netsurf.de [194.163.86.205])
+	by beach.frankfurt.netsurf.de (8.8.5/8.8.5) with ESMTP id EAA24885
+	for <caml-list@inria.fr>; Thu, 17 Feb 2000 04:07:19 +0100 (MET)
+Received: from localhost (localhost [[UNIX: localhost]])
+	by ice.darmstadt.netsurf.de (8.9.3/8.9.3) id EAA14502
+	for caml-list@inria.fr; Thu, 17 Feb 2000 04:06:56 +0100
+From: Gerd Stolpmann <Gerd.Stolpmann@darmstadt.netsurf.de>
+Reply-To: Gerd.Stolpmann@darmstadt.netsurf.de
+Organization: privat
+To: caml-list@inria.fr
+Subject: Again: Portability of applications
+Date: Thu, 17 Feb 2000 03:34:53 +0100
+X-Mailer: KMail [version 1.0.28]
+Content-Type: text/plain
+MIME-Version: 1.0
+Message-Id: <00021704065603.30469@ice>
+Content-Transfer-Encoding: 8bit
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Fri, 18 Feb 2000 00:36:58 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+Several hours later...
+
+Here is a very first dynamic loader, tested under Linux. It reads a file
+"shlibs" in the current directory which must contain the names of the
+shared libraries which must reside in the current directory. The order of the
+libraries matters.
+
+Example: "shlibs" is
+libcamlrun.so
+libunix.so
+
+Here, libcamlrun.so is a shared version of libcamlrun.a, and libunix.so
+is a shared version of libunix.a (when you create them, do not forget that
+you must turn -fpic on!)
+
+The dynamic loader reads the primitive table from the bytecode file, and
+searches every primitive in every library mentioned in shlibs.
+
+To get the main executable, do
+  gcc -o dynamic-runner -I/where/is/ocaml-2.04/byterun main.c -ldl -rdynamic
+(Linux-specific); the source of "main.c" is appended below.
+
+dynamic-runner works just like ocamlrun; i.e. you can execute the bytecode
+file t by
+  dynamic-runner t
+
+To create the bytecode file, you need a conventional, statically-linked
+interpreter (only to get the list of primitives). For example, do
+  ocamlc -o static-runner -custom -make-runtime unix.cma -cclib -lunix
+Compile then with
+  ocamlc -o t -use-runtime static-runner unix.cma t.ml
+(The latter statement runs static-runner -p which prints the list of
+primitives; the only reason why we need it.)
+
+What does this mean? - dynamic-runner is only a loader that reads the list
+of primitives of a bytecode file, and loads the appropriate libraries.
+Instead of creating customized interpreters again and again for every
+application, it is sufficient to have ONE loader, ONE interpreter, and
+ONE set of libraries. If you need an additional library, just compile it and
+install it together with the already installed ones.
+
+There are currently some problems: I needed a "shlibs" file because the
+bytecode file does not contain the names of the libraries. Instead of
+using an extra file it would be better to add another section to the
+bytecode file format containing these names; perhaps together with version
+information.
+
+Furthermore, currently a statically linked version of the interpreter
+is necessary. This interpreter is only used to get the list of primitives
+to put into the bytecode file. It is possible to get this list from the
+command line options of the compiler.
+
+I would suggest to integrate a dynamic loader into the next release
+of OCaml; I think this is the only way to get around these problems.
+
+And now the source of "main.c":
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/types.h>
+#include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+#include "mlvalues.h"
+#include "exec.h"
+#include "sys.h"
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
+
+
+struct shared_libs {
+    void *handle;
+    struct shared_libs *next;
+} *shl_list;
+
+
+typedef value (*c_primitive)(); /* from prims.h */
+
+#define MAXPRIM 5000
+
+c_primitive cprim[MAXPRIM];
+char *names_of_cprim[MAXPRIM];
+
+
+void *lookup(char *name) {
+    void *sym;
+    struct shared_libs *l;
+
+    sym = NULL;
+    for (l = shl_list; l != NULL; l = l->next) {
+	sym = dlsym(l->handle, name);
+	if (sym != NULL) break;
+    };
+    if (sym == NULL) {
+	fprintf(stderr, "Cannot find symbol %s in any library\n", name);
+	exit(1);
+    };
+    return sym;
+}
+
+
+char *searchpath(char *name) {
+    char *(*f)(char *);
+
+    f = lookup("searchpath");
+    return (*f)(name);
+}
+
+
+void fatal_error(char *text) {
+    fprintf(stderr, text);
+    exit(1);
+}
+
+
+/* Stolen from startup.c: */
+
+static unsigned long read_size(char * ptr)
+{
+  unsigned char * p = (unsigned char *) ptr;
+  return ((unsigned long) p[0] << 24) + ((unsigned long) p[1] << 16) +
+         ((unsigned long) p[2] << 8) + p[3];
+}
+
+#define FILE_NOT_FOUND (-1)
+#define TRUNCATED_FILE (-2)
+#define BAD_MAGIC_NUM (-3)
+
+static int read_trailer(int fd, struct exec_trailer *trail)
+{
+  char buffer[TRAILER_SIZE];
+
+  lseek(fd, (long) -TRAILER_SIZE, SEEK_END);
+  if (read(fd, buffer, TRAILER_SIZE) < TRAILER_SIZE) return TRUNCATED_FILE;
+  trail->path_size = read_size(buffer);
+  trail->code_size = read_size(buffer + 4);
+  trail->prim_size = read_size(buffer + 8);
+  trail->data_size = read_size(buffer + 12);
+  trail->symbol_size = read_size(buffer + 16);
+  trail->debug_size = read_size(buffer + 20);
+  if (strncmp(buffer + 24, EXEC_MAGIC, 12) == 0)
+    return 0;
+  else
+    return BAD_MAGIC_NUM;
+}
+
+static int attempt_open(char **name, struct exec_trailer *trail, int do_open_script)
+{
+  char * truename;
+  int fd;
+  int err;
+  char buf [2];
+
+  truename = searchpath(*name);
+  if (truename == 0) truename = *name; else *name = truename;
+  fd = open(truename, O_RDONLY | O_BINARY);
+  if (fd == -1) return FILE_NOT_FOUND;
+  if (!do_open_script){
+    err = read (fd, buf, 2);
+    if (err < 2) { close(fd); return TRUNCATED_FILE; }
+    if (buf [0] == '#' && buf [1] == '!') { close(fd); return BAD_MAGIC_NUM; }
+  }
+  err = read_trailer(fd, trail);
+  if (err != 0) { close(fd); return err; }
+  return fd;
+}
+
+
+/* Simplified version from startup.c: */
+
+static int parse_command_line(char **argv)
+{
+  int i, j;
+
+  for(i = 1; argv[i] != NULL && argv[i][0] == '-'; i++) {
+    switch(argv[i][1]) {
+    case 'v':
+      break;
+    case 'p':
+      break;
+    default:
+      fprintf(stderr, "Unknown option %s.\n", argv[i]);
+      exit(1);
+    }
+  }
+  return i;
+}
+
+
+/* Code from me: */
+
+int main(int argc, char **argv) {
+    FILE *f;
+    char line[100];
+    struct shared_libs *shl, *l;
+    int k, j, pos, fd, n;
+    char *cwd, *filename, *prims, *p;
+    struct exec_trailer trail;
+    void *sym;
+    void (*caml_main)(char **);
+
+    shl_list = NULL;
+
+    /* First, determine which dynamic libraries are available.
+     * As this is only an experiment: Read library names from file "shlibs".
+     */
+    
+    f = fopen("shlibs", "r");
+    if (f == NULL) { perror("fopen"); exit(1); };
+
+    fgets(line, 99, f);
+    while (!(feof(f))) {
+	k = strlen(line);
+	if (line[k-1] == '\n') {
+	    line[k-1] = 0;
+	    k--;
+	};
+	if (k>=3 && strcmp(line + (k-3), ".so") == 0) {
+	    /* fprintf(stderr, "Found library %s\n", line); */
+	    shl = (struct shared_libs *) malloc(sizeof(struct shared_libs));
+	    /* Test shl == NULL left out */
+	    cwd = getcwd(NULL,0);
+	    j = strlen(cwd);
+	    filename = malloc(j + k + 2);
+	    /* Test filename == NULL left out */
+	    strcpy(filename, cwd);
+	    filename[j] = '/';
+	    strcpy(filename+j+1, line);
+	    shl->handle = dlopen(filename, RTLD_LAZY|RTLD_GLOBAL);
+	    if (shl->handle == NULL) {
+		fprintf(stderr, "dlopen error: %s\n", dlerror());
+		exit(1);
+	    };
+	    shl->next = shl_list;
+	    shl_list = shl;
+	};
+	fgets(line, 99, f);
+    };
+    fclose(f);
+
+    /* Result so far: All available libraries are in shl_list */
+
+    /* Find the bytecode file (stolen from startup.c) */
+
+    pos = 0;
+    fd = attempt_open(&argv[0], &trail, 0);
+    if (fd < 0) {
+	pos = parse_command_line(argv);
+	if (argv[pos] == 0)
+	    fatal_error("No bytecode file specified.\n");
+	fd = attempt_open(&argv[pos], &trail, 1);
+	switch(fd) {
+	case FILE_NOT_FOUND:
+	    fprintf(stderr, "Fatal error: cannot find file %s\n", argv[pos]);
+	    exit(1);
+	    break;
+	case TRUNCATED_FILE:
+	case BAD_MAGIC_NUM:
+	    fprintf(stderr,
+		    "Fatal error: the file %s is not a bytecode executable file\n",
+		    argv[pos]);
+	    exit(1);
+	    break;
+	}
+    }
+
+    /* Now initialize the list of primitives: Walk through the primitives
+     * found in the bytecode file, and search them in the shared libraries.
+     */
+
+    /* partially stolen from startup.c */
+
+    lseek(fd, - (long) (TRAILER_SIZE + trail.prim_size + trail.data_size +
+			trail.symbol_size + trail.debug_size),
+	  SEEK_END);
+
+    prims = malloc(trail.prim_size);
+    if (read(fd, prims, trail.prim_size) != trail.prim_size)
+	fatal_error("Fatal error: cannot read primitive table\n");
+
+    close(fd);
+
+    /* Get the size of the primitive table */
+
+    n = 0;
+    for (p = prims; p < prims + trail.prim_size; p = p + strlen(p) + 1) {
+	n++;
+    }
+
+    /* Set up the primitive table */
+
+    for (p = prims, k = 0; k < n; p = p + strlen(p) + 1, k++) {
+	names_of_cprim[k] = malloc(strlen(p)+1);
+	strcpy(names_of_cprim[k], p);
+	/* Lookup the symbol */
+	cprim[k] = lookup(names_of_cprim[k]);
+	/* fprintf(stdout, "found symbol %d: %s.\n", k, p); */
+    };
+    cprim[n] = NULL;
+    names_of_cprim[n] = NULL;
+    free(prims);
+
+    /* DONE! */
+
+    /* Continue regularly: */
+    caml_main = lookup("caml_main");
+    (*caml_main)(argv);
+
+    exit(0);
+
+    /* Don't forget: This is a quick hack. Many tests on error conditions have
+     * been left out!
+     */
+}
+
+
+Gerd
+-- 
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   Gerd.Stolpmann@darmstadt.netsurf.de (privat)
+Germany                     
+----------------------------------------------------------------------------
+
+

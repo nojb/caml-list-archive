@@ -1,0 +1,89 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA06107; Sun, 6 Jul 2003 12:35:48 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA05161 for <caml-list@pauillac.inria.fr>; Sun, 6 Jul 2003 12:35:47 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h66AZkf22872;
+	Sun, 6 Jul 2003 12:35:46 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA06778; Sun, 6 Jul 2003 12:35:46 +0200 (MET DST)
+Date: Sun, 6 Jul 2003 12:35:46 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Sylvain LE GALL <sylvain.le-gall@polytechnique.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Printf and format
+Message-ID: <20030706123545.A227@pauillac.inria.fr>
+References: <20030703163804.GA1207@gallu> <200307051026.MAA02389@pauillac.inria.fr> <20030705120714.GA8202@gallu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <20030705120714.GA8202@gallu>; from sylvain.le-gall@polytechnique.org on Sat, Jul 05, 2003 at 02:07:14PM +0200
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 printf:01 type-safe:01 infer:01 run-time:01 suffices:01 compile-time:01 dynamically:01 3.06,:01 fmt:01 lnl:99 accu:01 delim:01 failwith:01 nonetheless:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Is there a way to transform string to ( 'a, out_channel, unit, unit)
+> format. I need this function to use it with something like :
+> 
+> Printf.printf (my_fun "X, Y") "coucou";;
+
+No, not in a type-safe manner.  The type of a format string depends on
+the "%" specifiers found in the string itself, and OCaml can't infer
+or check types at run-time.
+
+However, for the purpose of internationalization, the following
+operation suffices: given a (compile-time constant) format and a
+(dynamically computed) string, check that the string can be viewed as
+a format with the same format type as the constant format, and return
+the string as a format.  
+
+In OCaml 3.06, this can be done as follows:
+
+  let re_fmt =
+    Str.regexp "%[#0-9.*+ -]*[lnL]?[sScCdioxXunfeEgGFbBatn[]"
+
+  let string_of_format (s : ('a, 'b, 'c) format) = (Obj.magic s : string)
+
+  let extract_formats s =
+    List.fold_right
+      (fun part accu ->
+        match part with Str.Text _ -> accu | Str.Delim d -> d :: accu)
+      (Str.full_split re_fmt s) []
+
+  let conv_format (src: ('a, 'b, 'c) format) (dst: string) =
+    if extract_formats (string_of_format src) = extract_formats dst
+    then (Obj.magic dst : ('a, 'b, 'c) format)
+    else failwith "conv_format"
+
+Remark 1: yes, there's a lot of "Obj.magic" in this code, and yes,
+this is a deadly sin, but in this particular instance it is all
+type-safe nonetheless.
+
+Remark 2: the matching of the two formats can be relaxed, e.g.
+the code above will not allow the conversion of "%6d" into "%8x",
+although both formats have the same type.  This is left as an exercise
+for the reader.  But for internationalization purposes, I doubt
+you need that additional flexibility.
+
+Then, assuming you have a function "gettext : string -> string" to translate
+strings according to the user-selected language, you can extend it to
+formats as follows:
+
+  let getformat f = conv_format f (gettext (string_of_format f))
+
+and use it with printf functions like this:
+
+  printf (getformat "My name is %s and I'm %d years old") "Bob" 12
+
+> you read my mind. Indeed, the question concern an internationalization
+> module ( let's call libgettext-ocaml ). It is basically a binding of
+> gettext. 
+
+I hope the above is enough to get you off the ground.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,105 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA27692; Fri, 9 Nov 2001 22:55:52 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA27751 for <caml-list@pauillac.inria.fr>; Fri, 9 Nov 2001 22:55:51 +0100 (MET)
+Received: from leia.mandrakesoft.com (office.mandrakesoft.com [195.68.114.34])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id fA9Ltp517014
+	for <caml-list@pauillac.inria.fr>; Fri, 9 Nov 2001 22:55:51 +0100 (MET)
+Received: by leia.mandrakesoft.com (Postfix, from userid 505)
+	id 1B88B578F; Fri,  9 Nov 2001 22:53:24 +0100 (CET)
+To: "Krishnaswami, Neel" <neelk@cswcasa.com>
+Cc: Caml <caml-list@pauillac.inria.fr>
+Subject: Re: [Caml-list] From folds to zips (was Dynamic vs. Static)
+References: <B1E4D3274D57D411BE8400D0B783FF32A8D59C@exchange1.cswv.com>
+From: Pixel <pixel@mandrakesoft.com>
+Date: 09 Nov 2001 22:53:23 +0100
+In-Reply-To: <B1E4D3274D57D411BE8400D0B783FF32A8D59C@exchange1.cswv.com>
+Message-ID: <lyeln7fw6k.fsf@leia.mandrakesoft.com>
+Lines: 78
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.1
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+"Krishnaswami, Neel" <neelk@cswcasa.com> writes:
+
+> I don't know how to write code equivalently 
+> generic in Caml. For specific types -- eg, lists -- there are
+> functions like List.fold_left2, but I don't know how to get from a 
+> fold to a zip for generic collections. 
+
+I'd say functional languages do not have to rely on iterators (using
+fold/iter/...), and so decide they are not needed :)
+
+Below is your zipfold with OO-iterator. Would there be any pb having the base
+library functions based on iterators? (speed?)
+
+
+let rec it_fold f init it =
+  if it#is_end then init
+  else 
+    let v = it#value in
+    it#next ; 
+    it_fold f (f v init) it
+
+let rec zipfold f init it1 it2 =
+  if it1#is_end || it2#is_end then init
+  else 
+    let v1, v2 = it1#value, it2#value in
+    it1#next ; it2#next ;
+    zipfold f (f v1 v2 init) it1 it2
+
+
+and here are some iterators:
+
+
+class ['a] list_iterator l =
+    object
+      val mutable it = (l : 'a list)
+      method is_end = it = []
+      method value = List.hd it
+      method next = it <- List.tl it
+    end
+
+
+type 'a btree = Empty | Node of 'a * 'a btree * 'a btree
+let leaf e = Node(e,Empty,Empty)
+
+
+class ['a] btree_iterator__depth_first tree =
+  let rec down_the_tree up = function
+    | Node(e, left, right) -> down_the_tree ((e, right) :: up) left
+    | Empty -> up
+  in
+  object
+    val mutable it = down_the_tree [] (tree : 'a btree)
+    method is_end = it = []
+    method value = fst (List.hd it)
+    method next = 
+      it <- 
+	match it with
+	| [] -> failwith "no next"
+	| (_, Empty) :: up -> up
+	| (_, node) :: up -> down_the_tree up node
+  end
+
+
+class ['a] btree_iterator tree =
+  object
+    val mutable it = [(tree : 'a btree)]
+    method is_end = it = []
+    method value =
+      match it with
+      | Node(e,_,_) :: _ -> e
+      | _ -> failwith "no value"
+    method next = 
+      let tree2l tree = if tree = Empty then [] else [tree] in
+      it <- 
+	match it with
+	| Node(_, left, right) :: up -> tree2l left @ tree2l right @ up
+	| _ -> failwith "no next"
+  end
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

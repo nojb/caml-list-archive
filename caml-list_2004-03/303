@@ -1,0 +1,177 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA27716; Mon, 22 Mar 2004 10:43:04 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA27678 for <caml-list@pauillac.inria.fr>; Mon, 22 Mar 2004 10:43:03 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i2M9fFKW005702;
+	Mon, 22 Mar 2004 10:41:15 +0100
+Received: from bourg.inria.fr (bourg.inria.fr [128.93.11.100]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA26387; Mon, 22 Mar 2004 10:40:41 +0100 (MET)
+Received: from starynke by bourg.inria.fr with local (Exim 4.30)
+	id 1B5Lul-0006h7-4i; Mon, 22 Mar 2004 10:40:11 +0100
+Date: Mon, 22 Mar 2004 10:40:11 +0100
+To: Richard Cole <rcole@itee.uq.edu.au>, caml-list@inria.fr
+Subject: Re: [Caml-list] Memory Mapped Files and OCaml
+Message-ID: <20040322094010.GA25354@bourg.inria.fr>
+References: <405E7404.3050306@itee.uq.edu.au>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <405E7404.3050306@itee.uq.edu.au>
+User-Agent: Mutt/1.5.5.1+cvs20040105i
+From: Basile Starynkevitch <basile.starynkevitch@inria.fr>
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 basile:01 basile:01 2004:99 cole:99 pointers:01 marshalling:01 rank:99 serializing:01 evan:01 thrashing:01 pervasives:01 conjuction:01 referential:01 generic:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 303
+
+On Mon, Mar 22, 2004 at 03:05:08PM +1000, Richard Cole wrote:
+
+> I wonder if anyone can give me some pointers. I'm interested in having 
+> all memory used by my ocaml program memory mapped so that calculations 
+> can be preserved from one run of an ocaml program to the next. [...]
+
+There are two separate issues here:
+
+1. first is memory mapped files, i.e. an interface to the mmap(2) &
+   munmap(2) system calls. This is provided in the Bigarray module
+   (see http://caml.inria.fr/ocaml/htmlman/manual043.html for more)
+   thru functions like Bigarray.Array1.map_file etc...
+
+2. second issue is persistent data. Did you look at Persil on
+   http://cristal.inria.fr/~starynke/persil/ which should provide what
+   you need? Persil is using the internal marshalling primitives for
+   serialisation.
+
+
+> With the idea being that all values are stored in the memory mapped 
+> files so put_value and get_value are very fast. Serialization is ok for 
+> small data structures, but for 50M data structures, for which only a 
+> small part of the data structure is accesed, it is a pain.
+
+If the huge data structures contain some (potentially shared)
+persistent data, you don't need to serialise the data itself but only
+some persistent "pointer" to it (internally, a persistent value in
+Persil is a phantom type of only two integers: the store number, and
+the value rank within this store. So serializing such a persistent
+value is quite quick). This is what Persil does. So I'll bet that evan
+if you have a gigabyte of data, if it is organised as a "chunk" of
+many medium (or small) sized persistent values, you won't have to
+serialise 50Mbytes at once. Of course you'll need to explicitly code
+with persistent values, and get & set operations on them (and also
+transactions on persistent stores).
+
+
+> Of course program termination can take a long time if there are many 
+> dirty pages that need to be synchronised to disk. There may be some way 
+> to tell unix to sync dirty pages while the program is running but 
+> without thrashing (i.e. using all system resources).
+
+If you mean calling the msync(2) system call, I think that there is
+currently no Ocaml interface to it. The madvise(2) system call might
+also help. For reads, Linux also provide a Linux specific readahead(2)
+call. All three calls (msync, madvise, readahead) are not interfaced
+to Ocaml, but coding the C wrapper to call them from Ocaml should be
+easy.
+
+
+In Persil, updating the persistent store (if it was not done before)
+is done at exit (using the Pervasives.at_exit function), unless it was
+not done in a transactional manner. So you shouldn't lose your data.
+
+
+> 
+> Such a persistent store does suffer from a lack of safety. i.e. killing 
+> the process or the machine going down could leave the store in an 
+> inconsistent state. If safety is required there must be algorithms 
+> around to provide it in conjuction with a memory mapped file, perhaps 
+> via checkpointing. Does referential transparency help us here?
+
+
+Persil does provide some transaction mechanism, provided that the
+underlying store (eg MySQL4) provides it. Persil also provides a
+"generic" persistent store machinery (using functors).
+
+> One final question: Are most people using database backends for 
+> persistence? Is it the case that most data structures that one would 
+> want to create in Ocaml programs map fairly easily into B-tree 
+> structures, i.e. are maps or multimaps from a keyed domain into some 
+> structured domain.
+
+I think it depends upon the application. The main reasons for using a
+database include
+
+A. concurrency, and more generally ACID properties and
+transactions. Persil does provide a transactional interfaces, if and
+only if the underlying persistent store has them. I'm not sure that
+memory mapping is enough here! And writing an ACID system from scratch
+is a huge amount of work.
+
+B. compatibility with other applications. If a database is accessed by
+your Ocaml program and also by an existing Perl or Java software, you
+have to find a least common denominator.... (which might be SQL...)
+
+
+C. (closely related to B) compatibility with existing data. Usually,
+big data is already available in some RDBMS system, and you have to
+handle it thru the existing infrastructure.
+
+Persil may use MySQL4 for point A (ACIDity & transactions), but the
+persistent data is marshalled into a string.
+
+________________
+
+
+There are still some difficult issues (a little related, but mostly
+orthogonal)
+
+
+* functional values: marshalling functions (ie internally closures) is
+difficult, and only currently possible within a single program which
+does not change. This means that you cannot communicate a closure from
+one program to another (even if it is inside the same compilation unit
+- but in that case, the runtime might perhaps be adapted to handle
+this specific case). I tend to believe that functional values are not
+needed in practice in persistent stores, but Ocaml objects have
+functions inside them (internally, in their class descriptor or vtable
+equivalent).
+
+
+
+* data schema evolution: suppose you serialise records like 
+   type person = { name: string; age: int }
+  and later on, you want to change it to 
+   type person = { name: string; age: int; mutable friends: person list }
+
+Currently, the marshalling machinery does not permit such an
+evolution. You cannot store a huge number of persons of the first type
+and read them as persons of the later type (with an empty friends list).
+
+* generating encoding & decoding functions from the concrete type
+descriptions (and, in case of abstract data types, from their module
+signatures and more...). If all your types are concrete, a syntactic
+approach like IoXML at http://cristal.inria.fr/~ddr/IoXML/ should
+help.
+
+
+________________
+
+Richard Cole, I am extremely interested by your application's need
+regarding persistency. Could you give me (or the list) more details,
+first forgetting the file mapping issue (which IMHO is just an
+[important] implementation detail).
+
+Regards.
+-- 
+Basile STARYNKEVITCH -- basile dot starynkevitch at inria dot fr
+Project cristal.inria.fr - phone +33 1 3963 5197 - mobile 6 8501 2359
+http://cristal.inria.fr/~starynke --- all opinions are only mine 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

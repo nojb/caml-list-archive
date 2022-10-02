@@ -1,0 +1,157 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA06472; Sun, 7 Dec 2003 20:46:25 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA05756 for <caml-list@pauillac.inria.fr>; Sun, 7 Dec 2003 20:46:23 +0100 (MET)
+Received: from smtp2.pp.htv.fi (smtp2.pp.htv.fi [213.243.153.14])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hB7JkM125780
+	for <caml-list@inria.fr>; Sun, 7 Dec 2003 20:46:22 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp2.pp.htv.fi (Postfix) with ESMTP
+	id 9CDAB2975A5; Sun,  7 Dec 2003 21:46:22 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hB7JkLT02688;
+	Sun, 7 Dec 2003 21:46:21 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AT4rE-0005bp-00; Sun, 07 Dec 2003 21:46:20 +0200
+To: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Object-oriented access bottleneck
+References: <871xrhe4hb.fsf@iki.fi>
+	<20031207192702D.garrigue@kurims.kyoto-u.ac.jp>
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Sun, 07 Dec 2003 21:46:20 +0200
+Message-ID: <87brqkcsxf.fsf@iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 bottleneck:01 jacques:01 model:01 statically:01 clumsy:01 non-mutable:01 slower:01 atom:01 val:01 atom:01 atoms:01 atoms:01 inlined:01 inlined:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Jacques Garrigue wrote:
+> I think the correct name is "late binding".
+
+Ah, right. Thanks.
+
+> But you're correct. Classes are not very good for performance, and
+> nothing serious is done for their optimization.
+>
+> As you remarked already, the object model chosen in ocaml makes
+> final methods mostly irrelevant. There is however one way to tell
+> the compiler that a specific method code should be used, but this
+> only works for calls inside a class: inherit c ... as super method p
+> = ... super#m ...  In this case, if we know statically the class c,
+> we exactly know the code referenced by super#m. However, this
+> information is not used currently (and is probably not what you want
+> for your own code). And there is no way to tell this for a method
+> defined in the same class.
+
+Ah, right! So it would be possible to inline the "c"'s method "m" into
+the body of method "p" in class "a" - just that the compiler doesn't
+do that?
+
+> The approach you suggest of using a record sounds like a good idea.
+> This will make the problem clearer: either you really need objects,
+> and external functions are just there for performance; or you didn't
+> need them anyway, and you will be able to rewrite everything as
+> functions with a record parameter.  Note also that this is not as
+> clumsy as it looks: even without records, you can already pass (by
+> hand) all non-mutable fields to external functions (labelled
+> parameters handy there?)
+
+Yeah, that will probably just fine. Just that, in OCaml, unlike for
+example CLOS (where method calls look just like ordinary function
+calls), normally exposes in an interface if things are objects or not
+- obviously so if you are supposed to use method calls. So either I
+commit to using objects, or commit to having a simple function-based
+interface, which will have to wrap the method calls, if the
+implementation ever becomes based on objects.
+
+> If your problem requires objects, I'm interested if you can show me
+> some code: I'm in the process of making extensive changes to object
+> compilation, and I need serious performance sensitive benchmarks.
+> (All my programs using objects call them only a few times, so that
+> method calls could be 10 times slower and I wouldn't care)
+
+This is mostly an academic problem for me right now, as I'm just
+getting into OCaml. So no actual production code is at hand.
+
+But here is a trivial example, as my weak OCaml skills could produce
+it:
+
+,----
+| class atom =
+| object (self : 'a)
+|   val mutable id = 0
+|   method get_id () = id
+|   method compare (x:'a) =
+|     let x_id = x#get_id () in
+|       if id < x_id then -1 else if id > x_id then 1 else 0
+| end;;
+| 
+| let atom_compare (x:#atom) (y:#atom) = x#compare y;;
+| 
+| let sort_atoms x = List.sort atom_compare x;;
+`----
+
+Now, it should somehow be possible to translate this into a form where
+the body of sort_atoms would be fully inlined with no external
+function calls. As I take it, calling List.sort like that in a
+traditional program doesn't get inlined yet either? But you get the
+idea.
+
+It's good to know that progress is being made on the object front,
+especially in terms of performance. Some of these might be doable, I
+just don't know how, but a few things that bugged me when I
+investigated were:
+
+ - no way to specify the exact type for an argument - atleast not
+   without abstract types. If I type:
+
+     let f x = f#m x
+
+   then f will accept any object that has method m. If I type:
+
+     let f (x:#a) = f#m x
+
+   then f will accept any object that has atleast the interface of
+   a. If I type:
+
+     let f (x:a) = f#m x
+
+   then f will accept any object that has exactly the interface of a -
+   if it's anything else, then it will have to be subtyped to a
+   first. But I have no way of saying that accept only class a typed
+   parameters, regardless of any subtyping or identical
+   interfaces. Except, as said, by making the argument type abstract
+   through an interface.
+
+ - no way to have a method/function inside a class that could be used
+   by several methods, would have access to class variables and would be
+   inlined. It would not need to be visible to the outside. Like
+   mentioned, this can be circumvented for non-mutable variables by just
+   giving them as parameters.
+
+ - no standard way to have method call like invocation for normal
+   function calls. Consider for example:
+
+     Udp.get_data (Ip.get_udp (Eth.get_ip (Packet.as_eth packet)))
+
+   Against the same with a handy definition of let (-->) x f = f x:
+
+     packet --> Packet.as_eth --> Eth.get_ip --> Ip.get_udp --> Udp.get_data
+
+   Or, as actual method calls:
+
+     packet # as_eth # get_ip # get_udp # get_data
+
+Though I'm not sure if you were touching features or syntax at all :-)
+
+Anyhow, that's it for now, thanks for listening,
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

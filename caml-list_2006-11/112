@@ -1,0 +1,88 @@
+Return-Path: <carette@mcmaster.ca>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 3F64DBC0A
+	for <caml-list@yquem.inria.fr>; Fri, 17 Nov 2006 04:12:13 +0100 (CET)
+Received: from coriana6.cis.mcmaster.ca (coriana6.CIS.McMaster.CA [130.113.128.17])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kAH3CC9Z026060
+	for <caml-list@inria.fr>; Fri, 17 Nov 2006 04:12:12 +0100
+Received: from Gorash7.UTS.McMaster.CA (Gorash7.UTS.mcmaster.ca [130.113.196.61])
+	by coriana6.cis.mcmaster.ca (8.13.7/8.13.7) with ESMTP id kAH3C4vG012058
+	for <caml-list@inria.fr>; Thu, 16 Nov 2006 22:12:11 -0500 (EST)
+Received: from cgpsrv2.cis.mcmaster.ca (univmail.CIS.mcmaster.ca [130.113.64.46])
+	by Gorash7.UTS.McMaster.CA (8.13.7/8.13.7) with ESMTP id kAH3BBhT019979
+	for <caml-list@inria.fr>; Thu, 16 Nov 2006 22:11:11 -0500
+Received: from [69.193.76.85] (account carette@univmail.cis.mcmaster.ca HELO [192.168.1.101])
+  by cgpsrv2.cis.mcmaster.ca (CommuniGate Pro SMTP 4.1.8)
+  with ESMTP-TLS id 149451578 for caml-list@inria.fr; Thu, 16 Nov 2006 22:11:44 -0500
+Message-ID: <455D27F8.7020105@mcmaster.ca>
+Date: Thu, 16 Nov 2006 22:09:44 -0500
+From: Jacques Carette <carette@mcmaster.ca>
+Organization: McMaster University
+User-Agent: Thunderbird 1.5.0.8 (Windows/20061025)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: value restriction
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-PMX-Version-Mac: 4.7.1.128075, Antispam-Engine: 2.4.0.264935, Antispam-Data: 2006.11.16.185433
+X-PerlMx-Spam: Gauge=IIIIIII, Probability=7%, Report='__CT 0, __CTE 0, __CT_TEXT_PLAIN 0, __HAS_MSGID 0, __MIME_TEXT_ONLY 0, __MIME_VERSION 0, __SANE_MSGID 0, __USER_AGENT 0'
+X-Miltered: at concorde with ID 455D288C.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; functor:01 failwith:01 computed:01 monadic:01 notation:01 functor:01 struct:01 computed:01 failwith:01 'obj:01 magic':01 struct:01 invoke:01 invoke:01 tuple:02 
+
+I am wondering if there is a (nice) way around the value restriction in 
+a particular case we have encountered.
+Inside a Functor, we compute a value as
+
+let make_result =
+	match IF.R.fin with
+	| Some rank_action ->
+	function m -> perform
+		      rank <-- rank_action ();
+		      ret (Tuple.tup2 m.matrix rank)
+        | None -> failwith "Rank is not computed here"
+
+(where the above uses the campl4 extension for monadic notation).
+By design, we _want_ the failure to happen at Functor instantiation time 
+(if it will fail), so the usual 'fix' of having make_result () does not 
+help.
+But the code above does not work because of the value restriction :-(
+
+Instead, we currently resort to
+
+let make_result m = perform
+    rank <-- fromJust IF.R.fin ();
+    ret (Tuple.tup2 m.matrix rank)
+(* Initialization: check the preconditions of instantiation of this struct*)
+let () = notNone IF.R.fin "Rank is not computed here"
+
+where
+let fromJust = function Some x -> x | None -> failwith "Can't happen"
+let notNone v str = match v with None -> failwith str | Some _ -> ()
+
+which is clearly very ugly.  So ugly that when 'Obj.magic' came up as a 
+possibility around this, it was not immediately rejected.  Yes, that ugly.
+
+The one possibility we have considered is to make IF.R.fin of type  unit 
+-> 'a monad (no option) and instead of having None, we'd have
+    fin () = failwith "Rank is not computed"
+
+Then we would have to do
+
+let make_result m = perform
+    rank <-- IF.R.fin ();
+    ret (Tuple.tup2 m.matrix rank)
+(* Initialization: check the preconditions of instantiation of this struct*)
+let _ = IF.R.fin ()
+
+That would invoke IF.R.fin speculatively, and if that works, then invoke 
+it 'for real' (but monadically the second time) later, when we know it 
+will work.  That certainly works, and has a certain appeal.  And yet...
+
+Jacques
+

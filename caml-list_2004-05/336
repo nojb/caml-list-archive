@@ -1,0 +1,115 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA23658; Tue, 18 May 2004 22:41:00 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA23645 for <caml-list@pauillac.inria.fr>; Tue, 18 May 2004 22:40:59 +0200 (MET DST)
+Received: from mxout1.cac.washington.edu (mxout1.cac.washington.edu [140.142.32.134])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i4IKevSH019995
+	for <caml-list@inria.fr>; Tue, 18 May 2004 22:40:58 +0200
+Received: from mailhost1.u.washington.edu (mailhost1.u.washington.edu [140.142.32.141])
+	by mxout1.cac.washington.edu (8.12.11+UW04.02/8.12.11+UW04.03) with ESMTP id i4IKetwF007287;
+	Tue, 18 May 2004 13:40:56 -0700
+Received: from lulu (mobile258.dyn.cs.washington.edu [128.208.7.79])
+	by mailhost1.u.washington.edu (8.12.11+UW04.02/8.12.11+UW04.03) with ESMTP id i4IKetZZ006012;
+	Tue, 18 May 2004 13:40:55 -0700
+Received: from martine by lulu with local (masqmail 0.2.20) id
+ 1BQBNI-6b9-00; Tue, 18 May 2004 13:39:44 -0700
+Date: Tue, 18 May 2004 13:39:44 -0700
+From: Evan Martin <martine@danga.com>
+To: SWAMPY <swampy@spacebird.net>
+Cc: caml-list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Functional critical section
+Message-ID: <20040518203944.GA25349@lulu>
+References: <1084869517.19838.409.camel@pelican.wigram> <20040518090635.GA6918@bourg.inria.fr> <1084875941.19838.446.camel@pelican.wigram> <20040518121147.GA20094@redhat.com> <1084910535.30471.49.camel@ice.gerd-stolpmann.de> <006801c43d14$61edef40$10015c0a@word>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <006801c43d14$61edef40$10015c0a@word>
+User-Agent: Mutt/1.5.5.1+cvs20040105i
+X-Miltered: at concorde with ID 40AA74D9.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; evan:01 caml-list:01 2004:99 0400,:01 expr:01 expr:01 closures:01 evan:01 evaluates:01 evaluates:01 ocaml:01 trivial:01 constructs:02 inner:02 identifier:03 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, May 18, 2004 at 04:10:44PM -0400, SWAMPY wrote:
+>    I'm very new to ocaml, and I'm trying to figure out how
+> to do something that may or may not actually be possible.
+> Any suggestions?
+> 
+>     I'd like to write
+> 
+>         <name> <expr>
+> 
+>     as an expression, and have this evaluate <expr> first
+> evaluating fixed expression A, and then after evaluting
+> <expr> evaluate fixed expression B.
+
+I'm not sure what you mean by A and B here, but in general there is a
+specific way* things are evaluated and the only way to make things happen
+another way is to use closures to delay evaluation.
+
+>     Then, I could do something like:
+> 
+>     critical (threadsafeFunction arg1 arg2 arg3)
+> 
+>     and have this do the equivalent of
+> 
+>     Mutex.lock someMutex; let tmp = threadsafeFunction arg1
+> arg2 arg3; Mutex.unlock someMutex; tmp;;
+> 
+>     Is this sort of thing possible?  In general I'm
+> interested in techniques I could use to wrap
+> imperative-biased parts of the library to more functional
+> constructs.
+
+Sure, that's the sort of thing that anonymous functions are great for.
+
+let criticial f =
+  Mutex.lock someMutex;
+  let tmp = f () in
+  Mutex.unlock someMutex;
+  tmp
+
+And then call it like this:
+
+ criticial (fun () -> threadsafeFunction arg1 arg2 arg3)
+
+The "trick" here is that we wrap up the inner in its own function, so
+that the function "critical" can decide when to run it-- between the
+mutex lock and unlock.
+
+
+
+* A more pedantic description of evalution order, as I understand it:
+Arguments are always evaluated before calling functions.
+However, in the application form "e1 e2", the thing being applied (e1)
+must also be evaluated to a value, and the order of those evaluations is
+either undefined or right to left (I forget which; maybe the former
+officially, and the latter in practice?).
+
+That means that in something like e1 e2, e1 and e2 are evaluated to
+values, and then the function that e1 evaluates to is evaluated with
+e2's value as its argument.
+
+In most situations, e1 is just an identifier like "threadsafeFunction",
+and evaluation of it is trivial.  So it doesn't matter whether e2
+evaluates before or after that, and the actual application of the
+function is always last.
+
+If you ever want to force evaluation order, you can use let.
+For example, if I have code like:
+ f (function1 1) (function2 31)
+and I want to be certain that function2 is called first, you can rewrite
+it to
+ let f2 = function2 31 in
+ f (function1 1) f2
+
+-- 
+Evan Martin
+martine@danga.com
+http://neugierig.org
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

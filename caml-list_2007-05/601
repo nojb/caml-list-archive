@@ -1,0 +1,127 @@
+Return-Path: <yuanchen.zhu@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 6525DBC69
+	for <caml-list@yquem.inria.fr>; Thu, 31 May 2007 07:50:07 +0200 (CEST)
+Received: from wr-out-0506.google.com (wr-out-0506.google.com [64.233.184.226])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4V5o6tg011591
+	for <caml-list@yquem.inria.fr>; Thu, 31 May 2007 07:50:06 +0200
+Received: by wr-out-0506.google.com with SMTP id i28so46514wra
+        for <caml-list@yquem.inria.fr>; Wed, 30 May 2007 22:50:06 -0700 (PDT)
+DKIM-Signature: a=rsa-sha1; c=relaxed/relaxed;
+        d=gmail.com; s=beta;
+        h=domainkey-signature:received:received:message-id:date:from:sender:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition:x-google-sender-auth;
+        b=KTTACytRJ72NcMgBBhsVvN/r6gkBKkHantzm6avEjJuLzY4164+vALfkwOdZxlxPjXUVUFe/3PNETDLLhK1LxA4PNTARKY/K2RbHIgaSxiEcnyLu7+K/hGGS+FZ4DshTdAmXIaZh7SAt4n9IIowkXOjpF5MjtYLpTCYGAc27rio=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=beta;
+        h=received:message-id:date:from:sender:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition:x-google-sender-auth;
+        b=BZRL8XvPblPF2A/YUVXPKMTFYrzzviBBt2WgGChVa/bUeAhIuFJZIdqQqKshWxcL4FBOqcwtkrG2eoq3pAxF2ULM3xAVozADuQsIzKHqaCAcKifDXImAbwvnTY3cP8BVQiP2nGsnuADlyxcUqEjmZDCWJ29YSqBU9nZCb4WxbWk=
+Received: by 10.78.160.2 with SMTP id i2mr126835hue.1180590605164;
+        Wed, 30 May 2007 22:50:05 -0700 (PDT)
+Received: by 10.78.90.19 with HTTP; Wed, 30 May 2007 22:50:05 -0700 (PDT)
+Message-ID: <5195a210705302250u6a9e5adey4ed857480f9e5cd8@mail.gmail.com>
+Date: Thu, 31 May 2007 13:50:05 +0800
+From: "Yuanchen Zhu" <yzhu@fas.harvard.edu>
+Sender: yuanchen.zhu@gmail.com
+To: caml-list@yquem.inria.fr
+Subject: Comparison of OCaml and MLton for numerics
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+X-Google-Sender-Auth: 963145956a5a32d4
+X-Miltered: at discorde with ID 465E620E.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 ocaml:01 sml:01 trivial:01 prototyping:01 ocamlopt:01 -inline:01 -unsafe:01 translated:01 uglier:01 numerically:01 ocamlopt:01 img:98 img:98 1.0:98 
+
+Greetings!
+
+I've been using Ocaml for implementing computer graphics algorithms.
+One of the algorithms that I implemented was:
+
+Li etal, "Compressing and Companding High Dynamic Range Images with
+Subband Architectures"
+
+For intellectual entertainment, I next converted the code to SML, and
+got some interesting performance numbers on Ocaml and MLton. Since the
+implementation is not a trivial micro benchmark, I thought I'd share
+it with the group. I also have some questions regarding the future of
+ocaml.
+
+The most expensive part of the algorithm is image convolution. The
+convolution kernel is separable, so the actual computation is done for
+one horizontal/vertical strip at a time, i.e., it is 1-d convolution.
+
+For rapid prototyping and easier maintenance, I used high-order
+functions a lot in my code. For example, the horizontal convolution
+routine looks something like the following:
+
+let hconvolve kern (img:t) r =
+  let ac y x s (kx, ky) = s +. ky *. getReflected img y (x + kx) 1.0 r in
+    mapi (fun y x _ -> Array.fold_left (ac y x) 0.0 kern) img
+
+Where the mapi function is basically a 2D version of Array.mapi.
+
+The code is compiled using ocamlopt with arguments: -inline 4 -S
+-ffast-math -unsafe. Next I translated the Caml code to Standard ML
+and compiled using MLton with no additional arguments.
+
+The performance numbers were as following:
+
+Ocaml (unsafe) : user: 39.674s, real: 41.356s
+MLton (safe):  user:  17.981s, real: 21.968s
+
+Note that I didn't find an option that turns off array bound-checking
+for MLton, so the MLton version is safe.
+
+Clearly polymorphic function application in the inner-loop is killing
+Ocaml. So I recoded the convolution function using for-loops. The code
+is now much uglier:
+
+let hconvolve kern (img:t) r =
+  let sup = Array.length kern - 1 in
+  let img' = create (size img) in
+    for y = 0 to height img - 1 do
+      for x = 0 to width img - 1 do
+        let s = ref 0.0 in
+          for i = 0 to sup do
+            let (kx, ky) = kern.(i) in
+              s := !s +. ky *. getReflected img y (x + kx) 1.0 r
+          done;
+          img'.(y).(x) <- !s;
+      done
+    done;
+    img'
+
+The new running time is:
+
+Ocaml (unsafe) : user: 21.477s, real: 23.366s
+
+which is much in line with MLton:
+
+MLton (safe):  user:  17.981s, real: 21.968s
+
+Although note that the MLton version has array-bound check enabled and
+used the two-line high order function version of hconvolve.
+
+So the moral of the story: To use Ocaml for numerically intensive
+work, code in C style in the inner loops.
+
+This brings me to the next question: is there any plan to implement
+type specialization optimization for ocamlopt? For numerics, this is
+really crucial if you want write both in an elegant functional style
+and get good performance. Also, I remember reading somewhere that the
+current code base of Ocaml is ill-suited for implementing this kind of
+optimization. May I ask what exactly needs to be done to the current
+code base in order to support that? I have some compiler-writing
+background and this sounds like an interesting project to work in my
+past time.
+
+
+Regards,
+Yuanchen
+

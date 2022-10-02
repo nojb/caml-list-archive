@@ -1,0 +1,61 @@
+Return-Path: <steck@stecksoft.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id D4E03BBAF
+	for <caml-list@yquem.inria.fr>; Wed, 25 Aug 2010 06:00:32 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am0CAJcydExKfVK0kGdsb2JhbACTI40OCBUBAQEBCQkMBxEDH6MHmw2FNwSEaIUP
+X-IronPort-AV: E=Sophos;i="4.56,266,1280700000"; 
+   d="scan'208";a="57767536"
+Received: from mail-wy0-f180.google.com ([74.125.82.180])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 25 Aug 2010 06:00:32 +0200
+Received: by wyb34 with SMTP id 34so185240wyb.39
+        for <caml-list@yquem.inria.fr>; Tue, 24 Aug 2010 21:00:32 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.216.11.129 with SMTP id 1mr286291wex.90.1282708830945; Tue, 24
+ Aug 2010 21:00:30 -0700 (PDT)
+Received: by 10.216.154.17 with HTTP; Tue, 24 Aug 2010 21:00:30 -0700 (PDT)
+X-Originating-IP: [203.143.161.115]
+In-Reply-To: <AANLkTin6GWH+Csz4QLVbfs4M7=+zD8PCNgfKwMDfT9_v@mail.gmail.com>
+References: <AANLkTin6GWH+Csz4QLVbfs4M7=+zD8PCNgfKwMDfT9_v@mail.gmail.com>
+Date: Wed, 25 Aug 2010 14:00:30 +1000
+Message-ID: <AANLkTinxtK-ScwAHUyZ7-UVPtKVFtu0FYFrjo5UraiZo@mail.gmail.com>
+Subject: Re: Segfaults with Dynlink with OCaml 3.11
+From: Paul Steckler <steck@stecksoft.com>
+To: caml-list@yquem.inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; segfaults:01 dynlink:01 ocaml:01 steckler:01 steck:01 steckler:01 steck:01 ocaml:01 chunks:01 ffi:01 camlreturn:01 segfaults:01 patching:01 segfault:01 dynlink:01 
+
+On Mon, Aug 23, 2010 at 8:57 PM, Paul Steckler <steck@stecksoft.com> wrote:
+> I'm getting segmentation faults when using dynamically linked native
+> code in 64-bit OCaml 3.11 running on Linux (Fedora 12 x64).
+
+Many thanks to all who gave useful advice on tracking down this problem.
+
+We have three chunks of C code we're calling, so we went through those
+and audited our use of the FFI conventions.  Indeed, we found a number
+of instances where we used return instead of CAMLreturn, and so on.
+
+But the segfaults were occurring before our C code was ever called,
+and before any code was called in OCaml packages we use that are
+linked against C code, such as sqlite3.  So the segfaults occurred
+even after patching our C code.
+
+Today, I found the culprit.  Here's the pattern:
+
+   dynamically load .cmxs file
+   query list mutated by .cmxs file      (* no problem *)
+   Gc.set { (Gc.get()) with Gc.minor_heap_size         = ...};
+   Gc.set { (Gc.get()) with Gc.major_heap_increment = ... };
+   query mutated list   (* segfault! *)
+
+If I move the Gc.set's to the program initialization code, before the
+loading of dynamic code, no segfaults occur.
+
+Is this expected behavior?  I don't see caveats about interaction with
+the garbage collector in the documentation for the Dynlink module, nor
+anything about dynamic linking in the Gc module documentation.
+
+-- Paul
+

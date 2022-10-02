@@ -1,0 +1,165 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA20015; Mon, 30 Jun 2003 20:39:07 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA19241 for <caml-list@pauillac.inria.fr>; Mon, 30 Jun 2003 20:39:06 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h5UId3j02160;
+	Mon, 30 Jun 2003 20:39:03 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA20778; Mon, 30 Jun 2003 20:39:02 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200306301839.UAA20778@pauillac.inria.fr>
+Subject: Re: [Caml-list] syntax of private constructors in CVS version
+In-Reply-To: <Pine.LNX.4.44.0306271917250.19568-100000@grace.speakeasy.net> from "brogoff@speakeasy.net" at "Jun 27, 103 07:24:53 pm"
+To: brogoff@speakeasy.net
+Date: Mon, 30 Jun 2003 20:39:02 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; pierre:01 weis:01 caml-list:01 modelization:01 non-free:01 modelize:01 invariants:01 quotient:01 equivalence:01 nat:01 successor:01 generalizing:01 predicate:01 summands:01 equivalently:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi Brian & all,
+
+[Sketching the semantics of private types, this message is long.] 
+
+> Private only works with new record types and sum types that you declared. 
+> Think about it. What would it mean to declare some set of polymorphic variant 
+> tags as "private"? 
+
+You're absolutely right on your comments and explanation. However, I
+think we also need to explain the ideas beneath private types and
+their intended uses.
+
+As you should already know, usual sum and product types in Caml
+correspond to the mathematical notion of free algebraic data
+structures. This is fairly useful and allows the modelization of a lot
+of common data structures in practical programming
+situations. However, besides the free algebra structures,
+mathematicians use a lot of non-free algebras (so-called structures
+defined via generators and relations). Private types aim at giving a
+way to modelize those non-free structures. Equivalenetly, you can
+think of private types as providing a way to implement types equipped
+with invariants, quotient structures (i.e. sets of equivalence classes
+for some equivalence relation on a free algebra), or data types with
+canonical normal forms.
+
+As an example, consider a simple modelization of natural integers in
+unary notation:
+
+type nat =
+   | Zero
+   | Succ of nat;;
+
+The nat type is a regular sum type; a value of the nat type is either
+the constant constructor Zero (modelizing the integer 0) or
+constructed with any application of the constructor Succ to a nat
+value (Succ n modelizing the successor of n or n + 1). Hence, the nat
+type is adequate in the sense that it exactly modelizes the unary
+representation of positive integers. Nothing new here, and we can
+easily write a test to 0 as:
+
+let is_zero = function
+  | Zero -> true
+  | _ -> false;;
+
+Now, let's go one step further and imagine we modelize integers
+(either positive or negative). Even if a complex (adequate)
+modelization of those numbers using a regular Caml data type is not
+very complex, let's take, for the sake of explanation, a simple
+approach by generalizing the nat type; we simply add an extra Pred
+constructor to modelize negative integers: Pred n is the predecessor
+of n or n - 1:
+
+type integer =
+   | Zero
+   | Succ of integer
+   | Pred of integer;;
+
+Now, we can modelize all integers in unary notation but the integer
+type is no more adequate, in the sense that we have a problem of
+unicity of representation: a given number can be modelized by
+(infinitely) many distinct values of the integer data type. For
+instance, the terms Succ (Pred Zero) and Zero all represent the number
+0. You may think that this is not a big problem but in fact it is very
+ennoying, because when writing a function over values of type integer,
+you must now pattern match a lot of patterns instead of the only one
+that canonically represents a given integer. For instance
+
+let is_zero = function
+  | Zero -> true
+  | _ -> false;;
+
+is no more the expected predicate. We must write something much more
+complex, for instance
+
+let rec is_zero = function
+  | Zero -> true
+  | Succ (Pred n) -> is_zero n
+  | Pred (Succ n) -> is_zero n
+  | n -> false;;
+
+(BTW: is this code now correct ?)
+
+A private type will solve this problem. We define a module Integer
+whose interface defines the integer type as a private type equipped
+with functions that construct values in the different summands of the
+type:
+
+type integer = private
+   | Zero
+   | Succ of integer
+   | Pred of integer;;
+
+value zero : unit -> integer
+value succ : integer -> integer
+value pred : integer -> integer
+
+In the implementation of the module, we keep the definition of the
+type as regular (say ``public'', if you want) and implement the
+constructing functions such that they ensure the unicity of
+representation of integers:
+
+let zero () = Zero;;
+
+let succ = function
+  | Pred n -> n
+  | n -> Succ n;;
+
+let pred = function
+  | Succ n -> n
+  | n -> Succ n;;
+
+It is now easy to prove that all the integers built with applications
+of functions pred and succ have a unique representation (or
+equivalently that no tree of type integer obtained by composing those
+functions can have an occurrence of the redexes (Pred (Succ ...)) or
+(Succ (Pred ...))).
+
+Now, since all the clients of the Integer module cannot construct
+values of type integer by directly applying the constructors and must
+use the constructing functions instead, we know for sure that the
+unicity property holds. Hence, the naive (and natural) version of
+is_zero is correct again.
+
+In conclusion: private types serve to modelize types with arbitrary
+algebraic invariants (no miracle here: you must program those
+invariants in the definition of the constructing functions).
+
+In contrast with abstract data types, the private types still maintain
+the elegant pattern matching facility of ML outside the module that
+defines the type.
+
+Hope this helps.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

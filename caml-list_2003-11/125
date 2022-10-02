@@ -1,0 +1,127 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA31354; Mon, 10 Nov 2003 18:04:22 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA31556 for <caml-list@pauillac.inria.fr>; Mon, 10 Nov 2003 18:04:21 +0100 (MET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hAAH4K115719
+	for <caml-list@inria.fr>; Mon, 10 Nov 2003 18:04:20 +0100 (MET)
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id hAAH49C26470;
+	Mon, 10 Nov 2003 11:04:10 -0600 (CST)
+Date: Mon, 10 Nov 2003 12:03:07 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Eric Dahlman <edahlman@atcorp.com>
+cc: Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Rounding mode
+In-Reply-To: <3FAF9C64.7090504@atcorp.com>
+Message-ID: <Pine.LNX.4.44.0311101124200.5009-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 rounding:01 raffalli:01 rounding:01 implemented:01 simplistic:01 unexpected:01 unexpected:01 python:01 multiplying:01 analysts:99 newbies:01 newbies:01 overflows:01 christophe:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Mon, 10 Nov 2003, Eric Dahlman wrote:
+
+> Christophe Raffalli wrote:
+> 
+> >
+> > I saw a previous discussion about rounding mode for OCaml (in 2000).
+> >
+> > As anyone implemented the functions to change the rounding mode for 
+> > floating point from OCaml (possibly as a patch to add primitives and 
+> > save a C function call) ?
+> >
+> > This is necessary to implement interval arithmetic ...
+> 
+> Somewhat off topic but why is this necessary from a numerical math type 
+> of perspective.  I am honestly curious as I don't see how this would 
+> interact with the calculation in a meaningful way.
+>
+
+Simplistic discussion of why changing the rounding modes is usefull for 
+numeric programming.  If you know numerical analysis, stop reading now 
+:-).
+
+FP numbers are only precise to so many digits.  So every time you do an 
+operation, a small amount of error is introduced- rather than being the 
+exact answer, it's the closest number to the exact answer that FP numbers 
+can represent.  This is why the following code does not return the answer 
+you expect:
+
+let unexpected () =
+    let loop i n =
+        if (i < 10) then
+            loop (i + 1) (n +. 0.1)
+        else
+            n
+    in
+    loop 0 0.
+;;
+
+1/10 in binary is infinitely repeating the way 1/3 is in decimal.  So the 
+expression n +. 0.1 isn't adding *exactly* 0.1, but instead 0.1 - e for 
+some small e.  Where e is ~1E-16.  But this is large enough that 
+unexpected() returns  0.999999999999999889 and not 1.0.
+
+Note also that this is nothing to do with Ocaml- C, Java, Perl, Python, 
+FORTRAN, and every other language out there that does floating point has 
+this problem- it's a problem with floating point.
+
+Now, for a single operation this error is negligable- one the order of
+1e-15 (assuming the answer is 1.0).  But over large numbers of
+calculations, this error can accumulate, and become large enough to affect
+the results.
+
+Consider, for example, multiplying two numbers- x and y.  But you don't 
+have x and y exactly, you have (x + e) and (y + e) for some error amount 
+e.  You multiply them, and you get (x + e)*(y + e) = x*y + x*e + y*e + 
+e*e.  Now, e*e is vanishingly small, we can ignore it.  And, assuming x 
+and y are both about 1.0, our answer is x*y + ~2*e- in other words, we've 
+about doubled the amount of error.  Even starting at 1e-15, doubling it 
+every operation and you eat up all your precision surprisingly fast.
+
+How can we tell how much error we have?  Well, you can either do a whole
+bunch of graduate-level mathematics, or you can run the same algorithm
+with different rounding modes.  If you always round towards positive
+infinity, you'll always be adding an error term- i.e. it'll be (x + e) and
+(y + e) with a result of x*y + 2e.  If you always round to negative
+infinity, you'll be subtracting the error term- (x - e) and (y - e) with a 
+result x*Y - 2e.  Comparing the results gives you both a good idea of 
+where the answer really is, and how big your errors are.
+
+Note, all is not necessarily lost.  If instead we have (x + e) and (y - e)  
+a little bit of quick algebra shows that the result is actually *more*
+accurate than either of the original inputs.  The errors tend to cancel
+instead of accumulate.  Numerical analysts call algorithms whose errors
+tend to cancel "stable", while algorithsm whose errors tend to accumulate
+are "unstable".  A good textbook on numerical methods will generally only 
+discuss stable algorithms- use 'em.
+
+The effect can also be sort of acheived by using a random rounding method.  
+For each operation, the CPU picks one of it's rounding methods at random 
+to use (well, pseudo-random anyways).  Now, while this will in general 
+increase the accuracy of floating point programs, it also means that every 
+time you run a numerical program, even over the same data, you will get a 
+slightly different answer.  Newbies wondering why their program keeps 
+changing it's answer will probably rival newbies wondering why their stack 
+overflows pretty quickly.  Which is why I'm hesitant to advocate doing 
+this to all programs.  I still would like to be able to select the 
+rounding mode- either at compile time or at run time, which ever is 
+easier.  Actually, run time is probably easier to implement and more 
+usefull (I can switch rounding modes for different parts of the program).
+ 
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

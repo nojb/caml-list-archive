@@ -1,0 +1,129 @@
+Return-Path: <jon@jdh30.plus.com>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 3684EBB81
+	for <caml-list@yquem.inria.fr>; Sat, 18 Dec 2004 19:34:56 +0100 (CET)
+Received: from ptb-relay02.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iBIIYtE9024124
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sat, 18 Dec 2004 19:34:56 +0100
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1CfjPq-00068b-H8; Sat, 18 Dec 2004 18:34:54 +0000
+From: Jon Harrop <jon@jdh30.plus.com>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Type problem... possible design problem
+Date: Sat, 18 Dec 2004 18:37:52 +0000
+User-Agent: KMail/1.6.2
+Cc: "chris.danx" <chris.danx@ntlworld.com>
+References: <41C37CF7.5050400@ntlworld.com> <200412180807.05925.jon@jdh30.plus.com> <41C43E79.1040502@ntlworld.com>
+In-Reply-To: <41C43E79.1040502@ntlworld.com>
+MIME-Version: 1.0
+Content-Disposition: inline
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Message-Id: <200412181837.52861.jon@jdh30.plus.com>
+X-Miltered: at concorde with ID 41C4784F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 constructors:01 reusing:01 constructors:01 reuse:01 reusing:01 implements:01 implements:01 reuse:01 nodes:01 variants:01 subset:01 variants:01 ocaml:01 cheers:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+
+Ah yes, it's coming back to me now. I asked about this on the mailing list 
+almost a year ago because I didn't understand it then. I don't completely 
+understand it now but I can tell you what I learned. :-)
+
+My original scenegraph implementation was written without objects. I wanted to 
+be able to extend the functionality without touching the original code so I 
+converted the whole thing to using objects instead. Basically, I found that 
+neither approach solves all of the problems and I ended up converting the 
+code back to non-OO because I decided this was the better of the two.
+
+There are two ways you'll want to extend the functionality provided by your 
+scenegraph library:
+
+1. Add new types of node (e.g. a "glyph leaf node" to represent a character).
+2. Add new functions which act over scenegraphs or node (e.g. a 
+"render_selected" function for a graphical editor).
+
+If you choose OO then you can easily create a new node class type which 
+inherits from the base node class type. However, I couldn't figure out how to 
+define new functions which act over arbitrary node types as the necessary 
+functionality was rarely provided by the objects' interface, requiring me to 
+create a whole new bunch of objects each time I needed a new function.
+
+If you choose non-OO then you can add new node constructors by reusing the old 
+constructors but you'll have to add a little extra code to every new function 
+which resorts to the equivalent existing function.
+
+I defined the type of a node in the scene graph to be the variant type over 
+the types of metadata held in leaves ('a), loners ('b) and groups ('c) (a 
+loner is a node with one child, such as a transformation):
+
+type ('a, 'b, 'c) generic_node =
+    GenericLeaf of 'a
+  | GenericLoner of 'b * ('a, 'b, 'c) generic_node
+  | GenericGroup of 'c * ('a, 'b, 'c) generic_node list
+
+You can reuse this definition when adding new node types by supplementing the 
+variant type used as 'a, 'b or 'c with an extra constructor. Your new 
+function can then call the old function for the old contructor(s), thus 
+reusing the old code.
+
+For example, I've then done:
+
+type basic_leaf =
+    ContourObject of ContourObject.t
+
+type basic_loner =
+    Transform of mat
+  | Text of string * string
+
+type basic_group =
+    Group of Bound.t cache
+
+type basic_node = (basic_leaf,
+     basic_loner,
+     basic_group) generic_node
+
+So basic_node is now a simple scenegraph which implements contour objects at 
+the leaves, transforms and text as loners, and groups. A type of scenegraph 
+which implements additional stuff (which I've done for the vector graphics 
+editor) can either be defined similarly to the above (copying most of the 
+code) or by referring back to the code above (which requires the same amount 
+of code in this case and is less readable).
+
+However, functions which traverse the scenegraph can now be written 
+straightforwardly.
+
+Of course, this looks like a tree and not a graph. I chose to implement the 
+graphness by using "thin" metadata in the above variant types. In order to 
+reuse a subgraph, the metadata contains a reference to a reference to a 
+scenegraph, which can then be shared between nodes in the root scenegraph. 
+This satisfies my design criteria but may not satisfy yours.
+
+In summary, I decided that users will not be adding layer upon layer of new 
+node types and, consequently, the benefits associated with using variant 
+types over OO outweighed the costs.
+
+I'd like to know if polymorphic variants would offer an improvement because 
+they might be able to let you extend the variant type and resort to 
+previously defined functions for the previously defined subset of the 
+polymorphic variant's constructors. I can't see how they can but I've got a 
+paper on extensible programming using polymorphic variants by someone 
+(Jacques, no doubt ;-) which I have yet to absorb.
+
+As OCaml is a functional language, data tends to be magically shared (see 
+"referential transparency") so you don't need to worry about this as long as 
+you build each subgraph once and place it in two different parts of the 
+scenegraph, it will be shared and not copied. Just don't build it twice.
+
+I'm very interested to hear what people have to say about this...
+
+HTH.
+
+Cheers,
+Jon.
+

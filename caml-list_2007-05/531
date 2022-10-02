@@ -1,0 +1,120 @@
+Return-Path: <filliatr@lri.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id B7CCBBC6B
+	for <caml-list@yquem.inria.fr>; Mon, 28 May 2007 18:14:42 +0200 (CEST)
+Received: from ext.lri.fr (ext.lri.fr [129.175.15.4])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4SGEgKX002496
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Mon, 28 May 2007 18:14:42 +0200
+Received: from smtp.lri.fr (serveur3-5 [129.175.3.5])
+	by ext.lri.fr (Postfix) with ESMTP id 22A9CDF215;
+	Mon, 28 May 2007 18:14:42 +0200 (CEST)
+Received: from serveur9-10.lri.fr (serveur9-10 [129.175.9.10])
+	by smtp.lri.fr (Postfix) with ESMTP
+	id 3B4A4CED98; Mon, 28 May 2007 18:14:42 +0200 (CEST)
+Received: from filliatr by serveur9-10.lri.fr with local (Exim 3.36 #1 (Debian))
+	id 1Hshrm-00010s-00; Mon, 28 May 2007 18:14:42 +0200
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <18010.65522.31165.647915@serveur9-10.lri.fr>
+Date: Mon, 28 May 2007 18:14:42 +0200
+From: Jean-Christophe Filliatre <filliatr@lri.fr>
+To: "jeremy" <flashvan@gmail.com>
+Cc: "caml-list" <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] How can I have a string matched my custom type?
+In-Reply-To: <200505282346008070041@gmail.com>
+References: <200505282346008070041@gmail.com>
+X-Mailer: VM 7.19 under Emacs 21.4.1
+X-Virus-Scanned: by amavisd-new at lri.fr
+X-Miltered: at concorde with ID 465AFFF2.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; filliatre:01 filliatr:01 lri:01 expr:01 expr:01 endline:01 argv:01 parser:01 recursive:01 parser:01 genlex:01 ocaml's:01 genlex:01 lexer:01 kwd:01 
+
+
+ >     I want to parse an expression string from the command line arguments, and have written some codes like below:
+ >     
+ >     type expr =      
+ >           Plus        of expr * expr
+ >         | Minus     of expr * expr
+ >         | Times     of expr * expr            
+ >         | Divide    of expr * expr
+ >         | Value     of string
+ > 
+ >     let rec to_string e =
+ >         match e with
+ >               Plus      (left, right)   -> "(" ^ (to_string left) ^ "+" ^ (to_string right) ^ ")"
+ >             | Minus     (left, right)   -> "(" ^ (to_string left) ^ "-" ^ (to_string right) ^ ")"
+ >             | Times     (left, right)   -> "(" ^ (to_string left) ^ "*" ^ (to_string right) ^ ")"
+ >             | Divide    (left, right)   -> "(" ^ (to_string left) ^ "/" ^ (to_string right) ^ ")"
+ >             | Value     v               -> v
+ > 
+ >     let _ =
+ >          print_endline (to_string Sys.argv.(1))
+
+As you say, you want to _parse_ an expression from a string, which
+means a function of type string->expr, but your code only contains a
+_pretty-printer_, that is the opposite operation, which has type
+expr->string. 
+
+There are several ways to build such a parser. A simple way is to
+write a recursive descending parser using Genlex and Stream from
+ocaml's standard library, as follows:
+
+======================================================================
+open Genlex
+
+let lex = make_lexer ["+"; "-"; "*"; "/"; "("; ")"];;
+
+let rec expr s = 
+  let t = term s in
+  match Stream.peek s with
+    | Some (Kwd "+") -> Stream.junk s; Plus (t, expr s)
+    | Some (Kwd "-") -> Stream.junk s; Minus (t, expr s)
+    | _ -> t
+
+and term s = 
+  let f = factor s in
+  match Stream.peek s with
+    | Some (Kwd "*") -> Stream.junk s; Times (f, term s)
+    | Some (Kwd "/") -> Stream.junk s; Divide (f, term s)
+    | _ -> f
+    | _ -> failwith "syntax error"
+
+and factor s = match Stream.peek s with
+  | Some (Kwd "(") -> 
+      Stream.junk s;
+      let e = expr s in
+      begin match Stream.peek s with
+	| Some (Kwd ")") -> Stream.junk s; e
+	| _ -> failwith "syntax error"
+      end
+  | Some (Int n) ->
+      Stream.junk s;
+      Value (string_of_int n)
+  | _ -> 
+      failwith "syntax error"
+
+let parse s = expr (lex (Stream.of_string s))
+======================================================================
+
+then you can parse the string "(1+2)*3+4" as follows:
+
+======================================================================
+let e = parse "(1+2)*3+4"
+# val e : expr =
+  Plus (Times (Plus (Value "1", Value "2"), Value "3"), Value "4")
+======================================================================
+
+Another more sophisticated (but more powerful) way is to use a tool
+like ocamlyacc or menhir.
+
+Hope this helps,
+-- 
+Jean-Christophe
+

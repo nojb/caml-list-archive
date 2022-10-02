@@ -1,0 +1,104 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id C81EA7EE51
+	for <caml-list@sympa.inria.fr>; Tue,  9 Apr 2013 13:08:47 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApECALL1Y1FCJwNzemdsb2JhbABRgzyvWwGRZoEoDgEBCwcNCTyDH099iBm+V48iHYMrA5MtA4NDAYEhknc8
+X-IPAS-Result: ApECALL1Y1FCJwNzemdsb2JhbABRgzyvWwGRZoEoDgEBCwcNCTyDH099iBm+V48iHYMrA5MtA4NDAYEhknc8
+X-IronPort-AV: E=Sophos;i="4.87,438,1363129200"; 
+   d="scan'208";a="12458717"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 09 Apr 2013 13:08:46 +0200
+Received: (qmail 30460 invoked by uid 9370); 9 Apr 2013 11:08:45 -0000
+Date: 9 Apr 2013 11:08:45 -0000
+Message-ID: <20130409110845.30459.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: paulfsnively@gmail.com
+CC: caml-list@inria.fr
+X-Validation-by: oleg@okmij.org
+Subject: [Caml-list] Delimcc.0 OPAM Package Difficulty on Mac OS X
+
+
+
+Perhaps the following comment from delimcc:stacks.c will help:
+
+/* This function is defined in stacks.h and implemented in the ocamlrun.
+   We re-define it here with the weak attribute: although 
+   the function is implemented by ocamlrun and so will be available
+   at run-time, it is not exported by ocamlc. Unfortunately, ocamlc, 
+   when linking the bytecode executable and checking dlls requires 
+   that all symbols imported by dlls be satisfied at link time.
+*/
+void caml_realloc_stack (asize_t required_size)
+  __attribute__ ((weak));
+
+
+To elaborate: caml_realloc_stack is part of OCaml run-time, that is,
+byte code interpreter. On my FreeBSD system:
+
+nm -D /usr/local/bin/ocamlrun 
+...
+0000000000409ae0 T caml_realloc_stack
+...
+
+So, caml_realloc_stack exists and it is global (that is, exported and
+available for linking). 
+
+So, when testd0 is invoked, the bytecode interpreter ocamlrun starts,
+loads eventually dlldelimcc.so. The latter needs caml_realloc_stack,
+and it can find it in ocamlrun. Everything should work...
+
+You might have noticed the strange thing that the error is reported
+before testd0 gets to run -- by the compiler itself. This is because
+ocamlc is a little bit too helpful. When it links the bytecode
+executable, it loads all referenced dll -- at link time -- and checks
+that all needed symbols _will_ be satisfied at run-time. (More
+precisely, it does ldopen with the flag RTLD_NOW). Normally it
+is not ordinary linker's job to simulate run-time linking. After all, the
+run-time environment may be different from link-time
+environment. And in our case, it is different indeed. If your ocamlc
+is natively compiled, it does not use ocamlrun. And natively compiled
+ocamlc does _not_ export caml_realloc_stack. So, the premature, too
+helpful check really goes wrong here: caml_realloc_stack will be found
+at run-time but cannot be found at link time (where it is not really
+needed). 
+
+The weak subterfuge was sufficient to keep ocamlc happy. 
+
+nm -D dlldelimcc.so 
+                 w caml_realloc_stack
+
+The weak reference should never cause an error (even if it remains
+unresolved) -- according to my man pages.  Apparently MacOS thinks
+different. Or findlib may set some flag that cause dlopen
+to behave differently. I don't have access to MacOS. I guess I would
+first check that dlldelimcc.so  does indeed refers to
+caml_realloc_stack as a weak symbol, and then ask around as to why it
+causes the problems on MacOS specifically.
+
+Of course I'd be happier if ocamlc didn't use the RTLD_NOW flag.
+
+
+

@@ -1,0 +1,96 @@
+Return-Path: <warren@liveops.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id B366FBC69
+	for <caml-list@yquem.inria.fr>; Mon, 24 Sep 2007 04:09:36 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAKK49kbRnZoih2dsb2JhbACOGAIBCAon
+X-IronPort-AV: E=Sophos;i="4.20,289,1186351200"; 
+   d="scan'208";a="3140096"
+Received: from mail-pai.liveops.com (HELO mail.liveops.com) ([209.157.154.34])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 24 Sep 2007 04:11:28 +0200
+Received: from printer1-pho.liveops.com ([192.168.18.28]) by mail.liveops.com with Microsoft SMTPSVC(6.0.3790.3959);
+	 Sun, 23 Sep 2007 19:12:35 -0700
+Message-ID: <46F71CC9.8090609@liveops.com>
+Date: Sun, 23 Sep 2007 19:11:21 -0700
+From: Warren Harris <warren@liveops.com>
+User-Agent: Thunderbird 2.0.0.6 (Macintosh/20070728)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: question about polymorphic methods
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-OriginalArrivalTime: 24 Sep 2007 02:12:35.0622 (UTC) FILETIME=[5F7D1460:01C7FE50]
+X-Spam: no; 0.00; printf:01 printf:01 buffer:01 buf:01 buffer:01 buf:01 fprintf:01 overlooking:01 ocaml:01 warren:98 warren:98 fmt:01 fmt:01 unbound:01 unbound:01 
+
+I have a simple output stream class that abstracts over out_channels and 
+buffers. I would like to add a printf method that takes a format 
+directive, and calls the appropriate Printf function. To do this, I 
+needed to introduce a polymorphic method which abstracts over the first 
+type parameter to the format type (the 'a parameter of printf):
+
+class type ['b] out_stream =
+object
+  method print : string -> unit
+  method printf : 'a . ('a, 'b, unit) format -> 'a
+  method flush : unit
+end
+
+class out_stream_of_buffer buf =
+object (self : Buffer.t #out_stream)
+  method print str = Buffer.add_string buf str
+  method printf : 'a . ('a, Buffer.t, unit) format -> 'a =
+    fun fmt -> Printf.bprintf buf fmt
+  method flush = ()
+end
+
+class out_stream_of_channel och =
+object (self : out_channel #out_stream)
+  method print str = output_string och str
+  method printf : 'a . ('a, out_channel, unit) format -> 'a =
+    fun fmt -> Printf.fprintf och fmt
+  method flush = flush och
+end
+
+However, as you can see from this code, I also needed to abstract over 
+the second parameter to format in the definition of the out_stream class 
+type ('b is the type of the first argument of the Printf function). This 
+type parameter propagates through numerous places in my code, in some 
+cases requiring other methods to become polymorphic. This is 
+unfortunate, since 'b should be completely hidden by the particular 
+implementation of out_stream (Buffer.t in the case of 
+out_stream_of_buffer, or out_channel in the case of out_stream_of_channel).
+
+Is there some other way to implement this that I'm overlooking? It seems 
+like 'b should be "monomorphic" ('_b) and determined uniquely whenever 
+the printf method is called. However, if I eliminate the 'b class type 
+parameter, I get the following error:
+
+  .......... out_stream =
+  object
+    method print : string -> unit
+    method printf : 'a . ('a, 'b, unit) format -> 'a
+    method flush : unit
+  end
+Some type variables are unbound in this type:
+  class type out_stream =
+    object
+      method flush : unit
+      method print : string -> unit
+      method printf : ('a, 'b, unit) format -> 'a
+    end
+The method printf has type 'a. ('a, 'b, unit) format -> 'a where 'b
+is unbound
+
+Any suggestions on a better way to do this would be appreciated.
+
+BTW, all this code would be unnecessary if ocaml provided an 
+output_channel_of_buffer primitive. :-)
+
+Warren
+

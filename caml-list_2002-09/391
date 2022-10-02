@@ -1,0 +1,232 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA18546; Fri, 27 Sep 2002 19:22:11 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA18559 for <caml-list@pauillac.inria.fr>; Fri, 27 Sep 2002 19:22:10 +0200 (MET DST)
+Received: from lobus.fungible.com (adsl-64-161-114-6.dsl.snfc21.pacbell.net [64.161.114.6])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g8RHM8501137
+	for <caml-list@inria.fr>; Fri, 27 Sep 2002 19:22:08 +0200 (MET DST)
+Received: by lobus.fungible.com (Postfix, from userid 1000)
+	id 079137FEE; Fri, 27 Sep 2002 10:22:04 -0700 (PDT)
+Date: Fri, 27 Sep 2002 10:01:26 -0700
+From-Tims-Fingers: true
+To: fsmith@mathworks.com
+Cc: mvanier@cs.caltech.edu, caml-list@inria.fr
+In-reply-to: <IIEMJEMIMDMLIIPHPOBLGEKKCAAA.fsmith@mathworks.com>
+Subject: Re: [Caml-list] a design problem requiring downcasting? (long)
+References:  <IIEMJEMIMDMLIIPHPOBLGEKKCAAA.fsmith@mathworks.com>
+Message-Id: <20020927172204.079137FEE@lobus.fungible.com>
+From: tim@fungible.com (Tim Freeman)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Here's another stab at it.  
+
+This is like my previous attempt, except it supports arbitrarily deep
+subclassing and multiple inheritance.  This valid issue was raised by
+Andreas Rossberg <rossberg@ps.uni-sb.de>.
+
+It's like the try from "Fred Smith" <fsmith@mathworks.com>, except it
+avoids polymorphism and having any central place that has to be
+modified when you add a class.
+
+This hack has uglier syntax and perhaps slower execution than
+equivalent cocaml at
+http://www.pps.jussieu.fr/~emmanuel/Public/Dev/coca-ml/index-en.html;
+the only advantage of this hack over cocaml are a simpler compilation
+environment and avoidance of Obj.magic.
+
+The idea is to represent information about the class of the current
+object as a list of exceptions.  There is one exception for each class
+the current object can be downcast to.
+
+-- 
+Tim Freeman       
+tim@fungible.com
+GPG public key fingerprint ECDF 46F8 3B80 BB9E 575D  7180 76DF FE00 34B1 5C78 
+
+module type Foo = sig
+  exception Wrong_Class
+  exception Bad_Downcast
+
+  type 'a downcaster = exn -> 'a
+  class downcastable: object
+    method downcast: 'a . 'a downcaster -> 'a
+  end
+
+  class superclass: object
+    inherit downcastable
+    method super_meth: string
+  end
+
+  val superclass_dc: downcastable -> superclass
+
+  class subclass_1: string -> object
+    inherit superclass
+    method s: string
+  end
+                    
+  val subclass_1_dc: downcastable -> subclass_1
+    
+  class subclass_2: int -> object
+    inherit superclass
+    method i: int
+  end
+                    
+  val subclass_2_dc: downcastable -> subclass_2
+
+  class subsubclass:  object
+    inherit subclass_1
+    method j: int
+  end
+
+  val subsubclass_dc: downcastable -> subsubclass
+
+  class multiclass: object
+    inherit subclass_1
+    inherit subclass_2
+    method sum: int
+  end
+    
+  val multiclass_dc: downcastable -> multiclass
+    
+  val x: downcastable
+
+end
+
+module Foo: Foo = struct
+
+  exception Wrong_Class
+  exception Bad_Downcast
+
+  type 'a downcaster = exn -> 'a
+    (** This should throw Wrong_Class if the exception isn't the one we expect,
+      otherwise it should grab the argument of the exception. *)
+
+  class downcastable = object (self)
+    method private data: exn list = []
+    method downcast: 'a . 'a downcaster -> 'a = fun dc ->
+      let rec loop l =
+        match l with
+            [] -> raise Bad_Downcast
+          | a :: b ->
+              try
+                dc a
+              with
+                  Wrong_Class -> loop b
+      in
+        loop self#data
+  end
+
+  class superclass_impl (makeexn: superclass_impl -> exn) =
+  object (self: 'self)
+    inherit downcastable
+    method private data: exn list = [makeexn (self :> superclass_impl)]
+    method super_meth: string = "superclass"
+  end
+            
+  exception Superclass of superclass_impl
+
+  class superclass = superclass_impl (fun sc -> Superclass sc)
+
+  let superclass_dc (dc: downcastable): superclass =
+    dc#downcast (function Superclass s -> s
+                   | _ -> raise Wrong_Class)
+                       
+  class subclass_1_impl (s: string) (makeexn: subclass_1_impl -> exn) =
+  object (self: 'self)
+    inherit superclass as super
+    method private data: exn list =
+      makeexn (self :> subclass_1_impl) :: super#data
+    method s: string = s
+  end
+    
+  exception Subclass_1 of subclass_1_impl
+
+  class subclass_1 (s: string) = subclass_1_impl s (fun sc -> Subclass_1 sc)
+    
+  let subclass_1_dc (dc: downcastable): subclass_1 =
+    dc#downcast (function
+                     Subclass_1 s -> s
+                   | _ -> raise Wrong_Class)
+
+  class subclass_2_impl (i: int) (makeexn: subclass_2_impl -> exn) =
+  object (self: 'self)
+    inherit superclass as super
+    method private data: exn list =
+      makeexn (self :> subclass_2_impl) :: super#data
+    method i: int = i
+  end
+    
+  exception Subclass_2 of subclass_2_impl
+    
+  class subclass_2 (i: int) = subclass_2_impl i (fun sc -> Subclass_2 sc)
+    
+  let subclass_2_dc (dc: downcastable): subclass_2 =
+    dc#downcast (function
+                     Subclass_2 s -> s
+                   | _ -> raise Wrong_Class)
+
+  class subsubclass_impl (makeexn: subsubclass_impl -> exn) =
+  object (self: 'self)
+    inherit subclass_1 "subsubclass" as super
+    method private data: exn list =
+      makeexn (self :> subsubclass_impl) :: super#data
+    method j: int = 97
+  end
+
+  exception Subsubclass of subsubclass_impl
+
+  class subsubclass = subsubclass_impl (fun sc -> Subsubclass sc)
+
+  let subsubclass_dc (dc: downcastable): subsubclass =
+    dc#downcast (function
+                     Subsubclass s -> s
+                   | _ -> raise Wrong_Class)
+
+  class multiclass_impl (makeexn: multiclass_impl -> exn) =
+  object (self: 'self)
+    inherit subclass_1 "subsubclass" as super1
+    inherit subclass_2 34 as super2
+    method private data: exn list =
+      makeexn (self :> multiclass_impl) :: (super1#data @ super2#data)
+    method sum: int = String.length self#s + self#i
+  end
+
+  exception Multiclass of multiclass_impl
+
+  class multiclass = multiclass_impl (fun sc -> Multiclass sc)
+
+  let multiclass_dc (dc: downcastable): multiclass =
+    dc#downcast (function
+                     Multiclass s -> s
+                   | _ -> raise Wrong_Class)
+
+  let _ = Random.self_init ()
+
+  let x: downcastable =
+    match Random.bits () mod 5 with
+        0 -> (new superclass :> downcastable)
+      | 1 -> (new subclass_1 "blort" :> downcastable)
+      | 2 -> (new subclass_2 17 :> downcastable)
+      | 3 -> (new subsubclass :> downcastable)
+      | 4 -> (new multiclass :> downcastable)
+      | _ -> failwith "Impossible"  
+  let _ =
+    try
+      Format.printf "Multiclass, sum gives %d.\n@?" (multiclass_dc x)#sum
+    with Bad_Downcast -> try
+      Format.printf "Subsubclass, j gives %d.\n@?" (subsubclass_dc x)#j
+    with Bad_Downcast -> try
+      Format.printf "Subclass_2, i gives %d.\n@?" (subclass_2_dc x)#i
+    with Bad_Downcast -> try
+      Format.printf "Subclass_1, s gives %s.\n@?" (subclass_1_dc x)#s
+    with Bad_Downcast -> try
+      Format.printf "Superclass; super_meth gives %s.\n@?"
+        (superclass_dc x)#super_meth
+    with Bad_Downcast ->
+      failwith "Downcasts failed"
+end
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

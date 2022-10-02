@@ -1,0 +1,112 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8GKbvGw019852
+	for <caml-list@sympa-roc.inria.fr>; Fri, 16 Sep 2011 22:37:57 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvYDAJeyc07RVaE2imdsb2JhbABBmFpLjjMIFAEBAQoJDQcSBiGBUwEBAQECARICExMGARseAwELBgULKRIhAhEBBQEcGSKHVQKXcwqLQYJahSE7iG0CAwaGcgSHaYRkhn2GR4NLgm89g3E
+X-IronPort-AV: E=Sophos;i="4.68,395,1312149600"; 
+   d="scan'208";a="109385056"
+Received: from mail-fx0-f54.google.com ([209.85.161.54])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 16 Sep 2011 22:37:52 +0200
+Received: by fxg9 with SMTP id 9so3895194fxg.27
+        for <caml-list@inria.fr>; Fri, 16 Sep 2011 13:37:52 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=date:from:to:subject:message-id:in-reply-to:references:x-mailer
+         :mime-version:content-type:content-transfer-encoding;
+        bh=CWTmz4aVPIokJ3o1Sp3RKOmwtPrfuP6a4nCIt31tlqM=;
+        b=h8+ydesG2HrPVoyVfCgLl0MoBQQ05uIPIHtaJuQdOUAA4NwWlwZpbT8yOWk68LHB+5
+         yrNSYnryeY9L3CtPoA5c7vYSC+G1FygpY0lzxVJifdnj6zDRbfZEuATvIxElTYudNYfL
+         2RN0rpsVdF1Syojz/1U6lU2LlzrguvIHAey+s=
+Received: by 10.223.37.215 with SMTP id y23mr774488fad.12.1316205471944;
+        Fri, 16 Sep 2011 13:37:51 -0700 (PDT)
+Received: from lemon.local.tld (153-90-132-95.pool.ukrtel.net. [95.132.90.153])
+        by mx.google.com with ESMTPS id f1sm3800753fab.19.2011.09.16.13.37.49
+        (version=SSLv3 cipher=OTHER);
+        Fri, 16 Sep 2011 13:37:51 -0700 (PDT)
+Date: Fri, 16 Sep 2011 23:36:32 +0300
+From: ygrek <ygrekheretix@gmail.com>
+To: caml-list@inria.fr
+Message-Id: <20110916233632.cf8b09af56b83fe3e69a0798@gmail.com>
+In-Reply-To: <CAMB58pGrrz1BLn59i_9eAAMb=Z7D+4dKuoOuydQVfkQ8ODfUFw@mail.gmail.com>
+References: <CAMB58pGrrz1BLn59i_9eAAMb=Z7D+4dKuoOuydQVfkQ8ODfUFw@mail.gmail.com>
+X-Mailer: Sylpheed 3.2.0beta1 (GTK+ 2.24.4; i486-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Overhead of first class modules
+
+On Fri, 16 Sep 2011 16:08:55 -0400
+Alex Rubinsteyn <alex.rubinsteyn@gmail.com> wrote:
+
+> I ran a very simple experiment gauging the overhead of OCaml's new
+> first-class modules.
+
+This is not a valid experiment. In first two cases ocamlopt inlines
+function call. Also mind that in this code ocamlopt calls the 
+Local.f function directly, not through the module.
+
+But let's correctly microbenchmark the cost of direct call vs
+indirect vs message sending :)
+
+let n = 100_000_000
+
+let f x = x + 1
+let direct () =
+  let acc = ref 0 in
+  for i = 0 to n do
+    acc := !acc + (f 1)
+  done
+
+module type S = sig val f : int -> int end
+module M = struct let f x = x + 1 end
+let package = ref (module M : S)
+let fstcls () =
+  let acc = ref 0 in
+  for i = 0 to n do
+     let module Local = (val !package : S) in
+     acc := !acc + (Local.f 1)
+  done
+
+let o = object method f x = x + 1 end
+let obj () =
+  let acc = ref 0 in
+  for i = 0 to n do
+     acc := !acc + o#f 1
+  done
+
+let () = 
+  match Sys.argv with
+  | [|_;"direct"|] -> direct ()
+  | [|_;"fstcls"|] -> fstcls ()
+  | [|_;"obj"|] -> obj ();
+  | _ -> failwith "ORLY?"
+
+Disable inlining :
+
+ /opt/ocaml-3.12.1/bin/ocamlopt -inline 0 -S speed.ml -o speed
+
+Run (Linux 3.0.0-1-686-pae i686) :
+
+$ time ./speed direct
+
+real	0m0.711s
+user	0m0.560s
+sys	0m0.012s
+
+$ time ./speed fstcls
+
+real	0m0.631s
+user	0m0.508s
+sys	0m0.000s
+
+$ time ./speed obj
+
+real	0m1.157s
+user	0m0.840s
+sys	0m0.016s
+
+Looks like it is time to sprinkle some performance-critical code with first class modules :)
+
+-- 
+ ygrek
+ http://ygrek.org.ua 

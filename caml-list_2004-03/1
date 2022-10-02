@@ -1,0 +1,257 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA09579; Mon, 1 Mar 2004 03:10:02 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA10956 for <caml-list@pauillac.inria.fr>; Mon, 1 Mar 2004 03:10:00 +0100 (MET)
+Received: from oola.is.scarlet.be (oola.is.scarlet.be [193.74.71.23])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i2129xae009960
+	for <caml-list@inria.fr>; Mon, 1 Mar 2004 03:09:59 +0100
+Received: from (u195-95-86-134.dialup.planetinternet.be [195.95.86.134]) 
+	by oola.is.scarlet.be  with ESMTP id i2129to17625; 
+	Mon, 1 Mar 2004 03:09:55 +0100
+Received: from poincare
+	([127.0.0.1] helo=localhost ident=trch)
+	by poincare with esmtp (Exim 3.36 #1 (Debian))
+	id 1Axcsx-0004Ji-00; Mon, 01 Mar 2004 03:10:23 +0100
+Date: Mon, 01 Mar 2004 03:10:21 +0100 (CET)
+Message-Id: <20040301.031021.51509654.debian00@tiscali.be>
+To: Richard Jones <rich@annexia.org>
+Cc: caml-list@inria.fr
+Subject: [Caml-list] Re: OcamlDBI
+From: Christophe TROESTLER <debian00@tiscali.be>
+In-Reply-To: <20040229210015.GA31888@redhat.com>
+References: <20040229.202452.53575435.Christophe.Troestler@umh.ac.be>
+	<20040229210015.GA31888@redhat.com>
+Organization: None
+X-Spook: munitions AMEMB Europol military Commecen analyzer Skipjack
+ Montenegro Rule Psix basement 
+X-Mailer-URL: http://www.mew.org/
+X-Operating-System: GNU/Linux (http://www.linux.org/)
+X-Blessing: Om Ah Hum Vajra Guru Pema Siddhi Hum
+X-Mailer: Mew version 4.0.61 on Emacs 21.3.1 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; troestler:01 tiscali:99 sth:99 camlp:01 annotations:01 camlp:01 transported:01 terse:01 shortcomings:01 unportable:01 encodings:01 dbi:99 sqt:99 sth:99 sessionid:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+X-IMAPbase: 1080652306 414
+Status: O
+X-Status: 
+X-Keywords:                     
+X-UID: 1
+
+Dear Rich,
+
+I am sorry, I realized after the fact that the following is a bit long.
+
+On Sun, 29 Feb 2004, Richard Jones <<rich@annexia.org> wrote:
+> 
+> What I would _really_ like to do is to use some Obj.magic to build
+> tuples of the correct type, but that risks a segmentation fault at
+> run time if the programmer makes a mistake. [...] I was thinking
+> something along the lines of
+>
+> let data = sth#map (fun (i, s) ->
+>                      do something with int i and string s) ...
+>
+> The tuple of type int * string could be generated magically?
+
+That would be nice but is not quite possible.  Indeed what would be
+the type of #map ?  So this is only feasible with Camlp4 and some
+annotations to indicate to Camlp4 the type of the tuple.  The problem
+is that it would be nice to add the types to the prepare[_cached]
+statement but then they must be transported to the appropriate #map,
+#iter,...  places.  As Camlp4 is just about syntax, I do not see how
+to do that -- since, at worst, the #map, #iter,... may be in a
+different file!  But since Camlp4 can only do what Caml can do (only
+with a more terse and convenient syntax), this still begs the question
+of what pure Caml should do.
+
+So my point is first to try to understand what Caml should do for
+DYNAMIC queries (where nothing is [supposed to be] known at compile
+time: neither the types, nor the length, nor even the DB,...) and only
+later see whether one can add syntactic sugar.  I'd like, as much as
+you do, to find an efficient and convenient manner to address that
+problem.
+
+The code you send me is good food for thought.  Thanks for sharing it
+(as I said I am only a casual user of DB).  I got why you want lists
+on the input.  But this code also shows shortcomings that one should
+deal with.  For example
+
+  clickstream_is_null = row.(3) = ""
+
+suggest you identify a NULL string to an empty string!!!
+
+Because of the dynamic nature of the queries, the result cannot be
+[fully] typed.  Hence strings.  But, I am sorry to insist, strings
+tend to make the code UNPORTABLE because encodings are different from
+one DB engine to another.  This goes against the purpose if DBI --
+database independence!  The solution, then, I beg, is to create a new
+type [sql_t] (see db.ml attached to the previous mail and the P.S.)
+that "mimics" SQL types and can then be used to make automatic
+conversions between the two.  In fact, we do not need to care so much
+about SQL types but rather that we have enough types on the Caml side
+to make the translations.  (1) I think it is not convenient for the
+user to have
+
+    [`Tinyint of int | `Int of int | ...]
+
+as all we want to know on the Caml side is that we got an int.  Maybe
+another type should be defined to report the column types more finely,
+e.g. [`TinyInt | `SmallInt | `Int | ...] ?  (2) Also, another decision
+that must be made is how to handle NULL values.  I think it is better
+to have one global `Null instead of duplicating every type into [`X of
+x] and [`Xopt of x option].  This is closer to the way SQL works.
+Moreover, if the programmer knows that a column is not null, he can
+match the type with [`X x] instead of having to worry whether the
+column has been declared NOT NULL (in which case the matching should
+be [`X x]) or not (in which case the matching should be [`Xopt (Some
+x)]).  Finally, polymorphic variants make it convenient (see below).
+
+Let me change some of your code to illustrate how translating to
+[sqt_t array] works (see at the bottom of this mail for the types used).
+
+>          (* Convert out, ready for grouping by days. *)
+>          let hits = sth#map (fun row ->
+>                                let t = row.(0) in
+>                                let day = printable_day t in
+>                                let time = printable_time t in
+>                                let addr = row.(1) in
+>                                let url = row.(2) in
+>                                let clickstream = row.(3) in
+>                                let clickstream_is_null = row.(3) = "" in
+>                                let sessionid = row.(4) in
+>                                let sessionid_is_null = row.(4) = "" in
+>                                (day, (time, addr, url,
+>                                       clickstream, clickstream_is_null,
+>                                       sessionid, sessionid_is_null))) in
+
+<CODE>
+(* I am not sure what you do with "hits" -- whether you process them
+   after of print them -- so I decided to keep the structures
+   (believing formatting the data for output should happen in a single
+   place -- or since you may want different back-ends: HTML, TeX,...). *)
+let hits =
+  sth#map (function
+           | [|`Timestamp t; `String addr; `String url;
+               (`Null | `String _) as clickstream;
+               (`Null | `Int _) as sessionid |] ->
+               (t.day, (t.time, addr, url, clickstream, sessionid))
+           | _ -> assert(false))
+    (* REMARK: The assert() line is supposed not to happen.  Assert
+       was chosen because it will report line no if triggered. *)
+</CODE>
+
+Note that clickstream and sessionid do not have the same type as
+before.  They now contain their nullity:
+
+  clickstream : [> `Null | `String of string ]
+  sessionid   : [> `Int of int | `Null ]
+
+This is good as trying to access the value without caring about its
+possible nullity will result into a type error.  This should be as
+convenient to use as the couples (clickstream, clickstream_is_null) :
+string * bool.  At least so I think.  If possible, I will be glad to
+see the code using clickstream and sessionid to indeed be able to
+judge.
+
+Note that empty strings are now different from NULL values.
+
+>   let sessions = sth#map (fun row ->
+>                             let sessionid = int_of_string row.(0) in
+>                             let url = row.(1) in
+>                             let t = int_of_string row.(2) in
+>                             sessionid, (url, t)) in
+> 
+
+let sessions =
+  sth#map (function
+           | [| `Int sessionid; `String url; `Int t |] -> (sessionid, (url, t))
+           | _ -> assert(false))
+
+> > * I feel one could use polymorphic variants in a more terse way to
+> >   bind variables. [...]
+> I'm not sure I understand this point.  Can you explain some more?
+
+I just did not understand why you use `IntRef instead of simply `Int
+to bind variables.  I was trying to explain that I think this is safe.
+
+> > * method finish : unit
+>
+> Hmm ... #finish is not very well-defined. [...] Not clear if it's
+> better or worse to do this using a finalizer instead.
+
+Well, I thought that's what finalizers are for.  But maybe somebody on
+the ML will raise points I have not thought about.
+
+Cheers,
+ChriS
+
+
+P.S.  Feature request: it would be nice to have a standard way to work
+with time and dates.  A module in the standard library would be nice.
+
+---
+P.S.2.  Here is the part of db.ml I sent Rich that allows to understand
+the above.
+
+type date = {
+  year : int;
+  month : int;
+  day : int;
+}
+
+type time = {
+  hour : int;
+  min : int;
+  sec : int;
+}
+
+type datetime = {
+  date : date;
+  time : time;
+  microsecs : int;
+  utc_offset : int;
+}
+
+module type Decimal =
+sig
+  type t
+  val to_string : t -> string
+  val to_float : t -> float
+  val of_string : t -> t
+    (* Operations on Decimal values ??? *)
+end
+
+module type Blob =
+sig
+  type t
+  val length : t -> int64
+  val get_chunk : pos:int64 -> len:int -> string
+  val to_file : t -> string -> unit
+  val of_file : string -> t
+  val of_string : string -> t
+end
+
+type sql_t = [ `Null
+             | `Int of int
+             | `Float of float
+             | `String of string
+             | `Byte of char
+             | `Bool of bool
+             | `Bigint of Big_int.big_int
+             | `Decimal of Decimal.t
+             | `Date of date
+             | `Time of time
+             | `Timestamp of datetime
+             | `Interval of datetime (* utc_offset irrelevant *)
+             | `Blob of Blob.t
+             ]
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

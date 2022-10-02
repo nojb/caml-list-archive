@@ -1,0 +1,93 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id C640FBC0A
+	for <caml-list@yquem.inria.fr>; Mon,  4 Jun 2007 13:30:16 +0200 (CEST)
+Received: from ptb-relay01.plus.net (ptb-relay01.plus.net [212.159.14.212])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l54BUG9e023296
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Mon, 4 Jun 2007 13:30:16 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay01.plus.net with esmtp (Exim) id 1HvAlK-0006uP-8s
+	for caml-list@yquem.inria.fr; Mon, 04 Jun 2007 12:30:15 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Faking concurrency using Unix forks and pipes (ray tracing results)
+Date: Mon, 4 Jun 2007 11:56:15 +0100
+User-Agent: KMail/1.9.7
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200706041156.16521.jon@ffconsultancy.com>
+X-Miltered: at discorde with ID 4663F7C8.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; forks:01 invocation:01 ocaml:01 ocaml:01 forks:01 computes:01 marshalling:01 exn:01 exn:01 higher-order:01 arrays:01 compares:01 frog:98 invoke:01 invoke:01 
+
+
+I just got a first working version of .NET style asynchronous invocation 
+working in OCaml using process forking.
+
+The following OCaml function forks a new process and computes "f x" in that 
+process, returning a function that blocks and returns the result using 
+marshalling.
+
+let invoke (f : 'a -> 'b) x : unit -> 'b =
+  let input, output = Unix.pipe() in
+  match Unix.fork() with
+  | 0 ->
+    Unix.close input;
+    let output = Unix.out_channel_of_descr output in
+    Marshal.to_channel output (try `Res(f x) with e -> `Exn e) [];
+    exit 0
+  | _ ->
+      Unix.close output;
+      let input = Unix.in_channel_of_descr input in
+      fun () ->
+	match Marshal.from_channel input with
+	| `Res x -> x
+	| `Exn e -> raise e
+
+This function tries to account for reraising exceptions on the parent process 
+but that is untested.
+
+You can write a higher-order "map" function in terms of invoke like this:
+
+let ( |> ) x f = f x
+
+let map (f : 'a -> 'b) a : 'b array =
+  Array.map (invoke f) a |>
+      Array.map (fun f -> f())
+
+When you apply this map to an array, a new process is forked for each element. 
+As forking is time consuming, you should only apply this to short arrays.
+
+The performance characteristics of this approach are very interesting. 
+Firstly, I can observe doubled performance on my dual core by invoking two 
+simple but CPU-intensive operations concurrently:
+
+  map fib [|43; 43|]
+
+However, performance is easily degraded using this approach, partly because 
+forking is expensive but also because of other effects that I do not yet 
+understand. My original benchmark summed the elements of an array using 
+fold_left. For some reason, this is extremely inefficient, as if the entire 
+array is copied.
+
+Anyway, this function is so simple that it took no time to work it into my ray 
+tracer benchmark. The benefits of concurrency on my dual-core system reduce 
+the time taken by OCaml from 4s to 3s.
+
+I'll try a concurrent F# version and see how it compares...
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+OCaml for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists/?e
+

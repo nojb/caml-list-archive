@@ -1,0 +1,235 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p83CG3cl028021
+	for <caml-list@sympa-roc.inria.fr>; Sat, 3 Sep 2011 14:16:03 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtMBAKsZYk7RVdy2mGdsb2JhbABCmQeHQgGHMGoIFAEBAQEBCAkNBxQmgUYBAQEBAxICLAEGFQ8DCwEDDAYFCw0NISIBEQEFAQoSBhMSCQeHVZlACow9glYrhEc7iG0CAwaGZASCVJBajGY8g20
+X-IronPort-AV: E=Sophos;i="4.68,324,1312149600"; 
+   d="scan'208";a="107575466"
+Received: from mail-vx0-f182.google.com ([209.85.220.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 03 Sep 2011 14:15:57 +0200
+Received: by vxh11 with SMTP id 11so4979338vxh.27
+        for <caml-list@inria.fr>; Sat, 03 Sep 2011 05:15:56 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type;
+        bh=KdZvA2U6D0cPrD+i7Fbv1AWWM+Otv4dV3nuJFXJpin4=;
+        b=La4xUBqQChwjmit657RDKkPO6oLDvrVI9FBFyB8WGyA93POhAWOh23+aAHb6kFk3FG
+         7bppZvhz0oQr4CErLxr9fue3OUi2fwGf7XO0IubyQ2ZGFuaazOAQ7G1QqbCOHlsGvkTQ
+         YLhZ0Icm4Syh66cO8hb3HML0a5XvdWFhgOlp0=
+Received: by 10.52.23.225 with SMTP id p1mr2038956vdf.186.1315052155100; Sat,
+ 03 Sep 2011 05:15:55 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.52.158.99 with HTTP; Sat, 3 Sep 2011 05:15:35 -0700 (PDT)
+In-Reply-To: <20110903114625.GA15100@localhost>
+References: <87ty8uc5ph.fsf@frosties.localnet> <20110903103653.GX15100@localhost>
+ <CAOOOohT0v8zrEE6TbzL9RXn5_-A3KHBsZUT3aL+gZHCGsYuWEQ@mail.gmail.com> <20110903114625.GA15100@localhost>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Sat, 3 Sep 2011 14:15:35 +0200
+Message-ID: <CAPFanBFbX-D_hb0SqXS7-g3cG9RVe6-W3MzEs_FvfwqRhX54aA@mail.gmail.com>
+To: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Cc: Philippe Veber <philippe.veber@gmail.com>,
+        Goswin von Brederlow <goswin-v-b@web.de>, caml-list@inria.fr
+Content-Type: multipart/alternative; boundary=20cf307ca1ac90dde504ac087068
+Subject: Re: [Caml-list] Odd failure to infer types
+
+
+--20cf307ca1ac90dde504ac087068
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+Indeed, a let-bound [] is generalized to a polymorphic ('a list), while a
+let-bound (ref []), or (Array.make n []), is not generalized. It would be
+unsound to do so as if you had a reference to a polymorphic ('a list) you
+could add elements of different types in the list.
+
+When a type variable is not generalized (polymorphic), it stays an "unknown"
+of the type system until it is unified to a known type:
+
+# let r =3D ref [];;
+val r : '_a list ref =3D {contents =3D []}
+# r :=3D 1 :: !r;;
+- : unit =3D ()
+# r;;
+- : int list ref =3D {contents =3D [1]}
+
+'_a is sometimes called a "weakly polymorphic variable", in fact it is not
+polymorphic at all. It is just an unknown.
+
+In the code example above, the real type for '_a could be determined after
+two phrases in the top level. It may also happen as a compilation unit (if
+the code was written in a file instead of fed phrase-per-phrase to the
+toplevel). We wouldn't observe the intermediary '_a inferred type, as the
+type are inferred globally.
+
+It is forbidden however to keep an "undetermined variable" in a module
+interface. This is what the error message here says: the variable '_a could
+neither be generalized (as it is not a let-bound value, but a reference
+resulting from a call to the "ref" function), nor determined by unification
+with something in the module.
+Keeping undetermined variables in a module interface would break the
+separate compilation permitted by the interface/implementation distinction
+at the module level. Indeed, if a module A had undetermined variables in its
+interface, and modules B and C used A, B and C would have to coordinate each
+other to make sure that the instantiations they make (for the undetermined)
+are compatible; you couldn't compile B with A, and C with A, separately.
+
+The solution is to give enough indications locally, in the module, so that
+the reference type can be determined:
+
+ let states =3D Array.make ... ([] : (int * int * dir) list * (char * int *
+int) array * string)
+
+
+
+
+It also seems quite wrong to me. You should perhaps file a bug into
+> Mantis if no typing expert answers.
+>
+
+I don't want to criticize your answer which was very helpful, but I would
+like to point out that I have seen the "when you don't understand the type
+checker, it may be a bug" reaction quite often on this list. Indeed, all
+software has failures and the OCaml type checker is not exempt of bugs, most
+particularly on the delicate or recently changed parts of the system (first
+class modules, etc.).
+
+In general, the type checker is quite solid. I personally find that thinking
+of a tool bug when I'm stuck on something is actually counter-productive in
+most situations; when debugging something, you need strong guarantees of
+what "is right" and what "may have gone wrong". Insinuating doubts against
+the tool (on which you have no control) is a good way, at least for me, to
+not push myself into really thinking about what I could have done wrong on
+my side. Therefore, I try to always assume that the tools are right (and in
+my case working with the OCaml typechecker, they have never failed me),
+because it saves me lots of doubts, confusion, and self-indulgence.
+
+
+On Sat, Sep 3, 2011 at 1:46 PM, Guillaume Yziquel <
+guillaume.yziquel@citycable.ch> wrote:
+> Le Saturday 03 Sep 2011 =E0 13:35:22 (+0200), Philippe Veber a =E9crit :
+>>    Hi, I'm really no typing expert and have not looked much into your
+>>    code, so sorry in advance if what I say is irrelevant. Christophe got
+>>    it right I think : I'd say that an array value cannot be polymorphic
+>>    because it is mutable. I've quickly searched the web and found that
+>>    [1]
+http://mirror.ocamlcore.org/caml.inria.fr/pub/ml-archives/caml-list/
+>>    2001/12/0dccd30f4582e551a674562e3ddcc03c.en.html
+>
+> Yes, Christophe got it right.
+>
+> While not having the let-restriction on [] seems right theoretically, I
+> see little practical use case for it however.
+>
+> --
+>     Guillaume Yziquel
+>
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+
+--20cf307ca1ac90dde504ac087068
+Content-Type: text/html; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+Indeed, a let-bound [] is generalized to a polymorphic (&#39;a list), while=
+ a let-bound (ref []), or (Array.make n []), is not generalized. It would b=
+e unsound to do so as if you had a reference to a polymorphic (&#39;a list)=
+ you could add elements of different types in the list.<br>
+
+<br>When a type variable is not generalized (polymorphic), it stays an &quo=
+t;unknown&quot; of the type system until it is unified to a known type:<br>=
+<br># let r =3D ref [];;<br>val r : &#39;_a list ref =3D {contents =3D []}<=
+br>
+
+# r :=3D 1 :: !r;;<br>- : unit =3D ()<br># r;;<br>- : int list ref =3D {con=
+tents =3D [1]}<br><br>&#39;_a is sometimes called a &quot;weakly polymorphi=
+c variable&quot;, in fact it is not polymorphic at all. It is just an unkno=
+wn.<br>
+
+<br>In the code example above, the real type for &#39;_a could be determine=
+d after two phrases in the top level. It may also happen as a compilation u=
+nit (if the code was written in a file instead of fed phrase-per-phrase to =
+the toplevel). We wouldn&#39;t observe the intermediary &#39;_a inferred ty=
+pe, as the type are inferred globally.<br>
+
+<br>It is forbidden however to keep an &quot;undetermined variable&quot; in=
+ a module interface. This is what the error message here says: the variable=
+ &#39;_a could neither be generalized (as it is not a let-bound value, but =
+a reference resulting from a call to the &quot;ref&quot; function), nor det=
+ermined by unification with something in the module.<br>
+
+Keeping undetermined variables in a module interface would break the separa=
+te compilation permitted by the interface/implementation distinction at the=
+ module level. Indeed, if a module A had undetermined variables in its inte=
+rface, and modules B and C used A, B and C would have to coordinate each ot=
+her to make sure that the instantiations they make (for the undetermined) a=
+re compatible; you couldn&#39;t compile B with A, and C with A, separately.=
+<br>
+
+<br>The solution is to give enough indications locally, in the module, so t=
+hat the reference type can be determined:<br><br> =A0let states =3D Array.m=
+ake ... ([] : (int * int * dir) list * (char * int * int) array * string)<b=
+r>
+
+<br><br><br><br><blockquote style=3D"margin: 0pt 0pt 0pt 0.8ex; border-left=
+: 1px solid rgb(204, 204, 204); padding-left: 1ex;" class=3D"gmail_quote">I=
+t also seems quite wrong to me. You should perhaps file a bug into<br>Manti=
+s if no typing expert answers.<br>
+
+</blockquote><div><br>I don&#39;t want to criticize your answer which was v=
+ery helpful, but I would like to point out that I have seen the &quot;when =
+you don&#39;t understand the type checker, it may be a bug&quot; reaction q=
+uite often on this list. Indeed, all software has failures and the OCaml ty=
+pe checker is not exempt of bugs, most particularly on the delicate or rece=
+ntly changed parts of the system (first class modules, etc.).<br>
+
+<br>In general, the type checker is quite solid. I personally find that thi=
+nking of a tool bug when I&#39;m stuck on something is actually counter-pro=
+ductive in most situations; when debugging something, you need strong guara=
+ntees of what &quot;is right&quot; and what &quot;may have gone wrong&quot;=
+. Insinuating doubts against the tool (on which you have no control) is a g=
+ood way, at least for me, to not push myself into really thinking about wha=
+t I could have done wrong on my side. Therefore, I try to always assume tha=
+t the tools are right (and in my case working with the OCaml typechecker, t=
+hey have never failed me), because it saves me lots of doubts, confusion, a=
+nd self-indulgence.<br>
+
+</div><br><br>On Sat, Sep 3, 2011 at 1:46 PM, Guillaume Yziquel &lt;<a href=
+=3D"mailto:guillaume.yziquel@citycable.ch">guillaume.yziquel@citycable.ch</=
+a>&gt; wrote:<br>&gt; Le Saturday 03 Sep 2011 =E0 13:35:22 (+0200), Philipp=
+e Veber a =E9crit :<br>
+
+&gt;&gt; =A0 =A0Hi, I&#39;m really no typing expert and have not looked muc=
+h into your<br>&gt;&gt; =A0 =A0code, so sorry in advance if what I say is i=
+rrelevant. Christophe got<br>&gt;&gt; =A0 =A0it right I think : I&#39;d say=
+ that an array value cannot be polymorphic<br>
+
+&gt;&gt; =A0 =A0because it is mutable. I&#39;ve quickly searched the web an=
+d found that<br>&gt;&gt; =A0 =A0[1]<a href=3D"http://mirror.ocamlcore.org/c=
+aml.inria.fr/pub/ml-archives/caml-list/">http://mirror.ocamlcore.org/caml.i=
+nria.fr/pub/ml-archives/caml-list/</a><br>
+
+&gt;&gt; =A0 =A02001/12/0dccd30f4582e551a674562e3ddcc03c.en.html<br>&gt;<br=
+>&gt; Yes, Christophe got it right.<br>&gt;<br>&gt; While not having the le=
+t-restriction on [] seems right theoretically, I<br>&gt; see little practic=
+al use case for it however.<br>
+
+&gt;<br>&gt; --<br>&gt; =A0 =A0 Guillaume Yziquel<br>&gt;<br>&gt;<br>&gt; -=
+-<br>&gt; Caml-list mailing list. =A0Subscription management and archives:<=
+br>&gt; <a href=3D"https://sympa-roc.inria.fr/wws/info/caml-list">https://s=
+ympa-roc.inria.fr/wws/info/caml-list</a><br>
+
+&gt; Beginner&#39;s list: <a href=3D"http://groups.yahoo.com/group/ocaml_be=
+ginners">http://groups.yahoo.com/group/ocaml_beginners</a><br>&gt; Bug repo=
+rts: <a href=3D"http://caml.inria.fr/bin/caml-bugs">http://caml.inria.fr/bi=
+n/caml-bugs</a><br>
+
+&gt;<br>&gt;<br><br>
+
+--20cf307ca1ac90dde504ac087068--

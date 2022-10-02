@@ -1,0 +1,174 @@
+Return-Path: <darioteixeira@yahoo.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id C5D3EBBAF
+	for <caml-list@yquem.inria.fr>; Fri, 11 Jul 2008 22:39:10 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuIAAIhhd0jOvjGxfGdsb2JhbACSKAEBCwUCBgcRA5gm
+X-IronPort-AV: E=Sophos;i="4.30,347,1212357600"; 
+   d="scan'208";a="27250619"
+Received: from web54607.mail.re2.yahoo.com ([206.190.49.177])
+  by mail4-smtp-sop.national.inria.fr with SMTP; 11 Jul 2008 22:39:09 +0200
+Received: (qmail 61934 invoked by uid 60001); 11 Jul 2008 20:39:08 -0000
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+  s=s1024; d=yahoo.com;
+  h=Received:X-Mailer:Date:From:Subject:To:MIME-Version:Content-Type:Content-Transfer-Encoding:Message-ID;
+  b=O8dETbOJ4KIlMhuAoVcq446uHJeI/S5LC8LD9pzoxt7/Au+aaH9HHdXSlrgVIW2RHDcRxiROc8DGNl33vf6AO8kY2h/pAhX10cFGQDvSgRsF1klaspWnuD0vu2bJWR8d5sWp+mH9aVThG9CGL3H2Ajp8qdOqby70wuR8+2uTB8A=;
+Received: from [212.13.63.117] by web54607.mail.re2.yahoo.com via HTTP; Fri, 11 Jul 2008 13:39:08 PDT
+X-Mailer: YahooMailWebService/0.7.199
+Date: Fri, 11 Jul 2008 13:39:08 -0700 (PDT)
+From: Dario Teixeira <darioteixeira@yahoo.com>
+Subject: Troublesome nodes
+To: caml-list@yquem.inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <845241.60615.qm@web54607.mail.re2.yahoo.com>
+X-Spam: no; 0.00; nodes:01 variants:01 recursive:01 nodes:01 node:01 node:01 struct:01 seq:01 seq:01 variants:01 recursive:01 flatten:01 sig:01 val:01 val:01 
+
+Hi,
+
+This problem was originally raised in a thread in the ocaml-beginners
+list [1], but since polymorphic variants, covariant constraints, and
+recursive knots were brought into the discussion, I reckon it deserves
+the attention of some heavy weights.  Moreover, the problem is trickier
+than first appearances suggest.
+
+So, what's the situation?  I want to create a data structure holding
+document nodes.  There are four different kinds of nodes, two of which
+are terminals (Text and See), and two of which are defined recursively
+(Bold and Mref).  Moreover, both See and Mref produce links, and there
+is an additional constraint that a link node may *not* be the immediate
+ancestor of another link node.  Using conventional union types, a node
+could be modelled like this:
+
+module Old_node =3D
+struct
+    type seq_t =3D super_node_t list
+    and super_node_t =3D
+        | Nonlink_node of nonlink_node_t
+        | Link_node of link_node_t
+    and nonlink_node_t =3D
+        | Text of string
+        | Bold of seq_t
+    and link_node_t =3D
+        | Mref of string * nonlink_node_t list
+        | See of string
+end
+
+
+The problem with this representation is that it introduces an unwanted
+scaffolding for nodes.  Moreover, it prevents the use of constructor
+functions for nodes, since non-link nodes may be represented in the
+tree in a context-dependent fashion: either directly such as Bold [...],
+or as Nonlink_node (Bold [...]).  Note that preserving the link/nonlink
+distinction in the structure is helpful for pattern matching purposes,
+but the extra scaffolding is just a pain.
+
+One alternative is to use polymorphic variants, and to take advantage
+of the fact that new types can be built as the union of existing ones.
+Ideally, one could do something like this:
+
+type seq_t =3D super_node_t list
+ and nonlink_node_t =3D
+    [ `Text of string
+    | `Bold of seq_t ]
+ and link_node_t =3D
+    [ Mref of string * nonlink_node_t list
+    | See of string ]
+ and super_node_t =3D [nonlink_node_t | link_node_t]
+
+
+However, this fails with an error "The type constructor nonlink_node_t is
+not yet completely defined".  Jon Harrop suggested untying the recursive
+knot, but the solution has a few drawbacks of its own [2].
+
+Another alternative is to flatten the structure altogether and to annotate
+the constructor functions with phantom types to prevent the violation of
+the no-parent constraint:
+
+module Node:
+sig
+    type seq_t =3D node_t list
+    and node_t =3D
+        private
+        | Text of string
+        | Bold of seq_t
+        | Mref of string * seq_t
+        | See of string
+
+    type +'a t
+
+    val text: string -> [> `Nonlink] t
+    val bold: 'a t list -> [> `Nonlink] t
+    val mref: string -> [< `Nonlink] t list -> [> `Link] t
+    val see: string -> [> `Link] t
+end =3D
+struct
+    type seq_t =3D node_t list
+    and node_t =3D
+        | Text of string
+        | Bold of seq_t
+        | Mref of string * seq_t
+        | See of string
+
+    type +'a t =3D node_t
+
+    let text txt =3D Text txt
+    let bold inl =3D Bold inl
+    let mref ref inl =3D Mref (ref, inl)
+    let see ref =3D See ref
+end
+
+
+This works fine, but because the link/nonlink distinction is lost, making
+even a simple Node_to_Node translator becomes a mess:
+
+module Node_to_Node =3D
+struct
+    let rec convert_nonlink_node =3D function
+        | Node.Text txt          -> Node.text txt
+        | Node.Bold inl          -> Node.bold (List.map convert_super_node =
+inl)
+        | _                      -> failwith "oops"
+
+    and convert_link_node =3D function
+        | Node.Mref (ref, inl)   -> Node.mref ref (List.map convert_nonlink=
+_node inl)
+        | Node.See ref           -> Node.see ref
+        | _                      -> failwith "oops"
+
+    and convert_super_node node =3D match node with
+        | Node.Text _
+        | Node.Bold _            -> (convert_nonlink_node node :> [`Link | =
+`Nonlink] Node.t)
+        | Node.See _
+        | Node.Mref _            -> convert_link_node node
+end
+
+
+So, I am looking for a solution that meets the following conditions:
+
+ - It satisfies the "no link node shall be parent of another" constraint;
+ - the structure should be pattern-matchable;
+ - but nodes should be created via constructor functions.
+
+Any ideas?
+
+Thanks in advance and sorry for the long post!
+Cheers,
+Dario Teixeira
+
+[1] http://tech.groups.yahoo.com/group/ocaml_beginners/message/9930
+[2] http://tech.groups.yahoo.com/group/ocaml_beginners/message/9932
+
+=0A=0A=0A      __________________________________________________________=
+=0ANot happy with your email address?.=0AGet the one you really want - mill=
+ions of new email addresses available now at Yahoo! http://uk.docs.yahoo.co=
+m/ymail/new.html
+

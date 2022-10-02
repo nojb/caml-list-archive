@@ -1,0 +1,111 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 1A530BC6B
+	for <caml-list@yquem.inria.fr>; Sat, 18 Aug 2007 12:33:18 +0200 (CEST)
+Received: from ptb-relay03.plus.net (ptb-relay03.plus.net [212.159.14.214])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l7IAXHso023927
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sat, 18 Aug 2007 12:33:17 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by ptb-relay03.plus.net with esmtp (Exim) id 1IMLcK-00011T-RJ
+	for caml-list@yquem.inria.fr; Sat, 18 Aug 2007 11:33:17 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] What is a match statement translated into?
+Date: Sat, 18 Aug 2007 11:22:06 +0100
+User-Agent: KMail/1.9.7
+References: <1A6B8F53-FDA5-4F37-BA08-1FBD9CF09E7B@gmail.com>
+In-Reply-To: <1A6B8F53-FDA5-4F37-BA08-1FBD9CF09E7B@gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200708181122.06670.jon@ffconsultancy.com>
+X-Miltered: at discorde with ID 46C6CAED.002 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; translated:01 ocaml:01 computed:01 branching:01 ocamlopt:01 ocaml:01 nesting:01 variants:01 kwd:01 implements:01 byte:01 enum:01 instanceof:01 const:01 argv:01 
+
+On Saturday 18 August 2007 07:55:24 Joel Reymont wrote:
+> Folks,
+>
+> Is pattern-matching code in OCaml expanded into threaded code (pre-
+> computed branch table) or something analogous to the C switch
+> statement (lots of branching)?
+>
+> How do I find out?
+
+Use:
+
+  ocamlopt -S test.ml
+
+and look at the generated assembler.
+
+> I suspect this should be quite optimized but I haven't tried dumping
+> disassembling native-compiled OCaml yet and I wonder if there's a
+> simpler approach.
+
+Depends what type you are matching over. Pattern matches over variant types 
+(including nesting) are compiled extremely efficiently (dispatch table). 
+Polymorphic variants, ints and floats are efficient (balanced trees of 
+comparisons). Strings are very inefficient (sequence of string compares).
+
+For example, finding a Java keyword:
+
+let kwd = function
+  |"abstract" |"continue" |"for" |"new" |"switch"
+  |"assert" |"default" |"goto" |"package" |"synchronized"
+  |"boolean" |"do" |"if" |"private" |"this"
+  |"break" |"double" |"implements" |"protected" |"throw"
+  |"byte" |"else" |"import" |"public" |"throws"
+  |"case" |"enum" |"instanceof" |"return" |"transient" 
+  |"catch" |"extends" |"int" |"short" |"try"
+  |"char" |"final" |"interface" |"static" |"void"
+  |"class" |"finally" |"long" |"strictfp" |"volatile"
+  |"const" |"float" |"native" |"super" |"while" -> true
+  | _ -> false
+
+let () = match Sys.argv with
+  | [|_|] ->
+      for i=1 to 1000000 do
+	ignore(kwd "while")
+      done
+  | _ ->
+      let kwds = Hashtbl.create 1 in
+      List.iter (fun kwd -> Hashtbl.add kwds kwd ())
+	["abstract" ;"continue" ;"for" ;"new" ;"switch"
+	;"assert" ;"default" ;"goto" ;"package" ;"synchronized"
+	;"boolean" ;"do" ;"if" ;"private" ;"this"
+	;"break" ;"double" ;"implements" ;"protected" ;"throw"
+	;"byte" ;"else" ;"import" ;"public" ;"throws"
+	;"case" ;"enum" ;"instanceof" ;"return" ;"transient" 
+	;"catch" ;"extends" ;"int" ;"short" ;"try"
+	;"char" ;"final" ;"interface" ;"static" ;"void"
+	;"class" ;"finally" ;"long" ;"strictfp" ;"volatile"
+	;"const" ;"float" ;"native" ;"super" ;"while"];
+      for i=1 to 1000000 do
+	try Hashtbl.find kwds "while" with Not_found -> ()
+      done
+
+The pattern match is 4.1x slower that the hash table lookup on my machine.
+
+Contrast this with the worst case for balanced trees, which is probably floats 
+because the literals are loaded from memory into registers and the difference 
+between fastest and slowest is only 35% and the average improvement over 
+string matching is 33x faster.
+
+So pattern matching over strings in performance critical code is a very bad 
+idea with the current OCaml implementation. There are ways to work around it, 
+of course, but they are non-trivial.
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+OCaml for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists/?e
+

@@ -1,0 +1,251 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p4NLwYiV012807
+	for <caml-list@sympa-roc.inria.fr>; Mon, 23 May 2011 23:58:34 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArYCAI/X2k3RVdy2mGdsb2JhbACXb4ZhAYdICBQBAQEBAQgJDQcUJalijBuCNYRSN4hiAQEDBoM9AYJVBIIxjWCIS4I6O4M3
+X-IronPort-AV: E=Sophos;i="4.65,258,1304287200"; 
+   d="scan'208";a="99666243"
+Received: from mail-vx0-f182.google.com ([209.85.220.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 23 May 2011 23:58:28 +0200
+Received: by vxc34 with SMTP id 34so8520096vxc.27
+        for <caml-list@inria.fr>; Mon, 23 May 2011 14:58:27 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:in-reply-to:references:from:date
+         :message-id:subject:to:cc:content-type;
+        bh=Or/4a2idDBGiIEvAAe+LrWEqxYG06cXrL+mfqd3tOIw=;
+        b=EI4S/Q9TBtGRDNjlEQifHyhgKZQYGXZHGNCEmXQPuGVgHobo/ropyZdA+zcLqAKb5p
+         /YWQEFt0GTT+8xbFSXkOrBYLcKVtBPIHQsjdnI/ZuwP95VuJ9jhzT7wqHpJPK/BtpnJq
+         CuD1GgTZCOb6ZzAFNIrcNDgn/aloEnODksi8c=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type;
+        b=FfOP2XiSehW+9UtVeg2983Jg6uta96mnuwz7kabXTid5avTH4z3RpU5eBAGyLEjS76
+         aS7fSMJfcxQsfswwlOANfY5JPPtIi2utZUVMFTjehfaGkY1Zuf3Vn7YkU71taG5t4ZDQ
+         6sDIbe7gIAzgdeL/ha6bepjF7iE1c/P7gWVrA=
+Received: by 10.52.116.10 with SMTP id js10mr4028356vdb.256.1306187907160;
+ Mon, 23 May 2011 14:58:27 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.52.165.74 with HTTP; Mon, 23 May 2011 14:58:07 -0700 (PDT)
+In-Reply-To: <172756.45853.qm@web120203.mail.ne1.yahoo.com>
+References: <172756.45853.qm@web120203.mail.ne1.yahoo.com>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Mon, 23 May 2011 23:58:07 +0200
+Message-ID: <BANLkTinJkv98aek_oAd5DrzPKf5h6FFrHQ@mail.gmail.com>
+To: Hakan Suka <hakan40us@yahoo.com>
+Cc: caml-list@inria.fr
+Content-Type: multipart/alternative; boundary=bcaec548668e375a8f04a3f8923c
+Subject: Re: [Caml-list] functor inside a class
+
+
+--bcaec548668e375a8f04a3f8923c
+Content-Type: text/plain; charset=ISO-8859-1
+
+Local modules only make sense when they are used locally. You cannot return
+a value whose type depends on the local module (what woud that mean?). So in
+your example, LabelSet should not be a local module, as it is used in the
+return type of the "get" method.
+
+For a simpler example of this problem:
+
+> # let f x =
+>  let module M = Map.Make(struct type t = int let compare = compare end) in
+>  M.singleton 1 x;;
+> Error: This `let module' expression has type 'a M.t
+> In this type, the locally bound module name M escapes its scope
+>
+
+If you need to use a set, you must request an ordering on your labels. The
+type-safe way to do this in OCaml is to use modules, so you should define
+your class in a functor, rather than as a parametrized class.
+
+# module Tracker (Label : Set.OrderedType) = struct
+>     module LabelSet = Set.Make(Label)
+>     class tracker size = object
+>       method get (_ : int) = LabelSet.empty
+>     end
+>   end;;
+>
+
+You could consider this an issue with ordering-parametrized functors: they
+require code using them to get functorized as well, which may in turn
+require more important changes in your application. But starting from 3.12
+it's easier to contain functorization locally, and I think this design is
+viable. The other possibility is to use a polymorphic datatype that relies
+on the apparently polymorphic comparison function, but this is less
+type-safe: you cannot use your own comparison function, so you won't be able
+to use labels containing cycles or closures, and you may mistakenly mix
+result sets from different trackers.
+
+On Mon, May 23, 2011 at 1:17 PM, Hakan Suka <hakan40us@yahoo.com> wrote:
+> Hi everyone,
+>
+> I tried the ocaml-beginners list with this question but did not get a good
+> solution, so I am retrying here.
+>
+> I want to create a parameterised class that takes as input a polymorphic
+"label"
+>
+> type and internally stores information using a Set of that type. However,
+I
+> cannot get the functor to work inside a class, so I wonder whether this is
+> possible.
+>
+> For example, the following works:
+>
+> module LabelSet =
+> Set.Make (struct type t = int let compare = compare end)
+>
+> class ['a] tracker size =
+> object
+>
+> val nums_to_track_tbl : (int32, LabelSet.t) Hashtbl.t =
+> Hashtbl.create size
+>
+> method get pos = Hashtbl.find_all nums_to_track_tbl pos
+> end
+>
+> But can I have a local module definition so that the I can have a tracker
+not
+> only for integers, but for any type being passed as input? The following
+does
+> not work:
+>
+> class ['a] tracker size =
+> let module LabelSet =
+> Set.Make (struct type t = 'a let compare = compare end)
+> in
+> object
+> val nums_to_track_tbl : (int32, LabelSet.t) Hashtbl.t =
+> Hashtbl.create size
+>
+> method get pos = Hashtbl.find_all nums_to_track_tbl pos
+>
+> end
+>
+> If this is not possible, would it work in Ocaml 3.12 with first-class
+modules?
+>
+> I have seen the following code in the manual which seems fairly close of
+what I
+> would need inside the parametrised class, but not sure if I can use the
+output
+> of make_set inside the module. I haven't tested this because I have Ocaml
+3.11.2
+>
+> let make_set (type s) cmp =
+> let module S = Set.Make(struct
+> type t = s
+> let compare = cmp
+> end) in
+> (module S : Set.S with type elt = s)
+>
+> If that does not work, any suggestions on how to implement this?
+>
+> Thanks,
+> Hakan
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+
+--bcaec548668e375a8f04a3f8923c
+Content-Type: text/html; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+Local modules only make sense when they are used locally. You cannot return=
+ a value whose type depends on the local module (what woud that mean?). So =
+in your example, LabelSet should not be a local module, as it is used in th=
+e return type of the &quot;get&quot; method.<br>
+
+<br>For a simpler example of this problem:<br><blockquote style=3D"margin: =
+0pt 0pt 0pt 0.8ex; border-left: 1px solid rgb(204, 204, 204); padding-left:=
+ 1ex;" class=3D"gmail_quote"># let f x =3D<br> =A0let module M =3D Map.Make=
+(struct type t =3D int let compare =3D compare end) in<br>
+
+ =A0M.singleton 1 x;;<br>Error: This `let module&#39; expression has type &=
+#39;a M.t<br>In this type, the locally bound module name M escapes its scop=
+e<br></blockquote><br>If you need to use a set, you must request an orderin=
+g on your labels. The type-safe way to do this in OCaml is to use modules, =
+so you should define your class in a functor, rather than as a parametrized=
+ class.<br>
+
+<br><blockquote style=3D"margin: 0pt 0pt 0pt 0.8ex; border-left: 1px solid =
+rgb(204, 204, 204); padding-left: 1ex;" class=3D"gmail_quote"># module Trac=
+ker (Label : Set.OrderedType) =3D struct<br>=A0=A0=A0 module LabelSet =3D S=
+et.Make(Label)<br>
+
+=A0=A0=A0 class tracker size =3D object<br>=A0=A0=A0=A0=A0 method get (_ : =
+int) =3D LabelSet.empty<br>=A0=A0=A0 end<br>=A0 end;;<br></blockquote><br>Y=
+ou could consider this an issue with ordering-parametrized functors: they r=
+equire code using them to get functorized as well, which may in turn requir=
+e more important changes in your application. But starting from 3.12 it&#39=
+;s easier to contain functorization locally, and I think this design is via=
+ble. The other possibility is to use a polymorphic datatype that relies on =
+the apparently polymorphic comparison function, but this is less type-safe:=
+ you cannot use your own comparison function, so you won&#39;t be able to u=
+se labels containing cycles or closures, and you may mistakenly mix result =
+sets from different trackers.<br>
+
+<br>On Mon, May 23, 2011 at 1:17 PM, Hakan Suka &lt;<a href=3D"mailto:hakan=
+40us@yahoo.com">hakan40us@yahoo.com</a>&gt; wrote:<br>&gt; Hi everyone,<br>=
+&gt;<br>&gt; I tried the ocaml-beginners list with this question but did no=
+t get a good<br>
+
+&gt; solution, so I am retrying here.<br>&gt;<br>&gt; I want to create a pa=
+rameterised class that takes as input a polymorphic &quot;label&quot;<br>&g=
+t;<br>&gt; type and internally stores information using a Set of that type.=
+ However, I<br>
+
+&gt; cannot get the functor to work inside a class, so I wonder whether thi=
+s is<br>&gt; possible.<br>&gt;<br>&gt; For example, the following works:<br=
+>&gt;<br>&gt; module LabelSet =3D<br>&gt; Set.Make (struct type t =3D int l=
+et compare =3D compare end)<br>
+
+&gt;<br>&gt; class [&#39;a] tracker size =3D<br>&gt; object<br>&gt;<br>&gt;=
+ val nums_to_track_tbl : (int32, LabelSet.t) Hashtbl.t =3D<br>&gt; Hashtbl.=
+create size<br>&gt;<br>&gt; method get pos =3D Hashtbl.find_all nums_to_tra=
+ck_tbl pos<br>
+
+&gt; end<br>&gt;<br>&gt; But can I have a local module definition so that t=
+he I can have a tracker not<br>&gt; only for integers, but for any type bei=
+ng passed as input? The following does<br>&gt; not work:<br>&gt;<br>&gt; cl=
+ass [&#39;a] tracker size =3D<br>
+
+&gt; let module LabelSet =3D<br>&gt; Set.Make (struct type t =3D &#39;a let=
+ compare =3D compare end)<br>&gt; in<br>&gt; object<br>&gt; val nums_to_tra=
+ck_tbl : (int32, LabelSet.t) Hashtbl.t =3D<br>&gt; Hashtbl.create size<br>&=
+gt;<br>
+
+&gt; method get pos =3D Hashtbl.find_all nums_to_track_tbl pos<br>&gt;<br>&=
+gt; end<br>&gt;<br>&gt; If this is not possible, would it work in Ocaml 3.1=
+2 with first-class modules?<br>&gt;<br>&gt; I have seen the following code =
+in the manual which seems fairly close of what I<br>
+
+&gt; would need inside the parametrised class, but not sure if I can use th=
+e output<br>&gt; of make_set inside the module. I haven&#39;t tested this b=
+ecause I have Ocaml 3.11.2<br>&gt;<br>&gt; let make_set (type s) cmp =3D<br>
+
+&gt; let module S =3D Set.Make(struct<br>&gt; type t =3D s<br>&gt; let comp=
+are =3D cmp<br>&gt; end) in<br>&gt; (module S : Set.S with type elt =3D s)<=
+br>&gt;<br>&gt; If that does not work, any suggestions on how to implement =
+this?<br>
+
+&gt;<br>&gt; Thanks,<br>&gt; Hakan<br>&gt;<br>&gt; --<br>&gt; Caml-list mai=
+ling list. =A0Subscription management and archives:<br>&gt; <a href=3D"http=
+s://sympa-roc.inria.fr/wws/info/caml-list">https://sympa-roc.inria.fr/wws/i=
+nfo/caml-list</a><br>
+
+&gt; Beginner&#39;s list: <a href=3D"http://groups.yahoo.com/group/ocaml_be=
+ginners">http://groups.yahoo.com/group/ocaml_beginners</a><br>&gt; Bug repo=
+rts: <a href=3D"http://caml.inria.fr/bin/caml-bugs">http://caml.inria.fr/bi=
+n/caml-bugs</a><br>
+
+&gt;<br>&gt;<br><br>
+
+--bcaec548668e375a8f04a3f8923c--

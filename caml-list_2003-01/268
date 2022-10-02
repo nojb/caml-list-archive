@@ -1,0 +1,120 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA31809; Thu, 30 Jan 2003 19:10:32 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA32345 for <caml-list@pauillac.inria.fr>; Thu, 30 Jan 2003 19:10:31 +0100 (MET)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h0UIAUr12663
+	for <caml-list@inria.fr>; Thu, 30 Jan 2003 19:10:30 +0100 (MET)
+Received: from akasha.ijm.jussieu.fr (akasha.ijm.jussieu.fr [134.157.173.57])
+          by shiva.jussieu.fr (8.12.5/jtpda-5.4) with ESMTP id h0UIATYY001221
+          ; Thu, 30 Jan 2003 19:10:29 +0100 (CET)
+Received: by akasha.ijm.jussieu.fr (Postfix, from userid 11004)
+	id 7B3D83CDC5; Thu, 30 Jan 2003 19:10:24 +0100 (CET)
+From: Olivier Andrieu <andrieu@ijm.jussieu.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15929.27280.245255.70626@akasha.ijm.jussieu.fr>
+Date: Thu, 30 Jan 2003 19:10:24 +0100
+To: Brian Hurt <brian.hurt@qlogic.com>
+Cc: Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] @, List.append, and tail recursion
+In-Reply-To: <Pine.LNX.4.33.0301231815580.2036-100000@eagle.ancor.com>
+References: <Pine.LNX.4.33.0301231815580.2036-100000@eagle.ancor.com>
+X-Mailer: VM 7.07 under Emacs 21.2.1
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+ Brian Hurt [Thursday 23 January 2003] :
+ > I hit a bug recently wiith @ and List.append.  Since they're recursive, 
+ > not tail-recursive, on long enough lists Ocaml thinks you've gone 
+ > infinitely recursive and aborts. 
+
+ > List.append x [] ;;
+ > Exits with:
+ > Stack overflow during evaluation (looping recursion?).
+ > 
+ > So does:
+ > x @ [] ;;
+(not surprising, List.append 's definition is (@))
+
+ > And it has occured to me that all of these forms *should* be
+ > optimizable into loops.  The general case would work something like
+ > this in C:
+ > 
+ > struct list_t {
+ >     void * datum;
+ >     struct list_t * next_p;
+ > }
+ > 
+ > struct list_t * foo (struct list_t * x) {
+ >     struct list_t * retval = NULL;
+ >     struct list_t ** ptr_pp = &retval;
+ > 
+ >     while (x != NULL) {
+ >         struct list_t * temp = alloc(sizeof(struct list_t));
+ >         *ptr_pp = temp;
+ >         temp->datum = expr(x->datum);
+ >         temp->next_p = NULL; /* be nice to the GC */
+ >         ptr_pp = &(temp->next_p);
+ >         x = x->next_p;
+ >     }
+ >     return retval;
+ > }
+
+Well, all of this can be translated directly to caml, using the famous
+Obj module. All you need is a lispish setcdr function :
+
+,----
+| let setcdr : 'a list -> 'a list -> unit = fun c v -> 
+|   let c = Obj.repr c in
+|   assert(Obj.is_block c) ;
+|   Obj.set_field c 1 (Obj.repr v)
+`----
+
+Then one can write a tail-recursive append or a tail-recursive map :
+,----
+| let tr_append l1 l2 =
+|   let rec proc cell = function
+|     | [] ->
+| 	setcdr cell l2
+|     | x :: l -> 
+| 	let nxt = [ x ] in
+| 	setcdr cell nxt ;
+| 	proc nxt l
+|   in
+|   match l1 with
+|   | [] -> l2
+|   | x :: l ->
+|       let head = [ x ] in
+|       proc head l ;
+|       head
+| 	
+| let tr_map f l = 
+|   let rec proc cell = function
+|     | [] -> ()
+|     | x :: l -> 
+| 	let nxt = [ f x ] in
+| 	setcdr cell nxt ;
+| 	proc nxt l
+|   in
+|   match l with
+|   | [] -> [] 
+|   | x :: l ->
+|       let head = [ f x ] in
+|       proc head l ;
+|       head
+`----
+This seems safe to me, as setcdr is only called on new cons cells, so
+it shouldn't mess up the arguments.
+
+Anyway, the hole abstraction thing is cleaner but needs compiler
+support. 
+
+-- 
+   Olivier
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,246 @@
+Return-Path: <tf@functionality.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 4ED95BC6B
+	for <caml-list@yquem.inria.fr>; Thu, 28 Jun 2007 18:00:51 +0200 (CEST)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.179])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5SG0oES007745
+	for <caml-list@yquem.inria.fr>; Thu, 28 Jun 2007 18:00:51 +0200
+Received: from [141.84.136.30] (helo=[152.78.96.56])
+	by mrelayeu.kundenserver.de (node=mrelayeu5) with ESMTP (Nemesis),
+	id 0ML25U-1I3wQJ3Hhz-0006HD; Thu, 28 Jun 2007 18:00:48 +0200
+Message-ID: <4683DB41.50801@functionality.de>
+Date: Thu, 28 Jun 2007 17:01:05 +0100
+From: Thomas Fischbacher <tf@functionality.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.12) Gecko/20060607 Debian/1.7.12-1.2
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Jon Harrop <jon@ffconsultancy.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] The Implicit Accumulator: a design pattern using
+ optional arguments
+References: <200706271314.35134.jon@ffconsultancy.com>	<200706281405.22424.jon@ffconsultancy.com>	<4683B89B.1090306@functionality.de> <200706281543.01424.jon@ffconsultancy.com>
+In-Reply-To: <200706281543.01424.jon@ffconsultancy.com>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V01U2FsdGVkX18YBTY3tE715X/0KwSZAGGsjaTfkZIH3L3zyUF
+ Ib4NZ0rYCtSvNy5jHmo4+6yMvvPNtTzEBM5iv5ZfiC6OifxcxA
+ lz+8TVJzRsTDcofrLRxEQ==
+X-Miltered: at discorde with ID 4683DB32.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; verbose:01 verbose:01 printf:01 printf:01 chunks:01 compactions:01 chunks:01 compactions:01 argv:01 ocaml:01 run-time:01 ocaml:01 variants:01 stdio:01 typedef:01 
+
+Jon Harrop wrote:
+
+> I am more than happy to talk about continuations and consing but you need to 
+> post code that uses continuations or conses before anyone can help.
+
+Let us look at the following example:
+
+===>
+
+let print_gc_info verbose =
+   let s = if verbose then Gc.stat() else Gc.quick_stat() in
+     Printf.printf
+"=== GC Stats (%s) ===
+minor_words:       %f
+promoted_words:    %f
+major_words:       %f
+minor_collections: %d
+major_collections: %d
+heap_words:        %d
+heap_chunks:       %d
+live_words:        %d
+live_blocks:       %d
+free_words:        %d
+free_blocks:       %d
+largest_free:      %d
+fragments:         %d
+compactions:       %d
+top_heap_words:    %d
+"
+       (if verbose then "verbose" else "quick")
+       s.Gc.minor_words
+       s.Gc.promoted_words
+       s.Gc.major_words
+       s.Gc.minor_collections
+       s.Gc.major_collections
+       s.Gc.heap_words
+       s.Gc.heap_chunks
+       s.Gc.live_words
+       s.Gc.live_blocks
+       s.Gc.free_words
+       s.Gc.free_blocks
+       s.Gc.largest_free
+       s.Gc.fragments
+       s.Gc.compactions
+       s.Gc.top_heap_words
+;;
+
+let twofuns_v1 x =
+   (x mod 3, x mod 7)
+;;
+
+let twofuns_v2 c x =
+   c (x mod 3) (x mod 7)
+;;
+
+let walk_pairs_v1 ?(target=[|0;0|]) n =
+   begin
+     target.(0) <- 0;
+     target.(1) <- 0;
+     for i=0 to n-1 do
+       let (f1,f2) = twofuns_v1 i in
+	begin
+	  target.(0) <- target.(0) + f1;
+	  target.(1) <- target.(1) + f2;
+	end
+     done;
+     target
+   end
+;;
+
+let walk_pairs_v2 ?(target=[|0;0|]) n =
+   begin
+     target.(0) <- 0;
+     target.(1) <- 0;
+     (let cont x y =
+        begin
+	 target.(0) <- target.(0) + x;
+	 target.(1) <- target.(1) + y;
+        end
+      in
+        for i=0 to n-1 do
+	 twofuns_v2 cont i
+        done);
+     target
+   end
+;;
+
+let () =
+   let walker =
+     if Sys.argv.(1) = "v1"
+     then
+       let () = Printf.printf "Using variant #1\n" in
+	walk_pairs_v1
+     else
+       let () = Printf.printf "Using variant #2\n" in
+	walk_pairs_v2
+   in
+   let target=[|0;0|] in
+     begin
+       ignore(walker ~target 100000000);
+       Printf.printf "%d %d\n" target.(0) target.(1)
+     end
+;;
+
+print_gc_info true;;
+<===
+
+I get (for the non-continuation approach):
+
+=== GC Stats (verbose) ===
+minor_words:       300018751.000000
+promoted_words:    65.000000
+major_words:       74.000000
+minor_collections: 9155
+major_collections: 0
+heap_words:        61440
+heap_chunks:       1
+live_words:        74
+live_blocks:       23
+free_words:        61366
+free_blocks:       1
+largest_free:      61366
+fragments:         0
+compactions:       0
+top_heap_words:    61440
+
+And using the continuation:
+
+=== GC Stats (verbose) ===
+minor_words:       447.000000
+promoted_words:    0.000000
+major_words:       9.000000
+minor_collections: 0
+major_collections: 0
+heap_words:        61440
+heap_chunks:       1
+live_words:        9
+live_blocks:       3
+free_words:        61431
+free_blocks:       1
+largest_free:      61431
+fragments:         0
+compactions:       0
+top_heap_words:    61440
+
+...so the continuation-based approach can execute not using the GC
+at all - neither major nor minor. Sure, the OCaml GC behaves so
+nicely that it does not make a difference in terms of run-time for
+this particular small example (...or is it that calling a closure
+is at present so inefficient that it outweighs the benefits of not
+having to cons?) - but (1) is this the same if the minor heap is
+more complicated, as in a real application and (2) shouldn't there
+be huge potential for optimization in the second case then?
+
+In particular, concerning point (2), when comparing run times
+with the following bit of C code, I find that both OCaml
+variants are slower than the C variant by more than a factor
+of 3:
+
+===>
+
+#include <stdio.h>
+
+typedef void (*cfii)(int,int);
+
+static int buf[2]={0,0};
+
+void twofuns_cont(cfii c,int x)
+{
+   c(x%3,x%7);
+}
+
+void incbuf(int x,int y)
+{
+   buf[0]+=x;
+   buf[1]+=y;
+}
+
+int main(void)
+{
+   int i;
+
+   for(i=0;i<100000000;i++)
+     {
+       twofuns_cont(&incbuf,i);
+     }
+   printf("%d %d\n",buf[0],buf[1]);
+}
+<===
+
+
+>>According to your usually-screwed-up metrics...
+> 
+> 
+> Time taken?
+
+We are talking about your ray-tracer here.
+
+For those who do not know yet, the fundamental problem with that study
+of yours is that you kept on setting the *criteria* what to consider as
+a permissible solution only after seeing the result, and doing so in
+such a way that the outcome is the one you desired, i.e. to create the
+impression OCaml were the best system around. This is not proper
+scientific behaviour.
+
+-- 
+best regards,
+Thomas Fischbacher
+tf@functionality.de
+

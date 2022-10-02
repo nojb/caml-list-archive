@@ -1,0 +1,115 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA01523; Thu, 13 Nov 2003 23:34:14 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA01086 for <caml-list@pauillac.inria.fr>; Thu, 13 Nov 2003 23:34:13 +0100 (MET)
+Received: from mail6.bluewin.ch (mail6.bluewin.ch [195.186.4.229])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hADMYD125190
+	for <caml-list@inria.fr>; Thu, 13 Nov 2003 23:34:13 +0100 (MET)
+Received: from [10.0.1.2] (62.203.136.142) by mail6.bluewin.ch (Bluewin AG 7.0.020.2)
+        id 3FAA0258001132EB for caml-list@inria.fr; Thu, 13 Nov 2003 22:34:12 +0000
+Mime-Version: 1.0 (Apple Message framework v606)
+Content-Transfer-Encoding: 7bit
+Message-Id: <81F621FD-1629-11D8-A1E1-000393DBC266@epfl.ch>
+Content-Type: text/plain; charset=US-ASCII; format=flowed
+To: caml-list@inria.fr
+From: =?ISO-8859-1?Q?Daniel_B=FCnzli?= <daniel.buenzli@epfl.ch>
+Subject: [Caml-list] Profiling a function execution
+Date: Thu, 13 Nov 2003 23:34:13 +0100
+X-Mailer: Apple Mail (2.606)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; timings:01 0.0:01 gettimeofday:01 runtime:01 utime:01 utime:01 profile:98 profile:98 bindings:01 bytecode:01 int:01 int:01 float:02 float:02 pro:97 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello,
+
+To compare different implementations of a function I would like to 
+profile its execution in time and heap memory usage (at least orders of 
+magnitude). To do so, I use the code below, relying on the Gc and Unix 
+libraries.
+
+I have the following questions :
+
+1) When I start profiling should I prefer a Gc.compact to Gc.full_major 
+?
+
+2) Unix.times seems to have a low resolution, which means that my 
+timings are often 0.0 (unless I execute the function a lot of times). I 
+don't want to use Unix.gettimeofday because this prevents me to make 
+the difference between user and system time. Has anybody bindings to 
+the getrusage function or another idea ?
+
+3) What is the accuracy of these results ? E.g. I read in the 
+documentation of the Gc module that the field minor_words is only an 
+approximation in programs compiled to native code. Is it also true for 
+the other fields ? How much can I trust the figures I get ?
+
+4) Is it possible to know at runtime whether we are running native code 
+or interpreted bytecode ?
+
+Thanks for your answers,
+
+Daniel
+
+
+-- profile.ml --
+
+type t = { minor_bytes : float;
+	   promoted_bytes : float;
+	   major_bytes : float;
+	   allocated_bytes : float;
+	
+	   minor_collections : float;
+	   major_collections : float;
+	
+	   user_time : float;
+	   system_time : float }
+
+(* Bytes per words *)
+let bpw = float_of_int (Sys.word_size / 8)
+
+(* Heap allocation overhead due to profiling *)
+let heap_overhead =
+   let s = Gc.stat() in
+   ignore(Unix.times());
+   ignore(Unix.times());
+   let s' = Gc.stat() in
+   ((s'.Gc.minor_words +. s'.Gc.major_words -. s'.Gc.promoted_words) -.
+   (s.Gc.minor_words +. s.Gc.major_words -. s.Gc.promoted_words)) *. bpw
+
+let execution_mean (f : 'a -> 'b) (arg : 'a) n =
+   Gc.full_major ();
+   let s = Gc.stat () in
+   let t = Unix.times () in
+   for i = 1 to n do
+     ignore(f arg)
+   done;
+   let t' = Unix.times () in
+   let s' = Gc.stat () in
+   let mi, pro, ma =
+     ((s'.Gc.minor_words -. s.Gc.minor_words) *. bpw) -. heap_overhead,
+     (s'.Gc.promoted_words -. s.Gc.promoted_words) *. bpw,
+     (s'.Gc.major_words -. s.Gc.major_words) *. bpw in
+   let n' = float_of_int n in
+   { minor_bytes = mi /. n';
+     promoted_bytes = pro /. n';
+     major_bytes = ma /. n';
+     allocated_bytes = (mi +. ma -. pro) /. n';
+
+     minor_collections =
+       (float_of_int (s'.Gc.minor_collections - s.Gc.minor_collections)) 
+/. n';
+     major_collections =
+       (float_of_int (s'.Gc.major_collections - s.Gc.major_collections)) 
+/. n';
+
+     user_time = (t'.Unix.tms_utime -. t.Unix.tms_utime) /. n';
+     system_time = (t'.Unix.tms_stime -. t.Unix.tms_stime) /. n'
+   }
+
+let execution (f : 'a -> 'b) (arg : 'a) = execution_mean f arg 10_000
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

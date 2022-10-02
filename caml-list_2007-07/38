@@ -1,0 +1,216 @@
+Return-Path: <rich@annexia.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 04ECABC69
+	for <caml-list@yquem.inria.fr>; Tue,  3 Jul 2007 10:59:56 +0200 (CEST)
+Received: from furbychan.cocan.org (furbychan.cocan.org [80.68.91.176])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l638xtRV011410
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Tue, 3 Jul 2007 10:59:55 +0200
+Received: from rich by furbychan.cocan.org with local (Exim 3.35 #1 (Debian))
+	id 1I5eEi-0000XO-00; Tue, 03 Jul 2007 09:59:52 +0100
+Date: Tue, 3 Jul 2007 09:59:52 +0100
+To: Oliver Kania <kania.oliver@googlemail.com>, caml-list@inria.fr
+Subject: Re: [Caml-list] embedding ocaml from C++ -- PODs
+Message-ID: <20070703085951.GA15238@furbychan.cocan.org>
+References: <1262c4ee0707020406s7da99e37mc6706db8d35342a0@mail.gmail.com> <20070702114809.GA8908@furbychan.cocan.org> <1262c4ee0707020509h48d43e24s5e8902810cae7985@mail.gmail.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <1262c4ee0707020509h48d43e24s5e8902810cae7985@mail.gmail.com>
+User-Agent: Mutt/1.5.9i
+From: Richard Jones <rich@annexia.org>
+X-Miltered: at discorde with ID 468A100B.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 0200,:01 ocaml-side:01 ocaml:01 printf:01 struct:01 mutable:01 unboxed:01 struct:01 mutable:01 memb:01 memb:01 enum:01 enum:01 printf:01 
+
+On Mon, Jul 02, 2007 at 02:09:41PM +0200, Oliver Kania wrote:
+> Hi there,
+> yes, basically I can use ocaml-types.
+> I guess I will have to "unwrap" them on the C-side.
+> I have a favor to ask from you:
+> Could you please post a small example with, lets say
+> a strucutre with 4 members, showing both the C and the ocaml-side
+> modifying it ? I do not find the Ocaml documentatino to be very instructive
+> concerning this topic.
+
+Please CC replies to the list.
+
+Here's an example showing a four element structure shared between C
+and OCaml.  All the fields except the float can be modified on the
+OCaml side (you can get around that restriction by keeping any floats
+you need in a separate float-only structure).  All fields can be
+modified on the C side.
+
+It's only very lightly tested, so probably contains bugs.
+
+Rich.
+
+------------------------------------------------------------ st.ml
+open Printf
+
+(* All fields in struct4 are mutable from the OCaml side, except
+ * the boxed float.  If you want to share and update floats, then
+ * it's better to use a separate float-only array or structure
+ * for them, so they are stored unboxed and can be directly
+ * modified from OCaml.
+ *)
+type struct4 = {
+  mutable memb1 : int;
+  mutable memb2 : enum4;
+  memb3 : float;
+  mutable memb4 : int;
+}
+and enum4 = Is0 | Is1 | Is2 | Is3
+
+let string_of_enum4 = function
+  | Is0 -> "Is0" | Is1 -> "Is1" | Is2 -> "Is2" | Is3 -> "Is3"
+
+let next_enum4 = function
+  | Is0 -> Is1 | Is1 -> Is2 | Is2 -> Is3 | Is3 -> Is0
+
+external create_struct4_from_c : unit -> struct4 = "create_struct4"
+
+external print_struct4_from_c : struct4 -> unit = "print_struct4"
+
+external update_struct4_from_c : struct4 -> unit = "update_struct4"
+
+let print_struct4_from_ocaml data =
+  printf "OCaml: memb1 = %d\n" data.memb1;
+  printf "OCaml: memb2 = %s\n" (string_of_enum4 data.memb2);
+  printf "OCaml: memb3 = %f\n" data.memb3;
+  printf "OCaml: memb4 = %d\n" data.memb4;
+  flush stdout
+
+let update_struct4_from_ocaml data =
+  data.memb1 <- data.memb1 + 1;
+  data.memb2 <- next_enum4 data.memb2;
+  data.memb4 <- data.memb4 + 2
+
+let () =
+  let data = create_struct4_from_c () in
+  while true do
+    print_struct4_from_c data;
+    print_struct4_from_ocaml data;
+    printf "* updating struct4 from C\n"; flush stdout;
+    update_struct4_from_c data;
+    print_struct4_from_c data;
+    print_struct4_from_ocaml data;
+    printf "* updating struct4 from OCaml\n"; flush stdout;
+    update_struct4_from_ocaml data;
+    Gc.compact ()
+  done
+
+
+------------------------------------------------------------ st_c.c
+#include <stdio.h>
+
+#include <caml/config.h>
+#include <caml/mlvalues.h>
+#include <caml/memory.h>
+
+struct struct4 {
+  value header;			/* CAML header word. */
+  value memb1;
+  value memb2;
+  value memb3;			/* NB: boxed */
+  value memb4;
+};
+
+#if defined(ARCH_ALIGN_DOUBLE)
+#warn "this code probably won't work on 32 bit ARCH_ALIGN_DOUBLE platforms"
+#endif
+struct memb3 {			/* Storage for a float. */
+  value header;			/* CAML header word. */
+  double d;			/* The float itself. */
+};
+
+CAMLprim value
+create_struct4 (value unitv)
+{
+  CAMLparam1 (unitv);
+  struct struct4 *data;
+  struct memb3 *memb3;
+
+  /* Allocate on the C heap and return a raw pointer.  For
+   * provisos about this, see:
+   * http://caml.inria.fr/pub/old_caml_site/caml-list/1415.html
+   * http://caml.inria.fr/pub/ml-archives/caml-list/2006/09/977818689f4ceb2178c592453df7a343.en.html
+   */
+  data = malloc (sizeof *data);
+
+  /* We must initialise at least the header and the boxed memb3.
+   * Best to do all fields.
+   */
+  data->header = 4 << 10;
+  data->memb1 = Val_int (0);
+  data->memb2 = Val_int (0);	/* Is0 */
+
+  memb3 = malloc (sizeof *memb3);
+  memb3->header = 1 << 10 | Double_tag;
+  memb3->d = 0.;
+  data->memb3 = (value) &memb3->d;
+
+  data->memb4 = Val_int (0);
+
+  CAMLreturn ((value) &data->memb1);
+}
+
+CAMLprim value
+print_struct4 (value datav)
+{
+  CAMLparam0 ();		/* datav isn't on the CAML heap. */
+  struct struct4 *data = (struct struct4 *) Hp_val (datav);
+  struct memb3 *memb3 = (struct memb3 *) Hp_val (data->memb3);
+
+  printf ("    C: memb1 = %d\n", Int_val (data->memb1));
+  printf ("    C: memb2 = Is%d\n", Int_val (data->memb2));
+  printf ("    C: memb3 = %f\n", memb3->d);
+  printf ("    C: memb4 = %d\n", Int_val (data->memb4));
+  fflush (stdout);
+
+  CAMLreturn (Val_unit);
+}
+
+CAMLprim value
+update_struct4 (value datav)
+{
+  CAMLparam0 ();		/* datav isn't on the CAML heap. */
+  struct struct4 *data = (struct struct4 *) Hp_val (datav);
+  struct memb3 *memb3 = (struct memb3 *) Hp_val (data->memb3);
+  int i;
+
+  data->memb1 = Val_int (Int_val (data->memb1) + 1);
+  i = Int_val (data->memb2);
+  i++;
+  if (i > 3) i = 0;
+  data->memb2 = Val_int (i);
+  memb3->d += 0.1;
+  data->memb4 = Val_int (Int_val (data->memb4) + 2);
+
+  CAMLreturn (Val_unit);
+}
+
+------------------------------------------------------------ Makefile
+CC	:= gcc
+CFLAGS	:= -Wall -Werror -I$(shell ocamlc -where)
+
+all:	test
+
+test:	st.cmx st_c.o
+	ocamlopt -o $@ $^
+
+st.cmx:	st.ml
+	ocamlopt -o $@ -c $^
+
+----------------------------------------------------------------------
+
+
+-- 
+Richard Jones
+Red Hat
+

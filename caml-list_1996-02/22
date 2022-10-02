@@ -1,0 +1,145 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id TAA17903 for caml-redistribution; Tue, 20 Feb 1996 19:53:21 +0100
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id TAA17860; Tue, 20 Feb 1996 19:48:28 +0100
+From: Pierre Weis <weis@pauillac.inria.fr>
+Message-Id: <199602201848.TAA17860@pauillac.inria.fr>
+Subject: Re: your mail
+To: Michel.Levy@imag.fr (Michel Levy)
+Date: Tue, 20 Feb 1996 19:48:28 +0100 (MET)
+Cc: caml-list@pauillac.inria.fr
+In-Reply-To: <v01530537ad4e236a223a@[129.88.38.40]> from "Michel Levy" at Feb 19, 96 03:57:09 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Content-Length: 5125      
+Sender: weis
+Status: O
+
+
+> 1) L'expression
+> let rec x = 1 :: x ;;
+> est de type int list. Son exécution crée-t-elle une fermeture ?
+
+Il n'y a pas lieu de cre'er de fermeture car cette de'finition
+re'cursive n'est pas la de'finition d'une fonction mais la de'finition
+d'une liste. Ce genre de de'finitions re'cursives sont qualifie'es de
+``de'finitions re'cursives de valeurs'' dans le jargon des
+imple'menteurs de ML. En effet elles posent des proble`mes de
+compilation (voir ci-dessous) alors que les de'finitions re'cursives
+de fonction s'imple'mentent sans proble`me.
+
+Ici la de'finition cre'e une cellule de liste dont la queue pointe
+vers elle-me^me: on obtient une liste circulaire ne comportant que des
+1.
+
+> Je lis d'ailleurs dans le "Doc et user's manual" : the behavior of other
+> forms of let rec (formes autres que des définitions de fonction) is
+> implementation-dependant.
+> 
+> 2) Pourquoi le typeur accepte la définition récursive précédente mais
+
+Le typeur accepte cette de'finition parcequ'elle est bien type'e.
+
+Le proble`me des de'finitions re'cursives de valeurs n'est pas d'abord
+un proble`me de typage mais surtout un proble`me de compilation.
+
+En effet la de'finition re'cursive de valeur la plus ge'ne'rale s'e'crit:
+
+let rec x = F (x);;
+
+Calculer une valeur pour x revient finalement a` de'terminer le point
+fixe de la fonction F, ce qui n'est pas e'vident.
+Par exemple pour let rec x = 1 :: x, il faut trouver le point fixe de
+(function y -> 1 :: y).
+
+Ce proble`me est clairement non re'soluble en ge'ne'ral: soit parceque
+F n'admet pas de point fixe (let rec x = x + 1;;), soit parcequ'elle en
+admet plusieurs (let rec x = x * x;;), soit qu'on ne sait absolument
+pas comment en trouver un s'il existe.
+
+On de'termine cependant une large classe de fonctions F pour lesquels
+il y a un unique point fixe qu'on obtient en outre de fac,on uniforme:
+-- classe 0 : F est une fonctionnelle (on est en train de de'finir une
+fonction).
+ Ex: let rec fact = function x -> ... fact (x - 1)
+     F = function f -> function x -> ... f (x - 1)
+     On de'montre que F admet un unique point fixe. Pratiquement, on le
+     trouve en fabriquant une fermeture cyclique.
+-- classe 1 : l'expression F (x) ne fait intervenir que des
+constructeurs de valeurs mais aucun appel de fonction, et en outre la
+valeur de x est ne'cessairement alloue'e en me'moire et posse`de une
+taille pre'visible par le compilateur.
+
+La classe 0 est la plus simple et la seule supporte'e par tous les
+compilateurs; la classe 1 est celle accepte'e par Caml Light.
+
+Dans une de'finition de classe 1 on peut calculer F (x) sans
+connai^tre la valeur de x, on a seulement besoin de l'adresse me'moire
+ou` cette valeur sera range'e. En ce cas, le compilateur re'serve la
+place correspondante pour x, calcule F (x) et e'crit la valeur obtenue
+a` l'endroit re'serve' pour x.
+
+N'appartiennent pas a` la classe 1:
+let rec x = 1 + x;; (appel de fonction)
+let rec x = x;; (type (donc taille de x) inconnu)
+let rec x = 1;; (type int: x n'est pas alloue')
+
+La de'finition let rec x = 1 :: x entre dans la classe 1: x est
+force'ment une liste non vide. On re'serve donc une cellule de liste
+dans la me'moire, appelons la @x. Puis on calcule la liste 1 ::
+@x. Cette liste est e'crite a` l'adresse de x: on e'crit 1 dans le
+premier champ de la cellule @x, et @x dans le deuxie`me, ce qui boucle
+la liste.
+
+> 21)refuse la modification suivante du programme minicaml (cf Le langage
+> caml de Pierre Weiss et Xavier Leroy p 352) :
+> 
+> let rec env_étendu =
+> (déf.Nom, Val_fermeture
+>          { Définition = liste_de_cas ; Environnement = env_étendu}) ::
+> env_courant
+> 
+> sous le prétexte que déf.Nom n'est pas acceptable dans une définition récursive
+
+En effet un acce`s a` l'inte'rieur d'une structure de donne'es n'est
+pas tole're', car il est susceptible d'acce'der a` une partie de la
+valeur de'finie re'cursivement qui n'est pas encore significative
+(c'est-a`-dire pas encore construite). Ce cas est analogue a` l'acce`s
+a` la te^te d'une liste non encore construite, par exemple let rec x =
+(hd x) :: x;;
+
+> 22)accepte par contre
+> 
+> let nom = déf.Nom in
+> let rec env_étendu =
+> (nom, Val_fermeture
+>          { Définition = liste_de_cas ; Environnement = env_étendu}) ::
+> env_courant
+
+En effet, vous avez fait disparai^tre l'acce`s a` l'inte'rieur de
+de'f, il est maintenant clair (pour le compilateur) que seule
+l'adresse de env_e'tendu est ne'cessaire pour calculer l'expression
+de'finissante.
+
+> Remarque : mon but était d'éviter les types mutables pour représenter les
+> environnements.
+
+Nous n'avions pas utilise' la de'finition re'cursive de valeurs pour ne
+pas introduire dans notre livre d'extensions propres a` Caml Light. En
+outre boucler la fermeture ``a` la main'' est plus pe'dagogique ici,
+pluto^t que de de'finir les fonctions re'cursives directement avec un
+let rec de Caml.
+
+En outre, utiliser des structures mutables est la fac,on la plus
+ge'ne'rale de de'finir re'cursivement des valeurs.
+
+Et finalement: faut-il avoir peur des structures de donne'es mutables ?
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis
+
+
+
+
+
+

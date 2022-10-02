@@ -1,0 +1,128 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA24800 for caml-redistribution@pauillac.inria.fr; Fri, 10 Mar 2000 09:05:40 +0100 (MET)
+Resent-Message-Id: <200003100805.JAA24800@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA29046 for <caml-list@pauillac.inria.fr>; Thu, 9 Mar 2000 01:52:36 +0100 (MET)
+Received: from enst.enst.fr (enst.enst.fr [137.194.2.16])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id BAA19348
+	for <caml-list@inria.fr>; Thu, 9 Mar 2000 01:52:34 +0100 (MET)
+Received: from email.enst.fr (muse.enst.fr [137.194.2.33])
+	by enst.enst.fr (8.9.1a/8.9.1) with ESMTP id BAA07818;
+	Thu, 9 Mar 2000 01:52:04 +0100 (MET)
+Received: from young.enst.fr (young.enst.fr [137.194.34.13])
+	by email.enst.fr (8.9.3/8.9.3) with ESMTP id BAA18514;
+	Thu, 9 Mar 2000 01:52:03 +0100 (MET)
+Received: from localhost (debourse@localhost)
+	by young.enst.fr (8.8.8+Sun/8.8.8) with SMTP id BAA29282;
+	Thu, 9 Mar 2000 01:52:02 +0100 (MET)
+Date: Thu, 9 Mar 2000 01:52:02 +0100 (MET)
+From: Benoit Deboursetty <debourse@email.enst.fr>
+To: David Chemouil <David.Chemouil@enseeiht.fr>
+cc: caml-list@inria.fr
+Subject: Re: typing of a class
+In-Reply-To: <38C50056.9A272C81@enseeiht.fr>
+Message-ID: <Pine.GSO.4.02.10003082340120.27234-100000@young.enst.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=iso-8859-1
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Fri, 10 Mar 2000 09:05:40 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+> I've been using the OO features of Caml these past days, and soon
+> observed a behavior of the typing system that I don't understand. Here
+> is a simplified version of my problem:
+>=20
+> # class a (arg : a -> b) =3D object(self)
+>     val ob =3D arg self
+>   end
+>   and b =3D object
+>   end;;
+>=20
+> The instance variable self
+> cannot be accessed from the definition of another instance variable
+>=20
+> I don't understand why it is forbidden for an object to pass itself to
+> another one (which is possible in Java or Eiffel for example). Could
+> someone explain me? Or is there a paper talking about this?
+
+Ce n'est pas parce que l'objet se passe =E0 un autre qu'une erreur est
+d=E9tect=E9e... Mais parce que les variables d'instance ne peuvent pas se
+faire r=E9cursivement r=E9f=E9rence.
+
+Les variables d'instance sont celles qui sont propres =E0 chaque instance d=
+e
+l'objet. Elles sont construites, =E0 l'ex=E9cution, les unes apr=E8s les au=
+tres
+dans un ordre non sp=E9cifi=E9 (sauf "self", qui est toujours la derni=E8re=
+, je
+suppose...) Dans votre cas, "self" et "ob" sont des variables d'instance
+de la classe a.
+
+Par exemple, imaginez que le syst=E8me soit au moment de construire la
+premi=E8re variable d'instance d'un objet, mais que pour la construire il
+ait besoin des autres variables d'instance...
+
+[J'ai l'impression que c'est le m=EAme genre de raison qui emp=EAche (pour =
+le
+moment ?) d'avoir des d=E9pendances cycliques entre modules et des
+applications de fonctions dans les membres droits des "let rec" (et l=E0
+j'interroge l'=E9quipe de caml...)]
+
+Le probl=E8me appara=EEt si la fonction que vous passez en argument fait ac=
+c=E8s
+aux m=E9thodes de self. Modifions un peu votre exemple, en faisant
+l'hypoth=E8se que le compilateur accepte le code suivant :
+
+# class a (arg : a -> int) =3D object (self)
+    val ob =3D arg self
+    method get_ob =3D ob
+  end;;
+
+# let bad_arg =3D fun x -> ignore (x#get_ob); 0;;
+
+# let instance_of_a =3D new a bad_arg;;
+
+Que se passe-t-il =E0 la construction de l'instance "instance_of_a" ? En y
+r=E9fl=E9chissant un tout petit peu, vous verrez tr=E8s vite qu'il va forc=
+=E9ment
+y avoir un pointeur invalide d=E9r=E9f=E9renc=E9 (dans "bad_arg", "x#get_ob=
+").
+
+---
+
+It is not especially forbidden to an object to pass itself to another one.
+
+The error message means that you cannot recursively nest instance variable
+declarations. Instance variable means variable that are built with each
+instance of an object; here, ob and self are instance variable (they are
+different for each object). When you call "new", the instance variables=20
+are built one after the other in a non specified order (except that self
+is always the last one I suppose). Suppose for example the runtime builds
+the first instance variable, but that instance variable depends on other
+instance variable that will only be built later. This is clearly a
+safeness pitfall!
+
+(I think it is the same kind of problem that leads to a difficulty in
+recursively nesting modules and "right side of let rec" problems?)
+
+Let me somewhat modify your example to show you more concretely the point
+of the error and assume the compiler accept this:
+
+# class a (arg : a -> int) =3D object (self)
+    val ob =3D arg self
+    method get_ob =3D ob
+  end
+
+# let bad_arg =3D fun x -> ignore (x#get_ob); 0;;
+
+# let instance_of_a =3D new a bad_arg;;
+
+If you only imagine the building of an instance of that object, you will
+soon see that an invalid pointer is going to be dereferenced no matter
+what is the runtime implementation.
+
+Best regards,
+Benoit de Boursetty.
+
+
+

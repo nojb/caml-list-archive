@@ -1,0 +1,86 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 83083BC75
+	for <caml-list@yquem.inria.fr>; Thu,  3 Mar 2005 01:28:40 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j230Se3H018415
+	for <caml-list@yquem.inria.fr>; Thu, 3 Mar 2005 01:28:40 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA01236 for <caml-list@pauillac.inria.fr>; Thu, 3 Mar 2005 01:28:39 +0100 (MET)
+Received: from mail.davidb.org (adsl-64-172-240-129.dsl.sndg02.pacbell.net [64.172.240.129])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j230SbDv018412
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Thu, 3 Mar 2005 01:28:39 +0100
+Received: from davidb by mail.davidb.org with local (Exim 4.43 #1 (Debian))
+	id 1D6eCi-0007xH-DP; Wed, 02 Mar 2005 16:28:36 -0800
+Date: Wed, 2 Mar 2005 16:28:36 -0800
+From: David Brown <caml-list@davidb.org>
+To: Samuel Mimram <samuel.mimram@ens-lyon.org>
+Cc: Caml List <caml-list@inria.fr>
+Subject: Re: [Caml-list] interaction between *_blocking_section and value
+Message-ID: <20050303002836.GA30339@old.davidb.org>
+References: <42263EE3.6020701@ens-lyon.org>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <42263EE3.6020701@ens-lyon.org>
+User-Agent: Mutt/1.5.6i
+X-Miltered: at concorde with ID 42265A38.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 42265A35.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 caml-list:01 threads:01 bindings:01 camlparam:01 camlprim:01 camlparam:01 val:01 camlreturn:01 val:01 garbage:01 garbage:01 wrote:01 scope:01 interaction:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.2
+X-Spam-Level: 
+
+On Wed, Mar 02, 2005 at 11:32:03PM +0100, Samuel Mimram wrote:
+
+> I'd like to have some clarifications about the interaction between 
+> threads and the GC in C bindings.
+> As far as I understand the CAMLparam and CAMLlocal macros prevent values 
+> from being garbage-collected i.e.
+> 1. being completely removed from memory,
+> 2. being *moved*
+> during the whole scope of the C function (am I right?).
+> I have received a mail concerning one of my programs which was telling 
+> me that this is not true when in blocking sections, and that values can 
+> be moved by the GC. Is it the case? Consider the following code:
+> 
+> CAMLprim value caml_send(value data)
+> {
+> 	CAMLparam1(data);
+> 	enter_blocking_section();
+> 	send(0, String_val(data), string_length(data));
+> 	leave_blocking_section();
+> 	CAMLreturn(Val_unit);
+> }
+>
+> Is it safe or can the String_val(data) point to an invalid portion of 
+> memory because data have been move by the GC because of the 
+> enter_blocking_section()?
+
+The CAMLparamxxx macros only register these variables as additional roots.
+In particular, only your first statement above is true.  The garbage
+collector is free to move the values.  However, because the roots have been
+registered, the variable (data) itself will be modified whenever the
+garbage collector moves the data it points to.  Most importantly, you
+should not have other variables that also contains these same values.
+
+So, the problem with the above code is that the garbage collector is free
+to move the contents of data around, and it might happen when send blocks.
+
+Generally, you should copy the data in an instance such as this before
+passing the data on to the additional function.
+
+> Also, it would be nice if the *_blocking_section() could be explained in 
+> the documentation.
+
+It does different things, depending on what thread implementation you are
+using, but the basic idea is that there is a mutex kept that needs to be
+held while running caml code.  enter_blocking_section releases the mutex,
+and leave_blocking_section re-acquires the mutex.  It also changes how
+signal handling is done, to allow the operation to be interrupt by a
+signal.
+
+Dave
+

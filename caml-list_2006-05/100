@@ -1,0 +1,148 @@
+Return-Path: <info@gerd-stolpmann.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 20FADBB83
+	for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 20:51:50 +0200 (CEST)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.187])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4CIplqu001545
+	for <caml-list@yquem.inria.fr>; Fri, 12 May 2006 20:51:49 +0200
+Received: from [84.58.134.244] (helo=gate.lan.gerd-stolpmann.de)
+	by mrelayeu.kundenserver.de (node=mrelayeu10) with ESMTP (Nemesis),
+	id 0ML31I-1Fecjj17zR-00066q; Fri, 12 May 2006 20:51:41 +0200
+Received: from flakew.lan.gerd-stolpmann.de (flakew.lan.gerd-stolpmann.de [192.168.0.32])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id 755D1C105;
+	Fri, 12 May 2006 20:51:36 +0200 (CEST)
+Subject: Re: [Caml-list] Co-existing with non OCaml threads
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Ted Kremenek <kremenek@cs.stanford.edu>
+Cc: francois@rouaix.org, caml-list@yquem.inria.fr
+In-Reply-To: <25A4782F-1F23-4B18-8FB2-1627C3BF1C3D@cs.stanford.edu>
+References: <f2d6cc680605111729l4d35470ey7e45dcc73822a2b0@mail.gmail.com>
+	 <1147432929.19900.18.camel@localhost.localdomain>
+	 <25A4782F-1F23-4B18-8FB2-1627C3BF1C3D@cs.stanford.edu>
+Content-Type: text/plain
+Date: Fri, 12 May 2006 20:51:35 +0200
+Message-Id: <1147459895.19900.43.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: kundenserver.de abuse@kundenserver.de login:a6865a839c0178d9aa0ce41878507ea2
+X-Miltered: at concorde with ID 4464D943.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 threads:01 gerd:01 stolpmann:01 run-time:01 threads:01 o'caml:01 scheduler:01 scheduler:01 ocaml:01 run-time:01 thread-safe:01 o'caml:01 fine-grained:01 non-blocking:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Am Freitag, den 12.05.2006, 10:43 -0700 schrieb Ted Kremenek:
+> This is very interesting.  Thank you for pointing this out.  I have  
+> some questions that would clarify a few things for me.
+> 
+> Because of the run-time lock, should I gather that the threads are  
+> still essentially cooperative threads?  
+
+Essentially they are pthreads, i.e. on Linux kernel threads. However,
+there is a level of cooperation on top of this.
+
+> For example, does it work  
+> this way: if a thread holding the master lock is switched out and the  
+> kernel schedules another thread, that other thread will start running  
+> and try and acquire the lock.
+
+For all threads known to O'Caml we have:
+
+- Either the thread is running
+- Or it is waiting for the master lock (the kernel knows that, 
+  and won't schedule this thread)
+- Or it is executing non-O'Caml code because it passed
+  enter_blocking_section.
+
+I hope it is now clear that getting the master lock is not the problem.
+The trick is how a thread releases it.
+
+The running thread (that has the lock) is notified when it must release
+the master lock. There is a special controller thread that periodically
+checks whether the running thread ran too long. If so, a special
+notification mechanism will cause that this thread gives the master lock
+up.
+
+Effectively, this is a second scheduler on top of the kernel scheduler.
+
+>   It won't be able to, so it goes back  
+> to sleep, and another thread will wake up, try and acquire the lock,  
+> goes back to sleep, and so on, until the original thread holding the  
+> lock is rescheduled.  
+
+No, this won't happen, because the kernel does not wake up threads
+waiting for a lock that is not free. These are kernel-level locks!
+
+> Only when the thread releases the lock  
+> (yields?) will another thread be able to run.  Is this how it works?   
+> If so, this would lend itself to extremely poor performance: if I had  
+> 100 threads, 99 of them may have to wake up and go to sleep before  ie..
+> the original one is scheduled.  That is 99 useless context switches.   
+> Or rather is the lock acquired and released (within the generated  
+> native code for the OCaml part of a program, not C code) on calls to  
+> the memory management functions and other run-time code that are not  
+> thread-safe?
+
+No this is not done.
+
+>   This is also seems slow, since the heap is actively  
+> manipulated all the time, so locks will constantly be acquired and  
+> released, and you will have the same wake-up, make little or no  
+> progress and go back to sleep problem I mentioned before.
+> 
+> Your last email said that only one thread is allowed to run OCaml  
+> code at any time, so it seems to me that this mutual exclusion must  
+> come from somewhere.  I'm very curious to know how this is  
+> implemented.  I gather that most people want to use threads in OCaml  
+> to have multiple threads running OCaml code, and not necessarily have  
+> a bunch of threads executing called C code (allowing the master lock  
+> to be released).  I'm just trying to understand how actual  
+> performance would ever resemble anything desirable.
+
+Performance is quite good, but you should keep in mind:
+
+- O'Caml code can never run on more than one CPU
+
+- Switches between O'Caml threads are less fine-grained than 
+  between kernel threads. Imagine you stat a file, and it is
+  necessary to load some blocks from disk. This can take
+  0.01 s of time. During that time a switch is impossible.
+  (I.e. the problem is that there are system calls that are
+  non-blocking in general but that can nevertheless consume
+  lots of time in unlucky data cases.)
+
+Gerd
+
+> 
+> Just curious.  Thanks for the informative email.
+> 
+> Ted
+> 
+> On May 12, 2006, at 4:22 AM, Gerd Stolpmann wrote:
+> 
+> > If you compile ocaml with pthread support, the O'Caml threads are real
+> > Linux threads. When using them, be aware of:
+> >
+> > - The memory management code is not thread-safe. That means
+> >   only one thread is allowed to run O'Caml code at any time.
+> >   To ensure this there is the so-called "master lock". You
+> >   can acquire the master lock by calling
+> >
+> >   leave_blocking_section()
+> >
+> >   and you can release it by
+> >
+> >   enter_blocking_section()
+> 
+> 
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+Phone: +49-6151-153855                  Fax: +49-6151-997714
+------------------------------------------------------------
+

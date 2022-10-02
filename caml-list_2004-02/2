@@ -1,0 +1,129 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA02903; Mon, 2 Feb 2004 11:47:56 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA03369 for <caml-list@pauillac.inria.fr>; Mon, 2 Feb 2004 11:47:54 +0100 (MET)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from smtp.seznam.cz (smtp.seznam.cz [212.80.76.43])
+	by concorde.inria.fr (8.11.1/8.11.1) with SMTP id i12AlsP01362
+	for <caml-list@inria.fr>; Mon, 2 Feb 2004 11:47:54 +0100 (MET)
+Received: (qmail 20970 invoked from network); 1 Feb 2004 09:47:52 -0000
+Received: from unknown (HELO helios) (vrotaru@213.220.219.215)
+  by smtp.seznam.cz with SMTP; 1 Feb 2004 09:47:52 -0000
+Date: Sun, 1 Feb 2004 03:11:08 +0100
+From: Vasile Rotaru <vrotaru@seznam.cz>
+To: William Lovas <wlovas@stwing.upenn.edu>, caml-list@inria.fr
+Subject: Re: fancy types (was Re: [Caml-list] ocaml killer)
+Message-Id: <20040201031108.4c47b181.vrotaru@seznam.cz>
+In-Reply-To: <20040131033915.GA2151@force.stwing.upenn.edu>
+References: <40184A2F.6040007@dcs.qmul.ac.uk>
+	<200401290000.i0T00ntl006988@bismarck-chet.watson.ibm.com>
+	<40184FB9.4000808@dcs.qmul.ac.uk>
+	<200401290034.i0T0Yutl009000@bismarck-chet.watson.ibm.com>
+	<Pine.LNX.4.58.0401290949360.3416@seekar.cip.physik.uni-muenchen.de>
+	<20040129162048.GA29094@force.stwing.upenn.edu>
+	<Pine.LNX.4.58.0401291736560.3416@seekar.cip.physik.uni-muenchen.de>
+	<401945DB.4030106@ps.uni-sb.de>
+	<20040129191849.GA9427@force.stwing.upenn.edu>
+	<Pine.LNX.4.58.0401301134410.14159@seekar.cip.physik.uni-muenchen.de>
+	<20040131033915.GA2151@force.stwing.upenn.edu>
+X-Mailer: Sylpheed version 0.7.4claws (GTK+ 1.2.10; i386-debian-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; seznam:99 caml-list:01 lovas:01 wlovas:01 stwing:01 2004:99 lovas:01 ocamlc:01 -dlambda:01 setglobal:01 makeblock:01 makeblock:01 ocamlc:01 -dlambda:01 untyped:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 2743
+Lines: 89
+
+
+William Lovas <wlovas@stwing.upenn.edu> wrote:
+
+> On Fri, Jan 30, 2004 at 11:36:13AM +0100, Thomas Fischbacher wrote:
+> > 
+> > On Thu, 29 Jan 2004, William Lovas wrote:
+> > 
+> > >     # type ('a, 'b) specialist = S of (('a, 'b) specialist -> 'a -> 'b);;
+[...]
+> > 
+> > Hm, correct me if I am wrong, but to me this looks as if you had to 
+> > unnecessarily cons at every recursive call...
+> 
+> Well, it depends on what you mean by "unnecessarily" and what you mean by
+> "cons".  First, if by "cons" you mean "call a constructor", then yes, i did
+> have to cons at every recursive call.  However, if by "cons" you mean
+> "allocate memory", i can't say for sure by looking at this code -- it says
+> nothing about the optimizations applied to variant types during compilation
+> or potential opportunities for structure sharing.  I strongly suspect that
+> memory need not be allocated, though, in which case the answer is no, i did
+> not have to allocate memory at every recursive cell.
+> 
+
+  Just look at this:
+
+rv@helios:~$ cat specialist_typed.ml
+type ('a, 'b) specialist = S of (('a, 'b) specialist -> 'a -> 'b)
+
+let fac n =
+  let do_rec (S specialist) n =
+    if n = 0 then
+      1
+    else
+      n * specialist (S specialist) (n - 1)
+  in
+  do_rec (S do_rec) n
+
+rv@helios:~$ ocamlc -dlambda specialist_typed.ml
+(setglobal Specialist_typed!
+  (let
+    (fac/61
+       (function n/62
+         (let
+           (do_rec/63
+              (function param/68 n/65
+                (if (== n/65 0) 1
+                  (let (specialist/64 (field 0 param/68))
+                    (* n/65
+                      (apply specialist/64 (makeblock 0 specialist/64)
+                        (- n/65 1)))))))
+           (apply do_rec/63 (makeblock 0 do_rec/63) n/62))))
+    (makeblock 0 fac/61)))
+
+rv@helios:~$ ocamlc -dlambda specialist_untyped.ml
+(setglobal Specialist_untyped!
+  (let
+    (fac/56
+       (function n/57
+         (let
+           (do_rec/58
+              (function specialist/59 n/60
+                (if (== n/60 0) 1
+                  (* n/60
+                    (apply specialist/59 (id specialist/59) (- n/60 1))))))
+           (apply do_rec/58 do_rec/58 n/57))))
+    (makeblock 0 fac/56)))
+
+
+The difference between the two versions are in those two calls
+
+    (id specialist/..)               ; obviously a nop
+and
+    (makeblock 0 specialist/..)      ; ???
+
+Comments about whether (makeblock 0 ..) is a special case which can be
+optimized away are welcome.
+
+> 
+> cheers,
+> William
+> 
+
+Regards,
+Vasha
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

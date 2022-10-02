@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA28929; Thu, 27 Sep 2001 15:28:12 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA28925 for <caml-list@pauillac.inria.fr>; Thu, 27 Sep 2001 15:28:11 +0200 (MET DST)
+Received: from smtp1.cswv.com (smtp1.cswv.com [4.17.129.17])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f8RDSAX09866
+	for <caml-list@inria.fr>; Thu, 27 Sep 2001 15:28:11 +0200 (MET DST)
+Received: from smtp1.cswv.com ([4.17.129.17]) by smtp1.cswv.com  with Microsoft SMTPSVC(5.5.1877.197.19);
+	 Thu, 27 Sep 2001 09:28:58 -0400
+Received: FROM exchange1.cswv.com BY smtp1.cswv.com ; Thu Sep 27 09:28:57 2001 -0400
+Received: by exchange1.cswv.com with Internet Mail Service (5.5.2653.19)
+	id <TPNXDXNC>; Thu, 27 Sep 2001 09:32:27 -0400
+Message-ID: <B1E4D3274D57D411BE8400D0B783FF322E872A@exchange1.cswv.com>
+From: "Krishnaswami, Neel" <neelk@cswcasa.com>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Error Reporting
+Date: Thu, 27 Sep 2001 09:32:26 -0400
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.5.2653.19)
+Content-Type: text/plain;
+	charset="windows-1252"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+David McClain [mailto:barabh@qwest.net] wrote:
+> 
+> I am looking for some ideas on handling program error reporting for
+> a compiler that is built largely on CPS. Since there are no stack
+> frames to crawl for traceback, I have a first cut based on keeping a
+> finite length queue of last visited closures. But this becomes
+> problematic when there are circularities in the code, i.e.,
+> recursion. Also, I think I have way too much error tracking going on
+> at each incremental execution step and so runtime performance is cut
+> back compared to what it could be.
+
+Since you're using CPS, it seems like you have most of the infrastructure 
+you need already. If you track source locations from parsing down to code
+generation, you can place a source location into each frame as you allocate
+it. Then, when you have an error, you can simply walk back down the
+contination, emitting the source location of each frame. Since the
+continuation represents the rest of the computation, you automatically get 
+the exact execution context of the erroneous statement. 
+
+The overhead for this is one word per frame, plus initializing it 
+at each continuation allocation. This is probably acceptable unless
+you are writing a really high-performance compiler. Also, tail-call
+optimization will make the traceback only approximate, but this is
+IME not a big deal in practice. 
+
+Below is a small CPS-style lambda calculus interpreter that uses this 
+idea to generate tracebacks of its evaluation. It's a treecode 
+interpreter, but the ideas ought to carry over directly to bytecode too. 
+
+-*-*-*-
+
+type var = string
+type pos = int
+
+(* Expressions carry the source location with them *)
+
+type expr =
+  | Lit of pos * int
+  | Var of pos * var
+  | Fun of pos * var * expr
+  | App of pos * expr * expr
+
+(*
+   Continuation frames have the position as an extra argument, so that
+   the continuation as a whole contains the backtrace info. Primitive
+   functions take the continuation as an extra argument so that they
+   can generate a backtrace on an error.
+*)
+
+type denot =
+  | Int of int
+  | Closure of env * var * expr
+  | Primop of (denot -> cont -> denot)
+and frame =
+  | KFun of pos * env * expr
+  | KArg of pos * env * denot
+and env = (var * denot) list
+and cont = frame list
+
+(*
+   Here are the guts of the machinery to generate a backtrace. We
+   need to extract a position from a frame and then just map over
+   the whole continuation to get the backtrace.
+*)
+
+exception Eval_error of string * pos list
+
+let framepos frame =
+  match frame with
+  | KFun(pos, _, _) -> pos
+  | KArg(pos, _, _) -> pos
+
+let backtrace k = List.map framepos k 
+
+(* 
+  We augment variable lookup so that failed lookups generate backtraces.
+  If you check statically for unbound variables this is unneccesary.
+*)
+
+let bind v d r = (v,d) :: r
+
+let lookup v r k =
+  try
+    List.assoc v r 
+  with
+    Not_found -> raise (Eval_error("Unbound variable " ^ v, backtrace k))
+
+
+(*
+   In the interpreter proper, the only place where a backtrace is 
+   generated is when an argument is applied to a non-function. If an 
+   if-statement is added, then that should be too. Likewise, if 
+   exceptions are added then an uncaught exception should generate
+   one also.
+*)
+
+let rec eval e r k =
+  match e with
+  | Lit(pos, n) ->
+      next (Int n) k
+  | Var(pos, v) ->
+      next (lookup v r k) k 
+  | Fun(pos, formal, body) ->
+      next (Closure(r, formal, body)) k
+  | App(pos, f, arg) ->
+      eval f r (KFun(pos, r, arg) :: k)
+and next d k =
+  match k with
+  | [] -> d
+  | KFun(pos, r, arg) :: k' ->
+      eval arg r k'
+  | KArg(pos, r, func) :: k' ->
+      (match func with
+      | Int _ ->
+          raise (Eval_error("Not a function!", backtrace k))
+      | Closure(r, formal, body) ->
+          eval body (bind formal d r) k'
+      | Primop f ->
+          next (f d k) k')
+--
+Neel Krishnaswami
+neelk@cswcasa.com
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

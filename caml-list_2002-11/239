@@ -1,0 +1,137 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA32600; Tue, 19 Nov 2002 22:22:05 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA32602 for <caml-list@pauillac.inria.fr>; Tue, 19 Nov 2002 22:22:05 +0100 (MET)
+Received: from lothlorien.cymfony.com (fw-out.cymfony.com [205.232.186.90])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id gAJLM3120664
+	for <caml-list@inria.fr>; Tue, 19 Nov 2002 22:22:04 +0100 (MET)
+Received: (from lars@localhost)
+	by lothlorien.cymfony.com (8.11.6/8.11.6) id gAJLKQd02755;
+	Tue, 19 Nov 2002 16:20:26 -0500
+From: Lars Nilsson <lars@cymfony.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15834.43801.889171.453764@gargle.gargle.HOWL>
+Date: Tue, 19 Nov 2002 16:20:25 -0500
+To: caml-list@inria.fr
+Subject: [Caml-list] Ocaml -> C -> Ocaml callback problem
+X-Mailer: VM 7.00 under 21.5  (beta4) "bamboo" XEmacs Lucid
+Reply-To: lars@cymfony.com
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi all,
+
+I am attempting to make use of a C library from within Ocaml, and am
+running into a problem when it gets to callbacks (in the form of Ocaml
+-> C -> Ocaml. That is, from Ocaml I call a C function, which in turn
+calls back into Ocaml.)
+
+I am including two files (cbtest.ml and cb-helper.ml), that exhibit
+the problem I am experiencing (using RedHat Linux 7.2, gcc 2.95.3 and
+Ocaml 3.06). These files are not at all related to the library I'm
+trying to wrap, but I need to use the library in a similar fashion.
+
+I have tried many variations of the setting of closure_fun and
+closure_data in cb-helper.c (using Store_field() and alloc(), etc) but
+finally went with the least amount of code to keep it clear as the end
+result has been the same no matter what.
+
+Desired result: Concatenate "foo" n times (where n is given on the
+command line.)
+
+Observed problem: Although it appears to work for small n (less than
+280, say), at some point (in my case it happens to be 287, it may
+differ between operating systems and other external factors, possibly)
+I get a segmentation fault. At one point during debugging I was using
+ocamldebug, and it told me it lost contact with the program while
+performing a string concatenation (ultimately in the primitive
+"create_string"). I don't believe this to be the problem of course (it
+would just be a symptom of a problem, not a problem in itself), but am
+more or less positive I'm not satisfying the garbage collector in one
+way or another.
+
+Obviously, I'm not terribly interesting in the given string, "foo",
+but for the library in question it will correspond to some arbitrary
+string (and not the same string for each doit either).
+
+Any response that may point out the error in my ways would be greatly
+appreciated.
+
+Regards and thanks in advance,
+Lars Nilsson
+
+(*****************)
+(*** cbtest.ml ***)
+(*****************)
+
+type ('a, 'b) someData =
+    Callback of ((string -> 'a -> unit) * 'b)
+
+external register : ('a, 'b) someData -> unit = "helper_register"
+external doit : unit -> unit = "helper_doit"
+
+let callback s callbackData =
+  callbackData := !callbackData ^ s
+
+let _ =
+  let n = try int_of_string Sys.argv.(1) with _ -> 10
+  and foo = ref "" in
+    register (Callback (callback, foo));
+    for i = 1 to n do
+      doit ()
+    done;
+    Printf.printf "%s\n%d\n" !foo (String.length !foo)
+
+/***
+ ***  cb-helper.c
+ ***/
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "memory.h"
+#include "mlvalues.h"
+#include "callback.h"
+
+static value closure_fun;
+static value closure_data;
+
+CAMLprim value helper_register(value data)
+{
+     CAMLparam1(data);
+
+     if (Wosize_val(data) != 1)
+          return Val_unit;
+
+     if (Wosize_val(Field(data, 0)) != 2)
+          return Val_unit;
+
+     if (Tag_val(Field(Field(data, 0), 0)) == Closure_tag)
+     {
+          closure_fun = Field(Field(data, 0), 0);
+          register_global_root(&closure_fun);
+
+          closure_data = Field(Field(data, 0), 1);
+          register_global_root(&closure_data);
+     }
+     else
+          return Val_unit;
+
+     return Val_unit;
+}
+
+CAMLprim value helper_doit()
+{
+     CAMLparam0();
+
+     callback2(closure_fun, copy_string("foo"), closure_data);
+
+     return Val_unit;
+}
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

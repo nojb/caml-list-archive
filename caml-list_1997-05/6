@@ -1,0 +1,151 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA02470 for caml-redistribution; Tue, 6 May 1997 09:40:04 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA22499 for <caml-list@pauillac.inria.fr>; Mon, 5 May 1997 19:06:07 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35]) by concorde.inria.fr (8.8.5/8.7.3) with ESMTP id TAA25277; Mon, 5 May 1997 19:06:05 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA22495; Mon, 5 May 1997 19:06:05 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199705051706.TAA22495@pauillac.inria.fr>
+Subject: Re: initialization of arrays
+In-Reply-To: <Pine.GSO.3.95.970429214123.25931A-100000@terreaux> from David Monniaux at "Apr 29, 97 10:08:15 pm"
+To: David.Monniaux@ens-lyon.fr (David Monniaux)
+Date: Mon, 5 May 1997 19:06:04 +0200 (MET DST)
+Cc: caml-list@inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> [en français: l'initialisation de tableaux n'est pas pratique pour les
+> types mutables...]
+
+[en français: il faut initialiser les tableaux avec des fonctions
+d'initialisation appele'es pour chaque e'le'ment du tableau...]
+
+> Hi,
+> 
+> creating an array initializes all the cells to the same physical content.
+
+Yes, since the name ``Array'' is a bit cheating in Caml: there are no
+arrays, just flat vectors. Arrays are incoded into these flat vectors
+as vectors having vectors as elements (hence this strange
+'a array array type for a matrix). That's why a naive definition of a
+matrix (Array.create n (Array.create m 0)) leads to the unexpected
+sharing of the matrix's rows.
+
+> That is not very handy when the content is a mutable record. Of course,
+> one can initialize the cells with copies of a given record. There we run
+> into another problem: the only way I know of, given a record, produce
+> another record of the same content, is to write the following kind of
+> code:
+> { field1=a.field1; field2=a.field2 ...}
+
+> This is quite cumbersome.
+
+Yes it is, but you need not to use this kind of ``by hand'' copy. You
+should instead define a copying function for your records:
+let copy_record { field1=a1; field2=a2 ...} = { field1=a1; field2=a2...};;
+
+You then have to use a functional initialisation of your
+array, using an explicit function argument to initialize items:
+
+(* val init_array : int -> (int -> 'a) -> 'a = <fun> *)
+let init_array n f =
+ if n = 0 then [||] else
+ let val0 = f 0 in
+ let v = Array.create n val0 in
+ for i = 1 to n - 1 do
+  v.(i) <- f i
+ done;
+ v;;
+
+You then use
+
+# let arr = init_array 10 (function i -> i);;
+val arr : int array = [|0; 1; 2; 3; 4; 5; 6; 7; 8; 9|]
+
+to get a vector initialized with given integers.
+
+In the same vein, you may also initialize a matrix:
+
+# let mat = init_array 5 (function i -> init_array 5 (function j -> i + j));;
+val mat : int array array =
+  [|[|0; 1; 2; 3; 4|]; [|1; 2; 3; 4; 5|]; [|2; 3; 4; 5; 6|];
+    [|3; 4; 5; 6; 7|]; [|4; 5; 6; 7; 8|]|]
+
+In your case, initialisation with a mutable record is just:
+ init_array n
+  (function i -> init_array m
+  (function j -> {field1 = e1; field2 = e2; ...}))
+
+or equivalently
+ init_matrix n m (function i -> function j -> {field1 = e1; field2 = e2; ...})
+
+Note that, using the expanded form, you can finely monitor the
+sharing. For instance
+ init_array n
+  (function i -> init_array m
+  (let e1 = ... and e2 = ... in
+  (function j -> {field1 = e1; field2 = e2; ...})))
+
+means that expressions e1 and e2 will be computed once for each row
+(hence their values are shared among elements of a row).
+
+Now copying a matrix with your mutable record values is defined via
+the record copying function:
+let copy a =
+ init_matrix n m (function i -> function j -> copy_record a.(i).(j))
+
+With init_array, a matrix copying function is a one-liner:
+
+(* val shallow_copy_matrix : 'a array array -> 'a array array = <fun> *)
+let shallow_copy_matrix a =
+  init_array (Array.length a) (function i -> Array.copy a.(i));;
+
+(* copy_matrix : 'a array array -> (int -> int -> 'b) -> 'b array array *)
+let copy_matrix a f =
+  init_array (Array.length a)
+   (function i -> init_array (Array.length a.(i)) (function j -> f i j));;
+
+You may also define a general functional matrix initializer to derive
+the copying functions:
+
+(* init_matrix : int -> int -> (int -> int -> 'a) -> 'a array array *)
+let init_matrix n m f =
+ init_array n (function i -> init_array m (function j -> f i j));;
+
+(* map_matrix : 'a array array -> (int -> int -> 'b) -> 'b array array *)
+let map_matrix a f =
+ let n = Array.length a in
+ if n = 0 then [||] else
+ let m = Array.length a.(0) in
+ init_matrix n m f;;
+
+let copy_matrix = map_matrix;;
+
+> Wouldn't it be handy to have a function of type 'a->'a that duplicates
+> physically a piece of data, and functions that create vectors or
+> matrices with copy?
+
+The problem is: how deep will be the copy? If you want the copy
+function to handle properly matrix it cannot be a shallow copy. Thus
+this copy function will be costy and hard to use. Anyway, copying of
+vectors and matrices is really trivial using Array.copy and copy_matrix.
+
+> I feel it's now doable somehow with the Obj module (I'm testing it), but
+> using undocumented features is cumbersome and unsafe...
+
+You're right. I guess we could have a Matrix module, defining the same
+set of primitives as the Array module for 'a array array values: you
+then solve your problem with Matrix.copy, Matrix.create (and other
+problems as matrix concatenation, filling or blitting).
+
+> Thanks.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+
+
+
+

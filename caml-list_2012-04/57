@@ -1,0 +1,105 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q38MUAcR002897
+	for <caml-list@sympa-roc.inria.fr>; Mon, 9 Apr 2012 00:30:10 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiMBAC8Qgk/RVde2kGdsb2JhbABDFoVQszgIIgEBAQEJCQ0HFAQjgiICDx0BGx4DEhAPAhEVAiQBEQEFASI1h10BAwuYboJdCotLToJxhBIKGScNV4h2AQULgSSLe4IYgRgEjgaHZoERjUU9hAw
+X-IronPort-AV: E=Sophos;i="4.75,391,1330902000"; 
+   d="scan'208";a="139510717"
+Received: from mail-ey0-f182.google.com ([209.85.215.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 09 Apr 2012 00:30:04 +0200
+Received: by eaaf13 with SMTP id f13so1170282eaa.27
+        for <caml-list@inria.fr>; Sun, 08 Apr 2012 15:30:04 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20120113;
+        h=mime-version:date:message-id:subject:from:to:content-type
+         :content-transfer-encoding;
+        bh=SRhHhzE6cmhU/IoUfiOdfixad0dzEfEyAMv1klrAIKY=;
+        b=yS1G1SITJd+n7kMk3llcoLJ/8MqEC8aodsVvGmsSxVOs02qL92qzmgd560Z70EYFYJ
+         MlDNerMhaN6HIDC1FE46vvwl44yncV7ACCCVbgNwmABQ6bxN0TaVz4OZnWydBNB6LoO4
+         Z5TJTWNmO9sr4EBmgc1zm7LBiMOJXSiJWnWzP3prJxS/xfeByIw5Uu3iryR08P0qFISu
+         mrBSup7MB0LhM5h+SiVE2svq2kcLnsPhnU5E5RN+6apah2USsZILtMX8ZAirdOGE//Id
+         /SM7OaYUqtG+6w6tQU5PwhacMwwWcD1C5M2fN8nLgT3yodGzPJv16rMNx00b6bqXBm2j
+         JDag==
+MIME-Version: 1.0
+Received: by 10.14.95.141 with SMTP id p13mr619886eef.112.1333924203985; Sun,
+ 08 Apr 2012 15:30:03 -0700 (PDT)
+Received: by 10.213.19.138 with HTTP; Sun, 8 Apr 2012 15:30:03 -0700 (PDT)
+Date: Mon, 9 Apr 2012 00:30:03 +0200
+Message-ID: <CAP5QFJnwf88ov00cjoXNBYDPj9P6r6nXHJdn_5Yp+i6stX6o-Q@mail.gmail.com>
+From: Adrien <camaradetux@gmail.com>
+To: caml users <caml-list@inria.fr>
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q38MUAcR002897
+Subject: [Caml-list] Timing module initializations (working but crashy)
+
+Hi,
+
+A few months ago I think I saw some module initializations in lablgtk2
+take a lot of time. By module initializations, I mean the evaluation of
+toplevel expressions from source files at application startup.
+
+I found out about ld's --wrap option which can wrap a symbol. I then
+wrap all the camlSomeModule__entry symbols into a C function. When I
+start the program, I get an output like:
+
+  Initialiazing Pervasives.
+  Done initializing Pervasives in 0.236261 milliseconds.
+  Initialiazing Array.
+  Done initializing Array in 21.480000 microseconds.
+  [...]
+  Initialiazing Random.
+  Done initializing �H in 11.417000 microseconds.
+  [...]
+  Initialiazing GPack.
+  Done initializing g in 2.782904 milliseconds.
+  Initialiazing GButton.
+
+  Program received signal SIGSEGV, Segmentation fault.
+  0x000000000057618b in caml_oldify_local_roots ()
+
+The bogus module name after module initialization is the first sign that
+something has gone wrong (the string has not been changed: it's the char*
+_pointer_ to the module name which has been changed).
+
+My program is an ocaml wrapper to GCC (as a linker) which generates
+wrapper functions for the modules named in the environment variable
+"MODULES" (space-separated). The code is (currently) at:
+  http://notk.org/~adrien/link.ml
+You can build with: "ocamlopt unix.cmxa str.cmxa link.ml -o gcc".
+Now, make sure that the directory with this "gcc" executable is in your
+PATH and is the first element (I never said this was very clean :-) ).
+
+In the output C code, commenting out the two lines which change indent,
+makes the segfault go away but the memory corruption still happens.
+
+How could I fix this code? And what are the constraints which I should
+have taken into account?
+
+I've managed to make the program survive long enough to finish starting
+by setting the minor heap to 10M words with OCAMLRUNPARAM but I'd
+really prefer something clean.
+
+
+PS: In order to put all possible module names in the MODULES environment
+variable, I use the following:
+  pmake \
+  && MODULES="$(nm caravel.native | grep 'T caml.*__entry$' \
+    | cut -f3 -d' ' | sed -e 's/caml\(.*\)__entry/\1/g' | xargs)" \
+  && rm src/_build/browser/caravel.native \
+  && MODULES="${MODULES}" pmake \
+  && gdb ./caravel.native
+This builds the project, finds all the camlSomeModule__entry symbols
+which are referenced in the output (native code) binary, removes the
+final binary and builds the project again, thereby forcing a relink,
+with MODULES set.
+
+PS2: most initializations are very fast but I've already found some like
+GWindow which takes 22ms here, 1000 times more than most other modules.
+And less than 5% of the modules seem to be responsible for almost all
+the initialization time.
+
+
+Thanks,
+Adrien Nader
+

@@ -1,0 +1,123 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA18566; Sat, 20 Jul 2002 16:20:27 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA18560 for caml-list@pauillac.inria.fr; Sat, 20 Jul 2002 16:20:26 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA01562 for <caml-list@pauillac.inria.fr>; Fri, 19 Jul 2002 15:57:01 +0200 (MET DST)
+Received: from abel (nat.umh.ac.be [193.190.193.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g6JDv0v18017
+	for <caml-list@inria.fr>; Fri, 19 Jul 2002 15:57:00 +0200 (MET DST)
+Received: from abel
+	([127.0.0.1] helo=localhost ident=trch)
+	by abel with esmtp (Exim 3.35 #1 (Debian))
+	id 17VYIH-0000Xa-00; Fri, 19 Jul 2002 15:59:41 +0200
+Date: Fri, 19 Jul 2002 15:59:40 +0200 (CEST)
+Message-Id: <20020719.155940.19123621.Christophe.Troestler@umh.ac.be>
+To: "O'Caml Mailing List" <caml-list@inria.fr>
+Subject: [Caml-list] Bigarray map & set/get (long)
+From: Christophe TROESTLER <Christophe.Troestler@umh.ac.be>
+Organization: Universite de Mons-Hainaut
+X-URL: http://www.umh.ac.be/math/an/
+X-PGP-Fingerprint: CD33 D53D ED2B 6BE5 9018  6867 AD21 AA3F 9028 12D0
+X-Spook: Commecen security Mena Compsec Craig Livingstone Rand Corporation
+ Juiliett Class Submarine ASDIC AUTODIN digicash 
+X-Mailer-URL: http://www.mew.org/
+X-Operating-System: GNU/Linux (http://www.linux.org/)
+X-Blessing: Om Ah Hum Vajra Guru Pema Siddhi Hum
+X-Mailer: Mew version 2.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi everybody,
+
+I am in the process of writing some numerical code (nonlinear ODE/PDE
+solvers with C^1 finite elements).  I would like to share some remarks
+and ask some questions about the Bigarray module.  As an example of
+the operations I need, I chose the matrix assignment
+
+OUT <- A + B .* C
+
+where .* denotes elementwise multiplication.  Direct implementation in
+CAML is
+
+let mac out a b c =
+  for i = 1 to Array2.dim1 a do
+    for j = 1 to Array2.dim2 a do
+      out.{i,j} <- a.{i,j} +. b.{i,j} *. c.{i,j}
+    done
+  done;
+  out
+
+Typical matrices are of dimension 1000x1000 and above and computations
+like the previous one may need to be repeated several thousand of
+times.  Now, I also wrote such computation in C (I mean C called from
+CAML).  On my machine (Athlon 1GHz, 512Mb) for a matrix of size
+1300x1300, the C version run in 0.16 sec while the above CAML code
+takes 2.14 secs; that is, about 13 times more.  Now, if I specify the
+full type of the arrays I want (here
+
+type mat =
+  (float, Bigarray.float64_elt, Bigarray.fortran_layout) Bigarray.Array2.t
+
+) then the code runs much faster: 0.87 sec (still more than 5 times
+the C version unfortunately).  That sould be mentioned in
+http://caml.inria.fr/ocaml/speed.html IMHO -- and maybe this page
+could be better advertised?.
+
+I tried two other things.  First I wrote a callback version, that is a
+"map" function written in C that calls the CAML function passed as
+argument.  Its interface looks like:
+
+val map3 :
+  out:mat -> (float -> float -> float -> float) -> mat -> mat -> mat -> mat
+
+which allows to write the previous function [mac out a b c] as
+
+map3 ~out (fun a b c -> a +. b *. c) a b c
+
+Now, this does not work so bad (considering it is very naively
+written): 0.35 sec (about twice as much as C).  I also wrote in C safe
+and unsafe (and specialized to mat) versions and set/get but the the
+result is not what is expected: 1.16 sec (about 7 times slower than C)
+with little difference between safe/unsafe.
+
+So (eventually :-) here a my questions:
+
+* The Lacaml modules does contain some "matlab like" operations on
+  vectors (and, in the future, on 2D arrays).  That will make easy to
+  write fast code for this example.  However, one thing that will
+  always be necessary is to make CAML functions act on arrays.
+  Therefore why not add some carefully designed "map" and "fold"
+  functions to the Bigarray module.  Such functions would need making
+  bound checks and checks for the type of the array only once, before
+  the loop.  To be useful they would need to have optional arguments
+  like ~from (index of the start) ~inc (increment, default [|1;
+  1;... |]) ~to (max index).  ~out can also be made optional if one
+  wants to match more closely the map/fold of Array but it is
+  necessary to be able to specify it -- and it may be one of the input
+  arrays.
+
+  In the same vein, what can be done to write a faster map-like
+  function?
+
+* Are bound checks responsible for the difference between the "fully
+  typed" version [mac (out:mat) (a:mat) (b:mat) (c:mat)] and C??  How
+  to write specialized (fully typed) versions of set/get (possibly
+  unsafe) that will run as fast as C?  What is the difference with the
+  set/get for Arrays that allows them to run as fast as C (for a float
+  array of the size 1690000 = 1300 * 1300).
+
+Have a good weekend,
+Christophe
+
+
+P.S.  Is it possible to write a "let module A = B" (i.e., module
+renaming) in camlp4?  That is very useful when one wants to be able to
+switch between different modules with the same interface but do not
+want to open them (for name conflicts reasons for example).
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

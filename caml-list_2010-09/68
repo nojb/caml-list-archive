@@ -1,0 +1,292 @@
+Return-Path: <p.donadeo@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 7C06EBC57
+	for <caml-list@yquem.inria.fr>; Tue,  7 Sep 2010 22:58:26 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AjABAMlDhkzRVditkGdsb2JhbACDGZ0lQggVAQEBAQkJDAcRAx+mXYh3PIIVhk4uh3QBAQMFhER0BIFZgx+FIA
+X-IronPort-AV: E=Sophos;i="4.56,330,1280700000"; 
+   d="scan'208";a="69028167"
+Received: from mail-qy0-f173.google.com ([209.85.216.173])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 07 Sep 2010 22:58:25 +0200
+Received: by qyk34 with SMTP id 34so4942804qyk.18
+        for <caml-list@yquem.inria.fr>; Tue, 07 Sep 2010 13:58:24 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:received:mime-version:received:from:date
+         :message-id:subject:to:content-type;
+        bh=f9Wo//cNZVIeAYYuqJAEmd3NL9XZqCc1nJZcqZCyYNc=;
+        b=Wcx5UpVLsFExld+ga7MWevV2TYbBUg3BFW/Ik/MwGld4uJZJyvQC0rFo407AXpjyB1
+         DsF/WJWBB6rod3ohYnIBOD1ZqPb475rYVJSZS4X5dzNhGy9OmO2JzOHQjB8I9bQRpbrQ
+         PO7xsNQnJ7HeKvesOyG2cp22Jodd2BQ5d46EY=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:from:date:message-id:subject:to:content-type;
+        b=BuaQluuq2J3TuMzkGMhxMrslK+sCmkwNoNRfsFNWP7e0Pq5SqzWk1SHT6f6TCcobom
+         1M/5YkCPjjms9+keF1v9zqCmE6EGjN84cVMIckRYvLHsolP8yKVwDxkgh+s5M9dCcPeJ
+         XvoyrmOvqbznK5MYwWSA3BYdCcHMki6Pi5gqY=
+Received: by 10.220.168.12 with SMTP id s12mr112032vcy.240.1283893104203; Tue,
+ 07 Sep 2010 13:58:24 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.220.95.210 with HTTP; Tue, 7 Sep 2010 13:58:04 -0700 (PDT)
+From: Paolo Donadeo <p.donadeo@gmail.com>
+Date: Tue, 7 Sep 2010 22:58:04 +0200
+Message-ID: <AANLkTi=VCN4+wpKYG_EWUNX5zsBAs5_G_1hb2Y3uJDsu@mail.gmail.com>
+Subject: C binding and GC interaction: storing values outside the heap
+To: OCaml mailing list <caml-list@yquem.inria.fr>,
+	OCaml-Lua devel ML <ocaml-lua-devel@lists.forge.ocamlcore.org>
+Content-Type: multipart/alternative; boundary=001485e9a65c67df0f048fb1a8f2
+X-Spam: no; 0.00; pointer:01 ocaml:01 ncurses:01 alloc:01 pointer:01 alloc:01 val:01 val:01 sizeof:01 camlreturn:01 ocaml:01 typedef:01 struct:01 camlprim:01 stub:01 
+X-Attachments: cset="UTF-8" cset="UTF-8" 
+
+--001485e9a65c67df0f048fb1a8f2
+Content-Type: text/plain; charset=UTF-8
+
+I'm writing a Lua API binding <http://ocaml-lua.forge.ocamlcore.org/> and I
+have a problem regarding the interaction with the garbage collector. The
+situation is rather canonical: a particular C data type, the Lua
+state<http://www.lua.org/manual/5.1/manual.html#lua_state>,
+is used as argument in all the C functions of the API. A pointer to a
+lua_State is wrapped inside an OCaml custom block, in the very same way
+presented in the official documentation (in the ncurses example). Like the
+WINDOW* example, the lua_State is allocated via caml_stat_alloc and the
+resulting pointer is wrapped in a value obtained by caml_alloc_custom using
+a macro:
+
+#define lua_State_val(L) (*((lua_State **) Data_custom_val(L))) /* also
+l-value */
+... ... ...
+lua_State *L = lua_newstate(custom_alloc, NULL); // the actual allocation
+made by caml_stat_resize
+... ... ...
+v_L = caml_alloc_custom(&lua_State_ops, sizeof(lua_State *), 1, 10);
+lua_State_val(v_L) = L;
+CAMLreturn(v_L);
+
+So far so good.
+
+The problem is that, for several good reasons, I need a copy, or a
+reference, to the OCaml value representing the lua_State (v_L in the code
+above) *inside* the Lua state (I mean the C data structure). This is
+possible because the Lua API provides for a way to bind a user data inside
+the state. So I wrote:
+
+typedef struct ocaml_data
+{
+ value state_value;
+ value panic_callback;
+} ocaml_data;
+
+CAMLprim
+value luaL_newstate__stub (value unit)
+{
+   CAMLparam1(unit);
+   CAMLlocal1(v_L);
+
+   value *default_panic_v = caml_named_value("default_panic");
+
+   /* create a fresh new Lua state */
+   lua_State *L = lua_newstate(custom_alloc, NULL);
+   lua_atpanic(L, &default_panic);
+
+   /* alloc space for the register entry */
+   ocaml_data *data = (ocaml_data*)caml_stat_alloc(sizeof(ocaml_data));
+   caml_register_global_root(&(data->panic_callback));
+   data->panic_callback = *default_panic_v;
+
+   /* create a new Lua table for binding informations */
+   set_ocaml_data(L, data);  // puts "data" inside L
+
+   /* wrap the lua_State* in a custom object */
+   v_L = caml_alloc_custom(&lua_State_ops, sizeof(lua_State *), 1, 10);
+   lua_State_val(v_L) = L;
+   data->state_value = v_L;  // also v_L inside L but BIG PROBLEM HERE!!!
+
+   /* return the lua_State value */
+   CAMLreturn(v_L);
+}
+
+The problem here is that I'm storing an OCaml value (v_L) inside a malloc-ed
+area. Result: segfault.
+
+Is there a safe way to store a reference to a value outside the heap?
+
+As a temporary workaround I removed the "value state_value" field from the
+ocaml_data struct, replacing it with a reference counter:
+
+typedef struct ocaml_data
+{
+   value panic_callback;
+   int ref_counter;
+} ocaml_data;
+
+and the previous "luaL_newstate__stub" function sets the counter to 1:
+
+... ... ...
+   /* alloc space for the register entry */
+   ocaml_data *data = (ocaml_data*)caml_stat_alloc(sizeof(ocaml_data));
+   caml_register_global_root(&(data->panic_callback));
+   data->panic_callback = *default_panic_v;
+   data->ref_counter = 1;
+... ... ...
+
+In other parts of the code, where I have the original lua_State pointer, but
+I need the corresponding OCaml value, and where I previously used the
+retrieve it from the lua_State, now I create *another* OCaml value with the
+same lua_State, incrementing the reference counter, for example:
+
+static int panic_wrapper(lua_State *L)
+{
+   CAMLlocal1(v_L);
+   ocaml_data *data = get_ocaml_data(L);
+
+   /* wrap the lua_State* in a custom object */
+   v_L = caml_alloc_custom(&lua_State_ops, sizeof(lua_State *), 1, 10);
+   lua_State_val(v_L) = L;
+   data->ref_counter++;
+
+   return Int_val(caml_callback(data->panic_callback, v_L));
+}
+
+In the finalization function I free() the C data structures only if
+ref_counter reaches 0:
+
+static void finalize_lua_State(value L)
+{
+   lua_State *state = lua_State_val(L);
+   ocaml_data *data = get_ocaml_data(state);
+
+   if (data->ref_counter == 1)
+   {
+       caml_remove_global_root(&(data->panic_callback));
+       caml_stat_free(data);
+       lua_close(state);  // this calls free()
+   }
+   else
+   {
+       data->ref_counter--;
+   }
+}
+
+What I don't like here is that several OCaml values, representing the same C
+data structure, are simultaneously present in the program, and the reference
+counting is not exactly the best way to collect memory garbage.
+
+Any ideas or suggestions?
+
+
+-- 
+*Paolo*
+
+--001485e9a65c67df0f048fb1a8f2
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+I&#39;m writing a=C2=A0<a href=3D"http://ocaml-lua.forge.ocamlcore.org/">Lu=
+a API binding</a>=C2=A0and I have a problem regarding the interaction with =
+the garbage collector. The situation is rather canonical: a particular C da=
+ta type, the <a href=3D"http://www.lua.org/manual/5.1/manual.html#lua_state=
+">Lua state</a>, is used as argument in all the C functions of the API. A p=
+ointer to a lua_State is wrapped inside an OCaml custom block, in the very =
+same way presented in the official documentation (in the ncurses example). =
+Like the WINDOW* example, the lua_State is allocated via caml_stat_alloc an=
+d the resulting pointer is wrapped in a value obtained by caml_alloc_custom=
+ using a macro:<br>
+
+<br><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospa=
+ce">#define lua_State_val(L) (*((lua_State **) Data_custom_val(L))) /* also=
+ l-value */<br>... ... ...<br>lua_State *L =3D lua_newstate(custom_alloc, N=
+ULL); // the actual allocation made by caml_stat_resize<br>
+
+... ... ...<br>v_L =3D caml_alloc_custom(&amp;lua_State_ops, sizeof(lua_Sta=
+te *), 1, 10);<br>lua_State_val(v_L) =3D L;<br>CAMLreturn(v_L);<br></font><=
+br>So far so good.<br><br>The problem is that, for several good reasons, I =
+need a copy, or a reference, to the OCaml value representing the lua_State =
+(v_L in the code above) <b>inside</b>=C2=A0the Lua state (I mean the C data=
+ structure). This is possible because the Lua API provides for a way to bin=
+d a user data inside the state. So I wrote:<br>
+
+<br><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospa=
+ce">typedef struct ocaml_data<br>{<br>=C2=A0value state_value;<br>=C2=A0val=
+ue panic_callback;<br>} ocaml_data;<br><br>CAMLprim<br>value luaL_newstate_=
+_stub (value unit)<br>
+
+{<br>=C2=A0=C2=A0 CAMLparam1(unit);<br>=C2=A0=C2=A0 CAMLlocal1(v_L);<br><br=
+>=C2=A0=C2=A0 value *default_panic_v =3D caml_named_value(&quot;default_pan=
+ic&quot;);<br><br>=C2=A0=C2=A0 /* create a fresh new Lua state */<br>=C2=A0=
+=C2=A0 lua_State *L =3D lua_newstate(custom_alloc, NULL);<br>
+
+=C2=A0=C2=A0 lua_atpanic(L, &amp;default_panic);<br><br>=C2=A0=C2=A0 /* all=
+oc space for the register entry */<br>=C2=A0=C2=A0 ocaml_data *data =3D (oc=
+aml_data*)caml_stat_alloc(sizeof(ocaml_data));<br>=C2=A0=C2=A0 caml_registe=
+r_global_root(&amp;(data-&gt;panic_callback));<br>
+
+=C2=A0=C2=A0 data-&gt;panic_callback =3D *default_panic_v;<br><br>=C2=A0=C2=
+=A0 /* create a new Lua table for binding informations */<br>=C2=A0=C2=A0 s=
+et_ocaml_data(L, data); =C2=A0// puts &quot;data&quot; inside L<br><br>=C2=
+=A0=C2=A0 /* wrap the lua_State* in a custom object */<br>
+
+=C2=A0=C2=A0 v_L =3D caml_alloc_custom(&amp;lua_State_ops, sizeof(lua_State=
+ *), 1, 10);<br>=C2=A0=C2=A0 lua_State_val(v_L) =3D L;<br>=C2=A0=C2=A0 data=
+-&gt;state_value =3D v_L; =C2=A0// also v_L inside L but BIG PROBLEM HERE!!=
+!<br><br>=C2=A0=C2=A0 /* return the lua_State value */<br>
+
+=C2=A0=C2=A0 CAMLreturn(v_L);<br>}<br></font><br>The problem here is that I=
+&#39;m storing an OCaml value (v_L) inside a malloc-ed area. Result: segfau=
+lt.<br><br>Is there a safe way to store a reference to a value outside the =
+heap?<br>
+
+<br>As a temporary workaround I removed the &quot;value state_value&quot; f=
+ield from the ocaml_data struct, replacing it with a reference counter:<br>=
+<br><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospa=
+ce">typedef struct ocaml_data<br>
+
+{<br>=C2=A0=C2=A0 value panic_callback;<br>=C2=A0=C2=A0 int ref_counter;<br=
+>} ocaml_data;</font><br><br>and the previous &quot;luaL_newstate__stub&quo=
+t; function sets the counter to 1:<br><br><font class=3D"Apple-style-span" =
+face=3D"&#39;courier new&#39;, monospace">... ... ...<br>
+
+=C2=A0=C2=A0 /* alloc space for the register entry */<br>=C2=A0=C2=A0 ocaml=
+_data *data =3D (ocaml_data*)caml_stat_alloc(sizeof(ocaml_data));<br>=C2=A0=
+=C2=A0 caml_register_global_root(&amp;(data-&gt;panic_callback));<br>=C2=A0=
+=C2=A0 data-&gt;panic_callback =3D *default_panic_v;<br>
+
+=C2=A0=C2=A0 data-&gt;ref_counter =3D 1;<br>... ... ...<br></font><br>In ot=
+her parts of the code, where I have the original lua_State pointer, but I n=
+eed the corresponding OCaml value, and where I previously used the retrieve=
+ it from the lua_State, now I create *another* OCaml value with the same lu=
+a_State, incrementing the reference counter, for example:<br>
+
+<br><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospa=
+ce">static int panic_wrapper(lua_State *L)<br>{<br>=C2=A0=C2=A0 CAMLlocal1(=
+v_L);<br>=C2=A0=C2=A0 ocaml_data *data =3D get_ocaml_data(L);<br><br>=C2=A0=
+=C2=A0 /* wrap the lua_State* in a custom object */<br>
+
+=C2=A0=C2=A0 v_L =3D caml_alloc_custom(&amp;lua_State_ops, sizeof(lua_State=
+ *), 1, 10);<br>=C2=A0=C2=A0 lua_State_val(v_L) =3D L;<br>=C2=A0=C2=A0 data=
+-&gt;ref_counter++;<br><br>=C2=A0=C2=A0 return Int_val(caml_callback(data-&=
+gt;panic_callback, v_L));<br>}<br></font><br>
+
+In the finalization function I free() the C data structures only if ref_cou=
+nter reaches 0:<br><br><font class=3D"Apple-style-span" face=3D"&#39;courie=
+r new&#39;, monospace">static void finalize_lua_State(value L)<br>{<br>=C2=
+=A0=C2=A0 lua_State *state =3D lua_State_val(L);<br>
+
+=C2=A0=C2=A0 ocaml_data *data =3D get_ocaml_data(state);<br><br>=C2=A0=C2=
+=A0 if (data-&gt;ref_counter =3D=3D 1)<br>=C2=A0=C2=A0 {<br>=C2=A0=C2=A0 =
+=C2=A0 =C2=A0 caml_remove_global_root(&amp;(data-&gt;panic_callback));<br>=
+=C2=A0=C2=A0 =C2=A0 =C2=A0 caml_stat_free(data);<br>=C2=A0=C2=A0 =C2=A0 =C2=
+=A0 lua_close(state); =C2=A0// this calls free()<br>
+
+=C2=A0=C2=A0 }<br>=C2=A0=C2=A0 else<br>=C2=A0=C2=A0 {<br>=C2=A0=C2=A0 =C2=
+=A0 =C2=A0 data-&gt;ref_counter--;<br>=C2=A0=C2=A0 }<br>}<br></font><br>Wha=
+t I don&#39;t like here is that several OCaml values, representing the same=
+ C data structure, are simultaneously present in the program, and the refer=
+ence counting is not exactly the best way to collect memory garbage.<br>
+
+<br>Any ideas or suggestions?<br><br><br>--=C2=A0<br><i>Paolo</i><div><br><=
+/div>
+
+--001485e9a65c67df0f048fb1a8f2--
+

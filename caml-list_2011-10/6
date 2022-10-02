@@ -1,0 +1,141 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p92E9L7c020337
+	for <caml-list@sympa-roc.inria.fr>; Sun, 2 Oct 2011 16:09:21 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AogBAKRviE5KfVK2imdsb2JhbABBqCUIIgEBAQoJDQcSBiGBUwEBAQEDEgITGQEbHQEDDAYFCw0uIQEBEQEFARwGEyKidQqLTYJcg009iG4CBAaHGwSTYIoegnY9g28
+X-IronPort-AV: E=Sophos;i="4.68,476,1312149600"; 
+   d="scan'208";a="111423576"
+Received: from mail-wy0-f182.google.com ([74.125.82.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 02 Oct 2011 16:09:15 +0200
+Received: by wyj26 with SMTP id 26so4244614wyj.27
+        for <caml-list@inria.fr>; Sun, 02 Oct 2011 07:09:15 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=iLGH4BoWhvfgi3bpdEtZ5pi1YxgnIhv36lziXzhv8Gg=;
+        b=nL+4V9oYU1zPVtf/z7iwWAPR5XHFI//d6OJB8bQp91PvU+0QOe33xBNjiODTuKtDpp
+         2ajdVyCdqToOxvENWorllFo1Yny3VsK5PCJbiLuAdAvprOzHqMnKlzepJSJic/bb/e2q
+         YNUpf6wbk8WzRLNn49rd2aPoaItI0RbmLl3fg=
+Received: by 10.227.167.1 with SMTP id o1mr16126764wby.6.1317564555113; Sun,
+ 02 Oct 2011 07:09:15 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.227.155.67 with HTTP; Sun, 2 Oct 2011 07:08:55 -0700 (PDT)
+In-Reply-To: <CAHqiZ-K9dVQL2QNuQEXHedqZgeWgPRTmt4XKmCUJW7eUtgpy1A@mail.gmail.com>
+References: <CAHqiZ-K9dVQL2QNuQEXHedqZgeWgPRTmt4XKmCUJW7eUtgpy1A@mail.gmail.com>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Sun, 2 Oct 2011 16:08:55 +0200
+Message-ID: <CAPFanBE6RX4y_VQuaTJx40DJ=TFY9y_4PeLkfJ3d4Py=+X9Ckw@mail.gmail.com>
+To: Diego Olivier Fernandez Pons <dofp.ocaml@gmail.com>
+Cc: caml-list <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p92E9L7c020337
+Subject: Re: [Caml-list] How to simplify an arithmetic expression ?
+
+In my experience, the OCaml code doing recursive call and pattern
+matching is a relatively bad way to reason about such rewrite systems.
+Your questions are extremely pertinent, and relatively difficult to
+answer in general.
+
+For a start, I think your code indeed repeats useless traversals. This
+can be seen syntactically by the nesting of two normalForm calls, such
+as:
+
+  | (e, Constant b) -> normalForm (Plus (Constant b, normalForm e))
+
+You reduce e to a normal form, then repeat the reduction on some
+expression containing e. The outer call will surely re-traverse (the
+normal form of) e, which is useless here.
+
+One approach I like for such simplifications is the "normalization by
+evaluation" approach. The idea is to define a different representation
+of normal forms of your system as "semantic values"; I mean a
+representation that has a meaning in itself and not just "what's left
+after this arbitrary transformation"; in your case, that could be
+multivariate polynomials (defined as an independent datatype). Then
+you express your normalization algorithm as an evaluation of your
+expression into semantic values; you can reify them back into the
+expression datatype, and if you did everything right you get normal
+forms (in particular, normalizing a reified value will return exactly
+this value). The main difficulty is to understand what are the normal
+forms you're looking for; then the code is relatively easy and can be
+made efficient.
+
+I'm afraid my explanation may be a bit too abstract and high-level. Do
+not hesitate to ask for more concrete details.
+
+On Sun, Oct 2, 2011 at 1:51 PM, Diego Olivier Fernandez Pons
+<dofp.ocaml@gmail.com> wrote:
+>     OCaml list,
+> It's easy to encapsulate a couple of arithmetic simplifications into a
+> function that applies them bottom up to an expression represented as a tree
+> let rec simplify = function
+>     | Plus (e1, e2) ->
+>         match (simplify e1, simplify e2) with
+>              | (Constant 0, _) -> e2
+> With a couple well known tricks like pushing constants to the left side and
+> so on...
+> How can I however guarantee that
+>     1. My final expression reaches a kind of minimal normal form
+>     2. My set of simplifications is optimal in the sense it doesn't traverse
+> subtrees without need
+> Here is my current simplifier and I have no way of telling if it really
+> simplifies the expressions as much as possible and if it does useless passes
+> or not
+> type expr =
+>     | Constant of float
+>     | Plus of expr * expr
+>     | Minus of expr * expr
+>     | Times of expr * expr
+>     | Variable of string
+> let rec normalForm = function
+>     | Minus (e1, e2) -> normalForm (Plus (normalForm e1, Times (Constant
+> (-1.0), normalForm e2)))
+>     | Plus (e1, e2) ->
+>         begin
+>         match (normalForm e1, normalForm e2) with
+>             | (Constant a, Constant b) -> Constant (a +. b)
+>             | (Constant 0.0, e) -> normalForm e
+>             | (e, Constant b) -> normalForm (Plus (Constant b, normalForm
+> e))
+>             | (Constant a, Plus (Constant b, e)) -> Plus (Constant (a +. b),
+> normalForm e)
+>             | (Plus (Constant a, e1), Plus (Constant b, e2)) -> Plus
+> (Constant (a +. b), normalForm (Plus (normalForm e1, normalForm e2)))
+>             | (Variable a, Variable b) when a = b -> Times (Constant 2.0,
+> Variable a)
+>             | (Times (Constant n, Variable b), Variable a) when a = b ->
+> Times (Constant (n +. 1.0), Variable a)
+>             | (Variable a, Times (Constant n, Variable b)) when a = b ->
+> Times (Constant (n +. 1.0), Variable a)
+>             | (Times (Constant n, Variable a), Times (Constant m, Variable
+> b)) when a = b -> Times (Constant (n +. m), Variable a)
+>             | other -> Plus (e1, e2)
+>         end
+>     | Times (e1, e2) ->
+>         begin
+>         match (normalForm e1, normalForm e2) with
+>             | (Constant a, Constant b) -> Constant (a *. b)
+>             | (Constant 0.0, e) -> Constant 0.0
+>             | (Constant 1.0, e) -> e
+>             | (e, Constant b) -> normalForm (Times (Constant b, normalForm
+> e))
+>             | (Constant a, Times (Constant b, e)) -> Times (Constant (a *.
+> b), e)
+>             | other -> Times (e1, e2)
+>          end
+>     | x -> x
+> let (++) = fun x y -> Plus (x, y)
+> let ( ** ) = fun x y -> Times (x, y)
+> let ( --) = fun x y -> Minus (x, y)
+> let f = function fl -> Constant fl
+> let x = Variable "x"
+> let h = fun i -> f i ** x -- f i ** f i ** x ++ (f 3.0 ++ f i)
+> let e = List.fold_left (fun t i -> Plus (t, h i)) (f 0.0) [1.0; 2.0; 3.0;
+> 4.0; 5.0]
+> normalForm e
+>
+>         Diego Olivier
+>
+

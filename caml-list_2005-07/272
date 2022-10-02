@@ -1,0 +1,177 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 7887ED169
+	for <caml-list@yquem.inria.fr>; Mon, 25 Jul 2005 02:32:57 +0200 (CEST)
+Received: from ash25e.internode.on.net (ash25e.internode.on.net [203.16.214.182])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j6P0Wtvw005455
+	for <caml-list@yquem.inria.fr>; Mon, 25 Jul 2005 02:32:56 +0200
+Received: from rosella (ppp9-20.lns1.syd3.internode.on.net [59.167.9.20])
+	by ash25e.internode.on.net (8.12.9/8.12.6) with ESMTP id j6P0Wmjn006415;
+	Mon, 25 Jul 2005 10:02:49 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] How to do this properly with OCaml?
+From: skaller <skaller@users.sourceforge.net>
+To: Stephane Glondu <Stephane.Glondu@crans.org>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <200507241623.13705.Stephane.Glondu@crans.org>
+References: 
+	 <Pine.LNX.4.61.0507221552070.27560@katrin.cip.physik.uni-muenchen.de>
+	 <200507241408.29014.Stephane.Glondu@crans.org>
+	 <1122242129.9027.229.camel@localhost.localdomain>
+	 <200507241623.13705.Stephane.Glondu@crans.org>
+Content-Type: multipart/signed; micalg=pgp-sha1; protocol="application/pgp-signature"; boundary="=-kZAc4XInweTHNGKlD64l"
+Date: Mon, 25 Jul 2005 10:32:50 +1000
+Message-Id: <1122251570.9027.362.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.2.1.1 
+X-Miltered: at nez-perce with ID 42E43337.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 initialise:01 initialise:01 arrays:01 mutable:01 ocaml:01 non-empty:01 trivial:01 unreferenced:01 buffer:01 mutable:01 buffer:01 paging:98 wrote:01 
+X-Attachments: type="application/pgp-signature" name="signature.asc" 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+Status: O
+Content-Length: 4848
+Lines: 137
+
+
+--=-kZAc4XInweTHNGKlD64l
+Content-Type: text/plain
+Content-Transfer-Encoding: quoted-printable
+
+On Sun, 2005-07-24 at 16:23 -0700, Stephane Glondu wrote:
+> On Sunday 24 July 2005 14:55, skaller wrote:
+> > If you have to initialise the store, it is expensive,
+>=20
+> I understand your point now. However, if you want your array to hold=20
+> allocated values, you will always have to initialise the array.=20
+
+Not if the collector is modified by INRIA to support variable
+length arrays: this is some kind of tagged block with
+a mutable length count which limits how far along the block
+the collector looks for boxes: the length count is less
+than or equal to the actual number of allocated slots.
+
+> Moreover,=20
+> I think the overhead of this initialisation is insignificant compared to=20
+> the GC overhead.
+
+I am not so sure: to initialise an array causes a store
+in each slot, which forces the whole array to scroll
+through your cache: if the array is big this means
+disk paging/swapping activity.
+
+Why do all that when the values will never be read?
+We do not even know in advance how much of the
+array will actually be used. Consider an array
+of length 10,000 elements, where only 100 are used.
+We allocate space for 10,000 because we're conservative
+and want the program to run on many sized data sets.
+
+BTW: this is a *real* issue an Ocaml user had.
+
+Ok, so my argument is flawed as follows: the whole
+point of a variable length array is to keep the size
+of the array roughly the size of the data it actually
+holds: when extending, we're already initialising
+the new array with data from the old one, and the
+overhead initialising the rest is only going
+to double the time taken.. unless you happen
+to hit a cache size boundary, when it could
+take 10-100 times longer than necessary.
+
+So -- you could indeed be correct, but it isn't
+entirely clear that gratuitous writes are not
+going to impact performance.
+
+
+> > and if you have to provide a dummy value it is hard
+> > to use.
+>=20
+> Maybe hard is not the appropriate word. I would just say annoying. You ca=
+n=20
+> always define easily a dummy value when you define a (non-empty) type.
+
+Think of a class type, whose constructor function itself=20
+takes other class values as arguments .. it can be quite=20
+complicated to set up such values, and, worse,=20
+Ocaml being imperative doing so may have side-effects.
+
+This isn't far fetched at all -- it happened to me :)
+
+That is why I implemented a variable length array,
+to get around this obstacle. I used the 'one element
+is taken as a dummy value' technique (no Obj.magic!).
+
+However that turned what in C is a trivial set of
+library functions into a complex unreliable mess
+and left me wondering whether the encoding was
+properly transparent.
+
+> I didn't mean to change the dummy value all the time! Just take the first=
+=20
+> value as the dummy value, and keep it even if the first entry in the arra=
+y=20
+> changes. This will work fine for small values.=20
+
+But if you do that you have a reference to an object
+that the client does not know about. So the client
+will be confused if the object isn't finalised,
+and that in turn could cause many other objects
+to remain alive unexpectedly. Even if there are
+no side-effects on finalisation, the extra memory
+use could be a problem.
+
+> If you are planning to put=20
+> huge values in the array,
+
+Not just huge values: values that contain references
+to other values .. such as in a graph .. occupy
+a lot of memory. Much of that data structure may be
+shared, but we normally expect unreferenced parts
+of the graph to die, and release memory.
+
+> > That won't happen in Buffer because you can't modify it,
+> > but it must be allowed in more general variable length
+> > mutable array.
+>=20
+> What do you mean?
+
+The current implementation makes buffers extensible
+but immutable. However, for a general variable length
+array you would like to not only modify elements,
+but insert and delete as well.
+
+Without this additional requirement, using the
+'first' element as a dummy value would work fine:
+that is, you are correct 'a array option idea
+for Buffer would be make efficient elimination
+of the 'dummy value' requirement possible (although
+not eliminating the need to initialise the array).
+
+But for a true variable length array, and without
+gratuitously hanging on to an unused value,
+you'd need each store to the first element to
+also store in every unused slot.
+
+--=20
+John Skaller <skaller at users dot sourceforge dot net>
+
+
+--=-kZAc4XInweTHNGKlD64l
+Content-Type: application/pgp-signature; name=signature.asc
+Content-Description: This is a digitally signed message part
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.2.5 (GNU/Linux)
+
+iD8DBQBC5DMysRp8/9aGVGsRAkoDAJ4yxrHzsniPDx/wpxhnK64ESYW2LQCffTXN
+W62YlYI7iwvIMBoW29rSIH0=
+=DeZP
+-----END PGP SIGNATURE-----
+
+--=-kZAc4XInweTHNGKlD64l--
+

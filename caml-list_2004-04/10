@@ -1,0 +1,125 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA14288; Thu, 1 Apr 2004 11:05:04 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA22351 for <caml-list@pauillac.inria.fr>; Thu, 1 Apr 2004 11:05:03 +0200 (MET DST)
+Received: from gum.itee.uq.edu.au (gum.itee.uq.edu.au [130.102.66.1])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i31950YM017316
+	for <caml-list@inria.fr>; Thu, 1 Apr 2004 11:05:02 +0200
+Received: from luma.itee.uq.edu.au (luma.itee.uq.edu.au [130.102.66.14])
+	by gum.itee.uq.edu.au (8.12.10/8.12.10) with ESMTP id i3194kUs018725
+	for <caml-list@inria.fr>; Thu, 1 Apr 2004 19:04:46 +1000 (EST)
+Received: from itee.uq.edu.au (g613-8948.itee.uq.edu.au [130.102.66.112])
+	by luma.itee.uq.edu.au (8.12.10/8.12.9) with ESMTP id i3194kqd007294
+	for <caml-list@inria.fr>; Thu, 1 Apr 2004 19:04:46 +1000 (EST)
+Message-ID: <406BDB2E.2000807@itee.uq.edu.au>
+Date: Thu, 01 Apr 2004 19:04:46 +1000
+From: Richard Cole <rcole@itee.uq.edu.au>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.5) Gecko/20031016
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: [Caml-list] Indeterminate Initialization: Is it a Bug?
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Checked: This message probably not SPAM
+X-Spam-Score: -0.1
+X-Spam-Tests: USER_AGENT_MOZILLA_UA,X_ACCEPT_LANG
+X-Spam-Report: -0.10 points, 8 required;
+	*  0.0 -- User-Agent header indicates a non-spam MUA (Mozilla)
+	* -0.1 -- Has a X-Accept-Language  header
+X-Scanned-By: MIMEDefang 2.35
+X-Miltered: at concorde by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; cole:99 bug:01 funky:01 funky:01 printf:01 fprintf:01 stderr:01 stderr:01 mlvalues:01 stdio:01 camlparam:01 val:01 fprintf:01 fflush:01 camlreturn:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 10
+
+Hi,
+
+There seems to be a difference in initialization behaviour using the 
+native compiler depending on whether a module contains non "external" 
+calls. Let me give an example:
+
+#!/bin/bash
+rm -f test_funky.ml funky.ml ml_funky.c *funky*.cm* *funky*.a *funky*.so
+
+echo '
+  Printf.fprintf stderr "Test.Init\n"; flush stderr ;;
+  open Funky ;;
+  funky 4 ;;
+' > test_funky.ml
+
+echo '
+  #include <caml/mlvalues.h>
+  #include <caml/memory.h>
+  #include <stdio.h>
+
+  value ml_funky(value v)
+  {
+    CAMLparam1(v);
+    int i = Int_val(v) + 1;
+    fprintf(stderr, "ML_FUNKY!\n"); fflush(stderr);
+    CAMLreturn(Val_int(i));
+  };
+' > ml_funky.c
+
+echo '
+  external funky : int -> int = "ml_funky" ;;
+  Printf.fprintf stderr "Funky.Init.\n"; flush stderr ;;
+' > funky.ml
+
+gcc -Wall -c ml_funky.c -I/usr/local/godi/lib/ocaml/std-lib/
+ocamlopt -c funky.ml
+ocamlopt -c test_funky.ml
+ocamlmklib -o funky ml_funky.o funky.cmx
+ocamlopt -o test_funky.exe funky.cmxa test_funky.cmx -I .
+./test_funky.exe
+
+The output doesn't contain "Funky.Init". The problem is that the 
+initialization code in the funky module didn't get called. If I wrap the 
+functions as in:
+
+#!/bin/bash
+echo '
+  external ml_funky: int -> int = "ml_funky" ;;
+  let funky x = ml_funky x ;;
+  Printf.fprintf stderr "Init.\n"; flush stderr ;;
+' > funky.ml
+
+ocamlopt -c funky.ml
+ocamlmklib -o funky ml_funky.o funky.cmx
+ocamlopt -o test_funky.exe funky.cmxa test_funky.ml -I .
+./test_funky.exe
+
+Then the initialization code, namely the printf statement in flunky.ml 
+is called.
+
+So I have the following question: Is there some way to guarrentee that 
+modules are initialized exactly once? Does the development team see the 
+current situation, whereby intialization depends on wheher there is a 
+non external method in the module that is called, as a problem? Can it 
+be fixed?
+
+I should mention that I'm using Godi with godi-ocaml version 3.07pl2 and 
+fairly vanilla Redhat 9. Is this problem replicatable on other platforms?
+
+Why do I want to have intialization code always called in my modules. 
+Mostly because I want the following initialization code to work without 
+having to add a layer of indirection to my wrapper modules.
+
+exception NotFound ;;
+let _ = Callback.register "Funky.NotFound" NotFound ;;
+
+best regards,
+
+Richard.
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,174 @@
+Return-Path: <martin.jambon@ens-lyon.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 59D2DBBC4
+	for <caml-list@yquem.inria.fr>; Wed,  1 Apr 2009 01:04:22 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgQBAD8+0klCbwQbdWdsb2JhbACWFAEMCQELBxEEt3yDegY
+X-IronPort-AV: E=Sophos;i="4.39,304,1235948400"; 
+   d="scan'208";a="23680624"
+Received: from out3.smtp.messagingengine.com ([66.111.4.27])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 01 Apr 2009 01:04:21 +0200
+Received: from compute1.internal (compute1.internal [10.202.2.41])
+	by out1.messagingengine.com (Postfix) with ESMTP id B6F0730CA9A;
+	Tue, 31 Mar 2009 19:04:20 -0400 (EDT)
+Received: from heartbeat2.messagingengine.com ([10.202.2.161])
+  by compute1.internal (MEProxy); Tue, 31 Mar 2009 19:04:20 -0400
+X-Sasl-enc: XkxkRo0mQSpggumrzudqyY1Dpmx7n/FDULMCeuCRELf8 1238540660
+Received: from [192.168.1.10] (ALyon-157-1-87-173.w90-37.abo.wanadoo.fr [90.37.198.173])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id D3ECF54F36;
+	Tue, 31 Mar 2009 19:04:19 -0400 (EDT)
+Message-ID: <49D2A0AF.1080300@ens-lyon.org>
+Date: Wed, 01 Apr 2009 01:01:03 +0200
+From: Martin Jambon <martin.jambon@ens-lyon.org>
+User-Agent: Thunderbird 2.0.0.17 (X11/20081008)
+MIME-Version: 1.0
+To: Goswin von Brederlow <goswin-v-b@web.de>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Bug? Constraints get ignored in methods
+References: <87ab71ic1f.fsf@frosties.localdomain>
+In-Reply-To: <87ab71ic1f.fsf@frosties.localdomain>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ens-lyon:01 bug:01 subset:01 ocaml:01 polymorphism:01 subset:01 val:01 mutable:01 val:01 mutable:01 foo:01 foo:01 superset:01 ocaml:01 superset:01 
+
+Goswin von Brederlow wrote:
+> Hi,
+> 
+> I want to keep a linked list of structures that have a common subset
+> of functionality. I thought this would be a good use of ocaml objects.
+
+It is not a good use of objects. You'll notice this pretty soon as you'll run
+into a variety of problems:
+
+- polymorphism
+- initialization
+- verbosity
+- performance
+
+All of these issues are inexistent if you use records instead of objects for
+the list structure (or just a classic list).
+
+You can still use objects as elements of the list, but the elements would have
+to share the base type, as you know.
+
+
+(continued below)
+
+> A base class with the common subset of functionality and methods to
+> link them. And then derived classes for the specific types. Most
+> simplified it looks like this:
+> 
+> # class type base_type = object val mutable next : base_type option method set_next : base_type option -> unit end;;
+> class type base_type =
+>   object
+>     val mutable next : base_type option
+>     method set_next : base_type option -> unit
+>   end
+> 
+> # class base : base_type = object val mutable next = None method set_next n = next <- n end;;
+> class base : base_type
+> 
+> # class foo = object inherit base method foo = () end;;
+> class foo :
+>   object
+>     val mutable next : base_type option
+>     method foo : unit
+>     method set_next : base_type option -> unit
+>   end
+> 
+> # let a = new base in
+>     let b = new foo in
+>       a#set_next (Some (b :> base_type));;
+> - : unit = ()
+> 
+> # let a = new base in
+>     let b = new foo in
+>       a#set_next (Some b);;
+>                        ^
+> Error: This expression has type foo but is here used with type base_type
+>        The second object type has no method foo
+> 
+> This last error isn't nice. I don't want to have to cast the objects
+> all the time. So I thought there must be a better way using
+> polymorphic methods with a constraint. But here is where everything
+> breaks down. First lets look at just the set_next method:
+> 
+> # class type virtual vbase_type = object method virtual set_next : 'a. 'a option -> unit constraint 'a = #vbase_type end;;
+> class type virtual vbase_type =
+>   object method virtual set_next : 'a option -> unit end
+> 
+> # class virtual vbase : vbase_type = object method virtual set_next : 'a. 'a option -> unit constraint 'a = #vbase_type end;;
+> class virtual vbase : vbase_type
+> 
+> # class base = object inherit vbase method set_next _ = () end;;
+> class base : object method set_next : 'a option -> unit end
+> 
+> # let b = new base;;
+> val b : base = <obj>
+> 
+> # b#set_next (Some 1);;
+> - : unit = ()
+> 
+> Huh? That should not work. 1 is not a superset of #vbase_type. The
+> constraint gets completly ignored by ocaml. Adding back the next gives
+> further problems:
+> 
+> # class type virtual vbase_type = object val mutable next : #vbase_type option method virtual set_next : 'a. 'a option -> unit constraint 'a = #vbase_type end;;
+> class type virtual vbase_type =
+>   object
+>     val mutable next : #vbase_type option
+>     method virtual set_next : 'a option -> unit
+>   end
+> 
+> # class virtual vbase : vbase_type = object val mutable next = None method virtual set_next : 'a. 'a option -> unit constraint 'a = #vbase_type end;;
+> class virtual vbase : vbase_type
+> 
+> # class base = object inherit vbase
+>     method set_next n = next <- (n :> vbase_type option) end;;
+>                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> Error: This method has type #vbase_type option -> unit
+>        which is less general than 'a. 'a option -> unit
+> 
+> Again I  blame ocaml for dropping the constraint. Given the constraint
+> the type would be correct.
+> 
+> 
+> 
+> So how do I have to specify the set_next method that any superset of
+> #base_type will be accepted as argument? Or is that a bug in ocaml and
+> my syntax is perfectly fine?
+
+
+I have no idea. It looks way too complicated.
+Use a classic list:
+
+
+class base = ...
+class derived = ... (* inherits base *)
+
+type obj = Base of base | Derived of derived
+
+let obj_list = [ Base (new base); Derived (new derived); ... ]
+
+let iter_base f l =
+  List.iter (function Base x -> f x | Derived x -> f (x :> base)) l
+
+let iter_derived f l =
+  List.iter (function Derived x -> f x | Base _ -> ()) l
+
+...
+
+
+
+
+Martin
+
+-- 
+http://mjambon.com/
+

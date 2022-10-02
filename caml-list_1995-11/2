@@ -1,0 +1,204 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id JAA03661 for caml-redistribution; Mon, 6 Nov 1995 09:37:35 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id QAA26346 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 1995 16:41:52 +0100
+Received: from animal.cs.chalmers.se (root@animal.cs.chalmers.se [129.16.225.30]) by concorde.inria.fr (8.7.1/8.6.9) with ESMTP id QAA04131 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 1995 16:41:50 +0100 (MET)
+Received: from lips.cs.chalmers.se (raffalli@lips-be0.cs.chalmers.se [129.16.233.25]) by animal.cs.chalmers.se (8.7.1/8.7.1) with ESMTP id QAA04154 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 1995 16:41:47 +0100 (MET)
+Received: (from raffalli@localhost) by lips.cs.chalmers.se (8.7.1/8.7.1) id QAA23262; Fri, 3 Nov 1995 16:41:59 +0100 (MET)
+Date: Fri, 3 Nov 1995 16:41:59 +0100 (MET)
+Message-Id: <199511031541.QAA23262@lips.cs.chalmers.se>
+From: Christophe Raffalli <raffalli@cs.chalmers.se>
+To: caml-list@pauillac.inria.fr
+Subject: A (tiny) time-profiler for Caml-Light
+Sender: weis
+Status: O
+
+
+
+I wrote a simple tool to profile programs, it might be usefull to others....
+try it out. 
+
+Furthermore if anyone knowns how to put is inside the compiler ....
+
+------------------- cut here ------------------
+(* This program is a small time-profiler for Caml-Light *)
+
+(* It requires the UNIX library *)
+
+(* To use it, link it with the program you want to profile (don not forget
+"-lunix -custom unix.zo" among the link options).
+
+To trace a function "f" with ONE argument add the following just after the
+definition of "f":
+
+  let f = profile "f" f;;
+
+(the string is used to print the profile infomation).
+
+If f has two arguments do the same with profile2, idem with 3 and
+4. For more than 4 arguments ... modify the function profile yourself,
+it is very easy (look the differences between profile and profile2.
+
+If you want to profile two mutually recursive functions, you had better
+to rename them :
+
+  let f' = .... f' ... g'
+  and g' = .... f' .... g'
+  ;;
+
+  let f = profile "f" f';;
+  let g = profile "f" g';;
+
+Before the program quits, you should call "print_profile ();;". It
+produces a result of the following kind:
+
+  f                5.32    7.10
+  g                4.00    4.00
+  main             0.12    9.44
+  total           -9.44    0.00
+
+- The first column is the name of the function.
+
+- The third column give the time (utime + stime) spend inside the function.
+
+- The second column give the time spend inside the function minus the
+  time spend in other profiled functions called by it
+
+The last line can be ignored (there is a bug if the down-right digit is non
+zero)
+
+*)
+
+let tot_ptr = ref 0.0 and tot_ptr' = ref 0.0;;
+
+let prof_table = ref ["total",tot_ptr,tot_ptr'];;
+
+let stack = ref [tot_ptr'];;
+
+let print_profile () =
+  print_newline (); 
+  let l = sort__sort (fun (_,_,p) (_,_,p') -> !p >. !p') !prof_table in
+  do_list (fun (name,ptr,ptr') ->
+    printf__printf "%-20s %8.2f %8.2f\n" name !ptr' !ptr) l
+;;
+
+let profile name f =
+  let ptr = ref 0.0 and ptr' = ref 0.0 in
+  prof_table := (name,ptr,ptr')::!prof_table;
+  (fun x ->
+    let {unix__tms_utime = ut;unix__tms_stime = st} = unix__times () in
+    stack := ptr'::!stack;
+    try
+      let r = f x in
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      r
+    with e ->
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      raise e
+  )
+;;
+
+let profile2 name f =
+  let ptr = ref 0.0 and ptr' = ref 0.0 in
+  prof_table := (name,ptr,ptr')::!prof_table;
+  (fun x y ->
+    let {unix__tms_utime = ut;unix__tms_stime = st} = unix__times () in
+    stack := ptr'::!stack;
+    try
+      let r = f x y in
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      r
+    with e ->
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      raise e
+  )
+;;
+
+let profile3 name f =
+  let ptr = ref 0.0 and ptr' = ref 0.0 in
+  prof_table := (name,ptr,ptr')::!prof_table;
+  (fun x y z ->
+    let {unix__tms_utime = ut;unix__tms_stime = st} = unix__times () in
+    stack := ptr'::!stack;
+    try
+      let r = f x y z in
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      r
+    with e ->
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      raise e
+  )
+;;
+
+let profile4 name f =
+  let ptr = ref 0.0 and ptr' = ref 0.0 in
+  prof_table := (name,ptr,ptr')::!prof_table;
+  (fun x y z t ->
+    let {unix__tms_utime = ut;unix__tms_stime = st} = unix__times () in
+    stack := ptr'::!stack;
+    try
+      let r = f x y z t in
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      r
+    with e ->
+      let {unix__tms_utime = ut';unix__tms_stime = st'} = unix__times () in
+      let t = (ut' -. ut) +. (st' -. st) in
+      (match !stack with
+        _::(ptr'::_ as s) -> stack:=s; ptr' := !ptr' -. t
+      |  _ -> failwith "bug in profile");
+      ptr := !ptr +. t;
+      ptr' := !ptr' +. t;
+      raise e
+  )
+;;
+------------------- cut here ------------------
+
+----
+Christophe Raffalli
+Dept. of Computer Sciences
+Chalmers University of Technology
+
+URL: http://www.logique.jussieu.fr/www.raffalli
+
+
+

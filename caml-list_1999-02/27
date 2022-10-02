@@ -1,0 +1,109 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA18082 for caml-redistribution; Thu, 4 Feb 1999 08:56:33 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA21625 for <caml-list@pauillac.inria.fr>; Thu, 4 Feb 1999 07:35:14 +0100 (MET)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id HAA17589
+	for <caml-list@inria.fr>; Thu, 4 Feb 1999 07:35:11 +0100 (MET)
+Received: from localhost (safran.kurims.kyoto-u.ac.jp [130.54.16.91])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.1a/3.7W) with ESMTP id PAA12186;
+	Thu, 4 Feb 1999 15:34:58 +0900 (JST)
+To: mottl@miss.wu-wien.ac.at
+Cc: caml-list@inria.fr
+Subject: Re: Polymorphic recursion in modules - impossible?
+In-Reply-To: Your message of "Mon, 1 Feb 1999 21:58:13 +0100 (MET)"
+	<199902012058.VAA20331@miss.wu-wien.ac.at>
+References: <199902012058.VAA20331@miss.wu-wien.ac.at>
+X-Mailer: Mew version 1.93 on Emacs 20.3 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <19990204153413F.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 04 Feb 1999 15:34:13 +0900
+From: Jacques GARRIGUE <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 980905(IM100)
+Lines: 80
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+
+> Code example:
+> ---------------------------------------------------------------------------
+> module RA_List =
+> struct
+>   type 'a ra_list = Nil
+>                   | Zero of ('a * 'a) ra_list
+>                   | One of 'a * ('a * 'a) ra_list
+> 
+>   let rec cons x = function
+>       Nil -> One (x, Nil)
+>     | Zero ps -> One (x, ps)
+>     | One (y,b) -> Zero (cons (x, y) ps)
+> end
+> ---------------------------------------------------------------------------
+> 
+> It is clear that this piece of code cannot compile because of the
+> polymorphic recursion found in the last match of "cons".
+
+There is a way to circumvent this using polymorphic methods in olabl.
+This amounts more or less to what Pierre Weis calls "polymorphic
+recursion by constraints".
+
+(* Using olabl-2.01 *)
+
+type 'a ra_list = Nil
+  | Zero of ('a * 'a) ra_list
+  | One of 'a * ('a * 'a) ra_list
+
+class conser = object (self)
+  method cons : 'a. 'a ->  'a ra_list -> 'a ra_list =
+    fun x l ->
+      match l with
+	Nil -> One (x, Nil)
+      | Zero ps -> One (x, ps)
+      | One (y,b) -> Zero (self#cons (x, y) b)
+end
+
+You notice that the only reason to use an object here is to use
+explicit polymorphism: this object has no value fields.
+Then you can use it by defining your function cons as
+
+	let conser = new conser
+	let cons x l = conser#cons
+
+Which gives you the expected:
+
+	val cons : 'a -> 'a ra_list -> 'a ra_list = <fun>
+
+OK, using a method call is a little bit inefficient, but the
+type-checker is in fact ready to do it for any function, I just lack a
+nice syntax to provide it...
+
+Remark that you can also create a real object using this
+
+class ['a] ra_obj = object (self)
+  val l : 'a ra_list = Nil
+  method get = l
+  method private do_cons : 'b. 'b ->  'b ra_list -> 'b ra_list =
+    fun x l ->
+      match l with
+	Nil -> One (x, Nil)
+      | Zero ps -> One (x, ps)
+      | One (y,b) -> Zero (self#do_cons (x, y) b)
+  method cons x = {< l = self#do_cons x l >}
+end
+
+class ['a] ra_obj :
+  object ('b)
+    val l : 'a ra_list
+    method cons : 'a -> 'b
+    method get : 'a ra_list
+  end
+
+Cheers,
+Jacques
+---------------------------------------------------------------------------
+Jacques Garrigue      Kyoto University     garrigue at kurims.kyoto-u.ac.jp
+		<A HREF=http://wwwfun.kurims.kyoto-u.ac.jp/~garrigue/>JG</A>
+
+
+

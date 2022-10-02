@@ -1,0 +1,118 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8SCDBEh006903
+	for <caml-list@sympa-roc.inria.fr>; Wed, 28 Sep 2011 14:13:11 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkYDAPQNg05KfVK2imdsb2JhbABCDpkHjmkIFAEBAQoJDRkGIoFTAQEBBBICExkBGxILAQMMBgULAwoNISIBEQEFAQoSBhMSEIdcmxoKi0yCXIUfO4huAgQGgxKDcwSTUo0KPYM2OQ
+X-IronPort-AV: E=Sophos;i="4.68,455,1312149600"; 
+   d="scan'208";a="121965180"
+Received: from mail-wy0-f182.google.com ([74.125.82.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 28 Sep 2011 14:13:05 +0200
+Received: by wyj26 with SMTP id 26so9269546wyj.27
+        for <caml-list@inria.fr>; Wed, 28 Sep 2011 05:13:05 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=6u9NYX9mMdLwTx6idZWhN7ri+W0q3D0+1sd+O5HBdS8=;
+        b=OBtLuIvme8Ui+BbsMryqC0pAx9Mnc50C3ZgCQG7SUOcmIi+MEmMXTJPCO1NS7jJ0OX
+         rNWtrI33YNKS+i96hcqzRR4hIiP+D/c2W3JJuvnRVfdnN9eiQyH/wXLB8nd+aDLplVj0
+         AULmO/idFzFMTLlBgtw8hryUcH/484npvn01k=
+Received: by 10.227.28.4 with SMTP id k4mr10595799wbc.21.1317211985285; Wed,
+ 28 Sep 2011 05:13:05 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.227.155.67 with HTTP; Wed, 28 Sep 2011 05:12:45 -0700 (PDT)
+In-Reply-To: <4E830AC3.6020405@soton.ac.uk>
+References: <4E820844.7050705@soton.ac.uk> <2F6B5C48-88B0-4717-87FD-BD044B3D36E4@inria.fr>
+ <4E830AC3.6020405@soton.ac.uk>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Wed, 28 Sep 2011 14:12:45 +0200
+Message-ID: <CAPFanBGJJaYH51z8c9Lfg11QXJOt1dqJmyJ=2G7T2cCNzbHMWw@mail.gmail.com>
+To: Thomas Fischbacher <t.fischbacher@soton.ac.uk>
+Cc: OCaML Mailing List <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id p8SCDBEh006903
+Subject: Re: [Caml-list] Weird GC behaviour
+
+On Wed, Sep 28, 2011 at 1:53 PM, Thomas Fischbacher
+<t.fischbacher@soton.ac.uk> wrote:
+> How come (Ftag "funny") is regarded as constant while
+> (Rtag (ref "funny")) is not? After all, strings are mutable in OCaml,
+> so there really is not that much of a conceptual difference between a
+> string and a string ref in that respect:
+
+Of course references are not constant, and calls to `ref` allocate
+each time they're evaluated. Doing otherwise would completely break
+the reference semantics.
+
+Your remark that strings are also mutable is pertinent : indeed, in
+this case, the semantics of mutable strings is broken and lead to
+weird things. The canonical example -- very close to your lisp example
+-- is:
+
+  # let should_be_fresh () = "toto";;
+  val should_be_fresh : unit -> string = <fun>
+  # let t1 = should_be_fresh ();;
+  val t1 : string = "toto"
+  # t1.[1] <- 'u';;
+  - : unit = ()
+  # should_be_fresh();;
+  - : string = "tuto"
+
+The reason why string are still optimized as if they were immutable is
+that they are generally not mutated in practice, and that this
+constant optimization may save quite a lot of memory. I believe there
+is a consensus that making strings mutable is an historical mistake
+that should not be repeated, where you to design a programming
+language in the present times.
+
+If you want to force a string to be freshly allocated, an easy way is
+to concatenate the string literal with the empty string: "toto" ^ "".
+I believe (Ftag ("hello"^"")) would suit your purposes here.
+
+>
+> http://caml.inria.fr/pub/docs/manual-ocaml/manual010.html#toc44
+>
+> # type funny_str = Ftag of string;;
+> type funny_str = Ftag of string
+> # let s1 = Ftag "Hello";;
+> val s1 : funny_str = Ftag "Hello"
+> # let Ftag s = s1 in s.[0]<-'h';;
+> - : unit = ()
+> # s1;;
+> - : funny_str = Ftag "hello"
+>
+> The way I read the spec, it nowhere says that variant values that use a
+> non-constant constructor plus a value can be treated as constant. I do
+> see that in a sense, this may be a similar issue as the one that would
+> arise with lisp code such as this:
+>
+> (defun example ()
+>  (let ((text-segment-list '(1 2 3 4 5)))
+>    (nreverse text-segment-list)))
+>
+> Calling (example) twice gives weird behaviour, as we are destructively
+> modifying a lisp that conceptually was constant. So, one should have
+> used:
+>
+> (defun example2 ()
+>  (let ((text-segment-list (list 1 2 3 4 5)))
+>    (nreverse text-segment-list)))
+>
+> But the problem I think I have with OCaml is: there just seems to be no
+> way to properly express the conceptual difference between '(1 2 3 4 5)
+> and (list 1 2 3 4 5): All I can say above is: Ftag "Hello".
+>
+> --
+> best regards,
+> Thomas Fischbacher
+> t.fischbacher@soton.ac.uk
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+

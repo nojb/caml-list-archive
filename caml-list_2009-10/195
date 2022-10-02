@@ -1,0 +1,158 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 025CCBC37
+	for <caml-list@yquem.inria.fr>; Wed, 28 Oct 2009 19:01:11 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgcDALsj6ErZSMDqi2dsb2JhbACBT5lvAQEBCgsKBxEFvliEPwSBYQ
+X-IronPort-AV: E=Sophos;i="4.44,641,1249250400"; 
+   d="scan'208";a="49416193"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 28 Oct 2009 19:01:11 +0100
+Received: from smtp08.web.de (fmsmtp08.dlan.cinetic.de [172.20.5.216])
+	by fmmailgate03.web.de (Postfix) with ESMTP id 2B02312C00E86;
+	Wed, 28 Oct 2009 19:01:11 +0100 (CET)
+Received: from [95.208.117.111] (helo=frosties.localdomain)
+	by smtp08.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #314)
+	id 1N3CmO-0004Dr-00; Wed, 28 Oct 2009 18:57:52 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.69)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1N3CmO-0007Y5-7j; Wed, 28 Oct 2009 18:57:52 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Sylvain Le Gall <sylvain@le-gall.net>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: How to read different ints from a Bigarray?
+References: <87eiond3of.fsf@frosties.localdomain>
+	<slrnhegkik.q9j.sylvain@gallu.homelinux.org>
+	<87639zd0m9.fsf@frosties.localdomain>
+	<slrnhego3u.q9j.sylvain@gallu.homelinux.org>
+Date: Wed, 28 Oct 2009 18:57:52 +0100
+In-Reply-To: <slrnhego3u.q9j.sylvain@gallu.homelinux.org> (Sylvain Le Gall's
+	message of "Wed, 28 Oct 2009 15:17:18 +0000 (UTC)")
+Message-ID: <87tyxj5rkv.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) XEmacs/21.4.22 (linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: 
+X-Provags-ID: 
+X-Spam: no; 0.00; bigarray:01 le-gall:01 le-gall:01 ocaml:01 buffer:01 bigarray:01 buffer:01 alignment:01 lib:01 buf:01 byte:01 byte:01 buf:01 endian:01 blit:01 
+
+Sylvain Le Gall <sylvain@le-gall.net> writes:
+
+> On 28-10-2009, Goswin von Brederlow <goswin-v-b@web.de> wrote:
+>> Sylvain Le Gall <sylvain@le-gall.net> writes:
+>>
+>>> Hello,
+>>>
+>>> On 28-10-2009, Goswin von Brederlow <goswin-v-b@web.de> wrote:
+>>>> Hi,
+>>>>
+>>>
+>>> Well, we talk about this a little bit, but here is my opinion:
+>>> - calling a C function to add a single int will generate a big overhead
+>>> - OCaml string are quite fast to modify values
+>>>
+>>> So to my mind the best option is to have a buffer string (say 16/32
+>>> char) where you put data inside and flush it in a single C call to
+>>> Bigarray. 
+>>>
+>>> E.g.:
+>>> let append_char t c =
+>>>   if t.idx >= 64 then
+>>>     (
+>>>       flush t.bigarray t.buffer;
+>>>       t.idx <- 0
+>>>     );
+>>>   t.buffer.(t.idx) <- c;
+>>>   t.idx <- t.idx + 1
+>>>
+>>> let append_little_uint16 t i =
+>>>   append_char t ((i lsr 8) land 0xFF);
+>>>   append_char t ((i lsr 0) land 0xFF)
+>>>   
+>>>
+>>> I have used this kind of technique and it seems as fast as C, and a lot
+>>> less C coding.
+>>>
+>>> Regards,
+>>> Sylvain Le Gall
+>>
+>> This wont work so nicely:
+>>
+>> - Writes are not always in sequence. I want to do a stream access
+>>   too where this could be verry effective. But the plain buffer is
+>>   more for random / known offset access. At a minimum you would have
+>>   holes for alignment.
+>>
+>> - It makes read/write buffers complicated as you need to flush or peek
+>>   the string in case of uncommited changes. I can't do write-only
+>>   buffers as I want to be able to write a buffer and then add a
+>>   checksum to it in my application. The lib should not block that.
+>>
+>
+> I was thinking to pure stream. It still stand with random access but you
+> don't get a lot less C function call. You just have to write less C
+> code.
+
+set_uint8 buf 5 1 -> read in 64 byte from stream, skip to 5, set byte
+set uint8 buf 100 1 -> write 64 byte, read other 64 byte, set byte
+
+That can become real expensive.
+
+>> I also still wonder how bad a C function call really is. Consider the
+>> case of writing an int64.
+>>
+>> Directly: You get one C call that does range check, endian convert and
+>> write in one go.
+>>
+>> Bffered: With your code you have 7 Int64 shifts, 8 Int64 lands, 8
+>> conversions to int, at least one index check (more likely 8 to avoid
+>> handling unaligned access) and 1/8 C call to blit the 64 byte buffer
+>> string into the Bigarray.
+>
+> Not at all, you begin to break your int64 into 3 int (24bit * 2 + 16bit)
+> and then 7 int shift, 8 int land. 
+>
+> You can even manage to only break into 1 or 2 int.
+>
+> And off course, you bypass index check. 
+
+fun with unaligned writes.
+
+>> PS: Is a.{i} <- x a C call?
+>
+> Yes.
+
+That obviously sucks. I was hoping since the compiler has a special
+syntax for it it would be built-in. Bigarray being a seperate module
+should have clued me in.
+
+That obviously speaks against splitting int64 into 8 bytes and calling
+a.{i} <- x for each.
+
+I think I will implement your method and C stubs for every set/get and
+compare.
+
+Maybe ideal would be a format string based interface that calls C with
+a format string and a record of values. Because what I really need is
+to read/write records in an architecture independend way. Something
+like
+
+type t = { x:int; y:char; z:int64 }
+let t_format = "%2u%c%8d"
+
+put_formated buf t_format t
+
+But how to get that type safe? Maybe a camlp4 module that generates
+the format string and type from a single declaration so they always
+match.
+
+> Regards,
+> Sylvain Le Gall
+
+MfG
+        Goswin
+

@@ -1,0 +1,228 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA21811; Fri, 18 Oct 2002 22:10:02 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA22270 for <caml-list@pauillac.inria.fr>; Fri, 18 Oct 2002 22:10:01 +0200 (MET DST)
+Received: from sundown.cs.cornell.edu (sundown.cs.cornell.edu [128.84.96.20])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g9IKA0521037
+	for <caml-list@inria.fr>; Fri, 18 Oct 2002 22:10:00 +0200 (MET DST)
+Received: from quimby-xp.cs.cornell.edu.cs.cornell.edu (pptp-025.cs.cornell.edu [128.84.227.25])
+	by sundown.cs.cornell.edu (8.11.3/8.11.3/R-3.7) with ESMTP id g9IK9v113445
+	for <caml-list@inria.fr>; Fri, 18 Oct 2002 16:09:58 -0400 (EDT)
+To: caml-list@inria.fr
+Subject: [Caml-list] matrix-matrix multiply - O'Caml is 6 times slower than C
+From: Paul Stodghill <stodghil@CS.Cornell.EDU>
+Date: Fri, 18 Oct 2002 16:09:59 -0400
+Message-ID: <r99u1jjh5k8.fsf@quimby-xp.cs.cornell.edu>
+Lines: 57
+User-Agent: Gnus/5.090007 (Oort Gnus v0.07) XEmacs/21.4 (Military
+ Intelligence (RC2 Windows), i686-pc-cygwin)
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=-=-="
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+--=-=-=
+
+Doug Bagley's Great Language Shootout says that O'Caml and GCC get about
+the same performance for Matrix-Matrix Multiplication (MMM). I'm seeing
+somewhat different results for my code. In particular, on my machine
+(1.2GHz PIIIM, 256M), the O'Caml version of the code is 6 times slower
+than the C version.
+
+The codes are attached. A few of the differences between my code and
+Doug's code is that I have tiled the loops and I use constants for the
+matrices and the blocksize. I have not (yet) hoisted the invariant
+expressions.
+
+Looking at the assembly produced by O'Caml and GCC, it appears that GCC
+is performance loop unrolling (as requested with -funroll-loops) and
+strength reduction in the inner loops. I can easily see why these two
+optimizations can result in such a tremendous performance difference.
+
+My question is this: I can obviously performance loop unrolling myself
+by hand - does ocamlopt perform strength reduction? Is there anyway that
+I can get the O'Caml code to close to the performance of the C code?
+
+I can provide additonal information about my set up if that would help.
+
+Thanks.
+
+
+quimby-xp$ uname -a
+CYGWIN_NT-5.1 QUIMBY-XP 1.3.13(0.62/3/2) 2002-10-13 23:15 i686 unknown
+quimby-xp$ ocamlopt.opt -v
+The Objective Caml native-code compiler, version 3.06
+Standard library directory: /usr/local/ocaml/lib/ocaml
+quimby-xp$ gcc --version
+gcc (GCC) 3.2 20020818 (prerelease)
+Copyright (C) 2002 Free Software Foundation, Inc.
+This is free software; see the source for copying conditions.  There is NO
+warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+
+quimby-xp$ ocamlopt.opt -S -o mmm_ml.exe unix.cmxa mmm_ml.ml
+quimby-xp$ gcc -O4 -funroll-loops -o mmm_c.exe mmm_c.c
+quimby-xp$ ./mmm_ml
+(* 86.83 mflops *)
+quimby-xp$ ./mmm_ml
+(* 88.16 mflops *)
+quimby-xp$ ./mmm_ml
+(* 89.07 mflops *)
+quimby-xp$ ./mmm_c
+/* 523.64 mflops */
+quimby-xp$ ./mmm_c
+/* 523.64 mflops */
+quimby-xp$ ./mmm_c
+/* 523.64 mflops */
+quimby-xp$ 
+
+
+--=-=-=
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename=mmm_ml.ml
+
+(* ocamlopt.opt -S -o mmm_ml.exe unix.cmxa mmm_ml.ml *)
+
+open Printf
+
+let t = 5;;
+let n = 120;;
+
+
+let rec f create mmm n =
+  let (a,b,c) = create () in
+    (* do the work once to load the cache *)
+    mmm n a b c;
+    (* do the work t times and time it *)
+    let begin_time = Unix.gettimeofday () in
+    let _ =
+      for t = 1 to t do
+	mmm n a b c
+      done
+    in let end_time = Unix.gettimeofday () in
+    let n_f = float_of_int n in
+    let total_flops = 2.*.(float_of_int t)*.n_f*.n_f*.n_f in
+    let mflops = (total_flops /. (end_time -. begin_time)) /. 1e6 in
+      printf "(* %.2f mflops *)\n" mflops;
+      ()
+;;
+
+(* ***************************************************************** *)
+
+let create_arrays () =
+  let a = Array.create (n*n) 0. and
+    b = Array.create (n*n) 0. and
+    c = Array.create (n*n) 0. in
+    (* Init a and b*)
+    for i = 0 to n-1 do
+      for j = 0 to n-1 do
+	a.(i*n+j) <- (float_of_int (i+j));
+	b.(i*n+j) <- (float_of_int (i+j));
+      done
+    done;
+    (a,b,c)
+
+(* ***************************************************************** *)
+
+let mmm n (a: float array) (b: float array) (c: float array) =
+  assert (120 mod 30 = 0);
+  let num_blocks = 120/30 in
+    for bi = 0 to num_blocks-1 do
+      for bj = 0 to num_blocks-1 do
+	for bk = 0 to num_blocks-1 do
+	  for i = bi*30 to (bi+1)*30-1 do
+	    for j = bj*30 to (bj+1)*30-1 do
+	      for k = bk*30 to (bk+1)*30-1 do
+		Array.unsafe_set c (i*120+j)
+		  ((Array.unsafe_get c (i*120+j)) 
+		   +. (Array.unsafe_get a (i*120+k)) 
+		   *. (Array.unsafe_get b (k*120+j)));
+	      done
+	    done
+	  done
+	done
+      done
+    done
+;;
+
+(* 83.08 mflops (0.03% of peak) *)
+let _ = f create_arrays mmm n;;
+
+
+--=-=-=
+Content-Type: application/octet-stream
+Content-Disposition: attachment; filename=mmm_c.c
+
+#include <assert.h>
+#include <stdio.h>
+
+#include <sys/time.h>
+
+#define T 5
+#define N 120
+#define BB 30
+
+static double A[N*N];
+static double B[N*N];
+static double C[N*N];
+
+void mmm();
+
+int main(int argc, char** argv)
+{
+    int i, j, k;
+    int t;
+
+    struct timeval start_time;
+    struct timeval end_time;
+
+    double seconds;
+    double total_flops;
+    double mflops;
+
+    /* init the matrices */
+    for (i=0; i<N; i++)
+	for (j=0; j<N; j++)
+	    A[i*N+j] = B[i*N+j] = i+j;
+    /* warm the cache */
+    mmm();
+
+    /* do the work T times and time it */
+    gettimeofday(&start_time,NULL);
+    for (t=1; t<=T; t++)
+	mmm();
+    gettimeofday(&end_time,NULL);
+
+    seconds = (double)(end_time.tv_usec - start_time.tv_usec)/1e6;
+    seconds += (double)(end_time.tv_sec - start_time.tv_sec);
+
+    total_flops = 2.*(double)T*(double)N*(double)N*(double)N;
+    mflops = (total_flops / seconds) / 1e6;
+
+    printf("/* %.2f mflops */\n", mflops);
+
+}
+
+#define NUM_BLOCKS (N/BB)
+
+void mmm()
+{
+    int i, j, k;
+    int bi, bj, bk;
+
+    assert (N % BB == 0);
+
+    for (bi=0; bi<NUM_BLOCKS; bi++)
+	for (bj=0; bj<NUM_BLOCKS; bj++)
+	    for (bk=0; bk<NUM_BLOCKS; bk++)
+		for (i=bi*BB; i<(bi+1)*BB; i++)
+		    for (j=bj*BB; j<(bj+1)*BB; j++)
+			for (k=bk*BB; k<(bk+1)*BB; k++)
+			    C[i*N+j] += A[i*N+k] * B[k*N+j];
+}
+
+--=-=-=--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

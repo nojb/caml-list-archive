@@ -1,0 +1,131 @@
+Return-Path: <christoph.hoeger@tu-berlin.de>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id 968CD7F0A3
+	for <caml-list@sympa.inria.fr>; Sat, 22 Aug 2015 09:42:21 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  christoph.hoeger@tu-berlin.de) identity=pra;
+  client-ip=130.149.7.33;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="christoph.hoeger@tu-berlin.de";
+  x-sender="christoph.hoeger@tu-berlin.de";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  christoph.hoeger@tu-berlin.de) identity=mailfrom;
+  client-ip=130.149.7.33;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="christoph.hoeger@tu-berlin.de";
+  x-sender="christoph.hoeger@tu-berlin.de";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@mail.tu-berlin.de) identity=helo;
+  client-ip=130.149.7.33;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="christoph.hoeger@tu-berlin.de";
+  x-sender="postmaster@mail.tu-berlin.de";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: A0BXAQC1JthVnCEHlYJeg29pgyW8OIclTAEBAQEBARIBAQEBAQYNCQkhLoRNBAsBRTYCBRYLAgsDAgECAUsNBgIBAYgqBAmdc49jlXmBIpIvgUMFlTRwhBWJNUaGYI1zg2qEJW8BgksBAQE
+X-IPAS-Result: A0BXAQC1JthVnCEHlYJeg29pgyW8OIclTAEBAQEBARIBAQEBAQYNCQkhLoRNBAsBRTYCBRYLAgsDAgECAUsNBgIBAYgqBAmdc49jlXmBIpIvgUMFlTRwhBWJNUaGYI1zg2qEJW8BgksBAQE
+X-IronPort-AV: E=Sophos;i="5.15,727,1432591200"; 
+   d="scan'208";a="174479835"
+Received: from mail.tu-berlin.de ([130.149.7.33])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 22 Aug 2015 09:42:21 +0200
+X-tubIT-Incoming-IP: 91.64.68.238
+Received: from ip5b4044ee.dynamic.kabel-deutschland.de ([91.64.68.238] helo=[192.168.178.42])
+	by mail.tu-berlin.de (exim-4.76/mailfrontend-7) with esmtpsa [UNKNOWN:AES128-SHA:128]
+	for <caml-list@inria.fr>
+	id 1ZT3RT-0002NB-1H; Sat, 22 Aug 2015 09:42:20 +0200
+From: =?UTF-8?Q?Christoph_H=c3=b6ger?= <christoph.hoeger@tu-berlin.de>
+X-Enigmail-Draft-Status: N0010
+To: caml users <caml-list@inria.fr>
+Organization: =?UTF-8?Q?Technische_Universit=c3=a4t_Berlin?=
+Message-ID: <55D827DB.3010506@tu-berlin.de>
+Date: Sat, 22 Aug 2015 09:42:19 +0200
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:38.0) Gecko/20100101
+ Thunderbird/38.1.0
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+X-PMX-Version: 6.0.0.2142326, Antispam-Engine: 2.7.2.2107409, Antispam-Data: 2015.8.22.73616
+X-PMX-Spam: Gauge=IIIIIII, Probability=0%, Report=''
+Subject: [Caml-list] Expansion of type-constructors in ctype.ml
+
+Dear all,
+
+as a followup to [1], I figured out what causes both the massive
+unnecessary work and the huge output files.
+
+The fundamental problem is as follows:
+
+In case you have a type constructor in your implementation, say
+
+val x : 'a -> 'a foo
+
+the compiler will, among other things, try to match the implementation
+with its (inferred) interface. During this process, the routines eqtype,
+morgen and unify2 in ctype.ml are used.
+
+In all of these routines, however, the first step is to do an
+expand_head, which will replace the Tconstr with whatever is on its
+right-hand-side.
+
+If you happen to have a large rhs (as I do from a compiler), this
+process kills the compiler performance. I will try to write a script
+that autogenerates an example to demonstrate the issue later, but
+consider the form of:
+
+class ['a] c_n (a : 'a) = object
+  method m = (new c_<n-1>) a
+  method n = (new c_<n-1>) a
+end
+
+for an arbitrary n.
+Instead of checking e.g. the equality of a c_n with b c_n, by comparing
+a and b first, c_n is unfolded to an object. Then that object's fields
+are compared (and instead of comparing a c_<n-1> with b c_<n-1> ... you
+get the idea).
+
+So I intend to patch the compiler to try to avoid these expansions, when
+possible. But to do that, I need some more information:
+
+1. In the case of equality, it seems fairly simple. Iff the path of two
+constructors is the same and both argument lists are equal, the types
+are equal, right?
+
+2. In the case of unification, if both paths are the same, the argument
+lists are of the same length, we can directly unify the arguments, right?
+
+3. In the case of moregen, I am a little bit lost. Trying to just move
+up the Tconstr {..} case before the expansion made bootstrapping fail
+with inconsistent assumptions in the hashtbl module. So it seems
+something relies on the expansion's side-effect. Does anyone know why?
+
+Maybe in all these cases above, I'll have to do expansion in case the
+result is negative (non-equal, unification not possible etc.), would
+that be acceptable?
+
+And besides all this: Is there some clever trick that would let me avoid
+compiler patching at all? (Note that there is currently no way to
+autogenerate interfaces, I only have the implementations).
+
+regards,
+
+Christoph
+
+[1]: https://sympa.inria.fr/sympa/arc/caml-list/2015-08/msg00132.html
+-- 
+Christoph Höger
+
+Technische Universität Berlin
+Fakultät IV - Elektrotechnik und Informatik
+Übersetzerbau und Programmiersprachen
+
+Sekr. TEL12-2, Ernst-Reuter-Platz 7, 10587 Berlin
+
+Tel.: +49 (30) 314-24890
+E-Mail: christoph.hoeger@tu-berlin.de

@@ -1,0 +1,153 @@
+Return-Path: <dmitry.bely@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 3357BBBAF
+	for <caml-list@yquem.inria.fr>; Tue, 23 Mar 2010 09:58:11 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmkBALIfqEtKfVI2mGdsb2JhbACREooRCBUBAQEBAQgJDAcTIqk6gWNCCIR4LohLAQEDBYJeCIISBIMZ
+X-IronPort-AV: E=Sophos;i="4.51,293,1267398000"; 
+   d="scan'208";a="59539805"
+Received: from mail-ww0-f54.google.com ([74.125.82.54])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 23 Mar 2010 09:58:10 +0100
+Received: by wwf26 with SMTP id 26so692441wwf.27
+        for <caml-list@inria.fr>; Tue, 23 Mar 2010 01:58:10 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:in-reply-to:references
+         :date:message-id:subject:from:to:content-type
+         :content-transfer-encoding;
+        bh=YOnZFrsSNhi2PMm2/eKI9Ou8XbUU2dkwBzTedy653bw=;
+        b=kSufCCyHUTLrxqxiZJNhGlhPpcxZKooKfv2MYl8+TRnyEF2VoUQayHcY6VTSayIdHj
+         Nd0AjZh0ht+4MOGvRFSTHZAIssK3J+qJh0+W17fKawe4aShf+E0d6dxpFXiGviBrmkIa
+         MB1P7dMBuQibSPH8zOjjLcs3OwsxXvQALyIVo=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :content-type:content-transfer-encoding;
+        b=imBAuw/z3XINKoRpcxdIvgLAg6xVVEAL2wKdOK3l/G6MNcZ0WjKhIcSTvui5cmbLF2
+         WNGLy+2iVAzwiRiVSF1x8hk9IKLV0OdiA4UUVXGezRo2U+ux2xDrQdSxTiS8waYfpPvq
+         9B/7bYeAKYQi6IAzUUd9GMBvHv9t02n35MGcs=
+MIME-Version: 1.0
+Received: by 10.216.165.85 with SMTP id d63mr964773wel.123.1269334689680; Tue, 
+	23 Mar 2010 01:58:09 -0700 (PDT)
+In-Reply-To: <4B967857.3070303@inria.fr>
+References: <4B967857.3070303@inria.fr>
+Date: Tue, 23 Mar 2010 11:58:09 +0300
+Message-ID: <90823c941003230158n5080b46apc7c7462aead3372d@mail.gmail.com>
+Subject: Re: [Caml-list] testers wanted for experimental SSE2 back-end
+From: Dmitry Bely <dmitry.bely@gmail.com>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+X-Spam: no; 0.00; ocaml:01 compiler:01 rounding:01 flags:01 wrote:01 integer:01 experimental:01 experimental:01 dmitry:01 dmitry:01 caml-list:01 functions:01 arithmetic:01 bely:01 bely:01 
+
+On Tue, Mar 9, 2010 at 7:33 PM, Xavier Leroy <Xavier.Leroy@inria.fr> wrote:
+> Hello list,
+>
+> This is a call for testers concerning an experimental OCaml compiler
+> back-end that uses SSE2 instructions for floating-point arithmetic.
+> This code generation strategy was discussed before on this list, and I
+> include below a summary in Q&A style.
+>
+> The new back-end is being considered for inclusion in the next major
+> release (3.12), but performance testing done so far at INRIA and by
+> Caml Consortium members is not conclusive. =A0Additional results
+> from members of this list would therefore be very welcome.
+>
+> We're not terribly interested in small (< 50 LOC), Shootout-style
+> benchmarks, since their performance is very sensitive to code and data
+> placement. =A0However, if some of you have a sizeable (> 500 LOC) body
+> of float-intensive Caml code, we'd be very interested to hear about
+> the compared speed of the SSE2 back-end and the old back-end on your
+> code.
+
+I cannot provide any benchmark yet but even not taking into account
+the better register organization there are at least two areas where
+SSE2 can outperform x87 significantly.
+
+1. Float to integer conversion
+Is quite inefficient on x87 because you have to explicitly set and
+restore rounding mode. Typical
+
+let round x =3D truncate (x +. 0.5)
+
+Translates to
+
+_camlT__round_58:
+	sub	esp, 8
+L100:
+	fld	L101
+	fadd	REAL8 PTR [eax]
+	sub	esp, 8
+	fnstcw	[esp+4]
+	mov	ax, [esp+4]
+	mov	ah, 12
+	mov	[esp], ax
+	fldcw	[esp]
+	fistp	DWORD PTR [esp]
+	mov	eax, [esp]
+	fldcw	[esp+4]
+	add	esp, 8
+	lea	eax, DWORD PTR [eax+eax+1]
+	add    esp, 8
+	ret
+
+but just to
+
+_camlT__round_58:
+L100:
+	movlpd	xmm0, L101
+	addsd	xmm0, REAL8 PTR [eax]
+	cvttsd2si	eax, xmm0
+	lea	eax, DWORD PTR [eax+eax+1]
+	ret
+
+with SSE2.
+
+2. Float compare
+Does not set flags on x87 so
+
+let fmin (x:float) y =3D if x < y then x else y
+
+ends up with
+
+_camlT__fmin_58:
+	sub	esp, 8
+L101:
+	mov	ecx, eax
+	fld	REAL8 PTR [ebx]
+	fld	REAL8 PTR [ecx]
+	fcompp
+	fnstsw	ax
+	and	ah, 69
+	cmp	ah, 1
+	jne	L100
+	mov	eax, ecx
+	add    esp, 8
+	ret
+L100:
+	mov	eax, ebx
+	add    esp, 8
+	ret
+
+on SSE2 you just have
+
+_camlT__fmin_58:
+L101:
+	movlpd	xmm1, REAL8 PTR [ebx]
+	movlpd	xmm0, REAL8 PTR [eax]
+	comisd	xmm1, xmm0
+	jbe	L100
+	ret
+L100:
+	mov	eax, ebx
+	ret
+
+As for SSE2 backend presented I have some thoughts regarding the code
+(fast math functions via x87 are questionable, optimization of
+floating compare etc.) Where to discuss that - just here or there is
+some entry in Mantis?
+
+- Dmitry Bely
+

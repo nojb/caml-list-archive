@@ -1,0 +1,136 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id IAA09387 for caml-redistribution; Wed, 16 Oct 1996 08:28:30 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id RAA03331 for <caml-list@pauillac.inria.fr>; Thu, 10 Oct 1996 17:30:09 +0200
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.12]) by nez-perce.inria.fr (8.7.6/8.7.1) with SMTP id RAA00668 for <caml-list@inria.fr>; Thu, 10 Oct 1996 17:30:07 +0200 (MET DST)
+Received: from vedette.ens.fr by nef.ens.fr (5.65c8/ULM-1.0)
+	Id AA13848 ; Thu, 10 Oct 1996 17:30:06 +0200
+Date: Thu, 10 Oct 1996 17:30:05 +0200 (MET DST)
+From: Jerome Vouillon <vouillon@clipper.ens.fr>
+Sender: weis
+Reply-To: Jerome Vouillon <vouillon@clipper.ens.fr>
+Subject: Re: Constructeurs en O'Caml 
+To: Vyskocil Vladimir <Vladimir.Vyskocil@sophia.inria.fr>
+Cc: caml-list@inria.fr
+In-Reply-To: <199610091044.MAA16986@psyche.inria.fr>
+Message-Id: <Pine.3.89.9610101156.A7285-0100000@vedette>
+Mime-Version: 1.0
+Content-Type: TEXT/PLAIN; CHARSET=US-ASCII
+
+
+
+> Yes, but such contructor can't call a object method because self is
+> bind only at execution ie I can't do the following :
+> 
+> class my_class name as self = 
+>      (* MEMBERS *)
+>    
+>      val n = 
+>        (* begin constructor *)
+> 	self#init;
+>  	  ...;
+>        (* end constructor *)
+>        name
+>    
+>      (* METHODS *)
+>      method init =
+>      ... 
+>    end
+
+At the moment, you have to write a wrapper around class constructor `new 
+my_class':
+
+    let new_my_class name =
+      let obj = new my_class name in
+      (* begin constructor *)
+      self#init;
+      ...;
+      (* end constructor *)
+      obj
+
+But you have to do it again for any subclass of my_class.
+
+I had kept object initialisation very simple (only initialization of 
+instance variables) because I did not know exactly what was needed.
+Here are the problems I see at the moment:
+ (1) One cannot access self during object creation (for instance to
+     create a double link to another object, or register the object).
+ (2) Side-effects during creation must occurs during a variable
+     initialization.
+ (3) One cannot share any computation (for instance, one could want
+     the value of two instance variables to depend on the result
+     of a common computation).
+
+For solving point (1) and (2), I think that a new class component
+`initializer expr' should be added (yet another keyword...). These
+expressions `expr' would be evaluated after the initialization of
+instance variables (object creation would be a two-pass process: first
+initialization of instance variables, then evaluation of `initializer'
+bodies). This is cleaner than having anonymous instance variables
+`val _ = ...' with a special semantics, or a constructor method. 
+
+For point (3), I see two possible solutions, but I'm not sure
+of which one is the best solution.
+
+The first solution is to add yet another class component
+`let x = expr in'. `let'-bound variables would be visible from
+instance variable definitions, but not from method definitions. One
+could also have a `let _ = expr' as an alternative to `initializer'
+component for point (2). Here are a few examples:
+
+    (* Point (3) *)
+    class c f =
+      let x0 = Unix.time () in
+      val x = x0
+      inherit a (f x0)
+    end
+
+    (* Point (2) *)
+    let count = ref 0
+    class c =
+      let _ = incr count
+    end
+
+Pros: - Variables used during initialization and instance variables
+        are clearly distinguished.
+      - Easy to implement (this might not be a good argument)
+Cons: - Still more complex scoping rules.
+
+The second solution is to change the scoping rules for instance
+variables. An instance variable would also be visible to instance
+variables appearing next. The class parameters could also be
+considered as a private instance variables and be visible in
+methods. Instance variables only used during object initialization
+(and that does not appears in any method) would be omitted from the
+object. Some examples follows:
+
+    (* Point (3) *)
+    class c f =
+      val x = Unix.time ()
+      inherit a (f x)
+    end
+
+    (* Point (2) *)
+    let count = ref 0
+    class c =
+      val _ = incr count
+    end
+
+    (* Class parameter used in a method *)
+    class c x =
+      method m = x
+    end
+
+Pros: - Simpler scoping rules.
+      - A bit more compact (see third example).
+Cons: - Which values appears in or are omitted from the object is not
+        obvious to the user.
+      - One must rely on some more or less clever compiler
+        optimizations, so that instance variables not used in any
+        method are omitted from the object (as a side-effect, the
+        implementation is more complex).
+
+-- Jerome Vouillon
+
+
+
+
+

@@ -1,0 +1,123 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id EEF7A7F7C2
+	for <caml-list@sympa.inria.fr>; Mon,  3 Feb 2014 14:55:37 +0100 (CET)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.211;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.211;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.211;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am4BAHaf71LB/BfTm2dsb2JhbABZvxuDCIEeDgEBAQEBCAkLCRQogiUBAQUnEUARCxgJFg8JAwIBAgFFBgEMCAEBiAXMSheOVjqEOAEDmCqGSI8H
+X-IPAS-Result: Am4BAHaf71LB/BfTm2dsb2JhbABZvxuDCIEeDgEBAQEBCAkLCRQogiUBAQUnEUARCxgJFg8JAwIBAgFFBgEMCAEBiAXMSheOVjqEOAEDmCqGSI8H
+X-IronPort-AV: E=Sophos;i="4.95,772,1384297200"; 
+   d="scan'208";a="47597495"
+Received: from msa02.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.211])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 03 Feb 2014 14:55:37 +0100
+Received: from [192.168.1.133] ([92.151.71.198])
+	by mwinf5d60 with ME
+	id Mpvc1n00E4Ggq9Y03pvcXB; Mon, 03 Feb 2014 14:55:36 +0100
+Message-ID: <52EF9FD7.7080204@frisch.fr>
+Date: Mon, 03 Feb 2014 14:55:35 +0100
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:24.0) Gecko/20100101 Thunderbird/24.2.0
+MIME-Version: 1.0
+To: Goswin von Brederlow <goswin-v-b@web.de>, caml-list@inria.fr
+References: <CABooLwN_1vpyQAfA53cAiTk_5zACny1YZBt+dLd7h6WYyQiXQw@mail.gmail.com> <20140203103548.GA31067@frosties>
+In-Reply-To: <20140203103548.GA31067@frosties>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Question about objects and method overriding
+
+On 02/03/2014 11:35 AM, Goswin von Brederlow wrote:
+> On the source level you can change a method by inheriting the old
+> class and implementing the method again. But you seem to want to
+> change the method at runtime. Problem there is that all instances of a
+> class afaik have the same virtual table to dispatch methods. So
+> changing a methong in one instance would change it in all.
+
+Well, nothing prevent you from creating a fresh copy of the table for 
+the new object, as in:
+
+let unsafe_override (o : 'a) (ov : < .. >) : 'a =
+   let o = Obj.repr (Oo.copy o) in
+   let meths = Obj.dup (Obj.field o 0) in
+   Obj.set_field o 0 meths;
+   let nmeths : int = Obj.magic (Obj.field meths 0) in
+
+   let ov = Obj.repr ov in
+   let new_meths = Obj.field ov 0 in
+   let nnew_meths : int = Obj.magic (Obj.field new_meths 0) in
+   let i = ref 0 and j = ref 0 in
+   while !i < nmeths && !j < nnew_meths do
+     let tag : int = Obj.magic (Obj.field meths (3 + 2 * !i)) in
+     let ntag : int = Obj.magic (Obj.field new_meths (3 + 2 * !j)) in
+     if tag < ntag then incr i
+     else if ntag < tag then incr j
+     else begin
+       let f : _ -> _ = Obj.magic (Obj.field new_meths (2 + 2 * !j)) in
+       Obj.set_field meths (2 + 2 * !i) (Obj.magic (fun _ -> f ov));
+       incr i;
+       incr j
+     end
+   done;
+   Obj.magic o
+
+
+val unsafe_override : (< .. > as 'a) -> < .. > -> 'a = <fun>
+
+
+This function returns a copy of its first argument (with the same type), 
+where the methods which are also defined in the second argument are 
+overridden with the implementation from the second argument (and when 
+they are called, their "self" is the second argument).
+
+This is type-unsafe because one should enforce that methods common to 
+the two objects have the same type (and that there is no clash between 
+the hash value of their other methods).  Is there a user-land hack to 
+encode this property (or a stronger one, such as the type of the first 
+argument be an extension of the type of the second argument)?
+
+For a given list of methods, one can define safe (I believe!) instances 
+of unsafe_override, for instance:
+
+let override_x_y : (< x : 'x; y : 'y; .. > as 'this) -> < x : 'x; y : 'y 
+ > -> 'this = unsafe_override;;
+
+
+This function can be used to override methods x and y of an object 
+having these methods and potentially more.
+
+Some syntactic sugar could automate this a little bit.  For instance, 
+with extension points, one could use a -ppx filter to rewrite:
+
+  [#oo_override x y]
+
+into:
+
+(unsafe_override : (< x : 'x; y : 'y; .. > as 'this) -> < x : 'x; y : 'y 
+ > -> 'this)
+
+(with same more unique names for the generated type variables)
+
+
+
+
+Alain

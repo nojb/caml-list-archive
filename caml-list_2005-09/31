@@ -1,0 +1,86 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id CD825BDDB
+	for <caml-list@yquem.inria.fr>; Fri,  2 Sep 2005 19:34:34 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j82HYYsl023876
+	for <caml-list@yquem.inria.fr>; Fri, 2 Sep 2005 19:34:34 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA07504 for <caml-list@pauillac.inria.fr>; Fri, 2 Sep 2005 19:34:33 +0200 (MET DST)
+Received: from wproxy.gmail.com (wproxy.gmail.com [64.233.184.202])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j82HYXje023871
+	for <caml-list@inria.fr>; Fri, 2 Sep 2005 19:34:33 +0200
+Received: by wproxy.gmail.com with SMTP id 68so582014wra
+        for <caml-list@inria.fr>; Fri, 02 Sep 2005 10:34:32 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition;
+        b=rH3ZP+JVSxbeUp4snyY0jS7wh7XKGTFdftUogYPfoDbxx4FkXeBc7OpBvR7Wp90FcXTO6zM1PPTUJZjvPIdOt0xebjOYGYEoewazX4x9VV0hKrAoFDJxXjpTEdNM/MjgepFwg/YCFmWuCjSG4msePawrhkAqR3/UV3+682yoOqg=
+Received: by 10.54.56.77 with SMTP id e77mr2663404wra;
+        Fri, 02 Sep 2005 10:34:32 -0700 (PDT)
+Received: by 10.54.154.7 with HTTP; Fri, 2 Sep 2005 10:34:32 -0700 (PDT)
+Message-ID: <891bd339050902103460db1a55@mail.gmail.com>
+Date: Fri, 2 Sep 2005 13:34:32 -0400
+From: Yaron Minsky <yminsky@gmail.com>
+Reply-To: yminsky@cs.cornell.edu
+To: Caml Mailing List <caml-list@inria.fr>
+Subject: Unix.localtime not threadsafe?
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+X-Miltered: at nez-perce with ID 43188D2A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 43188D29.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; yaron:01 minsky:01 yminsky:01 ocaml:01 runtime:01 ocaml:01 alloc:01 struct:01 alloc:01 val:01 val:01 camlprim:01 struct:01 einval:01 ocaml's:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.3
+
+I was looking at the Unix.localtime implementation, and it appears to
+me that it's not threadsafe.  I'm wondering if anyone can confirm.
+
+First off, the underlying localtime call is definitely not re-entrant.
+ The tm data structure is shared among all calls, leading to the
+possibility of races.  What I'm not sure of is whether there can be a
+race given the locking of the OCaml runtime.  Here's the code from
+gmtime.c in the ocaml distribution:
+
+static value alloc_tm(struct tm *tm)
+{
+  value res;
+  res =3D alloc_small(9, 0);
+  Field(res,0) =3D Val_int(tm->tm_sec);
+  Field(res,1) =3D Val_int(tm->tm_min);
+  Field(res,2) =3D Val_int(tm->tm_hour);
+  Field(res,3) =3D Val_int(tm->tm_mday);
+  Field(res,4) =3D Val_int(tm->tm_mon);
+  Field(res,5) =3D Val_int(tm->tm_year);
+  Field(res,6) =3D Val_int(tm->tm_wday);
+  Field(res,7) =3D Val_int(tm->tm_yday);
+  Field(res,8) =3D tm->tm_isdst ? Val_true : Val_false;
+  return res;
+}
+
+CAMLprim value unix_localtime(value t)
+{
+  time_t clock;
+  struct tm * tm;
+  clock =3D (time_t) Double_val(t);
+  tm =3D localtime(&clock);
+  if (tm =3D=3D NULL) unix_error(EINVAL, "localtime", Nothing);
+  return alloc_tm(tm);
+}
+
+If I understand the way ocaml's locking works, another thread could
+make a call to localtime where alloc_small is called.  If there are
+mixed C threads and Ocaml threads, then a call by the C thread at that
+point could muck up the tm data structure before switching back to
+OCaml, thus leading to bad data getting into the tm data structure.
+
+So, does this seem like a going bug?  We think we may have encountered
+this in the wild, so this may be more than a theoretical bug.
+
+Yaron
+

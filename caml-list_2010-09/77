@@ -1,0 +1,62 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 3F438BC57
+	for <caml-list@yquem.inria.fr>; Wed,  8 Sep 2010 10:42:20 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtYFAHPphkzNm0EP/2dsb2JhbACTXoo5gnZxvXOFPQSEQ4VUgn4
+X-IronPort-AV: E=Sophos;i="4.56,333,1280700000"; 
+   d="scan'208";a="56834697"
+Received: from virginia.nps.edu ([205.155.65.15])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 08 Sep 2010 10:42:19 +0200
+Received: from Adric.ern.nps.edu ([172.20.216.170]) by virginia.nps.edu with Microsoft SMTPSVC(6.0.3790.4675);
+	 Wed, 8 Sep 2010 01:42:16 -0700
+Received: by Adric.ern.nps.edu (Postfix, from userid 760)
+	id 9C47F17460; Wed,  8 Sep 2010 01:41:25 -0700 (PDT)
+From: oleg@okmij.org
+To: p.donadeo@gmail.com, caml-list@inria.fr
+Subject: C binding and GC interaction: storing values outside the heap
+Message-Id: <20100908084125.9C47F17460@Adric.ern.nps.edu>
+Date: Wed,  8 Sep 2010 01:41:25 -0700 (PDT)
+X-OriginalArrivalTime: 08 Sep 2010 08:42:16.0436 (UTC) FILETIME=[BDAC2B40:01CB4F31]
+X-Spam: no; 0.00; oleg:01 ocaml:01 ocaml:01 non-ocaml:01 unboxed:01 native-code:01 delimited:01 leaking:01 pointer:01 finalizer:01 pointers:01 invokes:01 otherlibs:01 systhreads:01 invokes:01 
+
+
+Paolo Donadeo wrote: 
+> The problem is that, for several good reasons, I need a copy, or a
+> reference, to the OCaml value representing the lua_State *inside* the
+> Lua state (I mean the C data structure).
+
+Data structures with the mixture of OCaml values and non-OCaml
+(unboxed) values are needed indeed, it seems. I had to emulate these
+data structures since the captured native-code delimited continuation,
+a part of the C stack, is exactly such mixed value. Leaking memory
+can not be tolerated since continuations could be captured at high
+rate (the delimcc distribution has several tests for that).
+
+The solution was a custom GC scanning function. The mixed value is
+allocated off the OCaml heap. All allocated values are linked.  The
+pointer to the allocated value is wrapped into a OCaml custom block,
+with a finalizer, which unlinks the value being finalized. The links
+are not NOT heap pointers; they are not known to GC and so do not
+prevent finalization. The tricky part is registering a GC scan
+call-back. GC invokes the registered call-backs at the end.  The
+call-back should go through all linked mixed values, and apply the GC
+scanning action (passed as the argument to the callback) to all OCaml
+values within the mixed values.
+
+This solution is inspired by the implementation of thread contexts
+in the native thread implementation, see the file
+	otherlibs/systhreads/posix.c
+in the OCaml distribution. The delimcc implementation is in the file
+stacks-native.c of the delimcc distribution. 
+
+The solution does not seem to be very efficient; it would be great if
+OCaml supported mixed values directly (that is, permitted a custom
+block with a custom GC scanning function). When GC scans such a custom
+value, it invokes the user-provided function like a GC call-back.
+The custom GC callback should know which parts of the mixed value are
+OCaml values; it would do the GC action on those values.
+
+

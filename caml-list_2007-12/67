@@ -1,0 +1,154 @@
+Return-Path: <benjamin.canou@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.0 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 88FEFBC69
+	for <caml-list@yquem.inria.fr>; Sat,  8 Dec 2007 15:20:56 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAJU3WkdA6ba7mGdsb2JhbACPYAEBAQEHAgYJChiBFA
+X-IronPort-AV: E=Sophos;i="4.23,270,1194217200"; 
+   d="scan'208";a="20115303"
+Received: from nf-out-0910.google.com ([64.233.182.187])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 08 Dec 2007 15:20:41 +0100
+Received: by nf-out-0910.google.com with SMTP id e27so536890nfd
+        for <caml-list@yquem.inria.fr>; Sat, 08 Dec 2007 06:20:41 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:received:received:subject:from:to:in-reply-to:references:content-type:date:message-id:mime-version:x-mailer:content-transfer-encoding;
+        bh=h+AVwojI6HCCfY9SkWuAYVhvltm4Rq5Pxve73BiAFHE=;
+        b=uQ8jp3xYk8Jc8CBqhXXtEYkiK61J6n6Op1dAokTskDaCubyQMcxLsju2o2sL3GmIVl7gnYnhAbJL6CpaU++NI75I4kFC5aUqClZ/1cvff7T8GCU+RrV3oFQJXQrQfepN3QLTCa2hDm4Ev8JF5y4j5WBStNBB2iTkTTH6RYFTQ0M=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=subject:from:to:in-reply-to:references:content-type:date:message-id:mime-version:x-mailer:content-transfer-encoding;
+        b=Jnkd9FCbJleCgi35KCBFzrpycxZPIlz8wvF/F4snAcrMgdMXPqpnqfxg07OclYQ3sHs5cMYk/tXEm3XMAtkHCJAb6xSNmDCuex8iO50FCn7036ohWo9viAdStxtH0nYc3S9eeeocDeOWDMXbGn0iBZCVJyzvuJQjjE+K/ZKVJNY=
+Received: by 10.86.84.5 with SMTP id h5mr3360913fgb.1197123640299;
+        Sat, 08 Dec 2007 06:20:40 -0800 (PST)
+Received: from ?192.168.0.10? ( [82.237.227.151])
+        by mx.google.com with ESMTPS id 12sm964285fgg.2007.12.08.06.20.37
+        (version=SSLv3 cipher=RC4-MD5);
+        Sat, 08 Dec 2007 06:20:37 -0800 (PST)
+Subject: Re: [Caml-list] Questions on replacing finalizers and
+	memory	footprints
+From: Benjamin Canou <benjamin.canou@gmail.com>
+To: caml-list <caml-list@yquem.inria.fr>
+In-Reply-To: <200712081057.54605.alexandre.pilkiewicz@polytechnique.org>
+References: <4757D904.2090502@functionality.de> <4759A501.7070809@lri.fr>
+	 <75D66E7E-2C71-40E3-8F94-129821A06FFA@x9c.fr>
+	 <200712081057.54605.alexandre.pilkiewicz@polytechnique.org>
+Content-Type: text/plain; charset=UTF-8
+Date: Sat, 08 Dec 2007 15:20:37 +0100
+Message-Id: <1197123637.10196.30.camel@benjamin-laptop>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.12.1 
+Content-Transfer-Encoding: 8bit
+X-Spam: no; 0.00; finalizers:01 footprints:01 node:01 node:01 recursive:01 recursive:01 0100,:01 hashtable:01 hash:01 hash:01 hashtbl:01 memq:01 atoms:98 cembre:98 garbage:01 
+
+  Hi,
+
+Another solution (not safe if the value is used at the same time in
+another thread or signal handler however) is to modify the value while
+exploring it.
+
+Here is the principle :
+When you explore a block node b, you replace its first field with a
+special block saying "I've not restored this node, the original first
+field is v" (a tuple (false, v) with a special tag) and you call the
+recursive size function on v and remaining fields of b; when you explore
+this block again, you don't call the recursive function since the first
+field is a special block.
+When the calculation is done, you explore the value again, and when you
+find a block b with a special block (false, v) as first field, you set
+its status to "I'm restoring this block", you call the recursive
+reconstruction on v and replace the first field of b with v in the end;
+otherwise, you do nothing.
+
+Here is the code, but it does only handle simple blocks (not strings,
+etc.) Also since one cannot mark blocks easily, I use a high block tag
+which should not occur in most programs, but the code in totally unsafe
+and can destroy the value if it is the case. A safer way could be to use
+ad hoc custom blocks. As said in caps lock at the beginning of many
+source files : "use at your own risk, no warranty"...
+
+open Obj
+
+(* the special tag is 240 , not safe if used in v *)
+let calc_size v =
+  let rec calc_size v =
+    if is_int v then 1 else (
+      if size v >= 1 then (
+	let v0 = field v 0 in
+	  if is_int v0 || tag v0 <> 240 then (
+	    let s = ref (size v + 1 (* header *)) in
+	    let d = new_block 240 2 in
+	      set_field v 0 d ;
+	      set_field d 0 (repr false) ;
+	      set_field d 1 v0 ;
+	      if is_block v0 then
+		s := !s + calc_size v0;
+	      for i = 1 to size v - 1 do
+		if is_block (field v i) then
+		  s := !s + calc_size (field v i)
+	      done ;
+	      !s
+	  ) else 0
+      ) else 0 (* atoms are preallocated *)
+    ) in
+  let rec restore v =
+    if is_block v then (
+      if size v >= 1 then (
+	let v0 = field v 0 in
+	  if is_block v0 && tag v0 == 240 then (
+	    if field v0 0 = repr false then (
+	      set_field v0 0 (repr true) ;
+	      restore (field v0 1) ;
+	      for i = 1 to size v - 1 do
+		restore (field v i) ;
+	      done ;
+	      set_field v 0 (field v0 1)
+	    )
+	  )
+      )
+    ) in
+  let size = calc_size v in restore v ; size
+
+Benjamin.
+
+PS: My code is not much tested, if you find bugs and/or enhance it with
+strings, doubles, etc., I'm interested.
+
+Le samedi 08 décembre 2007 à 10:57 +0100, Alexandre Pilkiewicz a écrit :
+> Le Friday 07 December 2007 22:01:23 forum@x9c.fr, vous avez écrit :
+> > Le 7 déc. 07 à 20:54, Jean-Christophe Filliâtre a écrit :
+> > My mistake, I did not take into account the fact that if a block is
+> > moved by the
+> > garbage collector, its reference is updated in the hashtable *too*.
+> > Hence the termination guarantee.
+> 
+> I think the problem is with the hash function :
+> 
+> 	let hash o = Hashtbl.hash (magic o : int)
+> 
+> If you put an object in the hash table, it is stored under a key that depends 
+> on it's address a1. Once it's moved by the GC to the address a2, its 
+> reference is changed to a2, but not its key which is still the hash of a1. So 
+> when you check after that if your object is allready in the hash table, you 
+> look under the key hash(a2) if it's allready there, but it's not ! And if you 
+> are very unlucky (and have very few memory), it might append several time.
+> 
+> One solution could be to store the objects in a normal list and to look at the 
+> entire list every time. It would be *much* slower on huge structures, but 
+> probably more "correct" (so if used only for debug purpose, why not..)
+> 
+> let node_list = ref []
+> 
+> let in_list o = List.memq o !node_list
+> 
+> let add_in_list o = node_list := o::!node_list
+> 
+> let reset_list () = node_list := []
+> 
+

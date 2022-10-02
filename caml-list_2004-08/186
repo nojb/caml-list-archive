@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA07506; Thu, 12 Aug 2004 20:18:53 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA08436 for <caml-list@pauillac.inria.fr>; Thu, 12 Aug 2004 20:18:52 +0200 (MET DST)
+Received: from relaissmtp.ens-lyon.fr (pluvier.ens-lyon.fr [140.77.167.5])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i7CIIpmL006110
+	for <caml-list@inria.fr>; Thu, 12 Aug 2004 20:18:52 +0200
+Received: from mouette.ens-lyon.fr ([140.77.167.4])
+	by relaissmtp.ens-lyon.fr with esmtp (Exim 3.35 #1 (Debian))
+	id 1BvKA7-0002Jv-00
+	for <caml-list@inria.fr>; Thu, 12 Aug 2004 20:18:51 +0200
+Received: by mouette.ens-lyon.fr (Postfix, from userid 33)
+	id A63853C61C2; Thu, 12 Aug 2004 20:18:51 +0200 (CEST)
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] getting the type of a polymorphic data ?
+Message-ID: <1092334731.411bb48b56f4e@mouette.ens-lyon.fr>
+Date: Thu, 12 Aug 2004 20:18:51 +0200 (CEST)
+From: Jean-Baptiste Rouquier <jrouquiethearchiveshouldhaveafewantispamtricks@ens-lyon.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+User-Agent: IMP/PHP IMAP webmail program 2.2.6
+X-Originating-IP: 141.211.97.44
+X-Miltered: at nez-perce with ID 411BB48B.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 ens-lyon:01 hashtbl:01 hash:01 foo:01 hashtbl:01 hash:01 hashing:01 3.07:01 foo:01 floats:01 val:01 val:01 printf:01 printf:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Is it reasonable to admit that if Obj.is_int is true for x and y then
+Hashtbl.hash is injective ?
+No.
+
+# type foo = A | B;;
+# let _ = Obj.is_int (Obj.repr 0);;
+- : bool = true
+# let _ = Obj.is_int (Obj.repr A);;
+- : bool = true
+# let _ = Hashtbl.hash A;;
+- : int = 0
+# let _ = Hashtbl.hash 0;;
+- : int = 0
+
+The purpose of Hashtbl.hash is exactly no to be injective ! And hashing lists
+can't be injective.
+
+        Objective Caml version 3.07+2
+# let _ = Hashtbl.hash [0;1];;
+- : int = 65599
+# let _ = Hashtbl.hash [65599;0];;
+- : int = 65599
+
+What you are looking for is a function that associates a unique int to a
+variable of any type. This is Oo.id.
+As you said, hash is neither injective on int, nor does it allow to distinguish
+between types isomorphs to (a subset of) int.
+
+But let's try to first state the requirement :
+- the user define it's own types, foo and bar. We can ask him to provide some
+functions to handle these types.
+- you want a way to print the result x (of type foo or bar) of a computation
+with a user provided help message. This help message doesn't depend on the value
+of x.
+- you want to manipulate the types foo and bar either as int or floats (not both
+for the same type), for efficiency.
+
+My approach is to first transform the user defined type into your own good
+representation, using user provided functions, then work on int and float for
+the branch and bound, without type tricks, and work on more sophisticated types
+for printing.
+The user has to say whether his type is isomorph to int (and provide the
+conversions functions) or to float (ditto). It's safer than trying to guess it
+with the Obj module.
+You could provide defaults for those conversions functions, based on Obj / hash
+tricks, with lots of warnings.
+
+type 'a range =
+  | Single of 'a
+  | Interval of 'a * 'a
+
+type domain =
+  | Discrete of int range list
+  | Continuous of float range list (* is Single meaningful ? *)
+
+Your function
+[0 .. 1[ U ]2 .. 3[ U ]4 .. 5[ -> [0]
+can now be written
+val simplify : domain -> domain
+
+
+
+Now printing the results. The property lists is a general solution which is good
+for your problem. You can also have a specialized (trivial) mechanism, see
+below. The core idea is that you must have two different types :
+ - one for doing the computations. For efficiency it's int or float.
+ - one for printing the results. This one holds the value (possibly converted
+back to user defined type) and the help / description string.
+
+# type 'a result = 'a * string;;
+# let new_result (a:'a) description = ((a,description) : 'a result);;
+val new_result : 'a -> string -> 'a result = <fun>
+# let print_int ((a,d): int result) = Printf.printf "%s is %d\n%!" d a;;
+val print_int : int result -> unit = <fun>
+# let print_float = ...
+# let x = new_result 10 "the number of elements in the knapsack";;
+val x : int result = ...
+# print_int x;;
+the number of elements in the knapsack is 10
+- : unit = ()
+
+Jean-Baptiste.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

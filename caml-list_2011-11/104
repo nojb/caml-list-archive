@@ -1,0 +1,295 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id pAG1WeBr026830
+	for <caml-list@sympa-roc.inria.fr>; Wed, 16 Nov 2011 02:32:40 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhUBADsSw05KfVI0kGdsb2JhbABDhkmjIQgiAQEBAQkJDQcUBCGCCwITGQEbHgMSEF0BEQEFASI1oQ6CXAqLYYJlhRc9iHECBQqKBwSUMo1NPYNx
+X-IronPort-AV: E=Sophos;i="4.69,518,1315173600"; 
+   d="scan'208";a="119186322"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 16 Nov 2011 02:32:35 +0100
+Received: by wwf5 with SMTP id 5so9010127wwf.9
+        for <caml-list@inria.fr>; Tue, 15 Nov 2011 17:32:34 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:date:message-id:subject:from:to:content-type;
+        bh=WEakqRnWImu+hb4eI0CCOuPbeI1HBBzXy481u2GL1uM=;
+        b=KGzySX9eDK3tE+C55Z8qz6DJtYOBBDs5AKumiAtmPMDC9K5m5Iqyr8MJIFH+pJq9bA
+         erXMCkXL6bUJfTcvC2B9lTZZr4ZMauGTcY1k5w+Pikl2KeuliyJYGU4FFX1t961FrHJt
+         6nP9Wv6vrQKruCDSnyj1up5rndg+CteF0AD/w=
+MIME-Version: 1.0
+Received: by 10.216.140.15 with SMTP id d15mr144119wej.103.1321407154753; Tue,
+ 15 Nov 2011 17:32:34 -0800 (PST)
+Received: by 10.216.17.137 with HTTP; Tue, 15 Nov 2011 17:32:34 -0800 (PST)
+Date: Wed, 16 Nov 2011 02:32:34 +0100
+Message-ID: <CAHqiZ-LGpbyFzDJwAct+QG=3HC0HQfCJGGWHTi5DWAeRbZxPQw@mail.gmail.com>
+From: Diego Olivier Fernandez Pons <dofp.ocaml@gmail.com>
+To: caml-list <caml-list@inria.fr>
+Content-Type: multipart/alternative; boundary=0016e6dd961910127404b1d014a3
+Subject: [Caml-list] Strongly connected component algorithms
+
+
+--0016e6dd961910127404b1d014a3
+Content-Type: text/plain; charset=ISO-8859-1
+
+     Caml-list
+
+A couple weeks ago, Kim Quyen Ly asked a question about algorithms for
+strongly connected components.
+
+I answered the best known algorithms were Mehlhorn-Gabow's and Tarjan's,
+both linear in number of arcs.
+I wrote an implementation in Caml but was unsatisfied with it because in
+theory these algorithms use 3 data structures in total (2 arrays + 1 stack
+or 1 array + 2 stacks).
+However I had an extra stack because of the recursion, and couldn't figure
+out how to merge the call-stack with the open-node stack of the dfs.
+
+I finally checked in the original Mehlhorn paper (Algorithmica 1996) and
+Sedgewick implementations, to find out that not only did they use a
+recursive function as well but they had MORE arrays and stacks than
+theoretically required. I guess I will have to wait Knuth reaches the
+corresponding TAOCP volume to uncompile his assembler code and finally know
+the truth.
+
+So here are my implementations. The example graph was built to show the
+case where the call-stack and open-nodes stack differ (node 4).
+I recommend potential users to prove correction before using the
+implementation, I am a lousy coder.
+
+(* Make matrix from list *)
+let to_matrix = function list ->
+  let n = 1 + List.fold_left (fun current (i, j) -> max current (max i j))
+0 list in
+  let matrix = Array.make_matrix n n 0 in
+  let rec add_arc = function
+    | [] -> matrix
+    | (i, j) :: tail -> matrix.(i).(j) <- 1; add_arc tail
+  in add_arc list
+
+(* Example built to show the open-node stack / dfs call-stack difference *)
+let example = to_matrix [(0, 1); (1, 2); (2, 3); (3, 4); (4, 2); (2, 1);
+(3, 5); (5, 6); (6, 5)]
+
+
+(* Mehlhorn Gabow scc *)
+let cmg_scc = function matrix ->
+
+  let n = Array.length matrix in
+  let
+      visited_at_depth = Array.make n max_int and
+      roots = Stack.create () and
+      open_nodes = Stack.create ()
+  in
+
+  let rec unstack_until = function i ->
+    match Stack.pop open_nodes with
+      | n when n = i -> [i]
+      | n -> n :: unstack_until i
+  in
+
+  let rec dfs depth = function i ->
+
+    let result = ref [] in
+
+    (* mark *)
+    Stack.push depth roots;
+    Stack.push i open_nodes;
+    visited_at_depth.(i) <- depth;
+
+    (* dive *)
+    for j = 0 to n - 1 do
+      if (matrix.(i).(j) = 1) && (visited_at_depth.(j) = max_int) then
+result := dfs (depth + 1) j @ !result
+    done;
+
+    (* process reverse-arcs *)
+    for j = 0 to n - 1 do
+      if (matrix.(i).(j) = 1) && (visited_at_depth.(j) < depth) then
+let scc_returns_to_depth = visited_at_depth.(j) in
+ while Stack.top roots > scc_returns_to_depth do ignore (Stack.pop roots)
+done
+    done;
+
+    (* emit connected component if current node is root *)
+    if depth = Stack.top roots then
+      (
+ignore (Stack.pop roots);
+unstack_until i :: !result
+      )
+    else
+      !result
+  in
+
+  let result = ref [] in
+  for i = 0 to n - 1 do
+    if (visited_at_depth.(i) = max_int) then result := (dfs 0 i) @ !result
+  done;
+  !result
+
+
+(* Tarjan scc *)
+let tarjan_scc = function matrix ->
+
+  let n = Array.length matrix in
+  let
+      visited_at_depth = Array.make n max_int and
+      scc_root = Array.make n max_int and
+      open_nodes = Stack.create () and
+      result = ref []
+  in
+
+  let rec unstack_until = function i ->
+    match Stack.pop open_nodes with
+      | n when n = i -> [i]
+      | n -> n :: unstack_until i
+  in
+
+  let rec dfs depth = function i ->
+
+    (* mark *)
+    visited_at_depth.(i) <- depth;
+    scc_root.(i) <- depth;
+    Stack.push i open_nodes;
+
+    for j = 0 to n - 1 do
+      if matrix.(i).(j) = 1 then
+if visited_at_depth.(j) = max_int then
+  scc_root.(i) <- min scc_root.(i) (dfs (depth + 1) j) (* dive *)
+ else
+  scc_root.(i) <- min scc_root.(i) visited_at_depth.(j) (* reverse-arc *)
+    done;
+
+    (* emit connected component if current node is root *)
+    if scc_root.(i) = visited_at_depth.(i) then
+      result := unstack_until i :: !result;
+     scc_root.(i)
+  in
+
+  for i = 0 to n - 1 do
+    if (visited_at_depth.(i) = max_int) then ignore (dfs 0 i)
+  done;
+  !result
+
+         Diego Olivier
+
+--0016e6dd961910127404b1d014a3
+Content-Type: text/html; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+<div>=A0 =A0 =A0Caml-list</div><div><br></div><div>A couple weeks ago, Kim =
+Quyen Ly asked a question about algorithms for strongly connected component=
+s.</div><div><br></div><div>I answered the best known algorithms were Mehlh=
+orn-Gabow&#39;s and Tarjan&#39;s, both linear in number of arcs.</div>
+<div>I wrote an implementation in Caml but was unsatisfied with it because =
+in theory these algorithms use 3 data structures in total (2 arrays + 1 sta=
+ck or 1 array + 2 stacks).</div><div>However I had an extra stack because o=
+f the recursion, and couldn&#39;t figure out how to merge the call-stack wi=
+th the open-node stack of the dfs.</div>
+<div><br></div><div>I finally checked in the original Mehlhorn paper (Algor=
+ithmica 1996) and Sedgewick implementations, to find out that not only did =
+they use a recursive function as well but they had MORE arrays and stacks t=
+han theoretically required. I guess I will have to wait Knuth reaches the c=
+orresponding TAOCP volume to uncompile his assembler code and finally know =
+the truth.</div>
+<div><br></div><div>So here are my implementations. The example graph was b=
+uilt to show the case where the call-stack and open-nodes stack differ (nod=
+e 4).</div><div>I recommend potential users to prove correction before usin=
+g the implementation, I am a lousy coder.</div>
+<div><br></div><div>(* Make matrix from list *)</div><div>let to_matrix =3D=
+ function list -&gt;</div><div>=A0 let n =3D 1 + List.fold_left (fun curren=
+t (i, j) -&gt; max current (max i j)) 0 list in</div>
+<div>=A0 let matrix =3D Array.make_matrix n n 0 in</div><div>=A0 let rec ad=
+d_arc =3D function</div><div>=A0 =A0 | [] -&gt; matrix</div><div>=A0 =A0 | =
+(i, j) :: tail -&gt; matrix.(i).(j) &lt;- 1; add_arc tail</div><div>=A0 in =
+add_arc list</div>
+
+<div><br></div><div>(* Example built to show the open-node stack / dfs call=
+-stack difference *)</div><div>let example =3D to_matrix [(0, 1); (1, 2); (=
+2, 3); (3, 4); (4, 2); (2, 1); (3, 5); (5, 6); (6, 5)]</div><div><br></div>
+
+<div><br></div><div>(* Mehlhorn Gabow scc *)</div><div>let cmg_scc =3D func=
+tion matrix -&gt;</div><div><br></div><div>=A0 let n =3D Array.length matri=
+x in</div><div>=A0 let=A0</div><div>=A0 =A0 =A0 visited_at_depth =3D Array.=
+make n max_int and</div>
+
+<div>=A0 =A0 =A0 roots =3D Stack.create () and</div><div>=A0 =A0 =A0 open_n=
+odes =3D Stack.create ()</div><div>=A0 in</div><div><br></div><div>=A0 let =
+rec unstack_until =3D function i -&gt;</div><div>=A0 =A0 match Stack.pop op=
+en_nodes with</div><div>
+
+=A0 =A0 =A0 | n when n =3D i -&gt; [i]</div><div>=A0 =A0 =A0 | n -&gt; n ::=
+ unstack_until i</div><div>=A0 in</div><div><br></div><div>=A0 let rec dfs =
+depth =3D function i -&gt;</div><div><br></div><div>=A0 =A0 let result =3D =
+ref [] in</div><div>=A0 =A0=A0</div>
+
+<div>=A0 =A0 (* mark *)</div><div>=A0 =A0 Stack.push depth roots;</div><div=
+>=A0 =A0 Stack.push i open_nodes;</div><div>=A0 =A0 visited_at_depth.(i) &l=
+t;- depth;</div><div>=A0 =A0=A0</div><div>=A0 =A0 (* dive *)</div><div>=A0 =
+=A0 for j =3D 0 to n - 1 do</div>
+
+<div>=A0 =A0 =A0 if (matrix.(i).(j) =3D 1) &amp;&amp; (visited_at_depth.(j)=
+ =3D max_int) then=A0</div><div><span style=3D"white-space:pre-wrap">	</spa=
+n>result :=3D dfs (depth + 1) j @ !result</div><div>=A0 =A0 done;</div><div>
+<br></div><div>=A0 =A0 (* process reverse-arcs *)</div><div>=A0 =A0 for j =
+=3D 0 to n - 1 do</div><div>=A0 =A0 =A0 if (matrix.(i).(j) =3D 1) &amp;&amp=
+; (visited_at_depth.(j) &lt; depth) then=A0</div><div><span style=3D"white-=
+space:pre-wrap">	</span>let scc_returns_to_depth =3D visited_at_depth.(j) i=
+n</div>
+
+<div><span style=3D"white-space:pre-wrap">	</span>while Stack.top roots &gt=
+; scc_returns_to_depth do ignore (Stack.pop roots) done</div><div>=A0 =A0 d=
+one; =A0 =A0</div><div>=A0 =A0=A0</div><div>=A0 =A0 (* emit connected compo=
+nent if current node is root *)</div>
+
+<div>=A0 =A0 if depth =3D Stack.top roots then</div><div>=A0 =A0 =A0 (</div=
+><div><span style=3D"white-space:pre-wrap">	</span>ignore (Stack.pop roots)=
+;</div><div><span style=3D"white-space:pre-wrap">	</span>unstack_until i ::=
+ !result</div>
+
+<div>=A0 =A0 =A0 )</div><div>=A0 =A0 else</div><div>=A0 =A0 =A0 !result</di=
+v><div>=A0 in</div><div><br></div><div>=A0 let result =3D ref [] in</div><d=
+iv>=A0 for i =3D 0 to n - 1 do=A0</div><div>=A0 =A0 if (visited_at_depth.(i=
+) =3D max_int) then result :=3D (dfs 0 i) @ !result</div>
+
+<div>=A0 done;</div><div>=A0 !result</div><div><br></div><div>=A0 =A0 =A0</=
+div><div>(* Tarjan scc *)</div><div>let tarjan_scc =3D function matrix -&gt=
+;</div><div>=A0=A0</div><div>=A0 let n =3D Array.length matrix in</div><div=
+>=A0 let=A0</div><div>
+
+=A0 =A0 =A0 visited_at_depth =3D Array.make n max_int and</div><div>=A0 =A0=
+ =A0 scc_root =3D Array.make n max_int and</div><div>=A0 =A0 =A0 open_nodes=
+ =3D Stack.create () and</div><div>=A0 =A0 =A0 result =3D ref []</div><div>=
+=A0 in</div><div>=A0=A0</div><div>
+
+=A0 let rec unstack_until =3D function i -&gt;</div><div>=A0 =A0 match Stac=
+k.pop open_nodes with</div><div>=A0 =A0 =A0 | n when n =3D i -&gt; [i]</div=
+><div>=A0 =A0 =A0 | n -&gt; n :: unstack_until i</div><div>=A0 in</div><div=
+><br></div><div>=A0 let rec dfs depth =3D function i -&gt;</div>
+
+<div>=A0 =A0=A0</div><div>=A0 =A0 (* mark *)</div><div>=A0 =A0 visited_at_d=
+epth.(i) &lt;- depth;</div><div>=A0 =A0 scc_root.(i) &lt;- depth;</div><div=
+>=A0 =A0 Stack.push i open_nodes;</div><div><br></div><div>=A0 =A0 for j =
+=3D 0 to n - 1 do</div><div>
+
+=A0 =A0 =A0 if matrix.(i).(j) =3D 1 then</div><div><span style=3D"white-spa=
+ce:pre-wrap">	</span>if visited_at_depth.(j) =3D max_int then</div><div><sp=
+an style=3D"white-space:pre-wrap">	</span> =A0scc_root.(i) &lt;- min scc_ro=
+ot.(i) (dfs (depth + 1) j) (* dive *)<span style=3D"white-space:pre-wrap">	=
+</span> =A0</div>
+
+<div><span style=3D"white-space:pre-wrap">	</span>else=A0</div><div><span s=
+tyle=3D"white-space:pre-wrap">	</span> =A0scc_root.(i) &lt;- min scc_root.(=
+i) visited_at_depth.(j) (* reverse-arc *)</div>
+<div>=A0 =A0 done;</div><div>=A0 =A0=A0</div><div>=A0 =A0 (* emit connected=
+ component if current node is root *)</div><div>=A0 =A0 if scc_root.(i) =3D=
+ visited_at_depth.(i) then=A0</div><div>=A0 =A0 =A0 result :=3D unstack_unt=
+il i :: !result;</div><div>
+
+<span style=3D"white-space:pre-wrap">	</span></div><div>=A0 =A0 scc_root.(i=
+)</div><div><span style=3D"white-space:pre-wrap">	</span></div><div>=A0 in<=
+/div><div>=A0=A0</div><div>=A0 for i =3D 0 to n - 1 do=A0</div>
+<div>=A0 =A0 if (visited_at_depth.(i) =3D max_int) then ignore (dfs 0 i)</d=
+iv><div>=A0 done;</div><div>=A0 !result</div><div><br></div><div>=A0 =A0 =
+=A0 =A0 =A0Diego Olivier</div>
+
+--0016e6dd961910127404b1d014a3--

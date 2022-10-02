@@ -1,0 +1,141 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 55E1DBC37;
+	Wed, 28 Oct 2009 20:05:59 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgcDADIz6ErZSMDdi2dsb2JhbACBT5lyAQEBCgsKBxEFvnmEPwSBYQ
+X-IronPort-AV: E=Sophos;i="4.44,641,1249250400"; 
+   d="scan'208";a="37160695"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 28 Oct 2009 20:05:58 +0100
+Received: from smtp08.web.de (fmsmtp08.dlan.cinetic.de [172.20.5.216])
+	by fmmailgate01.web.de (Postfix) with ESMTP id E27AB133DEA84;
+	Wed, 28 Oct 2009 20:05:11 +0100 (CET)
+Received: from [95.208.117.111] (helo=frosties.localdomain)
+	by smtp08.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #314)
+	id 1N3DpX-0001uL-00; Wed, 28 Oct 2009 20:05:11 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.69)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1N3DpW-0000rS-ON; Wed, 28 Oct 2009 20:05:10 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>
+Cc: Goswin von Brederlow <goswin-v-b@web.de>, caml-list@inria.fr
+Subject: Re: [Caml-list] How to read different ints from a Bigarray?
+References: <87eiond3of.fsf@frosties.localdomain> <4AE87AB9.5020607@inria.fr>
+Date: Wed, 28 Oct 2009 20:05:10 +0100
+In-Reply-To: <4AE87AB9.5020607@inria.fr> (Xavier Leroy's message of "Wed, 28
+	Oct 2009 18:09:13 +0100")
+Message-ID: <87iqdz5ogp.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) XEmacs/21.4.22 (linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1+nMt0IfPh7MKlmuf6itykL7UWWHT4BHce3pifV
+	5OTCbjOHl3HadAPuOkl0tq9SBIdYhxBBTfRctuFmFolu0D1LmB
+	NgJC+MhYQ=
+X-Spam: no; 0.00; bigarray:01 buffer:01 elt:01 bigarray:01 buf:01 buf:01 elt:01 ocaml's:01 typechecker:01 ocaml:01 ocaml:01 endian:01 overkill:01 struct:01 enum:01 
+
+Xavier Leroy <Xavier.Leroy@inria.fr> writes:
+
+> Goswin von Brederlow wrote:
+>
+>> I'm working on binding s for linux libaio library (asynchron IO) with
+>> a sharp eye on efficiency. That means no copying must be done on the
+>> data, which in turn means I can not use string as buffer type.
+>> 
+>> The best type for this seems to be a (int, int8_unsigned_elt,
+>> c_layout) Bigarray.Array1.t. So far so good.
+>
+> That's a reasonable choice.
+
+Actualy signed seems better. Easier to get an int and mask out the
+lower 8 bit to get unsigned then sign extend. Or?
+
+>> Now I define helper functions:
+>> 
+>> let get_uint8 buf off = buf.{off}
+>> let set_uint8 buf off x = buf.{off} <- x
+>> 
+>> But I want more:
+>> 
+>> get/set_int8 - do I use Obj.magic to "convert" to int8_signed_elt?
+>
+> Not at all.  If you ask OCaml's typechecker to infer the type of
+> get_uint8, you'll see that it returns a plain OCaml "int" (in the
+> 0...255 range). Likewise, the "x" parameter to "set_uint8" has type
+> "int" (of which only the 8 low bits are used).
+
+The point was to make get_int8 to return an int in the -128..127
+range and get_uint8 in the 0..255 range. That both are int doesn't
+matter.
+
+> Repeat after me: "Obj.magic is not part of the OCaml language".
+
+Somebody else suggested to create an (int, int8_unsigned_elt,
+c_layout) Bigarray.Array1.t and (int, int8_signed_elt,
+c_layout) Bigarray.Array1.t and (int, int16_unsigned_elt,
+c_layout) Bigarray.Array1.t and (int, int16_signed_elt,
+c_layout) Bigarray.Array1.t and ... that all point to the same block
+of bits. As evil as Obj.Magic I guess but might work nicely.
+
+>> And endian correcting access for larger ints:
+>> 
+>> get/set_big_uint16
+>> get/set_big_int16
+>> get/set_little_uint16
+>> get/set_little_int16
+>> get/set_big_uint24
+>> ...
+>> get/set_little_int56
+>> get/set_big_int64
+>> get/set_little_int64
+>
+> The "56" functions look like a bit of overkill to me :-)
+
+For one part I am storing keys in there consisting of
+
+struct Key {
+  uint64_t type:8; // enum { TYPE1, TYPE2, TYPE3, ... };
+  uint64_t inode:56;
+  uint64_t data;
+}
+
+That gives a nice 16 bytes for a key but requires splitting the first
+uint64_t into 8 and 56 bit.  I could provide only get_int64 and split
+that in ocaml but what the hell. A function more or less doesn't kill
+me.
+
+>> What is the best way there? For uintXX I can get_uint8 each byte and
+>> shift and add them together. But that feels inefficient as each access
+>> will range check
+>
+> Not necessarily.  OCaml 3.11 introduced unchecked accesses to
+> bigarrays, so you can range-check yourself once, then perform
+> unchecked accesses.  Use with caution...
+
+I'm always verry cautious of such. In the existing code I already
+needed some unsafe_string that I really didn't like. Need to add
+phantom types to get rid of them some day.
+
+>> and the shifting generates a lot of code while cpus
+>> can usualy endian correct an int more elegantly.
+>> 
+>> Is it worth the overhead of calling a C function to write optimized
+>> stubs for this?
+>
+> The only way to know is to benchmark both approaches :-(  My guess is
+> that for 16-bit accesses, you're better off with a pure Caml solution,
+> but for 64-bit accesses, a C function could be faster.
+>
+> - Xavier Leroy
+
+Writing benchmark code, writing, writing. Now where is that big endian
+cpu to test converting from little endian? :)))
+
+MfG
+        Goswin
+

@@ -1,0 +1,152 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id pAQAXSY9006000
+	for <caml-list@sympa-roc.inria.fr>; Sat, 26 Nov 2011 11:33:28 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AksCAC/A0E5KfVI0imdsb2JhbABEml+QGQgiAQEBCgkNBxIGIYFyAQEBAwESAhMZARsSCwEDAQsGBQsNDSEiAREBBQEKEgYTEhCHYwiZSQqLY4JmhE49iHECBQqDVYcDBJRKjVg9g3c
+X-IronPort-AV: E=Sophos;i="4.69,575,1315173600"; 
+   d="scan'208";a="120967309"
+Received: from mail-ww0-f52.google.com ([74.125.82.52])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 26 Nov 2011 11:33:22 +0100
+Received: by wwg5 with SMTP id 5so7005232wwg.9
+        for <caml-list@inria.fr>; Sat, 26 Nov 2011 02:33:22 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=+zN9OKrnC0V82SzWycMyU0CHPGcMe7DIE9cQBbDVIQY=;
+        b=hXJrmfErPaBhXSKMg5jZQH1WqZW2cXfKX7Zot0UgFosq2Ac+MchKSdsInP43E6XQpy
+         P6V5OH5ywlceHswdjCpn5uhILhehB+/rENRZ6JMn2gNVBcRZxpLBCWgYeVU6xhaxvuox
+         Fgrb2OzhlZRhKlpwZfXOJQgF6k2stnT5HL02s=
+Received: by 10.227.199.16 with SMTP id eq16mr4785847wbb.26.1322303602107;
+ Sat, 26 Nov 2011 02:33:22 -0800 (PST)
+MIME-Version: 1.0
+Received: by 10.227.203.134 with HTTP; Sat, 26 Nov 2011 02:33:01 -0800 (PST)
+In-Reply-To: <C1DBEF7C-B845-4F03-9023-CE77065918EC@in.tum.de>
+References: <C1DBEF7C-B845-4F03-9023-CE77065918EC@in.tum.de>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Sat, 26 Nov 2011 11:33:01 +0100
+Message-ID: <CAPFanBE1vCStAg02PBcEBytB87XMfxR+NjVTeoj4NTy3hDh_aA@mail.gmail.com>
+To: =?ISO-8859-1?Q?Markus_W=2E_Wei=DFmann?= <markus.weissmann@in.tum.de>
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id pAQAXSY9006000
+Subject: Re: [Caml-list] 3.13.0 stricter on interfaces? (building extlib)
+
+There is a slighlt misinterpretation in your analysis of the issue:
+the problem comes from the fact that OCaml 3.13 standard library has
+added a ?seed optional parameter to the Hashtbl.create
+method. Extlib's interface still assumes <=3.12 interface with no
+parameter (and in particular didn't change this function interface),
+and tries to check the new Hashtbl.create standard function with the
+old (int†->†('a,'b)†t) interface.
+
+In particular, this problem does *not* come from a change of behavior
+of the typer, only from libraries changing.
+(And the change is on stdlib's side, not extlib's.)
+
+The OCaml manual is not very explicit about implicit coercions
+regarding optional arguments:
+
+> Normally the compiler generates a type error if you attempt to pass
+> to a function a parameter whose type is different from the expected
+> one. However, in the specific case where the expected type is
+> a non-labeled function type, and the argument is a function
+> expecting optional parameters, the compiler will attempt to
+> transform the argument to have it match the expected type, by
+> passing None for all optional parameters.
+
+It seems that in some cases it is able to convert from `?x:foo -> bar`
+to `bar`. Indeed:
+
+  # (fun (f : int -> int) -> f 3) (fun ?(x=0) y -> x+y);;
+  - : int = 3
+
+However, this doesn't seem to work when checking interfaces:
+
+  # module Test : sig val f : int -> int end
+                = struct let f ?(x=0) y = x+y end;;
+  Error: Signature mismatch: [...]
+
+(This was tested under 3.12.0)
+
+I personally try to avoid adding optional parameters silently as
+I have already been bitten by such issues in the past. However I don't
+really understand (or try to understand) how they are typed, and have
+also been wrong in predicting interface breakage that somehow didn't
+happen.
+
+Here are are a few ways this issue could be resolved:
+
+1. the stdlib could change to revert to the old interface, adding
+  a `create_seed` function
+
+2. extlib could introduce a conditional compilation trick to support
+  either interfaces depending on OCaml version; ugly and painful to
+  deal with in ocamldoc
+
+3. instead of repeating `val create : int -> ('a, 'b) t` in its own
+  interface, extlib could include (module type of Hashtbl) (referring
+  to stdlib's Hashtbl module). This way, their interface would keep in
+  synch with stdlib's change, and they would have to change their
+  implementation correspondingly.
+
+(3) is not perfect from a compatiblity point of view: if you introduce
+this level of coupling, you get the property that the Extlib library
+released at time T is always compatible with the OCaml library
+released at time T, but you don't necessarily get that it is
+compatible with previous Extlib releases (eg. if INRIA's stdlib adds
+a function that didn't exist in stdlib but was present in Extlib with
+a different signature).
+
+Besides, an issue with (3) is that it requires 3.12 to compile. Extlib
+developpers may wish to keep future versions of Extlib usable under
+older versions of OCaml.
+
+
+On Sat, Nov 26, 2011 at 10:52 AM, "Markus W. Weiﬂmann"
+<markus.weissmann@in.tum.de> wrote:
+> Hi everyone,
+>
+> I just tried to build extlib with the most recent checkout of ocaml (rev 11286):
+> The build fails on the extHashtbl.ml module:
+>
+> ---
+> Error: The implementation extHashtbl.ml
+> † † † does not match the interface extHashtbl.cmi:
+> † † † ...
+> † † † In module Hashtbl:
+> † † † Values do not match:
+> † † † † val create : ?seed:int -> int -> ('a, 'b) t
+> † † † is not included in
+> † † † † val create : int -> ('a, 'b) t
+> ---
+>
+> As far as I understand the problem, extlib's Hashtbl claims to implement the Hashtbl-interface from the standard library.
+> Previous OCaml versions were ok with extlib's "create" function having an additional optional parameter, but 3.13. seems to think different.
+> Is this on purpose or a bug?
+>
+>
+> Regards
+>
+> -Markus
+>
+> --
+> Markus Weiﬂmann, M.Sc.
+> Technische Universit‰t M¸nchen
+> Institut f¸r Informatik
+> Boltzmannstr. 3
+> D-85748 Garching
+> Germany
+> http://wwwknoll.in.tum.de/
+>
+>
+>
+> --
+> Caml-list mailing list. †Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+>
+

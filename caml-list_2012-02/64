@@ -1,0 +1,90 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q1AMAqTF017373
+	for <caml-list@sympa-roc.inria.fr>; Fri, 10 Feb 2012 23:10:52 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AnUBAB2VNU/RVdK2mGdsb2JhbABEhRCqTggiAQEBAQEICQ0HFCeBcwEBBBICDwQZARsdAQMMBgULDwImAgIiAREBBQEcBjWjFQqLJkuCcIR6P4hzAgULgSSKOgUKCwIEAwQKAQIHBQYBAwgBDQQVhmaBFgSVMI4lPYQC
+X-IronPort-AV: E=Sophos;i="4.73,398,1325458800"; 
+   d="scan'208";a="143786673"
+Received: from mail-iy0-f182.google.com ([209.85.210.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 10 Feb 2012 23:10:47 +0100
+Received: by iaeo4 with SMTP id o4so1355617iae.27
+        for <caml-list@inria.fr>; Fri, 10 Feb 2012 14:10:46 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :cc:content-type;
+        bh=wBllJiQlbSuA8GGFHiWOdxB+Y7izL2/JoqR7XehbBBc=;
+        b=p007xG7stoa8tUfYYwyU3HO3ouWc2CVwtNnTfG+Lt+UmvyMYu8PTVwEmpMJPEgbB4C
+         rK3UCaupU+SsPr7VoXFZ5hOXtg9LOH0nXP9qviTrba+9+9VHTgvRdJ4ozf+vibEC87Pi
+         pKWhC68/G4j9YT1R0LSilT4bwZxI4AR8at1LA=
+MIME-Version: 1.0
+Received: by 10.50.89.137 with SMTP id bo9mr14759949igb.7.1328911846077; Fri,
+ 10 Feb 2012 14:10:46 -0800 (PST)
+Received: by 10.231.160.209 with HTTP; Fri, 10 Feb 2012 14:10:46 -0800 (PST)
+In-Reply-To: <CAPFanBHvSWRTbgR-bb5q2DHZtN5Gfa__cVxUhqG_Zx2tm1V4nw@mail.gmail.com>
+References: <CAPFanBHvSWRTbgR-bb5q2DHZtN5Gfa__cVxUhqG_Zx2tm1V4nw@mail.gmail.com>
+Date: Fri, 10 Feb 2012 22:10:46 +0000
+Message-ID: <CAAxsn=EcaJ14Dr-dvuweabGZhVQDGR4YHcc_S3-tzhHAibypYQ@mail.gmail.com>
+From: Jeremy Yallop <yallop@gmail.com>
+To: Gabriel Scherer <gabriel.scherer@gmail.com>
+Cc: caml users <caml-list@inria.fr>,
+        Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+Content-Type: text/plain; charset=UTF-8
+Subject: Re: [Caml-list] Variance of GADT parameters
+
+Dear Gabriel,
+
+Here's an example of the sort of misbehaviour that the variance
+condition on GADTs is intended to prevent.  Consider what happens when
+we decorate our old friend the equality GADT with a variance
+annotation on one of the type parameters (it doesn't matter which):
+
+ type (_, +_) eq = Refl : ('a, 'a) eq
+
+Even this fairly harmless looking addition allows us to write the
+dreaded 'magic' function of type 'a -> 'b.  Here's how (somewhat
+untested):
+
+ let magic : 'a 'b. 'a -> 'b =
+     (* Dramatis personae:
+      * i, the input type
+      * o, the output type
+      * x, a value of the input type
+      *)
+  fun (type i) (type o) (x : i) ->
+
+   (* Step 1. Coerce a (legitimate) proof of <m:t> = <m:t> (any t) to a
+    *         (dodgy) proof of <m:t> = < >.
+    *)
+   let bad_proof (type t) = (Refl : (<m:t>, <m:t>) eq :>
+                               (<m:t>, < >) eq) in
+
+   (* Step 2. Use GADT pattern matching / type refinement to write a
+    *         (legitimate) function from a proof of t = < > (any t) and a
+    *         value of < > to a value of t.
+    *)
+   let downcast_1 : type a. (a, < >) eq -> < > -> a =
+                      fun (type a) (Refl : (a, < >) eq) (s : < >) ->
+                           (s :> a) in
+
+   (* Step 3. Apply the (legitimate) function to the (dodgy) proof to
+    *         obtain a (dodgy) conversion from < > to <m:o>.
+    *)
+   let downcast_2 : < > -> <m:o> = downcast_1 bad_proof in
+
+   (* Step 4. Wrap up x in an object, and hide it behind a (legitimate)
+    *         upcast to < >.
+    *)
+   let wrapped_x = ((object method m = x end) :> < >) in
+
+   (* Step 5. Apply the (dodgy) conversion to the wrapped x to obtain a
+    *         value of type <m:o>, from which we can extract x at type o.
+    *)
+     (downcast_2 wrapped_x) # m
+
+If I understand correctly, constraints 1-3 alone wouldn't be enough to
+prevent this sort of thing.
+
+Kind regards,
+
+Jeremy.

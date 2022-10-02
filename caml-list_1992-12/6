@@ -1,0 +1,538 @@
+Received: by margaux.inria.fr, Mon, 21 Dec 92 17:46:33 +0100
+Received: from peray.inria.fr by margaux.inria.fr, Mon, 21 Dec 92 17:25:58 +0100
+Received: by peray.inria.fr; Mon, 21 Dec 92 17:25:41 +0100
+From: Daniel de Rauglaudre <ddr@peray>
+Message-Id: <9212211625.AA23944@peray.inria.fr>
+Subject: Parallel CAML
+To: caml-list@margaux
+Date: Mon, 21 Dec 1992 17:25:40 +0900 (MET)
+X-Mailer: ELM [version 2.4 PL13]
+Content-Type: text
+Content-Length: 13813     
+Sender: weis@margaux
+Status: O
+
+I send here the files for my implementation of continuations in caml-light.
+Without warranty: it's a prototype!
+
+	Daniel de Rauglaudre
+	ddr@margaux.inria.fr
+
+#!/bin/sh
+# This is a shell archive (produced by shar 3.49)
+# To extract the files from this archive, save it to a file, remove
+# everything above the "!/bin/sh" line above, and type "sh file_name".
+#
+# made 12/21/1992 16:19 UTC by ddr@margaux
+# Source directory /home/margaux/formel1/ddr/scratch/tmp
+#
+# existing files will NOT be overwritten unless -c is specified
+#
+# This shar contains:
+# length  mode       name
+# ------ ---------- ------------------------------------------
+#    353 -rw-r--r-- Makefile
+#    697 -rw-rw-r-- README
+#   6341 -rw-r--r-- callcc.c
+#    299 -rw-r--r-- callcc.ml
+#    601 -rw-r--r-- callcc.mli
+#     70 -rwxr-xr-x camltop
+#   1015 -rw-r--r-- concur.ml
+#    109 -rw-rw-r-- example.ml
+#
+# ============= Makefile ==============
+if test -f 'Makefile' -a X"$1" != X"-c"; then
+	echo 'x - skipping Makefile (File already exists)'
+else
+echo 'x - extracting Makefile (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'Makefile' &&
+CAMLTOP=caml-light
+CFLAGS=-I$(CAMLTOP)/src/runtime -UNDEBUG -O
+CAMLMKTOP=camlmktop
+X
+all: camltop.out callcc.zo
+X
+camltop.out: callcc.zo callcc.o
+X	$(CAMLMKTOP) -custom callcc.zo callcc.o $(UNIX)
+X
+clean:
+X	rm -f *.o *.zi *.zo *.out *.bak *~
+X
+.mli.zi:
+X	camlc -c $(ZFLAGS) $<
+X
+.ml.zo:
+X	camlc -c $(ZFLAGS) $<
+X
+.SUFFIXES: .mli .zi .ml .zo
+X
+callcc.zo: callcc.zi
+SHAR_EOF
+chmod 0644 Makefile ||
+echo 'restore of Makefile failed'
+Wc_c="`wc -c < 'Makefile'`"
+test 353 -eq "$Wc_c" ||
+	echo 'Makefile: original size 353, current size' "$Wc_c"
+fi
+# ============= README ==============
+if test -f 'README' -a X"$1" != X"-c"; then
+	echo 'x - skipping README (File already exists)'
+else
+echo 'x - extracting README (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'README' &&
+To make a toplevel holding the continuations functions:
+X
+1- Edit the file "Makefile":
+X
+  Set the variable CAMLTOP to the main directory of the distribution
+of Caml-Light 0.5. This was necessary because some usefull include files are
+not installed in the standard caml-light library (/usr/local/lib/caml-light).
+X
+2- Run "make"
+X
+  This compiles callcc.c, callcc.ml, callcc.mli and creates the toplevel
+camltop.out.
+X
+X
+To execute this toplevel, just type: ./camltop
+X
+X
+There is a small test in "example.ml".
+See also the file "concur.ml" for a small implementation of coroutines
+using channels.
+X
+X
+This files are given without warranty. This is a prototype.
+X
+X	Daniel de Rauglaudre
+X	ddr@margaux.inria.fr
+SHAR_EOF
+chmod 0664 README ||
+echo 'restore of README failed'
+Wc_c="`wc -c < 'README'`"
+test 697 -eq "$Wc_c" ||
+	echo 'README: original size 697, current size' "$Wc_c"
+fi
+# ============= callcc.c ==============
+if test -f 'callcc.c' -a X"$1" != X"-c"; then
+	echo 'x - skipping callcc.c (File already exists)'
+else
+echo 'x - extracting callcc.c (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'callcc.c' &&
+/* $Id: callcc.c,v 1.11 92/12/21 11:59:52 ddr Exp $ */
+X
+#include <assert.h>
+#ifndef NDEBUG
+#include <stdio.h>
+#define private
+#define public
+#else
+#define private static
+#define public
+#endif
+X
+#define Setup_for_gc
+#define Restore_after_gc
+#include "mlvalues.h"
+#include "stacks.h"
+#include "prims.h"
+#include "memory.h"
+X
+#define ret(sp)		((struct return_frame *) (sp))
+#define rsp		extern_rsp
+#define asp		extern_asp
+X
+private unsigned long min_as_size = 0, min_rs_size = 0;
+private int trace_if_major = 1;
+X
+#undef CONTCNT
+#ifdef CONTCNT
+private int cont_cnt = 0;
+#endif
+X
+#undef CONTSZ
+#ifdef CONTSZ
+private int cont_max_size = 0;
+#endif
+X
+#undef TRACE
+X
+public value save_cont (v)
+value v;
+{
+X	int size_in_longs;
+X	register value *p, *q;
+X	value *r;
+X	value *arg_stack_start = arg_stack_high - min_as_size;
+X	value *ret_stack_start = ret_stack_high - min_rs_size;
+X	int arg_stack_len = arg_stack_start - asp;
+X	int ret_stack_len = ret_stack_start - rsp;
+/* bogus mark any address not in the heap */
+#define BOGUSMARK	((value) save_cont)
+X
+X	assert (c_roots_head == NULL);;
+X
+X	if (arg_stack_len < 0 || ret_stack_len < 0)
+X		failwith ("callcc: incorrect stack start");
+X	size_in_longs = 3 + arg_stack_len + ret_stack_len;
+#ifdef CONTCNT
+X	size_in_longs++;
+X	printf ("callcc: save cont no %d\n", cont_cnt);
+#endif
+#if 0
+X	printf ("callcc: continuation size (in longs) = %d\n", size_in_longs);
+#endif
+#ifdef CONTSZ
+X	if (size_in_longs > cont_max_size) {
+X		cont_max_size = size_in_longs;
+X		printf ("callcc: max cont size so far = %d\n", cont_max_size);
+X	}
+#endif
+        if (size_in_longs < Max_young_wosize) {
+X		value accu;
+X		Alloc_small (accu, size_in_longs, 0);
+X		r = (value *) accu;
+X	}
+X	else {
+X		if (trace_if_major)
+X			printf ("**** continuation allocated in MAJOR heap\n");
+X		Setup_for_gc;
+X		minor_collection ();
+X		r = (value *) alloc_shr (size_in_longs, 0);
+X		Restore_after_gc;
+X	}
+X	p = r;
+X
+#ifdef CONTCNT
+X	*p++ = Val_long (cont_cnt++);
+#endif
+X	/* save sizes of arg & ret & tp stacks */
+#ifdef TRACE
+X	printf ("callcc: arg stack size = %d\n", arg_stack_len);
+X	printf ("callcc: ret stack size = %d\n", ret_stack_len);
+X	printf ("callcc: relative tp = %d\n", ret_stack_start - (value *) tp);
+#endif
+X	*p++ = Val_long (arg_stack_len);
+X	*p++ = Val_long (ret_stack_len);
+X	*p++ = Val_long (ret_stack_start - (value *) tp);
+X
+X	/* save arg stack; mind the MARKs! */
+X	for (q = asp; q < arg_stack_start; p++, q++) {
+X		if (*q == MARK) *p = BOGUSMARK;
+#ifndef NDEBUG
+X		else if (*q == BOGUSMARK) {
+X			printf ("*** quel est le fils de pute ?\n");
+X			exit (1);
+X		}
+#endif
+X		else *p = *q;
+X	}
+X
+X	/* save ret stack */
+X	for (q = rsp; q < ret_stack_start; ) {
+X		int i = ret(q)->cache_size;
+X		ret(p)->env = ret(q)->env;
+X		ret(p)->pc = (code_t) Val_long(ret(q)->pc);
+X		ret(p)->cache_size = Val_long(i);
+X		q += sizeof(struct return_frame)/sizeof(value);
+X		p += sizeof(struct return_frame)/sizeof(value);
+X		while (--i >= 0) *p++ = *q++;
+X	}
+X	assert (q == ret_stack_start);
+X	assert (p == r + 3 + arg_stack_len + ret_stack_len);
+#ifdef TRACE
+X	printf ("callcc: terminated ok\n");
+#endif
+X
+X	return (value) r;
+}
+X
+public value restore_cont (k, v)
+value k, v;
+{
+X	register value *p, *q;
+X	value *arg_stack_start = arg_stack_high - min_as_size;
+X	value *ret_stack_start = ret_stack_high - min_rs_size;
+X	int cache_size = ret(rsp)->cache_size;
+X
+X	assert (c_roots_head == NULL);;
+X
+X	p = (value *) k;
+X
+#ifdef CONTCNT
+X	printf ("throw: restore cont no %d\n", Long_val (*p++));
+#endif
+X
+X	/* restore positions of arg & ret & tp stacks */
+X	asp = arg_stack_start - Long_val (*p++);
+X	rsp = ret_stack_start - Long_val (*p++);
+X	tp = (struct trap_frame *) (ret_stack_start - Long_val (*p++));
+#ifdef TRACE
+X	printf ("throw: arg stack size = %d\n", arg_stack_start - asp);
+X	printf ("throw: ret stack size = %d\n", ret_stack_start - rsp);
+X	printf ("throw: relative tp = %d\n", ret_stack_start - (value *) tp);
+#endif
+X
+X	/* restore arg stack */
+X	for (q = asp; q < arg_stack_start; p++, q++) {
+X		if (*p == BOGUSMARK) *q = MARK;
+X		else *q = *p;
+X	}
+X
+X	/* restore ret stack */
+X	for (q = rsp; q < ret_stack_start; ) {
+X		int i = Long_val (ret(p)->cache_size);
+X		ret(q)->env = ret(p)->env;
+X		ret(q)->pc = (code_t) Long_val ((value) ret(p)->pc);
+X		ret(q)->cache_size = i;
+X		p += sizeof(struct return_frame)/sizeof(value);
+X		q += sizeof(struct return_frame)/sizeof(value);
+X		while (--i >= 0) *q++ = *p++;
+X	}
+X	assert (q == ret_stack_start);
+X	assert (p == (value *) k + 3 + (arg_stack_start - asp) + (ret_stack_start - rsp));
+X
+X	if (cache_size != ret(rsp)->cache_size) {
+X		value env = ret(rsp)->env;
+X		rsp -= (cache_size - ret(rsp)->cache_size);
+X		ret(rsp)->env = env;
+X	}
+#if 1
+X	if (*asp != MARK)
+X		printf ("hmm... asp != MARK\n");
+#endif
+X	asp--; /* not actually a pop: just because C_CALL2 adds 1 to asp */
+#ifdef TRACE
+X	printf ("throw: terminated ok\n");
+#endif
+X	return v;
+}
+X
+public value new_stack (v)
+value v;
+{
+X	/* 2 frames on ret stack given:
+X	   - 1 for returning from C
+X	   - 1 for possible throw of this stack (throw uses normal return)
+X	*/
+X	int c_cache_size = ret(rsp)->cache_size;
+X	int c_len = sizeof(struct return_frame)/sizeof(value) + c_cache_size;
+X	int ml_cache_size = ret(rsp + c_len)->cache_size;
+X	int ml_len = sizeof(struct return_frame)/sizeof(value) + ml_cache_size;
+X	value len = c_len + ml_len;
+X	value *src = rsp + len;
+X
+#if 0
+X	printf ("new_stack: c_cache_size = %d\n", c_cache_size);
+X	printf ("new_stack: ml_cache_size = %d\n", ml_cache_size);
+#endif
+X	asp = arg_stack_high;
+X	rsp = ret_stack_high;
+X	tp = (struct trap_frame *) ret_stack_high;
+X	while (--len >= 0) *--rsp = *--src;
+#ifdef TRACE
+X	printf ("new_stack: terminated ok\n");
+#endif
+X	return v;
+}
+X
+public value get_stack_pos (v)
+value v;
+{
+        value ms;
+        Alloc_small (ms, 2, 0);
+        Field (ms, 0) = Val_long (arg_stack_high - asp);
+        Field (ms, 1) = Val_long (ret_stack_high - rsp
+X		- sizeof (struct return_frame) / sizeof (value)
+X		- ret(rsp)->cache_size);
+X	return ms;
+}
+X
+public value get_min_cont (v)
+value v;
+{
+        value ms;
+        Alloc_small (ms, 2, 0);
+        Field (ms, 0) = Val_long (min_as_size);
+        Field (ms, 1) = Val_long (min_rs_size);
+X	return ms;
+}
+X
+public value set_min_cont (ms)
+value ms;
+{
+        min_as_size = Long_val (Field (ms, 0));
+        min_rs_size = Long_val (Field (ms, 1));
+        return Atom (0);
+}
+X
+public value set_trace_major (b)
+value b;
+{
+X	trace_if_major = (b != Atom(0));
+X	return Atom(0);
+}
+SHAR_EOF
+chmod 0644 callcc.c ||
+echo 'restore of callcc.c failed'
+Wc_c="`wc -c < 'callcc.c'`"
+test 6341 -eq "$Wc_c" ||
+	echo 'callcc.c: original size 6341, current size' "$Wc_c"
+fi
+# ============= callcc.ml ==============
+if test -f 'callcc.ml' -a X"$1" != X"-c"; then
+	echo 'x - skipping callcc.ml (File already exists)'
+else
+echo 'x - extracting callcc.ml (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'callcc.ml' &&
+(* $Id: callcc.ml,v 1.11 92/12/21 11:59:55 ddr Exp $ *)
+X
+let callcc f =
+  f (save_cont ())
+;;
+X
+let throw =
+  restore_cont
+;;
+X
+let handle_cont f a =
+  let mc = get_min_cont () in
+  set_min_cont (get_stack_pos ());
+  let x =
+    try f a with x -> set_min_cont mc; raise x
+  in
+  set_min_cont mc; x
+;;
+SHAR_EOF
+chmod 0644 callcc.ml ||
+echo 'restore of callcc.ml failed'
+Wc_c="`wc -c < 'callcc.ml'`"
+test 299 -eq "$Wc_c" ||
+	echo 'callcc.ml: original size 299, current size' "$Wc_c"
+fi
+# ============= callcc.mli ==============
+if test -f 'callcc.mli' -a X"$1" != X"-c"; then
+	echo 'x - skipping callcc.mli (File already exists)'
+else
+echo 'x - extracting callcc.mli (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'callcc.mli' &&
+(* $Id: callcc.mli,v 1.13 92/12/21 11:59:57 ddr Exp $ *)
+X
+type 'a cont;;
+X
+value callcc : ('a cont -> 'a) -> 'a;;
+value throw : 'a cont -> 'a -> 'b;;
+value handle_cont : ('a -> 'b) -> 'a -> 'b;;
+value new_stack : unit -> unit = 1 "new_stack";;
+X
+value save_cont : unit -> 'a cont = 1 "save_cont";;
+value restore_cont : 'a cont -> 'a -> 'b = 2 "restore_cont";;
+value get_stack_pos : unit -> int * int = 1 "get_stack_pos";;
+value get_min_cont : unit -> int * int = 1 "get_min_cont";;
+value set_min_cont : int * int -> unit = 1 "set_min_cont";;
+value set_trace_major : bool -> unit = 1 "set_trace_major";;
+SHAR_EOF
+chmod 0644 callcc.mli ||
+echo 'restore of callcc.mli failed'
+Wc_c="`wc -c < 'callcc.mli'`"
+test 601 -eq "$Wc_c" ||
+	echo 'callcc.mli: original size 601, current size' "$Wc_c"
+fi
+# ============= camltop ==============
+if test -f 'camltop' -a X"$1" != X"-c"; then
+	echo 'x - skipping camltop (File already exists)'
+else
+echo 'x - extracting camltop (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'camltop' &&
+#!/bin/sh -e
+X
+exec ./camltop.out -stdlib /usr/local/lib/caml-light $*
+SHAR_EOF
+chmod 0755 camltop ||
+echo 'restore of camltop failed'
+Wc_c="`wc -c < 'camltop'`"
+test 70 -eq "$Wc_c" ||
+	echo 'camltop: original size 70, current size' "$Wc_c"
+fi
+# ============= concur.ml ==============
+if test -f 'concur.ml' -a X"$1" != X"-c"; then
+	echo 'x - skipping concur.ml (File already exists)'
+else
+echo 'x - extracting concur.ml (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'concur.ml' &&
+(* $Id: concur.ml,v 1.9 92/09/07 14:51:05 ddr Exp $ *)
+X
+#open "callcc";;
+X
+type 'a option = None | Some of 'a;;
+let queue_get q =
+  try Some (queue__take q) with queue__Empty -> None
+;;
+X
+type 'a chan = {
+  inq  : 'a cont queue__t;
+  outq : ('a * unit cont) queue__t
+};;
+X
+let rdyQ = (queue__new () : unit cont queue__t);;
+let channel () = {inq = queue__new (); outq = queue__new ()};;
+X
+let spawn f =
+  callcc (fun parent_k ->
+    queue__add parent_k rdyQ;
+    f ();
+    throw (queue__take rdyQ) ()
+  )
+;;
+X
+let send ch msg =
+  callcc (fun send_k ->
+    match queue_get ch.inq with
+      Some accept_k ->
+        queue__add send_k rdyQ;
+        throw accept_k msg
+    | None ->
+        queue__add (msg, send_k) ch.outq;
+        throw (queue__take rdyQ) ()
+  )
+;;
+X
+let accept ch =
+  callcc (fun accept_k ->
+    match queue_get ch.outq with
+      Some (msg, send_k) ->
+        queue__add send_k rdyQ;
+        throw accept_k msg
+    | None ->
+        queue__add accept_k ch.inq;
+        throw (queue__take rdyQ) ()
+  )
+;;
+SHAR_EOF
+chmod 0644 concur.ml ||
+echo 'restore of concur.ml failed'
+Wc_c="`wc -c < 'concur.ml'`"
+test 1015 -eq "$Wc_c" ||
+	echo 'concur.ml: original size 1015, current size' "$Wc_c"
+fi
+# ============= example.ml ==============
+if test -f 'example.ml' -a X"$1" != X"-c"; then
+	echo 'x - skipping example.ml (File already exists)'
+else
+echo 'x - extracting example.ml (Text)'
+sed 's/^X//' << 'SHAR_EOF' > 'example.ml' &&
+#open "callcc";;
+let test a = callcc (fun k -> 3 + (if a then 1 else throw k 10));;
+test true;;
+test false;;
+SHAR_EOF
+chmod 0664 example.ml ||
+echo 'restore of example.ml failed'
+Wc_c="`wc -c < 'example.ml'`"
+test 109 -eq "$Wc_c" ||
+	echo 'example.ml: original size 109, current size' "$Wc_c"
+fi
+exit 0
+
+
+

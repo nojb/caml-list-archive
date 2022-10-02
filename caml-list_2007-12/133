@@ -1,0 +1,96 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.1 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE,
+	SPF_SOFTFAIL autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id D70DDBC6B
+	for <caml-list@yquem.inria.fr>; Sun, 16 Dec 2007 06:17:45 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAFNEZEeFBoIFh2dsb2JhbACQAwEBAQgKKZgJ
+X-IronPort-AV: E=Sophos;i="4.24,172,1196636400"; 
+   d="scan'208";a="5694799"
+Received: from rabbit.math.nagoya-u.ac.jp ([133.6.130.5])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 16 Dec 2007 06:17:44 +0100
+Received: from localhost (rabbit-172 [172.16.254.254])
+	by rabbit.math.nagoya-u.ac.jp (8.12.11/3.7W) with ESMTP id lBG5Hc8o027744;
+	Sun, 16 Dec 2007 14:17:38 +0900 (JST)
+Date: Sun, 16 Dec 2007 14:17:25 +0900 (JST)
+Message-Id: <20071216.141725.55512483.garrigue@math.nagoya-u.ac.jp>
+To: pedagand@gmail.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] "Ref" and copy of functions
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <6cb897b30712130927m7df88e3axec56eacba4d47fdf@mail.gmail.com>
+References: <6cb897b30712130927m7df88e3axec56eacba4d47fdf@mail.gmail.com>
+X-Mailer: Mew version 5.1 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; advices:01 combinator:01 oleg's:01 val:01 val:01 mutable:01 oleg's:01 caml-list:01 functions:01 computation:01 explicitly:02 explicitly:02 construct:02 objects:02 objects:02 
+
+From: "Pierre-Evariste Dagand" <pedagand@gmail.com>
+
+> I'm looking for advices about a "clean way" of doing something which,
+> by design, isn't. So, let states the problem.
+> 
+> I'm doing a combinator library based on Arrows for a Yampa-like system :
+> 
+> type ('a,'b) arrow = Arrow of ( 'a -> 'b )
+
+[...]
+
+> But now, I would like to be able to "copy" a built arrow and to be
+> able to execute the copy without side-effecting on the first one.
+> Obviously, I cannot do that in this implementation.
+
+Here is yet another solution, using objects, which actually combines
+Zheng's and Oleg's ideas. That is, it separates state and function,
+but provides only access to state through a cloning method, so that it
+is completely type safe. This is just what objects are good at!
+
+class ['a,'b] arrow (f : 'a -> 'b) =
+  object (self) method call = f method copy = self end
+
+let (>>>) rf rg : ('a,'b) arrow =
+  object
+    val rf : ('a,'c) arrow = rf
+    val rg : ('c,'b) arrow = rg
+    method call x = rg#call (rf#call x)
+    method copy = {< rf = rf#copy; rg = rg#copy >}
+  end
+
+let loop init rf : ('b,'c) arrow =
+  object
+    val mutable state = init
+    val rf : ('a*'b,'a*'c) arrow = rf
+    method call x =
+      let state', y = rf#call (state, x) in
+      state <- state'; y
+    method copy = {< rf = rf#copy >}
+  end
+
+let arr = new arrow
+let arr_counter = loop 0 (arr (fun (counter,x) -> counter+1, counter+x))
+let arr_double = arr (fun x -> 2*x)
+let arr_my_small_arrow = arr_counter >>> arr_double
+
+The key here is the {< ... >} construct, which creates a shallow copy
+of an object, eventually with some fields changed. As a result, in
+loop there is no need to handle the state explicitly: the state field
+in the copied object will be distinct from the state field in the
+original object. On the other hand, you must explicitly update fields
+holding arrows, since the copy is shallow. Note that the explicit
+"val" fields are needed to allow updating their contents when copying.
+
+One difference with Oleg's approach is that we take a copy of the
+original object, rather than creating a completely new record. In this
+case, this doesn't mean much, since there is no extra computation
+involved. Still, the state after copying is not the original but the
+current one. And this may matter more if the construction is more
+complicated.
+
+Jacques Garrigue
+

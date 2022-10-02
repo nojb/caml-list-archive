@@ -1,0 +1,102 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA23290; Sun, 3 Feb 2002 23:24:05 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA23310 for caml-list@pauillac.inria.fr; Sun, 3 Feb 2002 23:24:05 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA21338 for <caml-list@pauillac.inria.fr>; Sun, 3 Feb 2002 20:25:24 +0100 (MET)
+Received: from ns.bagley.org (ns.bagley.org [216.30.46.2])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g13JPNv01665
+	for <caml-list@inria.fr>; Sun, 3 Feb 2002 20:25:23 +0100 (MET)
+Received: by ns.bagley.org (Milliard Gargantubrain Mail Daemon, from userid 500)
+	id 36499FBA2C; Sun,  3 Feb 2002 13:25:17 -0600 (CST)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15453.36509.586757.825002@ns.bagley.org>
+Date: Sun, 3 Feb 2002 13:25:17 -0600
+To: caml-list@inria.fr
+Subject: [Caml-list] some Hashtbl observations
+From: doug@bagley.org (Doug Bagley)
+Organization: Podereterno Delaflor SA
+X-Face: "|NaWfYJ-]P="T#?R.9}QgGuFXUd@3vi[.E2q-;"NV3+k_y@zreL2w^ts0XPXtt9^9{uQ@.cu2GgUgK9@HXC\a}Rtah}0'eT~>or7[~Hd?;!\Bpo#"3<S%YOu{cRbrw?={32$(5@e/te?nkrEUlsBoWC,+N1M&g{:ej9?$c*7W?>w>0a0ft-MvvZ
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I recently had occasion to create a hash table to remember some Num's
+I was generating. Of course, I didn't figure out right away that you
+can't directly use the generic interface for Hashtbl with the type
+"Num".
+
+Well, actually, you *can* but you won't find out you have made an
+error until you are already a good way into your work:
+
+# #load "nums.cma";;
+# let h = Hashtbl.create 10;;
+val h : ('_a, '_b) Hashtbl.t = <abstr>
+# let one = Num.num_of_int 1;;
+val one : Num.num = Num.Int 1
+# let nine_tenths = Num.num_of_string "9/10";;
+val nine_tenths : Num.num = Num.Ratio <abstr>
+# let ten_ninths = Num.num_of_string "10/9";;
+val ten_ninths : Num.num = Num.Ratio <abstr>
+# let remember k = try Hashtbl.find h k with Not_found -> Hashtbl.add h k ();;
+val remember : ('a, unit) Hashtbl.t -> 'a -> unit = <fun>
+# remember one;;
+- : unit = ()
+# remember nine_tenths;;
+- : unit = ()
+# remember ten_ninths;;
+Exception: Failure "equal: abstract value".
+
+D'oh!  So I guess I shouldn't use an <abstr> type as a hash key in the
+generic Hashtbl interface.  That makes sense in hindsight.
+
+Well, I went off to try to create my own custom hash with the functorial
+interface. The invocation was a bit of a mystery to me, but I eventually
+found an example and got that to work. But it seemed pretty slow. I
+tried a couple different hashing functions, one was just:
+
+let hash_of_num n = Hashtbl.hash (float_of_num n);;
+
+With the other I tried converting the numer/denom to ints, and
+shifting the numerator left 15 bits. In any case, it seemed like I
+ended up with pretty slow find/add operations. (Also, I was using
+eq_num as the "equal" function).
+
+I realized that since I was only using Num's to represent small rational
+numbers that I could switch back to the generic Hashtbl interface and
+use as a key a tuple of ints to represent (numerator, denominator). That
+turned out faster than my custom hash (by about an order of magnitude
+for my program), and the generic Hashtbl interface seemed happy with it.
+(I also saved the actual Num value along with each key generated so I
+didn't have to do any backwards conversion).
+
+I sat and pondered why OCaml couldn't tell me earlier on why there was
+a problem storing Num's via the generic interface. I think I figured it
+out. Some operations require the application of (=) to the keys, and
+unless you hit that operation on keys that are =-wise incompatible, you
+won't see the exception above. e.g.:
+
+# one = one;;
+- : bool = true
+# one = ten_ninths;;
+- : bool = false
+# nine_tenths = ten_ninths;;
+Exception: Failure "equal: abstract value".
+
+Well, that makes sense. I wondered if the type system could be used to
+check earlier on if the key type has the property of being =-compatible,
+but am I right in surmising that if so, it would require changes to both
+Hashtbl and Num? I suppose that may not be practical.
+
+Maybe Hashtbl's behavior for keys of abstract type could be more
+explicitly documented? It might help some other newbies.
+
+Anyway, that's my trip report from the land of Hashtbl. If anyone can
+suggest ways I could have made life easier for myself, please let me
+know.  Thanks.
+
+cheers,
+doug
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

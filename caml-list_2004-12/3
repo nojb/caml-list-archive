@@ -1,0 +1,157 @@
+Return-Path: <virgile.prevosto@m4x.org>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id DB849BC2F
+	for <caml-list@yquem.inria.fr>; Wed,  1 Dec 2004 15:09:19 +0100 (CET)
+Received: from francois.mpi-sb.mpg.de (mpiat0203-1.mpi-sb.mpg.de [139.19.1.2])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iB1E9Jbq015032
+	for <caml-list@yquem.inria.fr>; Wed, 1 Dec 2004 15:09:19 +0100
+Received: from amavis by francois.mpi-sb.mpg.de with scanned-ok (Exim 3.36 #1 (Debian))
+	id 1CZVAV-0000x8-00
+	for <caml-list@yquem.inria.fr>; Wed, 01 Dec 2004 15:09:19 +0100
+Received: from maildist ([139.19.90.238] helo=mpi-sb.mpg.de)
+	by francois.mpi-sb.mpg.de with esmtp (Exim 3.36 #1 (Debian))
+	id 1CZVAS-0000wr-00
+	for <caml-list@yquem.inria.fr>; Wed, 01 Dec 2004 15:09:16 +0100
+Received: from mpiat2314 (Debian-exim@mpiat2314 [139.19.20.103])
+	by mpi-sb.mpg.de (8.12.9+Sun/8.12.9) with ESMTP id iB1E9GpA005197
+	for <caml-list@yquem.inria.fr>; Wed, 1 Dec 2004 15:09:16 +0100 (MET)
+Received: from localhost.mpi-sb.mpg.de
+	([127.0.0.1] helo=mpiat2314 ident=prevosto)
+	by mpiat2314 with smtp (Exim 4.34)
+	id 1CZVAS-0007Gb-Af
+	for caml-list@yquem.inria.fr; Wed, 01 Dec 2004 15:09:16 +0100
+Date: Wed, 1 Dec 2004 15:09:15 +0100
+From: Virgile Prevosto <virgile.prevosto@m4x.org>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] typing a value cache
+Message-ID: <20041201150915.5cf79fe1@mpiat2314>
+In-Reply-To: <41AC368D.8040808@ifp.fr>
+References: <41AC368D.8040808@ifp.fr>
+X-Mailer: Sylpheed-Claws 0.9.12b (GTK+ 1.2.10; i686-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-15
+Content-Transfer-Encoding: quoted-printable
+X-Virus-Scanned: by AMaViS perl-11
+X-Miltered: at concorde with ID 41ADD08F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 christophe:01 dependencies:01 'a-:01 cached:01 cached:01 sig:01 val:01 val:01 struct:01 mutable:01 hashtbl:01 hashtbl:01 dependencies:01 iter:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+Le 30.11.2004, =E0 09:59:57, Christophe DEHLINGER a =E9crit:
+> Now things get tricky: the body of any function may change during=20
+> execution (so I actually deal with function references rather than=20
+> functions). When this happens, the cache entries corresponding to the=20
+> function calls that used this function during evaluation become=20
+> obsolete, and thus should be removed from the cache. So - and this is=20
+> the hard part typing-wise - this means that the cache must somehow=20
+> record the dependencies between function calls.
+>=20
+> I have found (I think) two ways to do that:
+> - defining  notype_cache and no_type_cache_key, two class types with=20
+> methods to handle addition of a dependency in a cache. They are=20
+> inherited respectively by ('a,'b) cache and ('a,'b) cache_key. Each=20
+> function of type 'a->'b in the collection has its own ('a,'b) cache.=20
+> Seems to work fine, but notype_cache_key object instances cannot be=20
+
+Hello,
+I'm not sure I really understand your solution, but I'd say that a
+way to handle this problem would be to store together with a
+given cached value the actions needed to remove the other cached values
+that depend on it (for instance under the form of unit -> unit
+functions). Then, each time you're about to erase a value, you perform
+the corresponding actions. If they are correctly coded, you should then
+be able to recursively remove the obsolete cached values, and only them.
+
+I include at the bottom of this message a small module which seems to do
+the trick (at least on your 3-functions example), but is of course
+absolutely not tested on a large set of functions.
+
+Hope this might help.
+--=20
+E tutto per oggi, a la prossima volta
+Virgile
+------------------------------------------------------------------------
+module Cache:
+sig
+  type ('a, 'b) t
+  val create: ('a -> 'b) -> ('a, 'b) t
+  val app: ('a, 'b) t -> 'a -> 'b
+  val modify: ('a, 'b) t -> ('a -> 'b) -> unit
+end =3D=20
+struct
+  type ('a, 'b) t =3D {=20
+    mutable f: 'a -> 'b; (* the function's body. *)
+    cache: ('a, 'b * (unit -> unit) list) Hashtbl.t
+      (* cached result, with the list of erasures to perform if the
+         value becomes inaccurate. *)
+  }
+
+  let create f =3D { f =3D f; cache =3D Hashtbl.create 13}
+
+  let cont =3D ref None (* how to remove the cached result that performs
+                         the current call (None =3D call from a
+                         non-monitored function).*)
+
+  let remove cache x =3D (* remove all dependencies wrt a given value. *)
+    try=20
+      let (_,l) =3D Hashtbl.find cache x in
+        List.iter (fun x -> x ()) l;
+        Hashtbl.remove cache x
+    with Not_found -> ()=20
+
+  let app f x =3D
+    try=20
+      (let (res, dep) =3D Hashtbl.find f.cache x in
+         print_endline "cached";
+         match !cont with
+             None -> res
+           | Some cont ->=20
+               Hashtbl.replace f.cache x (res, cont::dep);
+               res)
+    with Not_found ->
+      let prec_cont =3D !cont in
+        cont :=3D Some (fun () -> remove f.cache x);
+        let res =3D f.f x in
+        let dep =3D match prec_cont with
+            None -> []
+          | Some n -> [n]
+        in=20
+          Hashtbl.add f.cache x (res,dep);
+          cont :=3D prec_cont;
+          res
+
+  let modify f new_f =3D=20
+    f.f <- new_f;
+    Hashtbl.iter (fun _ -> fun (_,l) -> List.iter (fun x -> x()) l)
+                  f.cache;
+    Hashtbl.clear f.cache
+end                 =20
+
+let f =3D Cache.create (fun n -> n > 0);;
+
+let g =3D Cache.create=20
+          (fun b -> if b then "yo" else=20
+                    string_of_bool (Cache.app f 5));;
+
+let h =3D Cache.create (fun () -> String.length (Cache.app g false));;
+
+Cache.app h ();;
+
+Cache.app g false;;
+
+Cache.app f 5;;
+
+Cache.app g true;;
+
+Cache.modify f (fun n -> n =3D 0);;
+
+Cache.app f 5;; (* recomputed. *)
+
+Cache.app g true;; (* still cached. *)
+
+Cache.app h ();;
+-----------------------------------------------------------------------
+

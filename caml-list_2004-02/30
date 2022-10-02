@@ -1,0 +1,140 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA01147; Wed, 4 Feb 2004 03:51:13 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA00974 for <caml-list@pauillac.inria.fr>; Wed, 4 Feb 2004 03:51:12 +0100 (MET)
+Received: from cs.rice.edu (cs.rice.edu [128.42.1.30])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id i142p9v23815
+	for <caml-list@inria.fr>; Wed, 4 Feb 2004 03:51:10 +0100 (MET)
+Received: from localhost (localhost [127.0.0.1])
+	by cs.rice.edu (Postfix) with ESMTP
+	id 24ABB4AAF1; Tue,  3 Feb 2004 20:51:09 -0600 (CST)
+Received: from cs.rice.edu ([127.0.0.1])
+ by localhost (cs.rice.edu [127.0.0.1]) (amavisd-new, port 10024) with LMTP
+ id 06172-01-28; Tue,  3 Feb 2004 20:51:04 -0600 (CST)
+Received: from boromir.cs.rice.edu (boromir.cs.rice.edu [128.42.129.71])
+	(using TLSv1 with cipher EDH-RSA-DES-CBC3-SHA (168/168 bits))
+	(No client certificate requested)
+	by cs.rice.edu (Postfix) with ESMTP
+	id 537BE4A9A3; Tue,  3 Feb 2004 20:51:04 -0600 (CST)
+Date: Tue, 3 Feb 2004 20:51:03 -0600 (CST)
+From: Walid Taha <taha@cs.rice.edu>
+To: Ben Kavanagh <kavabean@lmi.net>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] partial eval question
+In-Reply-To: <004a01c39c2b$819db8f0$1fcf2952@Archimedes>
+Message-ID: <Pine.LNX.4.44.0402032046400.17089-100000@boromir.cs.rice.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavis-20030616-p5 at rice.edu
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 metaocaml:01 metaocaml:01 staged:01 timings:01 timings:01 closures:01 bug:01 faq:01 faq:01 beginner's:01 beginners:01 bin:01 caml-bugs:01 ocaml:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+Content-Length: 3384
+Lines: 104
+
+
+Hi Ben,
+
+Below is a MetaOCaml (www.metaocaml.org) program that does what you were
+asking for.  
+
+----- begin ben.ml
+
+Trx.init_times (* Initialize MetaOCaml timer library *)
+
+(* Here's Ben's original code *)
+
+let pow n x =                                                                      
+  let rec pow_iter (n1, x1, p1) =                                                 
+    if (n1 = 0) then 
+      p1                                                         
+    else if (n1 mod 2 = 0) then 
+      pow_iter(n1/2, x1*x1, p1)                                     
+    else pow_iter(n1-1, x1, p1*x1)                                         
+  in pow_iter(n, x, 1);;                                                          
+                                                                                    
+let pow2 = pow 2
+
+(* Here's a staged version of Ben's code *)
+
+let pow' n x =                                                                        
+  let rec pow_iter (n1, x1, p1) =                                                 
+    if (n1 = 0) then 
+      p1                                                         
+    else if (n1 mod 2 = 0) then 
+      pow_iter(n1/2, .<.~x1 * .~x1>., p1)                                     
+    else pow_iter(n1-1, x1, .<.~p1 * .~x1>.)                                         
+  in pow_iter(n, x, .<1>.);;
+
+let pow2 = pow' 2
+
+(* Here's some code to get some timings *)                                      
+                                          
+let unstagedRunning = 
+  Trx.timenew "unstaged running"(fun () -> pow 5 3)
+
+let stage1Running =
+  Trx.timenew "stage 1 running" (fun () -> .<fun x-> .~(pow' 5 .<x>.)>.)
+
+let compiling = Trx.timenew "compiling" (fun () -> .! stage1Running)
+
+let stage2Running = Trx.timenew "stage 2 running" (fun () -> (compiling 
+3))
+
+let baseline = Trx.timenew "baseline" (fun () -> ())
+
+(* Print all the timings *)
+
+let _ = Trx.print_times ()
+                                           
+(* Outpout of timer:
+__ unstaged running ______ 2097152x avg= 7.929525E-04 msec
+__ stage 1 running ________ 262144x avg= 7.248323E-03 msec
+__ compiling ________________ 8192x avg= 2.320860E-01 msec
+__ stage 2 running ______ 16777216x avg= 1.123075E-04 msec
+__ baseline _____________ 33554432x avg= 3.921819E-05 msec
+*)
+
+--- end ben.ml
+
+Walid.
+
+On Mon, 27 Oct 2003, Ben Kavanagh wrote:
+
+|
+|Say I have a function such as pow defined as
+|
+|let pow n x = 
+|    let rec pow_iter (n1, x1, p1) = 
+|        if (n1 = 0) then p1 
+|        else if (n1 mod 2 = 0) 
+|		 then pow_iter(n1/2, x1*x1, p1) 
+|             else pow_iter(n1-1, x1, p1*x1)
+|    in pow_iter(n, x, 1);;
+|
+|and I say 
+|
+|let pow2 = pow 2
+|
+|Are there any ML implementations that would automatically perform
+|partial evaluation to create pow2 instead of using closures, possibly
+|unfolding the pow_iter call? Would Caml ever have this capability?
+|
+|Ben
+|
+|
+|-------------------
+|To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+|Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+|Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+|
+
+-- 
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

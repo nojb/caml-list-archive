@@ -1,0 +1,136 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p7KEVFc8029514
+	for <caml-list@sympa-roc.inria.fr>; Sat, 20 Aug 2011 16:31:16 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApACAInET05RZ90wlGdsb2JhbABBqA4UAQEBAQkLCQkUAyKBRwgCHQESTAUWUiMFFwEEHgWHY5lGn02GSASkCw
+X-IronPort-AV: E=Sophos;i="4.68,255,1312149600"; 
+   d="scan'208";a="116393892"
+Received: from mtaout02-winn.ispmail.ntl.com ([81.103.221.48])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 20 Aug 2011 16:31:10 +0200
+Received: from aamtaout02-winn.ispmail.ntl.com ([81.103.221.35])
+          by mtaout02-winn.ispmail.ntl.com
+          (InterMail vM.7.08.04.00 201-2186-134-20080326) with ESMTP
+          id <20110820143110.MCMS3933.mtaout02-winn.ispmail.ntl.com@aamtaout02-winn.ispmail.ntl.com>
+          for <caml-list@inria.fr>; Sat, 20 Aug 2011 15:31:10 +0100
+Received: from romulus.metastack.com ([81.102.132.77])
+          by aamtaout02-winn.ispmail.ntl.com
+          (InterMail vG.3.00.04.00 201-2196-133-20080908) with ESMTP
+          id <20110820143109.DJFP5924.aamtaout02-winn.ispmail.ntl.com@romulus.metastack.com>
+          for <caml-list@inria.fr>; Sat, 20 Aug 2011 15:31:09 +0100
+Received: from Tenor (dio005-85922.routed.opal-solutions.com [195.12.30.30] (may be forged))
+	(authenticated bits=0)
+	by romulus.metastack.com (8.14.2/8.14.2) with ESMTP id p7KEUx8i020051
+	(version=TLSv1/SSLv3 cipher=AES128-SHA bits=128 verify=NO)
+	for <caml-list@inria.fr>; Sat, 20 Aug 2011 15:31:03 +0100
+From: "David Allsopp" <dra-news@metastack.com>
+To: "OCaml List" <caml-list@inria.fr>
+Date: Sat, 20 Aug 2011 15:31:00 +0100
+Organization: MetaStack Solutions Ltd.
+Message-ID: <000701cc5f45$caa14310$5fe3c930$@metastack.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Mailer: Microsoft Outlook 14.0
+Thread-Index: AcxfLFsQyRluzwEKS3Ca8MjKG/yH7A==
+Content-Language: en-gb
+X-Scanned-By: MIMEDefang 2.65 on 81.102.132.77
+X-Cloudmark-Analysis: v=1.1 cv=R50lirqlHffDPPkwUlkuVa99MrvKdVWo//yz83qex8g= c=1 sm=0 a=cTs9vV391PwA:10 a=h5_Tp38J_ScA:10 a=kj9zAlcOel0A:10 a=PftfUnwST-yoexQ5hgoA:9 a=9TEnAMw6n8eFn4aaGQ4A:7 a=CjuIK1q_8ugA:10 a=HpAAvcLHHh0Zw7uRqdWCyQ==:117
+Subject: [Caml-list] Module design
+
+I'm working on a new version of a framework for a server daemon which can
+have custom functionality plugged in through different backends. The present
+version works by passing a record containing lots of options along the lines
+of:
+
+type backend = {b_connect: (connectionID -> bool) option; b_disconnect:
+(connectionID -> unit) option}
+
+which is then passed to a function run which does the actual work, using the
+callbacks given in the backend record or substituting defaults where None is
+specified.
+
+I'm thinking that a functor would be a much neater way of doing this (and
+would also allow for passing around more than just a connectionID if
+required) but wondering what the best way of preserving the ability to have
+default handlers for functions which a given backend isn't interested in.
+
+I've not really used the module system beyond trivial functor applications
+(Set and Map, etc.) but I've come up with the following:
+
+(* Framework.ml *)
+
+(* Individual connection identifiers *)
+type connectionID = int
+
+(* Wrapper type for custom connections *)
+module type CONNECTION = sig
+  type t
+  val newConnection : connectionID -> t
+end
+
+(* Actual backend type *)
+module type BACKEND =
+  sig
+    include CONNECTION
+
+    (* Toy functions, obviously *)
+    val connect : t -> bool
+    val disconnect : t -> unit
+  end
+
+(* Default behaviour defined in these two modules *)
+module Default = struct
+  (* Default connection information is just the identifier *)
+  module Connection : CONNECTION = struct
+    type t = connectionID
+    let newConnection connectionID = connectionID
+  end
+
+  (* Default functions *)
+  module Backend (C : CONNECTION) = struct
+    let connect _ = (* ... *)
+    let disconnect _ = (* ... *)
+  end
+end
+
+module Make (Backend : BACKEND) = struct
+  let run () = (* ... *)
+end
+
+and so an implementation using default connection IDs could be written:
+
+module rec MySimpleBackend : Framework.BACKEND = struct
+  include Framework.Default.Connection
+
+  include Framework.Default.Backend(MySimpleBackend)
+
+  let connect _ = (* Alternate behaviour *)
+  (* Default disconnect is fine *)
+end
+
+and one with more complex connectionIDs could be written:
+
+module rec MyComplexBackend : Framework.BACKEND = struct
+  type t = {ci_id : Framework.connectionID; (* ... *) }
+  let newConnection id = {ci_id = id; (* ... *) }
+
+  include Framework.Default.Backend(MyComplexBackend)
+
+  let connect {ci_id; (* ... *)} = (* Alternate behaviour *)
+end
+
+This pattern seems to work OK but is there an even neater way I haven't
+spotted? I'm presuming that in the following:
+
+module Foo = struct let x = true let x = false end
+
+the compiler doesn't create a module with two fields one of which is
+inaccessible which would seem to be important (from an aesthetic sense) with
+having a module of default functions which get "overridden". 
+
+Any guidance/comment appreciated!
+
+
+David
+

@@ -1,0 +1,114 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 71131BC3D
+	for <caml-list@yquem.inria.fr>; Mon,  8 Aug 2005 02:03:00 +0200 (CEST)
+Received: from ptb-relay01.plus.net (ptb-relay01.plus.net [212.159.14.212])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j7802xRm020902
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Mon, 8 Aug 2005 02:03:00 +0200
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay01.plus.net with esmtp (Exim) id 1E1v6F-0006qB-A9
+	for caml-list@yquem.inria.fr; Mon, 08 Aug 2005 01:02:39 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] ocamllex+ocamlyacc and not parsing properly
+Date: Mon, 8 Aug 2005 00:58:11 +0100
+User-Agent: KMail/1.7.2
+References: <ad8cfe7e050807143962166f9@mail.gmail.com>
+In-Reply-To: <ad8cfe7e050807143962166f9@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200508080058.12357.jon@ffconsultancy.com>
+X-Miltered: at concorde with ID 42F6A133.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocamllex:01 ocamlyacc:01 parsing:01 lexer:01 parser:01 minor:01 ocamllex:01 lexer:01 mll:01 ocamlyacc:01 parser:01 ocamlc:01 mli:01 ocamlmktop:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+On Sunday 07 August 2005 22:39, Jonathan Roewen wrote:
+> I'm having some trouble with a lexer+parser I've written to parse IRC
+> strings. Just about all strings are parsed correctly, but I'm having a
+> few minor issues.
+>
+> Here are two strings that fail to parse correctly:
+> :Sovereign.Wyldryde.org 254 dst 112 :holodeck programs running
+> :
+> :Sovereign.Wyldryde.org 333 dst #bfos Helio 112025589
+
+I just added "irc_types.ml":
+
+type command = JOIN | PART | MODE | TOPIC | NAMES | LIST | INVITE
+               | KICK | PRIVMSG | NOTICE | QUIT | PING | Numeric of int
+
+and compiled with:
+
+ocamllex irc_lexer.mll
+ocamlyacc irc_parser.mly
+ocamlc -c irc_types.ml irc_parser.mli irc_parser.ml irc_lexer.ml
+ocamlmktop irc_types.cmo irc_parser.cmo irc_lexer.cmo -o irc.top
+
+ran the custom top-level with "./irc.top" and asked it to lex the first of 
+your example strings:
+
+# let lexbuf = Lexing.from_string ":Sovereign.Wyldryde.org 254 dst 
+112:holodeck programs running";;
+val lexbuf : Lexing.lexbuf =
+  {Lexing.refill_buff = <fun>;
+   Lexing.lex_buffer =
+    ":Sovereign.Wyldryde.org 254 dst 112 :holodeck programs running";
+   Lexing.lex_buffer_len = 62; Lexing.lex_abs_pos = 0;
+   Lexing.lex_start_pos = 0; Lexing.lex_curr_pos = 0;
+   Lexing.lex_last_pos = 0; Lexing.lex_last_action = 0;
+   Lexing.lex_eof_reached = true; Lexing.lex_mem = [||];
+   Lexing.lex_start_p =
+    {Lexing.pos_fname = ""; Lexing.pos_lnum = 1; Lexing.pos_bol = 0;
+     Lexing.pos_cnum = 0};
+   Lexing.lex_curr_p =
+    {Lexing.pos_fname = ""; Lexing.pos_lnum = 1; Lexing.pos_bol = 0;
+     Lexing.pos_cnum = 0}}
+# Irc_lexer.message lexbuf;;
+- : Irc_parser.token = Irc_parser.STRING "Sovereign.Wyldryde.org"
+# Irc_lexer.message lexbuf;;
+- : Irc_parser.token = Irc_parser.COMMAND (Irc_types.Numeric 254)
+# Irc_lexer.message lexbuf;;
+- : Irc_parser.token = Irc_parser.STRING "dst"
+# Irc_lexer.message lexbuf;;
+- : Irc_parser.token = Irc_parser.COMMAND (Irc_types.Numeric 112)
+# Irc_lexer.message lexbuf;;
+- : Irc_parser.token = Irc_parser.STRING "holodeck programs running"
+# Irc_lexer.message lexbuf;;
+- : Irc_parser.token = Irc_parser.EOL
+
+So you're lexer is emitting the tokens str, com, str, com, str, eol but your 
+parser looks as though it is expecting str, com, str, str, str, eol.
+
+I'm guessing the error is in the lexer because the grammar in the parser is 
+very simple. So ":Sovereign.Wyldryde.org" is lexed by "message" into str, " " 
+then invokes "command" which parses 254 into com, " " then invokes "param" 
+which parses "dst" into str, "param" then invokes the remaining into strs.
+
+However, that can't be correct because the lexer has clearly gone back into 
+"command" in order to emit "Irc_types.Numeric 112".
+
+It's just a guess, but have you assumed that each time the lexer is invoked by 
+the parser that it starts in the rule it was left in when, in fact, the 
+parser invokes the "message" rule every time?
+
+> BTW: As an aside, if the lexer doesn't cover all the bases, it doesn't
+> throw an exception, just screws up my OS (Bounds check error, followed
+> by seg-fault).
+
+Any idea what is causing the segfault?
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+Objective CAML for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists
+

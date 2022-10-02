@@ -1,0 +1,107 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA30346; Mon, 22 Dec 2003 18:04:09 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA30364 for <caml-list@pauillac.inria.fr>; Mon, 22 Dec 2003 18:04:07 +0100 (MET)
+Received: from smtp2.pp.htv.fi (smtp2.pp.htv.fi [213.243.153.14])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hBMH46b18052
+	for <caml-list@inria.fr>; Mon, 22 Dec 2003 18:04:06 +0100 (MET)
+Received: from posti.pp.htv.fi (posti.pp.htv.fi [212.90.64.50])
+	by smtp2.pp.htv.fi (Postfix) with ESMTP
+	id 789E52973AF; Mon, 22 Dec 2003 19:04:06 +0200 (EET)
+Received: from oro (aka.pp.htv.fi [213.243.183.115])
+	by posti.pp.htv.fi (8.11.1 (Revision 1.5+JAGae91741+JAGae92668) /8.11.1) with ESMTP id hBMH46T28117;
+	Mon, 22 Dec 2003 19:04:06 +0200 (EET)
+Received: from naked by oro with local (Exim 3.36 #1 (Debian))
+	id 1AYTTQ-0004r1-00; Mon, 22 Dec 2003 19:04:04 +0200
+To: Richard Jones <rich@annexia.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] [PATCH] Dynamic freeing of dynamically loaded code
+References: <873cbdqoar.fsf@naked.iki.fi> <20031222114339.GA16395@redhat.com>
+From: Nuutti Kotivuori <naked+caml@naked.iki.fi>
+Date: Mon, 22 Dec 2003 19:04:04 +0200
+In-Reply-To: <20031222114339.GA16395@redhat.com> (Richard Jones's message of
+ "Mon, 22 Dec 2003 11:43:39 +0000")
+Message-ID: <87vfo8pywr.fsf@naked.iki.fi>
+User-Agent: Gnus/5.1002 (Gnus v5.10.2) XEmacs/21.4 (Portable Code, linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 dynamically:01 closures:01 loadfile:01 mli:01 script's:01 symtable:01 optionally:01 reusing:01 leaking:01 symtable:01 lessened:01 bloat:01 caml:01 garbage:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Richard Jones wrote:
+> On Mon, Dec 22, 2003 at 09:55:40AM +0200, Nuutti Kotivuori wrote:
+>> - If the module defines any toplevel functions, it cannot ever be
+>> freed, because the closures are referenced from the global
+>> table. This is true even for loadfile_private. Eg. code that
+>> defines functions will still not be garbage collected.
+>
+> Does this apply to:
+
+It applies if you define a _name_ at toplevel.
+
+> let () = ...
+>
+> code?  I assume these aren't really "toplevel functions".
+
+No, they aren't.
+
+> More seriously, what about toplevel functions which aren't
+> referenced outside the code (they may even be made private using an
+> .mli file).  I have a LOT of code which does this sort of thing:
+>
+> let run r =
+> let q = new cgi r in
+>
+> (* ... blah blah the CGI script ... *)
+>
+> (* Register the script's run function. *)
+> let () =
+> register_script run
+>
+> The toplevel 'run' function is there, but never referenced directly
+> from outside the code, although of course it is called from outside
+> the code.
+
+I'm afraid this will define run as a global function. You would have
+to define it like:
+
+let () =
+  let run r = ... in
+  register_script run
+
+or some in a similar manner. So this is a real bother to work around
+in common code in general.
+
+But, if you don't need the code working right away, I'm rather hopeful
+I can make this problem go away by modifying the Symtable
+implementation to keep track of which module uses which module - and
+optionally reusing old global table entries.
+
+But in fact, handling the literals leaking seems to be a more
+difficult operation - with the symtable, you can remove global table
+entries when they cannot be accessed any more, and let the gc take
+care of the code - but with literals, the literals would need to stick
+around as long as the code does, irrespective of the symbol table - so
+if we don't wish to put them all in the closure environments, the
+freeing of literals would need to be tied into the freeing of the
+code.
+
+Ofcourse this issue can be lessened quite a lot by re-using old
+literals if they happen to share the same contents - but still if you
+have a long literal you modify each time around, loading the code, it
+will bloat if something isn't done.
+
+Perhaps the literal table could use weak references to the code
+references, and clean up after they've changed to Empty, but that
+seems elaborate.
+
+But, I'm just brainstorming here now.
+
+-- Naked
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

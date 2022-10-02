@@ -1,0 +1,160 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA05835 for caml-redistribution; Fri, 14 Jan 2000 08:43:03 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA30278; Thu, 13 Jan 2000 18:49:34 +0100 (MET)
+Message-ID: <20000113184934.58381@pauillac.inria.fr>
+Date: Thu, 13 Jan 2000 18:49:34 +0100
+From: Xavier Leroy <xleroy@pauillac.inria.fr>
+To: emmanuel.dorlet@cea.fr, Liste-Caml <caml-list@pauillac.inria.fr>
+Subject: Re: Calling Java then C from a Ocaml toplevel
+References: <NDBBIOBOKNJIIGDGBOPLCEMJCBAA.emmanuel.dorlet@soleil.serma.cea.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <NDBBIOBOKNJIIGDGBOPLCEMJCBAA.emmanuel.dorlet@soleil.serma.cea.fr>; from Emmanuel DORLET on Thu, Jan 13, 2000 at 03:33:59PM +0100
+Sender: weis
+
+> Does someone ever try to call a Java program from Ocaml toplevel and
+> exchange data with it?
+
+It can be done, using the Java Native Interface (JNI).  See the files
+below for a trivial, but working, example.  Here is a demo:
+
+estephe:~/essais/ocaml/Caml2Java$ ./ocamljavatop
+        Objective Caml version 2.99 (99/12/08)
+
+# Javastub.init();;
+- : unit = ()
+# Javastub.call_Javacode_test 100;;
+Javacode.test(100) called                     <-- printed by Java
+Javacode.test returns 101                     <-- printed by Java
+- : int = 101                                 <-- 101 computed by Java
+# Javastub.fini();;
+- : unit = ()
+# #quit;;
+
+(Note: you may have to fight with the Unix dynamic loader quite a lot
+to get this running, since the JDK loads plenty of libraries
+dynamically, sometimes with hard-wired paths, but it can be made to
+run.  This is a JDK problem, not a Caml problem, thank you for not
+asking me how to solve it :-))
+
+I believe a much more versatile interface can be developed by stubbing
+in Caml the 100+ functions provided by the JNI, thus allowing the user
+to call any Java method without writing new C stub code.  I haven't
+tried, but this could be a nice summer internship for a student with
+hacking tendencies.
+
+> If yes, is it possible if Java call C (then other foreign langage
+> like say ... Fortran!)?
+
+Assuming that you know how to call C or Fortran from Java, I'm tempted
+to say yes.
+
+> Is there any difficult point that must be known, for example to deal
+> with the data exchanges in respect with the garbage collector of
+> both Caml and Java ?
+
+The JNI provides global root registration facilities, so in principle
+those could be used along with Caml finalized objects to coordinate
+the two GCs.  Again, I don't know how feasible this is in practice.
+
+Hope this helps,
+
+- Xavier Leroy
+
+------------------------------ stubs.c -----------------------------------
+
+#include <stdio.h>
+#include <stddef.h>
+#include <jni.h>
+#include <caml/mlvalues.h>
+#include <caml/fail.h>
+
+static JavaVM *jvm;       /* denotes a Java VM */
+static JNIEnv *env;       /* pointer to native method interface */
+
+value java_init(value unit)
+{
+  JDK1_1InitArgs vm_args; /* JDK 1.1 VM initialization arguments */
+
+  vm_args.version = 0x00010001; /* New in 1.1.2: VM version */
+  /* Get the default initialization arguments and set the class 
+   * path */
+  JNI_GetDefaultJavaVMInitArgs(&vm_args);
+  vm_args.classpath = "/usr/local/jdk1.2.2/jre/lib/rt.jar:.";
+    
+  /* load and initialize a Java VM, return a JNI interface
+   * pointer in env */
+  if (JNI_CreateJavaVM(&jvm, (void **) &env, &vm_args) != 0) {
+    failwith("JNI_CreateJavaVM failed");
+  }
+  return Val_unit;
+}
+
+value java_fini(value unit)
+{
+  /* We are done. */
+  (*jvm)->DestroyJavaVM(jvm);
+  return Val_unit;
+}
+
+value java_call_Javacode_test(value caml_arg)
+{
+  jclass cls;
+  jmethodID mid;
+  int arg, res;
+
+  /* invoke the Javacode.test method using the JNI */
+  cls = (*env)->FindClass(env, "Javacode");
+  if (cls == NULL) {
+    failwith("FindClass failed");
+  }
+  mid = (*env)->GetStaticMethodID(env, cls, "test", "(I)I");
+  if (mid == NULL) {
+    failwith("GetStaticMethodID");
+  }
+  arg = Int_val(caml_arg);
+  res = (*env)->CallStaticIntMethod(env, cls, mid, arg);
+  return Val_int(res);
+}
+
+--------------------------- Javacode.java --------------------------------
+
+class Javacode {
+
+    static int test(int n)
+    {
+        System.out.println("Javacode.test(" + n + ") called");
+        int res = n + 1;
+        System.out.println("Javacode.test returns " + res);
+        return res;
+    }
+}
+
+--------------------------- javastub.ml -----------------------------------
+
+external init : unit -> unit = "java_init"
+external fini : unit -> unit = "java_fini"
+external call_Javacode_test : int -> int = "java_call_Javacode_test"
+
+---------------------------- Makefile -------------------------------------
+
+CC=gcc
+CFLAGS=-I/usr/local/jdk1.2.2/include -I/usr/local/jdk1.2.2/include/linux -g -Wall -I/usr/local/lib/ocaml
+LFLAGS=-cclib -ljvm -cclib -lhpi
+
+all: ocamljavatop Javacode.class
+
+ocamljavatop: stubs.o javastub.cmo
+	ocamlmktop -custom -o ocamljavatop javastub.cmo stubs.o $(LFLAGS)
+
+stubs.o: stubs.c
+	$(CC) -c $(CFLAGS) stubs.c
+
+Javacode.class: Javacode.java
+	javac Javacode.java
+
+javastub.cmo: javastub.ml
+	ocamlc -c javastub.ml
+
+
+

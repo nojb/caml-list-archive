@@ -1,0 +1,158 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.8 required=5.0 tests=AWL,NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 72EADBBC1
+	for <caml-list@yquem.inria.fr>; Mon, 28 Apr 2008 02:54:48 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqsDAMy8FEjAXQIm/2dsb2JhbACQXpg6
+X-IronPort-AV: E=Sophos;i="4.25,713,1199660400"; 
+   d="scan'208";a="12011254"
+Received: from discorde.inria.fr ([192.93.2.38])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 28 Apr 2008 02:54:47 +0200
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id m3S0slsZ019362
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Mon, 28 Apr 2008 02:54:47 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqkBAMy8FEjAEKcggWdsb2JhbACQXnwBARAglww
+X-IronPort-AV: E=Sophos;i="4.25,713,1199660400"; 
+   d="scan'208";a="10140182"
+Received: from selenite.metnet.navy.mil ([192.16.167.32])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 28 Apr 2008 02:54:46 +0200
+Received: (qmail 14884 invoked by uid 107); 28 Apr 2008 00:54:43 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 28 Apr 2008 00:54:43 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id 05842ABF9; Sun, 27 Apr 2008 17:53:36 -0700 (PDT)
+From: oleg@okmij.org
+To: caml-list@inria.fr
+Subject: Persistent twice-delimited continuations and CGI programming
+Reply-To: oleg@okmij.org
+Message-Id: <20080428005336.05842ABF9@Adric.metnet.fnmoc.navy.mil>
+Date: Sun, 27 Apr 2008 17:53:36 -0700 (PDT)
+X-Miltered: at discorde with ID 48152057.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; oleg:01 delimited:01 byte-code:01 ocaml:01 ocaml:01 delimited:01 compiler:01 bytecode:01 trivial:01 marshaling:01 marshaling:01 serialize:01 module's:01 prerr:01 stderr:01 
+
+
+The new version of the delimcc library of first-class delimited
+continuations for byte-code OCaml now supports serializing and storing
+captured continuations. The stored continuation can be invoked in the
+same or a different process running the same executable. The
+persistence feature supports process checkpointing, migration -- and
+specifically CGI programming. We can write CGI scripts using the
+*unmodified* OCaml system as if they were interactive ordinary
+_console_ applications. We can then execute these scripts on *any*,
+*unmodified* web server (e.g., Apache). The serialized continuations
+are twice delimited -- both in `control' and in `data'; the latter
+makes them compact and possible.
+
+The delimcc library is a pure library and makes _no_ changes to the
+OCaml system -- neither to the compiler nor to the bytecode
+VM. Therefore the library is perfectly compatible with any OCaml
+program and any (compiled) OCaml library. The delimcc library has no
+effect on the code that does not capture delimited continuations. The
+library has been tested on OCaml systems 3.09.x and 3.10.2 on Linux
+and FreeBSD.
+
+
+One may think that making captured continuations persistent is
+trivial: after all, OCaml already supports marshaling values
+including closures. If one actually tries to marshal a captured
+delimited continuation, one quickly discovers that the naive
+marshaling fails with the error on attempting to serialize an
+abstract data type. One may even discover that the troublesome
+abstract data type is _chan. The captured delimited continuation (a
+piece of stack along with administrative data) refers to heap data
+structures created by delimcc and other OCaml libraries; some of these
+data structures are closures, which contain module's environment and
+may refer to standard OCaml functions like prerr. This function is a
+closure over stderr, which is non-serializable. This points out the
+first problem: if we serialize all the data reachable from the
+captured continuation, we may end up serializing the (large) part of
+the heap and the global environment. Aside from inefficiency, that may
+preclude serialization as we are liable to encounter channels and
+other non-serializable data structures.
+
+There is a more serious problem however. If we serialize all data
+reachable from the captured delimited continuation, we also serialize
+two pieces of global state used by the delimcc library itself. When
+the stored continuation is deserialized, a fresh copy of these global
+data is created, referenced from within the restored
+continuation. Thus the whole program will have two copies of delimcc
+global data: one for use in the main program and one for use by the
+deserialized continuation. Although such an isolation may be desirable
+in many cases, it is precisely wrong in our case: the captured and the
+host continuations do not have the common view of the system and
+cannot work together. It may be instructive to contemplate process
+checkpointing offered by some operating systems (see also `undump'
+typically used by Emacs and TeX). When checkpointing a process, we
+wish to save the continuation of the process only (rather than the
+continuation of the scheduler that created the process, and the rest of
+the OS continuation). We also wish to save data associated with the
+process, for example, the process control block and the description of
+allocated memory and other resources. Control blocks of all processes
+are typically linked in; when saving the control block of one process,
+we definitely do not wish to save everything that is reachable from
+it.  When saving the state of a process in a checkpoint, we do not
+usually save the state of the file system -- or even of all files used
+by the process. First of all, that is impractical. Mainly, it is
+sometimes wrong. For example, a process might write records to a log
+file, e.g., syslog. We specifically do not wish to save the contents
+of the syslog along with the process image. We want the restored
+process append to the system log rather than replace it!
+
+Of course restoring a suspended process after modifying its input
+files may also be wrong. It is a hard question of what should be saved
+by value and what should be saved by reference only. It is clear
+however that both mechanisms are needed. The serialization code of the
+delimcc library does offer both mechanisms. The inspiration comes
+from the fact that OCaml's own serialization function serializes OCaml
+code pointed to from within closures by reference. The delimcc library
+extends this approach to data. The library supports registration of
+data (which currently must be closures in the old heap) in a global
+array. When serializing the continuation, the library traverses it and
+replaces all references to registered closures with indices in the
+global array; we then invoke OCaml's own serialization routine to
+marshal the result. After that, we undo the replacement of closures
+with indices. Such value mangling is not without precedent: to detect
+sharing, OCaml's own marshaling routine too mangles the value being
+serialized. The use of the global array is akin to the implementation
+of cross-staged persistence in MetaOCaml.
+
+The new version of the delimcc library is available at
+	http://okmij.org/ftp/packages/caml-shift.tar.gz
+
+The salient application is letting us write CGI scripts as if they
+were interactive console applications using read and printf. We write
+the scripts in the natural question-answer, storytelling style, with
+the full use of lexical scope, exceptions, mutable data and other
+imperative features (if necessary). The scripts can even be compiled
+and run as interactive console applications. With a different
+implementation of basic primitives for reading and writing, the
+console programs become CGI scripts. All that has been 
+demonstrated at the Continuation Fest 2008 two weeks ago:
+	http://okmij.org/ftp/Computation/Fest2008-talk.pdf 
+	http://okmij.org/ftp/Computation/Fest2008-talk-notes.pdf
+(the second file has notes of what I might say during the
+presentation). The corresponding code is available at
+	http://okmij.org/ftp/ML/caml-web.tar.gz
+
+The code contains the minimal library for writing CGI applications with
+form validation. The code supports nested transactions. The captured
+continuations are relatively compact: the essentially empty captured
+continuation takes 491 bytes when serialized. The serialized
+continuations of the unoptimized blog application have the typical
+size of 10K or so (depending on the size of the posts); bzip can
+compress them to one third of the original size.
+
+The new version of the delimcc library implements abort as a
+primitive, which makes it essentially as efficient as raise. The
+library offers shift and control for convenience, and a useful
+debugging primitive show_val, to display the structure of any OCaml
+value.
+

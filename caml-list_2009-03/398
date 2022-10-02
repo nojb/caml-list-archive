@@ -1,0 +1,176 @@
+Return-Path: <ober.14@osu.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.2 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id E18BABBAF
+	for <caml-list@yquem.inria.fr>; Mon, 23 Mar 2009 18:23:35 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ak0CABxix0lDWxLCbmdsb2JhbACBUJQhPkWvHIRIiE2DfgY
+X-IronPort-AV: E=Sophos;i="4.38,409,1233529200"; 
+   d="scan'208";a="23101301"
+Received: from ip67-91-18-194.z18-91-67.customer.algx.net (HELO server1.bertec.net) ([67.91.18.194])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 23 Mar 2009 18:23:35 +0100
+Received: from kuba-laptop.bertec.net (kuba-laptop.bertec.net [192.168.2.48])
+	by server1.bertec.net (Postfix) with ESMTP id 62D2410575C
+	for <caml-list@yquem.inria.fr>; Mon, 23 Mar 2009 13:23:33 -0400 (EDT)
+Message-Id: <171C3A52-F847-4D1A-9341-63E1062C15E6@osu.edu>
+From: Kuba Ober <ober.14@osu.edu>
+To: caml-list@yquem.inria.fr
+In-Reply-To: <871vsqtvjf.fsf@jehiel.elehack.net>
+Content-Type: text/plain; charset=US-ASCII; format=flowed; delsp=yes
+Content-Transfer-Encoding: 7bit
+Mime-Version: 1.0 (Apple Message framework v930.3)
+Subject: Re: [Caml-list] Re: Google summer of Code proposal
+Date: Mon, 23 Mar 2009 13:23:32 -0400
+References: <200903211439.47107.cdome@bk.ru> <200903211338.32805.jon@ffconsultancy.com> <61A6655E-FD4E-45F8-AD7E-6050C2E0DDE5@gmail.com> <871vsqtvjf.fsf@jehiel.elehack.net>
+X-Mailer: Apple Mail (2.930.3)
+X-Spam: no; 0.00; run-time:01 compiler:01 lacks:01 compilation:01 ocaml:01 run-time:01 trivial:01 byte:01 buffer:01 foo:01 buffer:01 link-time:01 gcc's:01 compiler:01 link-time:01 
+
+On Mar 21, 2009, at 5:28 PM, Michael Ekstrand wrote:
+
+> Joel Reymont <joelr1@gmail.com> writes:
+>> On Mar 21, 2009, at 1:38 PM, Jon Harrop wrote:
+>>
+>>> . You will succumb to ocamlopt's current run-time representation
+>>> which is
+>>> objectively inefficient (e.g. boxing floats, tuples, records) and
+>>> was only
+>>> chosen because the compiler lacks capabilities that LLVM already
+>>> provides for
+>>> you (primarily JIT compilation).
+>>
+>> This is probably a stupid suggestion but why not have OCaml directly
+>> generate machine code, without the use of assembler and linker?
+
+This won't help with anything -- why would it? How is this suggestion
+relevant to current discussion?
+
+> Because that would duplicate the code and logic provided by the  
+> system's
+> assembler and linker (esp. linker).  For every platform (and there are
+> many possible combinations!).
+
+The only problem is that the usual notion of a "linker" is somewhat  
+broken, even if
+what we're after is an embedded platform where all of the linking is  
+done
+before the code hits the target (no run-time linking!).
+
+I will show a trivial example where it fails bad. The example is in C.
+
+Suppose you have two platform-specific registers used to set the DMA  
+address.
+The platform has 12 bit addresses.
+
+#define DMAL (*((volatile unsigned char*)0xFFA))
+#define DMAH (*((volatile unsigned char*)0xFF0))
+
+The DMAL takes a whole least significant byte of the address. The DMAH  
+takes
+takes one most significant nibble (bits 11:8) of the address, and the  
+nibble must be
+left-aligned (occupy bits 7:4 of DMAH).
+
+Now, in your code, you want to point DMA to a static buffer. Thusly
+
+void foo(void)
+{
+   static char buffer[128];
+   DMAL = (unsigned char)&buffer;
+   DMAH = (((unsigned int)&buffer) >> 4) & 0xF0;
+...
+}
+
+Now, while all of the addresses are known constants, there's usually  
+no way,
+in the object file, to tell the linker the expression for the value of  
+DMAH!
+
+Thus, instead of what amounts to two "load immediate" instructions,
+you have one immediate load, followed by a lot of brouhaha to shift  
+and mask what
+amounts to constants known at compile/link time. That's what's usually  
+called
+premature pessimization.
+
+That's one issue with contemporary compile/assemble/link systems.  
+Never mind
+that even if the assemblers would support such "elaborate" expressions  
+using
+link-time constants, the compilers don't generate them anyway!
+
+So, writing the code in assembly won't help you! It's only at link  
+time that you
+know where the buffer[] will end up... You can of course hack and put  
+the
+buffer at a fixed address -- some C implementations will even have  
+special
+ways of doing that (say via gcc's __attribute__ mechanism). That will  
+backfire as
+soon as you get to interface more pieces of code: you'll be spending  
+your time
+moving stuff around just to keep the memory regions from overlapping  
+-- that's the
+linker's job, really.
+
+Heck -- many, many assemblers will silently generate utterly wrong  
+code for the load
+into DMAH, *if* you code this in assembly, not C!! I've got at least a  
+dozen production,
+shipping assemblers, that silently trip-and-fall on the code like the  
+one above. Of course
+they only fail if you code it in assembly, as the C compiler won't  
+even attempt such
+um, "trickery". Silly stuff, really, requiring no advanced  
+optimization theories, just doing
+one's darn job well...
+
+You have a choice: either put some ASTs into the object file, whenever  
+the
+expressions involving link-time constants are involved, or you get rid  
+of the whole
+compile-assemble-link separation and get everything into one place.
+
+The latter, incidentally, is what I ended up doing in my godawful LISP- 
+on-its-way-to-ML
+platform for Z8 Encore! and SX48.
+
+This would be, "of course", taken care of by a JIT: it would figure  
+out that a whole lot
+of nothing is done on constant memory addresses, and would replace all  
+the operations
+by a final load. But, on a platform where the code is statically  
+linked on the host, there's
+no need for any of that, nor for a JIT. This applies to a whole lot of  
+hard-realtime systems
+where a lot of reasoning can be made trivial by only using  
+preallocated memory, and not
+doing any runtime memory allocation (or at least limiting it well).
+
+> If you use the existing linker, then you can depend on the expertise  
+> of
+> the authors for each system getting all the logic right for loading
+> libraries (which may be arbitrary libraries, when you're using C
+> extensions) and producing a binary in the correct format for that
+> system.
+
+The "logic" present in many linkers is either pretty trivial, or is an  
+ugly hack
+for lack of expressiveness in object file records. Then you have link  
+time optimizations,
+which are really trivial to do in a whole-project compiler, but  
+require a lot of
+extra effort in a linker, etc.
+
+Heck, many linkers use ad-hoc horrible quadratic-or-worse time  
+algorithms that backfire
+severely once the size of the project gets sufficiently big. Just  
+follow the evolution of
+gnu ld in face of C++. A farce in multiple acts, at least.
+
+Cheers, Kuba
+

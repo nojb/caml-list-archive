@@ -1,0 +1,99 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA01703 for caml-redistribution@pauillac.inria.fr; Fri, 25 Feb 2000 18:04:25 +0100 (MET)
+Resent-Message-Id: <200002251704.SAA01703@pauillac.inria.fr>
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA08383 for <caml-list@pauillac.inria.fr>; Fri, 25 Feb 2000 15:28:28 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id PAA26790;
+	Fri, 25 Feb 2000 15:28:15 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA11834; Fri, 25 Feb 2000 15:28:13 +0100 (MET)
+Message-ID: <20000225152813.50858@pauillac.inria.fr>
+Date: Fri, 25 Feb 2000 15:28:13 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: David McClain <dmcclain@azstarnet.com>, caml-list@inria.fr
+Subject: Re: Dichotomy between functions and type constructors?
+References: <000501bf7a51$60490100$250148bf@vega>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <000501bf7a51$60490100$250148bf@vega>; from David McClain on Fri, Feb 18, 2000 at 01:47:28PM -0700
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Fri, 25 Feb 2000 18:04:25 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+> Say I have a type
+> 
+> type thing =
+>    T1 of int * float
+> | ....
+> 
+> I can create such a type as T1(5, 3.14) but I cannot create such a type on a
+> tuple result of a function call:
+> 
+> let doit x = (x, float_of_int x)
+> let myT1 = T1(doit x)
+> 
+> This gives rise to a type checking error wherein the constructor T1 demands
+> two arguments, instead of demanding a tuple of two elements.
+> 
+> SML does not appear to impose this same requirement on the programmer, so
+> what is the origin of the OCaml requirement?
+
+For reasonable performance, a datatype definition such as "thing" above
+must not represent values of type "thing" literally, i.e. as a block tagged 
+"T1" pointing to a two-field block representing a pair (integer, float). 
+It is crucial performance-wise to fold the two blocks into one block 
+tagged "T1" holding the integer and the float. Pretty much all ML compilers 
+do this. 
+
+Without modules, the compiler can still maintain the illusion that 
+T1 is really a one-argument constructor containing a pair, and not a 
+two-argument constructor. Accesses such as 
+
+        match x with T1 p -> p 
+
+are not terribly efficient (the pair is actually reconstructed on the 
+right-hand side in Caml Light), but they work. 
+
+The big problem is with modules and data abstraction. Namely, should 
+we allow the following structure 
+
+        struct type p = int * float 
+               type thing = T1 of int * float 
+               ... 
+        end 
+
+to match the following signature 
+
+        sig type p 
+              type thing = T1 of p 
+        end 
+
+If you believe the SML/Camllight illusion that constructors have 0 or 
+1 argument, then the answer should be "yes". However, this causes no 
+end of trouble in a compiler, because code typechecked against the 
+signature above assumes that values of type thing are one-field blocks 
+pointing to a value of type p, while code internal to the structure 
+assumes two-field blocks from which values of type p must be 
+reconstructed. 
+
+This problem has plagued the SML/NJ implementation for quite a while, 
+and the solutions that have been proposed are all extremely 
+heavy-weight. 
+
+I think it's not worth the effort to maintain the illusion that 
+constructors have 0 or 1 argument. Let's just face the truth and 
+consider them as N-ary, as in Prolog. 
+
+Incidentally, if you *really* need a constructor with one argument 
+that is a pair, you can always declare it as 
+
+        type p = int * float 
+        type thing = T1 of p 
+
+This will direct the OCaml compiler to use the proper representation for a 
+one-argument constructor. Of course, that representation will occupy 
+twice as much space as that of "type thing = T1 of int * float", and be 
+twice as slow to access. 
+
+- Xavier Leroy
+
+

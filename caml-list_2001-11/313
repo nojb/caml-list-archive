@@ -1,0 +1,164 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA14609; Sun, 18 Nov 2001 14:21:30 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA15182 for <caml-list@pauillac.inria.fr>; Sun, 18 Nov 2001 14:21:29 +0100 (MET)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id fAIDLSv18862
+	for <caml-list@inria.fr>; Sun, 18 Nov 2001 14:21:28 +0100 (MET)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.10.1/1.01.28121999) with ESMTP id fAIDJXU48777
+          ; Sun, 18 Nov 2001 14:19:33 +0100 (CET)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.9.2/jb-1.1)
+	id OAA01784 ; Sun, 18 Nov 2001 14:18:10 +0100 (MET)
+Date: Sun, 18 Nov 2001 14:18:10 +0100 (MET)
+From: Alain Frisch <frisch@clipper.ens.fr>
+To: Clemens Hintze <cle-ocaml@qiao.in-berlin.de>
+cc: Mark Wotton <mrak@cs.usyd.edu.au>, Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Re: [Q]: Co(ntra)variance and subtyping?
+In-Reply-To: <20011118101636.A38485@qiao.in-berlin.de>
+Message-ID: <Pine.GSO.4.33.0111181304140.27347-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 18 Nov 2001, Clemens Hintze wrote:
+
+> - If you believe that contravariance isn't generally particularly
+>   useful, as you stated in the mail before, why can I flag some type
+>   with (-'a) stating this is contravariant? What sense does this make?
+
+> - What exactly are types and subtypes in OCaml? You know, I am coming
+>   mainly from the imperative world. There I use languages that makes
+>   no distinction between classes and types. Is 'int' a subtype of
+>   'float'? How can I decide if something is a subtype of another one?
+>   I do not ask in sense of OO inheritance but in OCaml terminology.
+
+If you don't do OO, you can live with OCaml without knowing what 'subtype'
+means.
+
+Types in Caml are syntactical expressions, whose full syntax is
+given in section 6.4 of OCaml user's manual. As types may contain type
+variables, there is a natural order 'less general' induced by
+instantiating type variables. The type inference algorithm allows to
+take instances, that is to use an expression of a more general type where
+a less general type is expected. (this is an unaccurate description of the
+algorithm).
+
+What about objects ?  Let's have a look at:
+
+# let f x = (x # value) + 1;;
+val f : < value : int; .. > -> int = <fun>
+
+The function f accepts any object with a method value (returning an int)
+and possible others: the ".." really denotes a type variable that can
+be instantiated to a row of other methods.
+
+# class o = object method value = 2  method str = "abc" end;;
+class o : object method str : string method value : int end
+# f (new o);;
+- : int = 3
+
+Here ".." is instantiated with (str : string). This kind of type matching
+allows to use objects with extra methods in a context that expects only
+some methods. More precisely, it is the context that accepts more methods.
+
+What you can't do with that is for instance:
+
+# class o = object method x = 2  method y = "abc" end;;
+class o : object method x : int method y : string end
+# class p =  object method x = 3 end;;
+class p : object method x : int end
+# [new o; new p];;
+This expression has type p = < x : int > but is here used with type
+  o = < x : int; y : string >
+Only the second object type has a method y
+
+
+A list in OCaml is homogeneous: all the elements must have the _same_
+type; you could say that [new o; new p] has type < x : int; .. > list,
+but then ".." has to be unified with (y : string) and ()  [the empty
+row of methods], which is impossible.
+
+Here you have to help the type system, and coerce both objets
+to a common supertype:
+
+# type t = < x : int >;;
+type t = < x : int >
+# [(new o :> t); (new p :> t)];;
+- : t list = [<obj>; <obj>]
+
+Coercing to a supertype amounts to forget some methods (which is safe,
+but never done automatically).
+
+Now there is a subtyping relation on object types. But it is handy to have
+it also on constructed types:
+
+# let l1 = [new o; new o] and l2 = [new p; new p];;
+val l1 : o list = [<obj>; <obj>]
+val l2 : p list = [<obj>; <obj>]
+# (l1 :> t list) @ (l2 :> t list);;
+- : t list = [<obj>; <obj>; <obj>; <obj>]
+
+To make l1 and l2 compatible, we again use a coercion, but now, we use
+the subtyping relation over lists:  "o list is a subtype of
+t list _because_ o is a subtype of t". This express the covariance
+of the list type constructor.
+
+Some constructors are contravariant. For instance, the arrow constructor
+t->s is contravariant in t and covariant in s. This means that:
+t1->s1 is a subtype of t2->s2 if and only if t2 is a subtype
+of t1 and s1 is a subtype of s2. If the arrow constructor was
+considered covariant in both arguments, it would be easy to break
+the type system (runtime type error) with a coercion.
+
+
+And some constructors are invariant, such as:
+type 'a inv = A of 'a | B of 'a -> unit
+
+t1 inv is a subtype of t2 inv if and only if t1 and t2 are equal
+(modulo the subtyping relation).
+
+
+Now, if you don't have the definition of a type constructor - say
+it is an abstract type from your point of view -
+you can't tell what its variance is w.r.t one of its arguments.
+So OCaml allows to specify this information in module interface;
+for instance, in map.mli:
+
+module type S =
+  sig
+    type key
+          (* The type of the map keys. *)
+    type (+'a) t
+          (* The type of maps from type [key] to type ['a]. *)
+...
+
+
+The '+' means that type t is covariant: a map from type key to type
+t1 can be coerced to a map from type key to type t2 if and only
+if t1 is a subtype of t2.
+
+(I don't know why other modules such as Queue do not give variance
+information ...)
+
+
+So, the subtyping relation is only raised from object types to
+all types using variance information for each type constructor
+(actually, subtyping can also appears with polymorphic variants).
+There is no subtyping between basic types: int is not a subtype of float.
+
+One reason for it is that in OCaml, coercion to a super type does not
+require any computation, thanks to the concrete representation of objects.
+So coercing a list does not involve walking through all its elements.
+As int representation is not compatible with float one, int is not a
+subtype if float.
+
+
+
+-- 
+  Alain
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

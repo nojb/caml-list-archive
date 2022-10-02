@@ -1,0 +1,118 @@
+Return-Path: <martin_jambon@emailuser.net>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id EE585BC75
+	for <caml-list@yquem.inria.fr>; Thu, 24 Feb 2005 23:23:24 +0100 (CET)
+Received: from out1.smtp.messagingengine.com (out1.smtp.messagingengine.com [66.111.4.25])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j1OMNO3f022230
+	for <caml-list@yquem.inria.fr>; Thu, 24 Feb 2005 23:23:24 +0100
+Received: from frontend2.messagingengine.com (frontend2.internal [10.202.2.151])
+	by frontend1.messagingengine.com (Postfix) with ESMTP id 347FDC5A617;
+	Thu, 24 Feb 2005 17:23:22 -0500 (EST)
+X-Sasl-enc: 3EzEdm3hGejJ8l7tuGSssw 1109283801
+Received: from [172.16.112.115] (burnham.ljcrf.edu [192.231.106.2])
+	by frontend2.messagingengine.com (Postfix) with ESMTP id 0323656F785;
+	Thu, 24 Feb 2005 17:23:19 -0500 (EST)
+Date: Thu, 24 Feb 2005 14:23:09 -0800 (PST)
+From: Martin Jambon <martin_jambon@emailuser.net>
+X-X-Sender: martin@localhost
+To: David Monniaux <David.Monniaux@ens.fr>
+Cc: coq-club@pauillac.inria.fr, caml-list <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] camlp4 rewrites
+In-Reply-To: <421E3AEC.2080200@ens.fr>
+Message-ID: <Pine.LNX.4.44.0502241346440.2167-100000@localhost>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at nez-perce with ID 421E53DC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 rewrites:01 monniaux:01 wrote:01 coq:01 ocaml:01 infix:01 coq:01 ocaml:01 bug:01 mistaken:01 wrote:01 overriding:01 syntax:01 syntax:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.2
+X-Spam-Level: 
+
+On Thu, 24 Feb 2005, David Monniaux wrote:
+
+> I'm currently playing with Coq and extraction, and I'm having the
+> following problems:
+> * Since the list constructor of standard OCaml (infix ::) is not (yet)
+> usable as a prefix ( :: ), I cannot just tell Coq to extract lists to
+> OCaml lists. (Future OCaml versions will allow prefix ( :: ), I'm told.)
+> * OCaml compiles match e with true -> x1 | false -> x2 less efficiently
+> than if e then x1 else x2 (bug report filed, but not fixed so far).
+>
+> Unless I'm greatly mistaken, this can be fixed by a mere syntactic
+> transformation using Camlp4. I suppose I'm not the first person to have
+> encountered these problems... So has anybody done the necessary Camlp4
+> scripts? :-)
+
+The following should solve your problem #2 (I just wrote as an exercise
+for myself :-)
+It works by overriding (partially) the regular syntax of OCaml (which
+might not be the syntax of Coq, I don't know Coq). If anyone
+has a better solution, please tell me.
+The general solution however seems to work only on the AST. Any
+comments or suggestions?
+
+
+(* File pa_matchbool.ml
+   Compilation:
+     ocamlc -c -I +camlp4 -pp 'camlp4o pa_extend.cmo q_MLast.cmo -loc loc' \
+        pa_matchbool.ml
+   Test:
+     camlp4o -I . pr_o.cmo pa_matchbool.cmo test_matchbool.ml \
+        -o test_matchbool.ppo
+*)
+let expand_match loc e l =
+  match l with
+      [ <:patt< True >>, None, e1;
+	(<:patt< False >> | <:patt< _ >>), None, e2 ]
+    | [ <:patt< False >>, None, e2;
+	(<:patt< True >> | <:patt< _ >>), None, e1 ] ->
+
+	true, <:expr< if $e$ then $e1$ else $e2$ >>
+
+    | _ -> false, <:expr< match $e$ with [ $list:l$ ] >>
+
+let expand_function loc l =
+  match expand_match loc <:expr< __matchbool >> l with
+      true, e -> <:expr< fun __matchbool -> $e$ >>
+    | false, _ -> <:expr< fun [ $list:l$ ] >>
+
+
+let match_case = Grammar.Entry.create Pcaml.gram "match_case";;
+
+EXTEND
+  GLOBAL: match_case;
+
+  Pcaml.expr: LEVEL "expr1" [
+    [ "match"; e = Pcaml.expr; "with";
+	OPT "|"; cases = LIST1 match_case SEP "|" ->
+	  snd (expand_match loc e cases)
+    | "function";
+	OPT "|"; cases = LIST1 match_case SEP "|" ->
+	  expand_function loc cases ]
+  ];
+
+  match_case: [
+    [ x1 = Pcaml.patt;
+      w = OPT [ "when"; e = Pcaml.expr -> e ]; "->";
+      x2 = Pcaml.expr -> (x1, w, x2) ]
+  ];
+END;;
+
+
+
+Martin
+
+--
+Martin Jambon, PhD
+Researcher in Structural Bioinformatics since the 20th Century
+The Burnham Institute http://www.burnham.org
+San Diego, California
+
+
+
+
+
+
+

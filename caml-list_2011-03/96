@@ -1,0 +1,157 @@
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p2EJWHUb019248
+	for <caml-list@sympa-roc.inria.fr>; Mon, 14 Mar 2011 20:32:17 +0100
+X-IronPort-AV: E=Sophos;i="4.62,317,1297033200"; 
+   d="scan'208";a="93762130"
+Received: from walapai.inria.fr ([128.93.30.24])
+  by mail2-relais-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 14 Mar 2011 20:32:15 +0100
+Received: from walapai.inria.fr (localhost [127.0.0.1])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p2EJWFdV019251
+	for <caml-list@inria.fr>; Mon, 14 Mar 2011 20:32:15 +0100
+Received: (from sympa@localhost)
+	by walapai.inria.fr (8.13.6/8.12.10/Submit) id p2EJWFQv019250
+	for caml-list@inria.fr; Mon, 14 Mar 2011 20:32:15 +0100
+Date: Mon, 14 Mar 2011 20:32:15 +0100
+X-Authentication-Warning: walapai.inria.fr: sympa set sender to sympa@inria.fr using -f
+To: caml-list@inria.fr
+From: eagriffis@gmail.com
+In-Reply-To: 
+Message-ID: <sympa.1300129576.5894.159@inria.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: 8bit
+Subject: [Caml-list] Camlp4 type constructor transformation
+
+Hello,
+
+I am having trouble getting Camlp4 to detect and transform type constructors
+that take parameters. I believe the problem is with my grammar. Here is a base
+case (call it base.ml):
+
+
+open Camlp4.PreCast
+open Syntax
+
+let is_interesting = function
+  | ("Foo", 2) -> true
+  | _ -> false
+    
+let rec name = function
+  | Ast.ExApp (_, e, _) -> name e
+  | Ast.ExId (_, Ast.IdUid (_, n)) -> n
+  | _ -> raise Not_found
+;;
+
+let arity e =
+  (* print_string "ZZZ\t";
+  let _loc = Loc.ghost in
+  Printers.OCaml.print_implem <:str_item< $exp:e$ >>; *)
+  let rec loop a = function
+    | Ast.ExApp (_, f, _) -> loop (a + 1) f
+    | Ast.ExId (_, Ast.IdUid _) -> a
+    | _ -> raise Not_found
+  in
+  loop 0 e
+
+let apply _loc e1 e2 =
+  try
+    (* Printf.printf "XXX\t%s %d\n" (name e1) (arity e1); *)
+    if is_interesting (name e1, arity e1) then
+      <:expr< transform ($e1$ $e2$) >>
+    else
+      <:expr< $e1$ $e2$ >>
+  with Not_found -> <:expr< $e1$ $e2$ >>
+
+DELETE_RULE Gram expr: SELF; SELF END;
+
+EXTEND Gram
+  GLOBAL: expr;
+
+  expr: LEVEL "apply"
+    [ LEFTA
+	[ e1 = SELF; e2 = SELF -> apply _loc e1 e2 ] ];
+  
+END;;
+
+
+I compile with this command (ocaml 3.12.0):
+
+ocamlc -I +camlp4 -pp camlp4of dynlink.cma camlp4fulllib.cma base.ml
+
+
+Here is a test case (call it test.ml):
+
+type t = Foo of int * int | Bar of int | Baz
+    
+let f = function
+  | 1 -> Foo (1, 1)
+  | 2 -> Bar 2
+  | _ -> Baz
+
+
+I process the test case with this command:
+
+camlp4of base.cmo test.ml
+
+
+... and get the following output:
+
+type t = | Foo of int * int | Bar of int | Baz
+
+let f = function | 1 -> Foo ((1, 1)) | 2 -> Bar 2 | _ -> Baz
+
+
+... but what I want is this:
+
+type t = | Foo of int * int | Bar of int | Baz
+
+let f = function | 1 -> transform (Foo (1, 1)) | 2 -> Bar 2 | _ -> Baz
+
+
+If I uncomment the print statements in base.ml, I see this before the output:
+
+ZZZ	let _ = Foo;;
+XXX	Foo 0
+ZZZ	let _ = Foo;;
+ZZZ	let _ = Bar;;
+XXX	Bar 0
+ZZZ	let _ = Bar;;
+
+
+So it seems my grammar extension only ever considers the inner-most expression
+application. Perhaps further explanation is necessary. I examine the structure
+of the expression application with the following experiment (call it exp.ml):
+
+let p = <:str_item<
+type t = Foo of int * int | Bar of int | Baz
+    
+let f = function
+  | 1 -> Foo (1, 1)
+  | 2 -> Bar 2
+  | _ -> Baz
+>>
+
+
+I run the following command:
+
+camlp4of exp.ml
+
+
+It expands the quotation to a crazy big tree, the interesting bit being this:
+
+		      (Ast.ExApp (_loc,
+			 (Ast.ExApp (_loc,
+			    (Ast.ExId (_loc, (Ast.IdUid (_loc, "Foo")))),
+			    (Ast.ExInt (_loc, "1")))),
+			 (Ast.ExInt (_loc, "1")))))),
+
+It seems that my constructor of arity 2 can be located as an uppercase
+identifier nested twice deep in ExApps. So either I do not understand how to
+modify the grammar rule to catch this, or the problem is not in the rule?
+
+Any help would be most appreciated. I've gotten this far by reading whatever
+tutorials I could find and trying to follow along in the Camlp4 source code,
+but I am now completely stumped. Thank you!
+
+Eric Griffis
+eagriffis@gmail.com

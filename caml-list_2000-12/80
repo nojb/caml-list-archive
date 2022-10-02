@@ -1,0 +1,91 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA16207 for caml-red; Tue, 12 Dec 2000 10:32:00 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA02922 for <caml-list@pauillac.inria.fr>; Tue, 12 Dec 2000 06:48:54 +0100 (MET)
+Received: from smtp2-cm.mail.eni.net (smtp2a-cm.mail.eni.net [216.133.226.135])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id eBC5mrX15593
+	for <caml-list@inria.fr>; Tue, 12 Dec 2000 06:48:53 +0100 (MET)
+Received: from checkerlap.d6.com ([216.233.204.162])
+	by smtp2-cm.mail.eni.net (8.9.3/8.9.3) with ESMTP id VAA11974;
+	Mon, 11 Dec 2000 21:48:36 -0800
+Message-Id: <4.3.2.7.2.20001211202018.00b3f510@shell16.ba.best.com>
+X-Sender: def6@shell16.ba.best.com
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Date: Mon, 11 Dec 2000 21:06:16 -0800
+To: gerd@gerd-stolpmann.de, eijiro_sumii@anet.ne.jp, caml-list@inria.fr
+From: Chris Hecker <checker@d6.com>
+Subject: Re: substring match like "strstr"
+Cc: gerd@gerd-stolpmann.de, sumii@venus.is.s.u-tokyo.ac.jp
+In-Reply-To: <0012112341150J.00625@ice>
+References: <4.3.2.7.2.20001211103237.00c12100@shell16.ba.best.com>
+	<00120814135508.00625@ice>
+	<4.3.2.7.2.20001211103237.00c12100@shell16.ba.best.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset="us-ascii"
+Sender: weis@pauillac.inria.fr
+
+
+>  let i_limit = strlen - patlen in
+
+Ah, duh.  Good idea.
+
+Here are some new timings, including the _imp2 (I fixed a minor fencepost bug in yours in an admittedly cheesy way; the code's below):
+
+Under Win2k cmd.exe:
+strstr total = 0.610000 (5,0,19,13)
+strstr_imp total = 0.593000 (5,0,19,13)
+strstr_imp2 total = 0.563000 (5,0,19,13)
+strstr_c total = 0.469000 (5,0,19,13)
+
+Under Win98 command.com:
+strstr total = 1.460000 (5,0,19,13)
+strstr_imp total = 1.020000 (5,0,19,13)
+strstr_imp2 total = 0.955000 (5,0,19,13)
+strstr_c total = 0.800000 (5,0,19,13)
+
+Under Win98 emacs shell-command:
+strstr total = 1.125000 (5,0,19,13)
+strstr_imp total = 1.025000 (5,0,19,13)
+strstr_imp2 total = 0.960000 (5,0,19,13)
+strstr_c total = 0.800000 (5,0,19,13)
+
+I doubled the number of iterations to try to figure out the emacs/command.com difference, but to no avail.
+
+However, then I decided to check to see if this was actually the strstr in the library, so instead of calling that c code, I called string.h's strstr.  I discovered that there's actually an intel-asm version of strstr that's compiled into the crt:
+
+strstr total = 1.130000 (5,0,19,13)
+strstr_imp total = 1.020000 (5,0,19,13)
+strstr_imp2 total = 0.960000 (5,0,19,13)
+strstr_c total = 0.365000 (5,0,19,13)
+
+Ouch!  We're back to 3x slower.  But hey, no one said ocaml could compete with asm.  :)
+
+Anyway, as it stands, the ocaml code is 17% slower than the C code at relatively comparable code-simplicity.  I'd say the ocaml code is a bit harder to understand and wordier, but that's mostly because ocaml doesn't have modifyable pointers, and the C code just walks the pointers through the array.  Also, the C has an early-out return that ocaml can't do (without an exception), and that makes things a little simpler as well.
+
+Of course, I'm not saying you can extrapolate anything about real programs from this simple example, but it's interesting to me nonetheless.
+
+Chris
+
+Here's the updated strstr_imp2.  If you really wanted to try to max out the ocaml, we could read the pattern into an int and try to match it a word at a time, etc.
+
+(* "optimized" imperative strstr *)
+let strstr_imp2 pat str = 
+  let strlen = String.length str in
+  let patlen = String.length pat and
+      i = ref 0 and
+      f = ref strlen in
+  let limit = strlen - patlen + 1 in
+  while !i < limit do
+    let pati = ref 0 and
+        j = ref !i in
+    while !pati < patlen && 
+      String.unsafe_get str !j == String.unsafe_get pat !pati do
+      pati := succ !pati;
+      j := succ !j;
+    done;
+    if !pati = patlen then
+      begin f := !i; i := strlen end
+    else
+      i := succ !i
+  done;
+  !f
+
+

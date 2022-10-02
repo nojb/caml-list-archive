@@ -1,0 +1,120 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p0F0rBqW025461
+	for <caml-list@sympa-roc.inria.fr>; Sat, 15 Jan 2011 01:53:11 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AigBAPZ+ME3RVdi2imdsb2JhbACkVggVAQEBCgkMBw8GIKM1iXmCF4RULoZaAQEDBYVKBIsW
+X-IronPort-AV: E=Sophos;i="4.60,325,1291590000"; 
+   d="scan'208";a="95466916"
+Received: from mail-qy0-f182.google.com ([209.85.216.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-MD5; 15 Jan 2011 01:53:06 +0100
+Received: by qyk36 with SMTP id 36so3534022qyk.6
+        for <caml-list@inria.fr>; Fri, 14 Jan 2011 16:53:05 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:in-reply-to:references:date
+         :message-id:subject:from:to:cc:content-type;
+        bh=iv9ik1yb6vi9S/EIwtzo1rxqRP14YlrWa9E4RoZKIgE=;
+        b=lssicrTZu2N1r4lL5x85Q3Sw4YDQB7xt8l/kXip4VyKbYneLLomlg+9xRn2KJJV7xi
+         V4FExKDvSwj9eS1UHkwVKQZLcYwHjVUKZvmwMiNBB5PmkcjAaywdIkzs+VNJiCg67a52
+         Kx74cSzQyyVkF3vEuTM6+UE9yPF7Ah469dFrA=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :cc:content-type;
+        b=WA+VxbRYk2eIUWhkHY+WoHXU8+Eb9vkESCBGmWVSzgRfqcOsocuboj7h7OzhVF736S
+         5HBwumUU5Ckov0p6rCaGG8cnNvVe7zULtMv0EbN19CegsUwppsQqkdBq4Rnx2W2dF4pV
+         apV6pO3Ou4KYAqdQRWFMmDhNraukyL14ASV0Y=
+MIME-Version: 1.0
+Received: by 10.229.181.85 with SMTP id bx21mr1209801qcb.267.1295052784876;
+ Fri, 14 Jan 2011 16:53:04 -0800 (PST)
+Received: by 10.229.7.201 with HTTP; Fri, 14 Jan 2011 16:53:04 -0800 (PST)
+In-Reply-To: <C7AAD554-4DA5-4811-8AAA-84E14E46C31D@philou.ch>
+References: <C7AAD554-4DA5-4811-8AAA-84E14E46C31D@philou.ch>
+Date: Sat, 15 Jan 2011 00:53:04 +0000
+Message-ID: <AANLkTikgyY90U0v=83ss+ZO2gCiO15jahRXffTBMf_Vs@mail.gmail.com>
+From: Jeremy Yallop <yallop@gmail.com>
+To: Philippe Strauss <philou@philou.ch>
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Subject: Re: [Caml-list] writing a not too simple parametrized class interface
+
+On 14 January 2011 17:46, Philippe Strauss <philou@philou.ch> wrote:
+> the whole things works perfectly, but the .mli seems not easy to write.
+
+It can be useful in such circumstances to ask ocamlc to print out an
+interface (.mli) for you.  Once you've written your implementation
+(nodes.ml), you can run
+
+    ocamlc -i nodes.ml
+
+to dump the interface inferred by OCaml.  The result is not always a
+good starting point for your actual interface file, since any
+structural types such as objects (or polymorphic variants) will be
+expanded in full, and will not reflect the inheritance (or variant
+extension) that you used in your code.  Still, it can be helpful for
+debugging.
+
+You can also use ocamlc in this way with interface files as input, and
+this turns out to be helpful in diagnosing your problem here.  Running
+
+    ocamlc -i nodes.mli
+
+on your code gives the following output for node_virt_t (in amongst
+the other class types):
+
+  class virtual ['a, 'b] node_virt_t :
+    ('a, 'a) node_virt_t ->
+    parameters_t ->
+    int ->
+    int ->
+    object
+      constraint 'b = 'a
+      val hres : (int * int * string, 'a) Hashtbl.t
+      val mutable id : int array
+      val parms : parameters_t
+      val previous : ('a, 'a) node_virt_t
+      method get : int -> int * int * 'a
+      method get_id : int -> int
+      method private inc_id : int -> unit
+      method virtual process : 'a -> 'a
+      method private pstore : int -> int * int * 'a
+      method virtual ptyp : unit -> node_parameters_t
+    end
+
+If you compare this with your original type, you'll notice that all
+your type variables have been unified: you wrote
+
+   class virtual ['b, 'c] node_virt_t : ('a, 'b) node_virt_t -> ...
+
+but ocamlc has changed this to
+
+  class virtual ['a, 'b] node_virt_t : ('a, 'a) node_virt_t -> ...
+
+and added a further constraint on the class parameters:
+
+      constraint 'b = 'a
+
+This has happened because you've used type variables inconsistently in
+the type of node_virt_t: you've given it parameters 'b and 'c, but
+used 'a, 'b and 'c to the right of the colon.
+
+The following type for node_virt_t uses 'a and 'b more consistently,
+and may more closely reflect your intentions:
+
+ class virtual ['a, 'b] node_virt_t :
+    ('a, 'b) node_virt_t ->
+    parameters_t ->
+    int ->
+    int ->
+    object
+        val previous : ('a, 'b) node_virt_t
+        val parms : parameters_t
+        val hres : (int * int * string, 'b) Hashtbl.t
+        val mutable id : int array
+        method get_id : int -> int
+        method private inc_id : int -> unit
+        method virtual ptyp : unit -> node_parameters_t
+        method virtual process : 'a -> 'b
+        method private pstore : int -> int * int * 'b
+        method get : int -> int * int * 'b
+ end

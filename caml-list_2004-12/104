@@ -1,0 +1,122 @@
+Return-Path: <Jean-Christophe.Filliatre@lri.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 5C279BB91
+	for <caml-list@yquem.inria.fr>; Fri, 10 Dec 2004 09:21:50 +0100 (CET)
+Received: from ext.lri.fr (ext.lri.fr [129.175.15.4])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iBA8LoZt029705
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@yquem.inria.fr>; Fri, 10 Dec 2004 09:21:50 +0100
+Received: from localhost (localhost [127.0.0.1])
+	by ext.lri.fr (Postfix) with ESMTP
+	id DE48519E71E; Fri, 10 Dec 2004 09:21:49 +0100 (CET)
+Received: from ext.lri.fr ([127.0.0.1])
+ by localhost (ext.lri.fr [127.0.0.1]) (amavisd-new, port 10024) with ESMTP
+ id 10258-03; Fri, 10 Dec 2004 09:21:49 +0100 (CET)
+Received: from smtp.lri.fr (serveur3-5 [129.175.3.5])
+	by ext.lri.fr (Postfix) with ESMTP
+	id CC73919E71C; Fri, 10 Dec 2004 09:21:49 +0100 (CET)
+Received: from pc8-142 (pc8-142 [129.175.8.142])
+	by smtp.lri.fr (Postfix) with ESMTP
+	id D1ADECEC98; Fri, 10 Dec 2004 09:21:49 +0100 (CET)
+Received: from filliatr by pc8-142 with local (Exim 3.36 #1 (Debian))
+	id 1Ccg29-0004xV-00; Fri, 10 Dec 2004 09:21:49 +0100
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16825.23709.530721.745815@gargle.gargle.HOWL>
+Date: Fri, 10 Dec 2004 09:21:49 +0100
+To: Michel Pastor <K4ng@codefx.org>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Infinite loop when catching an exception
+In-Reply-To: <41B91A9F.8050400@codefx.org>
+References: <41B91A9F.8050400@codefx.org>
+X-Mailer: VM 7.18 under Emacs 21.3.1
+From: Jean-Christophe Filliatre <Jean-Christophe.Filliatre@lri.fr>
+X-Virus-Scanned: by amavisd-new at lri.fr
+X-Miltered: at concorde with ID 41B95C9E.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 filliatre:01 filliatre:01 lri:01 bug:01 environement:01 parsing:01 ocaml:01 compiler:01 uncomment:01 bug:01 endline:01 printf:01 endline:01 failwith:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+
+Michel Pastor writes:
+ > 
+ > I have a problem with a little piece of code but
+ > I attached the whole thing since i cannot reproduce
+ > the "bug" in reduced environement with the same values.
+ > I'm using the num library for doing exact maths.
+ > 
+ > [...]
+ >
+ > If I try to catch the exception like that the process
+ > wont even go beyond the "try with" block
+ > I tested printing something instead of trying to exit
+ > but nothing is writed to the console and the cpu is at 100%
+ > All I can do is to kill the process.
+ > But if I don't try catch the Failure all works fine.
+ > I don't think doing unsafe things since there is no C code,
+ > no black magic, only some maths.
+
+This is  a ``syntax'' problem: you  are not parsing the  code the same
+way the ocaml compiler does. When you insert the try/with like this:
+
+ > (************************)
+ > (*  HERE IS THE PROBLEM *)
+ > (************************)
+ > 
+ > let draw_curve color =
+ >   begin
+ >     set_color color;
+ >     let index = ref !x_min in
+ >     let ival = (!x_max -/ !x_min) // num_of_int (graph_width * 2) in
+ >     while !index <=/ !x_max do
+ >       let yval = poly_apply poly !index in
+ >      (* uncomment the "try with" block to trigger the bug *)
+ >      try 
+ >      begin
+ > 	print_endline ("ici " ^ string_of_num yval);
+ > 	let (graph_x, graph_y) = scale_point (!index, yval) in
+ > 	  begin
+ > 	    printf "%d %d\n" graph_x graph_y;
+ > 	    fill_circle graph_x graph_y 1;
+ > 	  end;
+ > 	print_endline "la";
+ > 	end;
+ >      with _ -> failwith "ici maintenant";
+ >       print_endline "et encore la";
+ >       index := !index +/ ival;
+ >     done
+ >   end
+
+then the three  lines "failwith ...; print_endline ...;  index := ..."
+are  all  part  of the  exception  handler.   Since  in your  code  no
+exception is  raised, these lines  are never evaluated,  including the
+update of the index, which explains the infinite loop.
+
+If you really  need this try/with, you need to  rewrite your code this
+way (for instance):
+
+	while ... do
+	  ...
+	  begin 
+	    try
+	      ...
+	    with _ ->
+              ...
+	  end;
+	  ...
+        done
+
+To  avoid  such pitfalls,  it  is convenient  to  use  an editor  with
+automatic indentation of  the code which is consistent  with the ocaml
+syntax, such as the Tuareg mode under Emacs. At some point, you become
+so  familiar with ocaml  syntax that  you don't  need it  anymore, but
+meanwhile it helps.
+
+Best regards,
+-- 
+Jean-Christophe
+

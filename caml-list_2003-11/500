@@ -1,0 +1,114 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA28106; Tue, 25 Nov 2003 16:10:41 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA28032 for <caml-list@pauillac.inria.fr>; Tue, 25 Nov 2003 16:10:40 +0100 (MET)
+Received: from flyingtuxman.baretta.com ([213.255.109.130])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hAPFAd109138;
+	Tue, 25 Nov 2003 16:10:39 +0100 (MET)
+Received: from baretta.com (flyingtuxman.baretta.com [127.0.0.1])
+	by flyingtuxman.baretta.com (8.12.8/8.12.8) with ESMTP id hAPFA6ku010688;
+	Tue, 25 Nov 2003 16:10:06 +0100
+Message-ID: <3FC370CE.2050509@baretta.com>
+Date: Tue, 25 Nov 2003 16:10:06 +0100
+From: Alex Baretta <alex@baretta.com>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.5) Gecko/20031007
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Richard Jones <rich@annexia.org>
+CC: Ocaml <caml-list@inria.fr>, Jacques Garrigue <caml-bugs@pauillac.inria.fr>
+Subject: Re: [Caml-list] Ocamlc stack overflow (Probably a typechecking bug)
+References: <3FC23E03.4030805@baretta.com> <20031124174743.GA30052@redhat.com> <3FC356F5.9080309@baretta.com> <20031125140614.GA5810@redhat.com>
+In-Reply-To: <20031125140614.GA5810@redhat.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; baretta:01 baretta:01 caml-list:01 ocamlc:01 bug:01 compiles:01 bug:01 chop:01 rule-based:01 functor:01 statically:01 typechecked:01 doubly:01 generic:01 generic:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Richard Jones wrote:
+> It's only 140 lines of code? Try chopping lines off the end of the
+> file until the thing compiles. Then you should be able to isolate
+> which statement causes the stack overflow. From there it should be a
+> simple enough job to either understand the problem and work around it,
+> or else come up with a minimal example which exhibits the bug.
+> 
+> Rich.
+> 
+
+I don't need to chop off lines of code. I know exactly what line of code 
+causes the problem. Let me quote it to you:
+
+ > let cont f init res execute =
+ >   Local_rules.Rewrite.rewrite_continuation rule_base (cont f)
+
+Let me try to explain the dependency relations in my libraries. You will 
+see that it is impossible to come up with a "minimal example". I have a 
+rule-based abstract processor (à la CLIPS) written as functor whose 
+parameter module defines types "fact" and "fact_base" as well the 
+operations which can be performed on them. I also have an SQL library 
+which gives provides a statically typechecked abstract syntax for SQL 
+and facilities to connect to databases through a doubly generic 
+interface: the first parameter module provides a database connection 
+layer, the second parameter (we call it the Access module) provides the 
+type information to the ocaml typechecking system to achieve static 
+typechecking of SQL in ocaml. This same generic library has a query 
+rewriting rule engine à la PostgreSQL which defines a fact base module 
+for the rule-based processor. This rewrite-rule functor takes an Access 
+parameter, which must match the Access parameter passed to the DB 
+functor. The actual rewrite rules are also defined in a functor which 
+takes an Access module as a parameter.
+
+Finally, I have an embedded-sql syntax extension which provides the 
+syntactic sugar to make everything nice and easy in an ocaml source 
+file. This syntax extension transforms SQL queries in concrete syntax 
+into an ocaml module which instantiates the DB functor and the 
+rewrite-rule engine with the same Access module. Since no module has an 
+explicit signature hiding the type representations, I would expect the 
+compiler to be able to figure things out correctly. Instead, I used to 
+get error messages of the following kind.
+
+ > File "inserimento_enti.xcaml", line 95, characters 56-65:
+ > This expression has type
+ >   Local_rules.Rewrite.Rules.rule_base =
+ >     Local_rules.Rewrite.Rules.rule list
+ >     Map.Make(Local_rules.Rewrite.Rules.Fact_class_order).t
+ > but is here used with type
+ >   RW.Rules.rule list RW.Rules.FCM.t =
+ >     RW.Rules.rule list Map.Make(RW.Rules.Fact_class_order).t
+
+
+Which points to the following line:
+
+ > let cont f init res execute =
+ >   RW.rewrite_continuation rule_base (cont f)
+
+It is worth noting that the following module definitions imply that the 
+error message is actually wrong.
+ > (* in Inserimento_enti *)
+ > module Local_rules = Generic_rules (Anagrafiche_logical)
+ > module RW = Local_rules.Rewrite
+
+
+Intuitively, I'd say the type checker is having some real trouble with 
+the complex module operations I use. But, then again, there might be a 
+problem in my code. So, I removed the RW definition and changed the 
+troublesome line to the one originally mentioned in this post:
+ > let cont f init res execute =
+ >   Local_rules.Rewrite.rewrite_continuation rule_base (cont f)
+
+Now, this really turns the typechecker nuts. It simply cannot state that 
+there is a type error for the inferred type is identical to the actual 
+type. Here comes the stack overflow problem.
+
+So, dear caml riders and caml breeders, how do we get out of this 
+impasse? I'm willing to submit my entire source tree. (I'd release it 
+GPLed if only I had time to write a minimum of documentation and got it 
+to compile properly...).
+
+Alex
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

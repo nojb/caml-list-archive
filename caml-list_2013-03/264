@@ -1,0 +1,116 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 71D047EE7A
+	for <caml-list@sympa.inria.fr>; Thu, 28 Mar 2013 12:23:23 +0100 (CET)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=pra; client-ip=193.252.23.212;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  alain@frisch.fr) identity=mailfrom; client-ip=193.252.23.212;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr"; x-sender="alain@frisch.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@msa.smtpout.orange.fr) identity=helo;
+  client-ip=193.252.23.212;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="alain@frisch.fr";
+  x-sender="postmaster@msa.smtpout.orange.fr";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuMAAIInVFHB/BfUe2dsb2JhbABDDoMtvAaCXoEZDgEBCQ0KCBQDJYIfAQEFJxFAARALEgYJFg8JAwIBAgE3DgYBDAEHAQGIFL5ojmUzB4NAA5ZnhX+NVECBaSQ
+X-IPAS-Result: AuMAAIInVFHB/BfUe2dsb2JhbABDDoMtvAaCXoEZDgEBCQ0KCBQDJYIfAQEFJxFAARALEgYJFg8JAwIBAgE3DgYBDAEHAQGIFL5ojmUzB4NAA5ZnhX+NVECBaSQ
+X-IronPort-AV: E=Sophos;i="4.84,925,1355094000"; 
+   d="scan'208";a="9040125"
+Received: from msa03.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.212])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 28 Mar 2013 12:23:22 +0100
+Received: from [192.168.1.120] ([92.151.115.78])
+	by mwinf5d52 with ME
+	id GzPM1l00J1hZWdG03zPM84; Thu, 28 Mar 2013 12:23:22 +0100
+Message-ID: <5154282B.9090803@frisch.fr>
+Date: Thu, 28 Mar 2013 12:23:23 +0100
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; Linux i686 on x86_64; rv:20.0) Gecko/20100101 Thunderbird/20.0
+MIME-Version: 1.0
+To: Anil Madhavapeddy <anil@recoil.org>, 
+ "cl-mirage@lists.cam.ac.uk List" <cl-mirage@lists.cam.ac.uk>
+CC: Philippe Veber <philippe.veber@gmail.com>, 
+ Martin Jambon <martin.jambon@ens-lyon.org>,
+ caml users <caml-list@inria.fr>
+References: <CAOOOohSzgcZxLOu9qUX1Box1eKyK-DEX7zrEM2GXzjs372jLpQ@mail.gmail.com> <51520CAE.6020009@ens-lyon.org> <CAOOOohTMNd6pW=3Gp8wBc8nggLUCEd9OAEFFV91jz8wEUJMMXg@mail.gmail.com> <51540395.50202@frisch.fr> <A9720A40-D685-493B-99B5-2E8271A7617C@recoil.org>
+In-Reply-To: <A9720A40-D685-493B-99B5-2E8271A7617C@recoil.org>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Master-slave architecture behind an ocsigen server.
+
+On 03/28/2013 12:02 PM, Anil Madhavapeddy wrote:
+> Are all of the messages through these queues persistent, or just the larger ones that are too big to fit in the shared memory segment, and are they always point-to-point streams?
+
+The messages always go through shared memory queues (non persistent), 
+but their payload is offloaded to the file system (in temporary files) 
+when it is too large.  There is no real persistence, though, because the 
+temporary file is not self-describing (it is not sufficient to restart a 
+computation after a process failure, for instance).  (The distribution 
+of computations through a database is closer to real persistence.)
+
+Queues are unidirectional point-to-point streams between two processes 
+(we use a pair of such queues for between the main process and the 
+scheduler, and between the scheduler and each worker process).
+
+The relevant part of the API is:
+
+========================================================
+type t
+       (** The type of point-to-point shared memory queues. *)
+
+val create: ?max_size:int -> unit -> t
+     (** A queue is created in one process with [create], passed by
+         name (using [id]) to a single another process which can call
+         [from_id]. *)
+
+val from_id:  ?max_size:int -> string -> t
+     (** Access a queue created by another process given its unique
+         name. *)
+
+val id: t -> string
+     (** Globally (system-wide) unique name attached to the queue. *)
+
+val close: t -> unit
+
+exception CannotGrow
+exception BrokenPipe
+
+val send: t -> string -> unit
+     (** Non-blocking operation.
+         Raises [BrokenPipe] if the reader has disconnected.
+         Raises [CannotGrow] if the maximum size of the buffer has been 
+reached. *)
+val read: t -> string option
+     (** Non-blocking operation.
+         Returns [None] if no message is available.
+         Raises [BrokenPipe] if the writer has disconnected. *)
+========================================================
+
+If there is some interest for it, maybe Fabrice could release the code 
+with an open source license?
+
+One thing which is not supported by this library is a notification 
+mechanism to inform the other side of the queue that messages are 
+available.  For now, we simulate that by pinging the processes 
+stdin/stdout descriptors.  In the scheduler and the worker, we use 
+select to monitor them (there is probably a big cost of doing so, 
+especially considering how select is emulated under Windows).  In the 
+GUI process, we use standard .Net process monitoring facilities to 
+inject callbacks in the main GUI thread.  (The OCaml side of our 
+application in mono-threaded, and we use a few external native or .Net 
+threads to monitor system conditions.)
+
+
+Alain

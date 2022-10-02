@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id GAA22752; Thu, 18 Dec 2003 06:32:02 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA22799 for <caml-list@pauillac.inria.fr>; Thu, 18 Dec 2003 06:32:00 +0100 (MET)
+Received: from mail.davidb.org (adsl-64-172-240-129.dsl.sndg02.pacbell.net [64.172.240.129])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hBI5VwH11309;
+	Thu, 18 Dec 2003 06:31:59 +0100 (MET)
+Received: from davidb by mail.davidb.org with local (Exim 3.36 #1 (Debian))
+	id 1AWqlP-0001xA-00; Wed, 17 Dec 2003 21:31:55 -0800
+Date: Wed, 17 Dec 2003 21:31:55 -0800
+From: David Brown <caml-list@davidb.org>
+To: Nicolas Cannasse <warplayer@free.fr>
+Cc: Pierre Weis <pierre.weis@inria.fr>,
+        Falk Hueffner <falk.hueffner@student.uni-tuebingen.de>,
+        caml-list@inria.fr
+Subject: Re: [Caml-list] Python's yield, Lisp's call-cc or C's setjmp/longjmp in OCaml
+Message-ID: <20031218053155.GA7333@davidb.org>
+References: <200312171914.UAA00389@pauillac.inria.fr> <004c01c3c504$62407b80$0274a8c0@PWARP>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <004c01c3c504$62407b80$0274a8c0@PWARP>
+User-Agent: Mutt/1.5.4i
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 caml-list:01 python's:01 lisp's:01 c's:01 0900,:01 cannasse:01 iterator:01 iterator:01 expr:01 expr:01 closures:01 closures:01 selves:99 haskell:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Thu, Dec 18, 2003 at 10:14:19AM +0900, Nicolas Cannasse wrote:
+
+> type 'a tree =
+>     |  Node of 'a tree list
+>     |  Leaf of 'a
+> 
+> let rec iterator = function
+>     | Node l -> List.iter iterator l
+>     | Leaf x -> yield x
+> 
+> Doing it using a closure is more difficult, since we need to reproduce the
+> stack using a data structure. That goes of course for all recursive data
+> structures.
+
+Ocaml does help us a bit by sort of having lazy functionality.  Remember
+that lazy (expr) is roughly equivalent to (fun () -> expr), and is
+equivalent in the case where Lazy.force is only called once.  The
+closures are very capable of representing the recursive structure, right
+in the closures them selves.
+
+What makes this a little complicated is that your definitions make calls
+to things like List.iter, which are not defined for lazy lists.  The
+first thing to do, is rewrite your function to just return a list of the
+results.  This could be done directly in Haskell, and the lazy
+evaluation would give you exactly what you want.
+
+  let rec iterator = function
+    | Node l -> List.flatten (List.map iterator l)
+    | Leaf x -> [x]
+
+To make this lazy, we need to define our own lazy list type.  This is a
+lot cleaner than the implicit closures I posted previously, since the
+conversion to lazy form is fairly straightforward.  The thing that makes
+this tricky is that we are mixing lazy with regular lists.  First, let's
+rewrite the needed list functions (flatten, map, and append)
+appropriately for the combination of regular and lazy lists we are
+using.
+
+  let rec lazy_map f = function
+    | [] -> Nil
+    | a::l ->
+        let r = f a in
+        Pair (r, lazy (lazy_map f l))
+
+  let rec lazy_append l r = match l with
+    | Nil -> r
+    | Pair (a, ar) ->
+        Pair (a, lazy (lazy_append (Lazy.force ar) r))
+
+  let rec lazy_flatten = function
+    | Nil -> Nil
+    | Pair (l, r) ->
+        lazy_append l (lazy_flatten (Lazy.force r))
+
+Now we can directly rewrite your above iterator in a lazy fashion:
+
+  let rec lazy_iterator = function
+    | Node l -> lazy_flatten (lazy_map lazy_iterator l)
+    | Leaf x -> Pair (x, lazy (Nil))
+
+The following code shows that it indeed works:
+
+  let rec force_iter f = function
+    | Nil -> ()
+    | Pair (a, l) ->
+        f a;
+        force_iter f (Lazy.force l)
+
+  let showb () =
+    let flat = lazy_iterator sample_tree in
+    force_iter (fun x -> printf "%d," x) flat;
+    printf "\n"
+
+  let () = showb ()
+
+Coming up with some good lazy data structures (lists are often enough)
+and possibly some ocamlp4 grammar to make them as easy to use as regular
+lists would be sufficient for this kind of problem.
+
+A good exercise would be to rewrite all of this using a
+continuation-passing style.
+
+Dave
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

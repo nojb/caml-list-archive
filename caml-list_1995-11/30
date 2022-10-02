@@ -1,0 +1,156 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id PAA24222 for caml-redistribution; Fri, 17 Nov 1995 15:53:46 +0100
+Received: from peray.inria.fr (peray.inria.fr [128.93.8.98]) by pauillac.inria.fr (8.6.10/8.6.6) with SMTP id OAA22172; Fri, 17 Nov 1995 14:50:27 +0100
+Received: by peray.inria.fr; Fri, 17 Nov 1995 14:52:04 +0100
+From: Daniel de Rauglaudre <ddr@peray.inria.fr>
+Message-Id: <199511171352.AA28748@peray.inria.fr>
+Subject: Quotations in Caml-Special-Light and Caml-Light
+To: caml-list@pauillac.inria.fr, coq@pauillac.inria.fr
+Date: Fri, 17 Nov 1995 14:52:03 +0100 (MET)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Content-Length: 5251      
+Sender: weis
+Status: RO
+
+
+There is a way to have macros in Caml-Light and Caml-Special-Light. I
+implemented them in my private version of Caml-Special-Light. This mail
+explains how these macros work.
+
+You can include, in your source, "quotation" expressions and patterns:
+quotations are tokens bracketed by << and >> holding any sequence of
+characters, just like strings.
+
+These quotations are expanded at parse time by a user function
+previously loaded by the compiler. This function, the "expander", gets
+as parameter the string of the sequence of characters of the quotation
+and returns a new string, the source code converted, which is parsed by
+the compiler.
+
+For example, this is a definition of an expander that will transform
+<<MAX>> into the value 350 and <<MIN>> to the value 8:
+        let expander = function
+            "MAX" -> "350"
+          | "MIN" -> "8"
+          | _ -> raise Parsing.Parse_error
+        ;;
+After having loaded this function in the compiler as a quotation
+expander, you can use quotations. For example, here is a possible
+toplevel session:
+         #<<MAX>>;;
+	 - : int = 350
+	 #<<MIN>>;;
+	 - : int = 8
+	 #<<GRR>>;;
+	 Uncaught exception: Parse_error
+	 Raised while expanding quotation
+         #match 350 with <<MAX>> -> 12 | x -> x + 3;;
+         - : int = 12
+         #match 351 with <<MAX>> -> 12 | x -> x + 3;;
+         - : int = 354
+
+Now how to load an expander? There is a new function, named
+"add_expander" in a new module named "quotation" in the compiler.
+
+For example, to load the function "expander" defined above:
+         Quotation.add_expander "oops" expander;;
+
+Quotation.add_expander is of type "string -> (string -> string) -> unit".
+It guaranties that the expander is well typed (string -> string). The
+first parameter is a name for the quotation (the usage of this name is
+not described in this message).
+
+In the toplevel, the order of operations is:
+        load the expander function
+        call Quotation.add_expander
+        use quotations
+
+Using the compiler, you have 2 steps: first make a file containing
+the expander code and the call to Quotation.add_expander
+(e.g. "foo.ml"):
+        let expander =
+          function
+	    "MAX" -> "350"
+	  | "MIN" -> "8"
+	  | _ -> raise Parsing.Parse_error
+	;;
+	Quotation.add_expander "oops" expander;;
+
+Just do the compiling phase (using the -c option):
+        cslc -c foo.ml
+
+Now, as a second step, you can use the "oops" quotations in
+Caml-Special-Light source files. For example this one, "test.ml":
+ 	let f =
+ 	  function
+ 	    <<MAX>> -> "it is max"
+ 	  | <<MIN>> -> "it is min"
+ 	  | x -> "it is " ^ string_of_int x
+ 	;;
+ 	let test x = Printf.printf "%d: %s\n" x (f x); flush stdout in
+ 	test 350;
+ 	test <<MAX>>;
+ 	test 8;
+ 	test <<MIN>>;
+ 	test 25;;
+
+Compile it with the option "-L foo.cmo". This is a new option telling
+the compiler to load "foo.cmo" before starting the compilation:
+        cslc -L foo.cmo test.ml
+
+The execution of this test gives:
+	350: it is max
+	350: it is max
+	8: it is min
+	8: it is min
+	25: it is 25
+
+Remarks:
+
+   * The quotation expanders are just of type "string -> string",
+     independantly from the parsing technology. You can use lex/yacc,
+     streams, or, like here, simple string pattern matchings. Etc.
+   * The function Quotation.add_expander, although visible in sources
+     like library interfaces, is local to the compiler. It is not
+     possible to link it:
+        $cslc foo.cmo
+        Error while linking foo.cmo: Reference to undefined global `Quotation'
+     its only usage is after the -L option, or in the toplevel.
+   * The values defined in expanders are not visible in the compiled files
+     using quotations: they need not to be. Only the expander code, loaded
+     by the compiler is indirectly visible, since it is run when expanding
+     quotations. In the example, you cannot access the function "expander",
+     defined in "foo.ml", in "test.ml", unless you explicitely open the
+     interface of "foo.ml", which would be unuseful since "foo.cmo" is
+     not linkable: yes, in the toplevel...
+   * The expander can generate any available input syntax. The example
+     gives very simple syntax: "350", "8". But it can generate any
+     expression or pattern code. This code is parsed by the compiler
+     as expression or pattern, depending of its context.
+   * All the source locations of the tree generated by the expander
+     are "the quotation itself". When printing a typing error, for
+     example, the whole quotation is showed. We are studying solutions
+     to allow expanders to specify more precise locations.
+
+
+Implementation
+
+The implementation is quite simple, the new module "quotation.ml" in
+the compiler (about 130 lines). Some modifications in the lexer and
+the parser to accept quotations. And the function to load .cmo files
+in the core of the compiler (got from the toplevel sources). The
+examples given above, including the call to cslc, are real examples:
+it works!
+
+--------------------------------------------------------------------------
+ Daniel de RAUGLAUDRE
+
+ Projet Cristal - INRIA Rocquencourt
+ Tel: +33 (1) 39 63 53 51
+ Email: daniel.de_rauglaudre@inria.fr
+ Web: http://pauillac.inria.fr:80/~ddr/
+--------------------------------------------------------------------------
+
+
+

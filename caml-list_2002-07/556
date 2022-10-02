@@ -1,0 +1,118 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA21431; Sun, 28 Jul 2002 22:15:02 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA21118 for <caml-list@pauillac.inria.fr>; Sun, 28 Jul 2002 22:15:01 +0200 (MET DST)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g6SKF0X25000
+	for <caml-list@inria.fr>; Sun, 28 Jul 2002 22:15:00 +0200 (MET DST)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.10.1/1.01.28121999) with ESMTP id g6SKExo93409
+          ; Sun, 28 Jul 2002 22:14:59 +0200 (CEST)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.12.3/jb-1.1)
+	id g6SKEx7x013854 ; Sun, 28 Jul 2002 22:14:59 +0200 (MET DST)
+Date: Sun, 28 Jul 2002 22:14:59 +0200 (MET DST)
+From: Alain Frisch <frisch@clipper.ens.fr>
+To: John Max Skaller <skaller@ozemail.com.au>
+cc: Caml list <caml-list@inria.fr>
+Subject: Re: [Caml-list] equi-recursive Fold isomorphism
+In-Reply-To: <3D434CC3.6030508@ozemail.com.au>
+Message-ID: <Pine.SOL.4.44.0207282143060.10604-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavisd-milter (http://amavis.org/)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 28 Jul 2002, John Max Skaller wrote:
+
+> Hmmm: Ocaml 3.04+15 with -rectypes
+>
+>
+> # let rec x = (1,(1,(1,x)));;
+> val x : int * (int * (int * 'a)) as 'a =
+>  ....
+>
+> Seem like Ocaml doesn't minimise the type, but:
+>
+>
+> let rec y = (1,y);;
+>
+> x = y;;
+>
+> Works correctly (so it knows the two types are comparable).
+> Interestingly, the answer is false
+
+Are you sure ?  It seems that the comparison doesn't terminate,
+as expected (as it does not consume memory). The manual
+says:
+<<
+Equality between cyclic data structures may not terminate.
+>>
+
+
+: both data structures
+> consist of an infinite stream of 1's, represented by
+> cycles of distinct lengths. No item by item comparison
+> could reveal any distinction: the infinite tree expansions
+> of the data structures are the same. Is Ocaml's answer correct?
+
+As you know, to implement the comparison between cyclic values with the
+expected behaviour, one has to use a coinductive algorithm with some kind
+of memoization. This would be much slower for the non-cyclic case, and
+many people expect a fast generic compare function. I would like to say
+that you can always take the code in byterun/compare.c and implement your
+own equirecursive generic comparison in C, but this is actually not
+possible (you need the Is_young and Is_in_heap macros that are not
+available). Using the mentioned Recurse module, you could do:
+
+module I = struct
+  type 'a t = Int of int | Pair of 'a * 'a
+
+  let map f = function
+    | Int i -> Int i
+    | Pair (a,b) -> Pair (f a, f b)
+
+  let equal f x y =
+    match (x,y) with
+      | (Int i, Int j) when i = j -> ()
+      | (Pair (a1,b1), Pair (a2,b2)) -> f a1 a2; f b1 b2
+      | _ -> raise Recursive.NotEqual
+
+  let iter f x = ignore (map f x)
+  let hash f x = Hashtbl.hash (map f x)
+  let deep = 4
+end
+
+module X = Recursive.Make(I)
+
+
+let cons x = let n = X.make () in X.define n x; n
+let recurs f = let n = X.make () in X.define n (f n); n
+let int' i = I.Int i
+let int i = cons (int' i)
+let pair' a b = I.Pair (a,b)
+let pair a b = cons (pair' a b)
+
+let x = recurs (fun x -> pair' (int 1) (pair (int 1) (pair (int 1) x)))
+let y = recurs (fun y -> pair' (int 1) y)
+
+let x = X.internalize x and y = X.internalize y
+let () = Printf.printf "%i;%i;%b\n" (X.id x) (X.id y) (x = y)
+
+
+(the equility test is specified by Recurse to run in constant time)
+
+
+Side-note: be careful if you implement a language with subtyping and both
+recursive types and recursive (cyclic) values. Indeed, the usual
+equi-recursive definition of subtyping is not sound if you allow cyclic
+values. For instance, the algorithm would say that the type ('a * 'a) as
+'a is empty, even though it is inhabited by values.
+
+
+-- Alain
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

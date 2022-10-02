@@ -1,0 +1,168 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA25530 for caml-red; Tue, 12 Dec 2000 10:20:52 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA07381 for <caml-list@pauillac.inria.fr>; Mon, 11 Dec 2000 22:32:18 +0100 (MET)
+Received: from mta5.snfc21.pbi.net (mta5.snfc21.pbi.net [206.13.28.241])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id eBBLWGv16706
+	for <caml-list@inria.fr>; Mon, 11 Dec 2000 22:32:17 +0100 (MET)
+Received: from checkerlap.d6.com ([64.160.53.10])
+	by mta5.snfc21.pbi.net (Sun Internet Mail Server sims.3.5.2000.01.05.12.18.p9)
+	with ESMTP id <0G5F00GLW998MK@mta5.snfc21.pbi.net> for caml-list@inria.fr;
+	Mon, 11 Dec 2000 13:05:35 -0800 (PST)
+Date: Mon, 11 Dec 2000 13:07:22 -0800
+From: Chris Hecker <checker@d6.com>
+Subject: Re: substring match like "strstr"
+In-reply-to: <20001210221657W.sumii@yl.is.s.u-tokyo.ac.jp>
+X-Sender: def6@shell16.ba.best.com
+To: eijiro_sumii@anet.ne.jp, caml-list@inria.fr
+Cc: gerd@gerd-stolpmann.de, sumii@venus.is.s.u-tokyo.ac.jp
+Message-id: <4.3.2.7.2.20001211103237.00c12100@shell16.ba.best.com>
+MIME-version: 1.0
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Content-type: text/plain; charset="us-ascii"
+References: <00120814135508.00625@ice>
+	<20001208150443I.sumii@yl.is.s.u-tokyo.ac.jp> <00120814135508.00625@ice>
+Sender: weis@pauillac.inria.fr
+
+
+>The results (execution time in seconds) were as follows.
+>  strstr   55.74
+>  regexp  154.37
+>  OCamlA  302.57
+>  OCamlB  129.23
+
+Any ideas why strstr blows the others away?  What's the libc strstr look like?  I just looked in the MSVC source and it's a braindead while loop (copied below), so it's not like it's doing a fancy Boyer-Moore or anything.  This is exactly the kind of problem on which I'd expect caml to come within 10% of c.
+
+Have you tried a purely imperative version?  I'd say I'd do the tests myself, but I don't have a bunch of gene sequences laying around.  :)  
+
+Okay, I'm curious, so I'll port the code to caml and include it below as well (as practice for myself).  Can you try it in your test harness?  I've attached a cheesy test app with your caml, calling msvc's strstr, and my imperative version.  I make no claims of profiling accuracy or even code correctness, but here are the results when run from a DOS box on Win98:
+
+strstr total = 1.060000 (5,0,19,13)
+strstr_imp total = 0.510000 (5,0,19,13)
+strstr_c total = 0.415000 (5,0,19,13)
+
+(The weird thing is when I ran it with shell-command under emacs the timings were 
+
+strstr total = 0.575000 (5,0,19,13)
+strstr_imp total = 0.500000 (5,0,19,13)
+strstr_c total = 0.415000 (5,0,19,13)
+
+which I found bizarre since strstr became 2x faster, but I haven't had time to look into it.  Can somebody else try these tests? )
+
+Looking at the asm output from strstr_imp, there's not that much you could do to make it better.  Maybe there are a few peephole things, and there are probably 30% more instructions than you need in this specific case because the code to compare characters goes to the trouble of keeping the ints in the caml format even in registers inside the loop (so they're shifted back and forth), and it converts the chars from the unsafe_gets to full caml ints, which is useless since they just get compared to each other and then dumped.  It might be interesting to write a peephole optimizer aimed at peepholing camlopt code, and looking for things like this.
+
+Can anybody optimize the caml src for strstr_imp?
+
+Chris
+
+
+----strstrc.c-----
+
+
+#include "/test/ocaml/lib/caml/mlvalues.h"
+
+/* ripped from msvc crt src */
+char * __cdecl strstr (
+        const char * str1,
+        const char * str2
+        )
+{
+        char *cp = (char *) str1;
+        char *s1, *s2;
+
+        if ( !*str2 )
+            return((char *)str1);
+
+        while (*cp)
+        {
+                s1 = cp;
+                s2 = (char *) str2;
+
+                while ( *s1 && *s2 && !(*s1-*s2) )
+                        s1++, s2++;
+
+                if (!*s2)
+                        return(cp);
+
+                cp++;
+        }
+
+        return(0);
+
+}
+
+value Camlstrstr( value pat, value str )
+{
+    char *string = String_val(str);
+    return Val_int(strstr(string,String_val(pat))-string);
+}
+
+------strstrc.mli-----
+
+
+external strstr_c: string -> string -> int = "Camlstrstr"
+
+------strstr.ml-------
+
+
+
+
+(* Eijiro Sumii's functional strstr *)
+let strstr pat str =
+  let patlen = String.length pat in
+  let strlen = String.length str in
+  let rec is_prefix pos spos epos =
+    if pos < 0 then true else
+    if String.unsafe_get pat pos <>
+      String.unsafe_get str epos then false else
+      is_prefix (pos - 1) spos (epos - 1) in
+  let rec search spos =
+    let epos = spos + patlen - 1 in
+    if epos >= strlen then raise Not_found else
+    if is_prefix (patlen - 1) spos epos then spos else
+    search (spos + 1) in
+  search 0
+    
+(* checker's lame imperative strstr *)
+let strstr_imp pat str = 
+  let strlen = String.length str in
+  let patlen = String.length pat and
+      i = ref 0 and
+      f = ref strlen in
+  while !i < strlen do
+    let pati = ref 0 and
+        j = ref !i in
+    while !pati < patlen && !j < strlen &&
+      String.unsafe_get str !j == String.unsafe_get pat !pati do
+        pati := succ !pati;
+        j := succ !j;
+    done;
+    if !pati = patlen then
+      begin f := !i; i := strlen end
+    else
+      i := succ !i
+  done;
+  !f
+
+(* a really questionable timing harness *)
+let time_strstr name strstr =
+  let t0 = Unix.gettimeofday () in 
+  for i = 0 to 100000 do
+    strstr "this" "that this the other";
+    strstr "this" "this that this the other";
+    strstr "this" "that tis the other this";
+    strstr "this" "that the othethisr th";
+  done;
+  let t = Unix.gettimeofday () -. t0 in
+  Printf.printf "%s total = %f (%d,%d,%d,%d)\n" name t
+  (* a really pathetic regression test *)
+    (strstr "this" "that this the other")
+    (strstr "this" "this that this the other")
+    (strstr "this" "that tis the other this")
+    (strstr "this" "that the othethisr th")
+
+(* main *)
+let _ = 
+  time_strstr "strstr" strstr;
+  time_strstr "strstr_imp" strstr_imp;
+  time_strstr "strstr_c" Strstrc.strstr_c;
+
+

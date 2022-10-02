@@ -1,0 +1,143 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8RHVLT4026912
+	for <caml-list@sympa-roc.inria.fr>; Tue, 27 Sep 2011 19:31:21 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AoUAAAcIgk6YToALkWdsb2JhbABBp3wUAQEBAQkLCwcUBSGBVT1APRYYAwIBAgFLEwIBAaJAn1qHCwSHQowQhRASCYwK
+X-IronPort-AV: E=Sophos;i="4.68,450,1312149600"; 
+   d="scan'208";a="110804879"
+Received: from mailgate6.iss.soton.ac.uk ([152.78.128.11])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 27 Sep 2011 19:30:53 +0200
+Received: from mailgate6.iss.soton.ac.uk (localhost.localdomain [127.0.0.1])
+	by mailgate6.iss.soton.ac.uk (8.13.8/8.13.4) with ESMTP id p8RHUikL027839
+	for <caml-list@inria.fr>; Tue, 27 Sep 2011 18:30:44 +0100
+Received: from uos-msg00011-si.soton.ac.uk (uos-msg00011-si.soton.ac.uk [152.78.119.34])
+	by mailgate6.iss.soton.ac.uk (mailgate6.iss.soton.ac.uk [152.78.128.11]) envelope-from <T.Fischbacher@soton.ac.uk> with ESMTP
+	id n8QIUi2521961669YY ret-id none; Tue, 27 Sep 2011 18:30:44 +0100
+Received: from [152.78.97.98] (152.78.97.98) by smtp.soton.ac.uk
+ (152.78.119.34) with Microsoft SMTP Server (TLS) id 8.2.213.0; Tue, 27 Sep
+ 2011 18:30:43 +0100
+Message-ID: <4E820844.7050705@soton.ac.uk>
+Date: Tue, 27 Sep 2011 18:30:44 +0100
+From: Thomas Fischbacher <t.fischbacher@soton.ac.uk>
+User-Agent: Mozilla-Thunderbird 2.0.0.24 (X11/20100328)
+MIME-Version: 1.0
+To: OCaML Mailing List <caml-list@inria.fr>
+Content-Type: text/plain; charset="ISO-8859-1"; format=flowed
+Content-Transfer-Encoding: 7bit
+X-smtpf-Report: sid=n8QIUi252196166900; tid=n8QIUi2521961669YY; client=relay,white,ipv6; mail=; rcpt=; nrcpt=1:0; fails=0
+Received-SPF: None; receiver=mailgate6.iss.soton.ac.uk; client-ip=152.78.119.34; helo=<uos-msg00011-si.soton.ac.uk>
+Received-SPF: None; receiver=mailgate6.iss.soton.ac.uk; client-ip=152.78.119.34; envelope-from=<T.Fischbacher@soton.ac.uk>
+X-UOS-MailScanner-Information: Please contact Serviceline@soton.ac.uk for more information
+X-UOS-MailScanner-ID: p8RHUikL027839
+X-UOS-MailScanner: Found to be clean
+X-UOS-MailScanner-From: t.fischbacher@soton.ac.uk
+Subject: [Caml-list] Weird GC behaviour
+
+
+Dear Camels,
+
+The example below shows GC behaviour which in my view is somewhat
+weird: I am building two very similar sorts of hash tables that map
+variant types to strings. The parameter "works" (which gets passed
+through from the "demo" to the "setup" function) allows one to choose,
+when calling the script, whether it behaves properly or shows weird
+behaviour.
+
+For Rtag, inlining get_rtag does not make a difference, but for Ftag,
+inlining the get_ftag call breaks things both with the interpreter and
+compiler, but in different ways.
+
+So... my question is: is there a documented reliable way to avoid this
+sort of funny behaviour?!?
+
+=================================
+type funny_tag = Ftag of string;;
+
+type funny_ref = Rtag of string ref;;
+
+let get_ftag s = Ftag s;;
+
+let get_rtag s = Rtag (ref s);;
+
+let fin_str ht k =
+   let Ftag s = k in
+   let () = Printf.printf "Removing str '%s'\n%!" s in
+   Hashtbl.remove ht k
+;;
+
+let fin_ref ht k =
+   let Rtag rs = k in
+   let () = Printf.printf "Removing ref '%s'\n%!" !rs in
+   Hashtbl.remove ht k
+;;
+
+
+let setup works =
+   let ht_str = Hashtbl.create 17 in
+   let ht_ref = Hashtbl.create 17 in
+   let (funny_str, funny_ref) =
+   if works
+     then (get_ftag "funny",get_rtag "funny")
+     else (Ftag "funny", Rtag (ref "funny"))
+   in
+   (* Note that they keys used below are equal but not identical to the 
+entities above *)
+   let () = Hashtbl.add ht_str (Ftag "funny") "situation" in
+   let () = Hashtbl.add ht_ref (Rtag (ref "funny")) "situation" in
+   let () = Gc.finalise (fin_str ht_str) funny_str in
+   let () = Gc.finalise (fin_ref ht_ref) funny_ref in
+   ((ht_str,ht_ref),(funny_str,funny_ref))
+;;
+
+let left (p,q) = p;;
+
+let demo works =
+   let (ht_str,ht_ref) = left (setup works) in
+   (* Note that I drop the references on the keys that have finalizers 
+registered. *)
+   let () = Gc.full_major () in
+   let () = Gc.compact () in
+   Printf.printf "ht_str entries: %d ht_ref entries: %d\n%!" 
+(Hashtbl.length ht_str) (Hashtbl.length ht_ref)
+;;
+
+let () = demo (Array.length Sys.argv > 1 && Sys.argv.(1) = "magic");;
+
+
+(* === Behaviour ===
+
+$ ocaml gc_bug.ml
+Removing ref 'funny'
+ht_str entries: 1 ht_ref entries: 0
+
+$ ocaml gc_bug.ml magic
+Removing ref 'funny'
+Removing str 'funny'
+ht_str entries: 0 ht_ref entries: 0
+
+$ ocamlopt -o gc_bug gc_bug.ml
+
+$ ./gc_bug
+Fatal error: exception Invalid_argument("Gc.finalise")
+
+$ ./gc_bug magic
+Removing ref 'funny'
+Removing str 'funny'
+ht_str entries: 0 ht_ref entries: 0
+
+$ ocaml
+         Objective Caml version 3.12.0
+
+#
+
+$ uname -prs
+FreeBSD 9.0-BETA3 amd64
+
+============ *)
+
+=================================
+
+-- 
+best regards,
+Thomas Fischbacher
+t.fischbacher@soton.ac.uk

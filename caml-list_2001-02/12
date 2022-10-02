@@ -1,0 +1,117 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA24109 for caml-red; Fri, 2 Feb 2001 16:18:26 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA19375 for <caml-list@pauillac.inria.fr>; Thu, 1 Feb 2001 10:19:54 +0100 (MET)
+Received: from pochi.inria.fr (pochi.inria.fr [128.93.8.128])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f119Jl522004;
+	Thu, 1 Feb 2001 10:19:47 +0100 (MET)
+Received: (from mentre@localhost)
+	by pochi.inria.fr (8.11.1/8.10.0) id f119JlG09312;
+	Thu, 1 Feb 2001 10:19:47 +0100
+X-Authentication-Warning: pochi.inria.fr: mentre set sender to David.Mentre@inria.fr using -f
+To: Christian Lindig <lindig@eecs.harvard.edu>
+Cc: Caml Mailing List <caml-list@inria.fr>,
+        George Russell <ger@informatik.uni-bremen.de>,
+        Archisman Rudra <archi@mosaic.mrl.nyu.edu>
+Subject: Re: NaN Test in OCaml
+References: <20010131140503.D2418@lakeland.eecs.harvard.edu>
+From: David Mentre <David.Mentre@inria.fr>
+X-PhD-defense:  in 0 months and 25 days.
+Date: 01 Feb 2001 10:19:47 +0100
+In-Reply-To: Christian Lindig's message of "Wed, 31 Jan 2001 14:05:03 -0500"
+Message-ID: <qtlg0hyu5e4.fsf@pochi.inria.fr>
+Lines: 89
+User-Agent: Gnus/5.0807 (Gnus v5.8.7) Emacs/20.4
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: weis@pauillac.inria.fr
+
+Hi Christian,
+
+I'm far from being at the level of Caml implementors but:
+
+Christian Lindig <lindig@eecs.harvard.edu> writes:
+
+>     # let nan x = not (x = x);;
+>     val nan : 'a -> bool = <fun>
+                ^^ here you have a polymorphic equality test
+>     # nan (1.0 /. 0.0);;
+>     - : bool = false            (* correct *)
+>     # nan (0.0 /. 0.0);;
+>     - : bool = false            (* should be true *)
+> 
+> The following definition of nan uses a type annotation and has a
+> different result:
+> 
+>     # let nan (x:float) = not (x = x);;
+>     val nan : float -> bool = <fun>
+                ^^^^^ here we know that we have floats
+>     # nan (0.0 /. 0.0);;
+>     - : bool = true             (* correct *)
+>     # nan (1.0 /. 0.0);;
+>     - : bool = false            (* correct *)
+> 
+> Is this a bug or a feature? Anyway, I guess this again shows the subtleties
+> of equality.
+
+I would say a feature. As Xavier said in his mail[1], if the compiler
+knows that in *every case* we have a float, it generates a float
+specific comparison code. Otherwise, the compiler takes the safe way by
+using a generic comparison operator.
+
+You can see this with an undocumented option of the bytecode compiler:
+
+pochi(mentre):~ [976] ocaml -dinstr
+        Objective Caml version 3.00
+
+# let nan x = not (x = x);;
+[...]
+	ccall equal, 2
+[...]
+val nan : 'a -> bool = <fun>
+
+# let nan (x:float) = not (x = x);;
+[...]
+	ccall eq_float, 2
+[...]
+val nan : float -> bool = <fun>
+
+
+If you look at assembly code, you'll see the same behavior:
+
+pochi(mentre):/tmp [1008] cat nan.ml
+let nan_poly x = not (x = x)
+
+let nan_float (x:float) = not (x = x)
+
+pochi(mentre):/tmp [1009] ocamlopt -S nan.ml
+pochi(mentre):/tmp [1010] cat nan.s
+[...]
+Nan_nan_poly_43:
+.L100:
+	pushl	%eax
+	pushl	%eax
+	movl	$equal, %eax
+	call	caml_c_call
+        ^^^^^^^^^^^^^^^^^^^ the compiler call a generic
+                            (i.e. polymorphic equality operator)
+[...]
+Nan_nan_float_45:
+	subl	$8, %esp
+.L104:
+	fldl	(%eax)
+	fldl	(%eax)
+	fucompp
+        ^^^^^^^ float specific comparison operation, with NaN handling,
+                see [2]
+[...]
+
+
+Hope it clarifies,
+david
+
+[1] http://caml.inria.fr/archives/200101/msg00195.html
+[2] http://webster.cs.ucr.edu/Page_asm/ArtofAssembly/CH14/CH14-5.html#HEADING5-22
+-- 
+ David.Mentre@inria.fr -- http://www.irisa.fr/prive/dmentre/
+ Opinions expressed here are only mine.
+
+

@@ -1,0 +1,140 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA09724; Fri, 9 Aug 2002 03:22:08 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA09829 for <caml-list@pauillac.inria.fr>; Fri, 9 Aug 2002 03:22:07 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g791M5n03295
+	for <caml-list@inria.fr>; Fri, 9 Aug 2002 03:22:05 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id KAA29433;
+	Fri, 9 Aug 2002 10:22:00 +0900 (JST)
+To: yminsky@CS.Cornell.EDU
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] interactive graphics with Tcl/Tk
+In-Reply-To: <59147.209.9.234.140.1028822939.squirrel@dragonfly.localdomain>
+References: <59147.209.9.234.140.1028822939.squirrel@dragonfly.localdomain>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020809102200M.garrigue@kurims.kyoto-u.ac.jp>
+Date: Fri, 09 Aug 2002 10:22:00 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 109
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: "Yaron M. Minsky" <yminsky@CS.Cornell.EDU>
+
+> I'm trying to use tcl/tk for doing interactive graphics from the toplevel.
+>  And, lord help me, I'm trying to do it on cygwin.
+> My basic solution I came up with is this:  I have one thread doing all the
+> labltk calls.  That thread also polls a channel where it effectively picks
+> up RPC requests.  SO, when I want to draw something on the screen, I stuff
+> the appropriate function into the channel, the TclTk thread picks it up
+> and executes that function, and then sends back a response, at which point
+> the calling thread continues.
+
+Sound OK.
+
+> Anyway, it all seems well and good, but when I actually try to do it, for
+> some reason the i/o on the caml toplevel locks up.  So if I type:
+> # Graphing.init (); print_string "Hello World!\n";;
+> Hello World!
+> - : unit = ()
+> #
+> 
+> Graphing.init starts up the Tcl/Tk window as expected, and the print
+> works, also as expected.  But from that point on until I kill the Tcl/Tk
+> window, I can't get the toplevel to respond to keypresses.  It's as if the
+> Tcl/Tk thread has stolen stdin.  Does anyone know how to work around this?
+> y
+
+There's one trouble: you can only switch between ocaml threads when
+they are executing ocaml code.
+This means that you should setup a timeout with Timer.add in your tk
+thread, and call Thread.yield there. Note that this works with
+posix and win32 threads, but not bytecode threads, since you cannot
+switch threads in callbacks with them.
+
+Here is the code. I only tested it with MSVC version, but this should
+be ok on cygwin too (it works on Unix).
+In fact, I wrote this code for lablgtk, because although it is
+reentrant (contrary to labltk), on windows you can only call it from
+one thread. This will be in the next lablgtk release.
+
+Other threads should only use the sync and async functions.
+
+$ ocaml -I +threads -I +labltk unix.cma threads.cma labltk.cma
+
+        Objective Caml version 3.06
+
+# let jobs : (unit -> unit) Queue.t = Queue.create ()
+  let m = Mutex.create ()
+  let with_jobs f =
+    Mutex.lock m; let y = f jobs in Mutex.unlock m; y
+  
+  let loop_id = ref None
+  let cannot_sync () =
+    match !loop_id with None -> true
+    | Some id -> Thread.id (Thread.self ()) = id
+  
+  let gui_safe () =
+    not (Sys.os_type = "Win32") || !loop_id = Some(Thread.id (Thread.self ()))
+  
+  let has_jobs () = not (with_jobs Queue.is_empty)
+  let n_jobs () = with_jobs Queue.length
+  let do_next_job () = with_jobs Queue.take ()
+  let async j x = with_jobs (Queue.add (fun () -> j x))
+  let sync f x =
+    if cannot_sync () then f x else
+    let m = Mutex.create () in
+    let res = ref None in
+    Mutex.lock m;
+    let c = Condition.create () in
+    let j x =
+      let y = f x in Mutex.lock m; res := Some y; Mutex.unlock m;
+      Condition.signal c
+    in
+    async j x;
+    Condition.wait c m;
+    match !res with Some y -> y | None -> assert false
+  ;;
+val jobs : (unit -> unit) Queue.t = <abstr>
+val m : Mutex.t = <abstr>
+val with_jobs : ((unit -> unit) Queue.t -> 'a) -> 'a = <fun>
+val loop_id : int option ref = {contents = None}
+val cannot_sync : unit -> bool = <fun>
+val gui_safe : unit -> bool = <fun>
+val has_jobs : unit -> bool = <fun>
+val n_jobs : unit -> int = <fun>
+val do_next_job : unit -> unit = <fun>
+val async : ('a -> unit) -> 'a -> unit = <fun>
+val sync : ('a -> 'b) -> 'a -> 'b = <fun>
+# open Tk;;
+# let tk_thread () =  
+    let top = openTk () in
+    let rec cb () = for i = 1 to n_jobs () do do_next_job () done;
+        Timer.set 1 cb; Thread.yield () in
+      Timer.set 1 cb;
+      mainLoop ();;
+val tk_thread : unit -> unit = <fun>
+# Thread.create tk_thread ();;
+- : Thread.t = <abstr>
+# let top = Widget.default_toplevel ;;
+val top : Widget.toplevel Widget.widget = <abstr>
+# let b = sync (Button.create ~text:"Hello world!") top;;
+val b : Widget.button Widget.widget = <abstr>
+# async pack [b];;
+- : unit = ()
+# async (Button.configure ~command:(fun () -> prerr_endline "Hello")) b;;
+- : unit = ()
+
+---------------------------------------------------------------------------
+Jacques Garrigue      Kyoto University     garrigue at kurims.kyoto-u.ac.jp
+		<A HREF=http://wwwfun.kurims.kyoto-u.ac.jp/~garrigue/>JG</A>
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

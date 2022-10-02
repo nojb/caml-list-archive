@@ -1,0 +1,129 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 3ECB6BB84
+	for <caml-list@yquem.inria.fr>; Tue, 16 May 2006 02:48:06 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4G0m5gS010385
+	for <caml-list@yquem.inria.fr>; Tue, 16 May 2006 02:48:05 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA18071 for <caml-list@pauillac.inria.fr>; Tue, 16 May 2006 02:48:04 +0200 (MET DST)
+Received: from luna.vie.lunde.net (at.lunde.net [62.116.13.60])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k4G0m3vr027035
+	for <caml-list@inria.fr>; Tue, 16 May 2006 02:48:04 +0200
+Received: from h-68-166-100-33.nycmny83.covad.net ([68.166.100.33] helo=localhost.localdomain)
+	by luna.vie.lunde.net with asmtp (Exim 3.36 #1 (Debian))
+	id 1Ffnj9-0000yv-00; Tue, 16 May 2006 02:47:56 +0200
+Received: from localhost (localhost.localdomain [127.0.0.1])
+	by localhost.localdomain (Postfix) with ESMTP id 6F335C3064;
+	Mon, 15 May 2006 20:48:16 -0400 (EDT)
+Date: Mon, 15 May 2006 20:48:16 -0400 (EDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: akalin@akalin.cx
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Array 4 MB size limit
+In-Reply-To: <20060515141230.ajyupn2z28k0484s@horde.akalin.cx>
+Message-ID: <Pine.LNX.4.63.0605152016400.10710@localhost.localdomain>
+References: <20060515141230.ajyupn2z28k0484s@horde.akalin.cx>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at concorde with ID 44692145.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 44692144.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; arrays:01 bigarrays:01 arrays:01 doubles:01 unboxed:01 pointers:01 pointers:01 ocaml:01 resize:01 byte:01 resize:01 surprising:01 bug:01 stack:01 ocaml:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+
+
+On Mon, 15 May 2006, akalin@akalin.cx wrote:
+
+> I'm running into cases where the 4 MB limit on arrays is starting to become a 
+> problem.  Lists are much slower and cause seg faults for me on the same data 
+> set, and Bigarrays are a partial solution because I'd like to be able to 
+> store arbitrary types in arrays (not just numbers).
+>
+> I was greatly surprised when I found out there was such a low limit on 
+> arrays.  Is there a reason for this?  Will this limit ever be increased?
+
+It comes from how arrays are stored in memory.  Every boxed value has a 
+"tag word", which, among other uses, is used by the GC to figure out how 
+big the object is (i.e. where the next object starts).  Now, the encoding 
+scheme of this tag word is fairly complicated, but it works out that for 
+arrays, 10 bits of the 32 bits is used for other stuff, leaving 22 bits 
+for the size.  This limits the size of an array to 4M-1 elements 
+(actually, it limits the size of the array to 16M-4 bytes, as size is 
+measured in words- which is why arrays of floats are limited to 2M-1 
+entries- each float takes up 8 bytes aka 2 words).
+
+When you move to 64 bits, the tag word doubles in size, but the amount of 
+"other" information in the tag word doesn't- this means that suddenly you 
+have 52 bits of size, or 4T arrays.  And now floats only take up one word, 
+not two, so they too can have 4T arrays.
+
+The array of array idea someone brought up is a good one.  There's a 
+slight performance hit, but not much.  I'd keep the top level array short- 
+1K entries is enough.  The advantage of this is that if you're heavily 
+using the array, the top level array will stay in cache (possibly even L1 
+cache), meaning the main cost of an array access only goes up by about 10% 
+or so, maybe less (maybe 1% if it stays in L1 cache).  The reasoning goes 
+like this: the largest cost by far of an array access on a large array is 
+the cache miss.  Doing a memory reference that is satisified out of L1 
+cache generally takes 1-4 clock cycles.  If you have to go to L2 cache, 
+that's going to take 10-40 clock cycles (approximately).  Going to main 
+memory?  100-350+ clock cycles.  With a large array, you're likely going 
+to take the 100-350+ clock cycle hit anyways. If the top level array is in 
+L1 cache, you're only adding 1-4 clockcycles to the 100-350+ clock cycle 
+hit you're going to take anyways.
+
+Personally, I think PCs should have gone 64 bit circa 1997 or so.  Once we 
+started getting hard disks large enough that we couldn't mmap the entire 
+hard disk, we started hitting problems.  Long long and the large file 
+interfaces are examples of these problems.  The longer we go- and the 
+larger memories and hard disks get, the bigger the problems get. 
+Microsoft seems to be the main impediment, now that AMD has forced Intel 
+to get off the stick.
+
+> If I had a record type with 5 floats, 
+> will the limit then by Sys.max_array_size / 10?
+
+Within the record, the floats are unboxed (assuming you didn't have any 
+non-float elements).  This means the floats are stored directly in the 
+record, and that the record doesn't hold pointers to the floats.  But the 
+record itself is boxed- which means that an array of these records is 
+really an array of pointers to these records, meaning that you're back at 
+the 4M-1 limit.
+
+Note that a record of 5 floats costs 44 bytes (40 bytes for the 5 floats + 
+4 bytes for the tag word).  Assuming no records are stored in more than 
+one location, the total memory cost of an array of 4M-1 of them is 16M for 
+the array, plus (4M-1)*44 for the records, for a total of 192M-44 bytes. 
+This is almost 10% of your available memory space right there.
+
+> Is there some sort of 
+> existing ArrayList module that works around this problem?  Ideally, I'd like 
+> to have something like C++'s std::vector<> type, which can be dynamically 
+> resized.
+
+Ocaml can't dynamically resize arrays.  This gets tricky to do when arrays 
+get large.  At the extreme, if the array takes up 50% + 1 byte of the 
+total address space, you can't resize it to be any larger- to resize 
+requires you to copy it, which takes more memory than you have.  I've 
+seend problems well before then.
+
+> Also, the fact that using lists crashes for the same data set is surprising. 
+> Is there a similar hard limit for lists, or would this be a bug?  Should I 
+> post a test case?
+
+I'm willing to bet dollars to donuts that the problem you hit with lists 
+was stack overflow.  Without signifigantly impacting performance there 
+isn't a whole lot Ocaml can do about detecting stack overflow before the 
+segfault hits.  My general rule is, if it's going to contain more than a 
+few dozen items, it probably shouldn't be a list.  Extlib's library is 
+less prone to this error, but you can still run into serious problems with 
+long lists.
+
+Brian
+

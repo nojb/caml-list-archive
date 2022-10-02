@@ -1,0 +1,131 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA23645; Mon, 16 Jun 2003 03:38:42 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA23403 for <caml-list@pauillac.inria.fr>; Mon, 16 Jun 2003 03:38:40 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h5G1ccT24183
+	for <caml-list@inria.fr>; Mon, 16 Jun 2003 03:38:39 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2/3.7W) with ESMTP id KAA26873;
+	Mon, 16 Jun 2003 10:38:23 +0900 (JST)
+To: brian.hurt@qlogic.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Type safe affectation ?
+In-Reply-To: <Pine.LNX.4.33.0306151435360.2154-100000@eagle.ancor.com>
+References: <Pine.LNX.4.44.0306151107490.29773-100000@grace.speakeasy.net>
+	<Pine.LNX.4.33.0306151435360.2154-100000@eagle.ancor.com>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20030616103823L.garrigue@kurims.kyoto-u.ac.jp>
+Date: Mon, 16 Jun 2003 10:38:23 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 97
+X-Spam: no; 0.00; jacques:01 caml-list:01 qlogic:01 brogoff:01 immutability:01 constants:01 immutable:01 extlib:01 inferred:01 variance:01 enum:01 high-level:01 preferable:01 covariant:01 val:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Brian Hurt <brian.hurt@qlogic.com>
+> On Sun, 15 Jun 2003 brogoff@speakeasy.net wrote:
+> > On Sat, 14 Jun 2003, Xavier Leroy wrote:
+> > > Also, keep in mind that the compiler can optimize based on
+> > > immutability assumptions.  For instance, the OCaml compiler performs
+> > > propagation of structured constants and code motion for accesses
+> > > inside data structures that are immutable.  You might very well break
+> > > something by using the set_cdr function above.
+> > 
+> > Is it the case that those functions which use it in a disciplined way, 
+> > basically rewriting those functions transformable from "ML +
+> > Minamide style holes" to "ML + setcdr" are going to break
+> > something? I believe ExtLib is doing this, and probably a few
+> > others wrote such libaries after the previous round on this topic.
+
+There are safe ways to do that: when you build such a structure with a
+hole, first define a mutable type sharing the same representation with
+your intended immutable type, and cast to it after you're fisnished.
+Since ocaml doesn't do any fancy representation optimizations, this
+will work, and if it changes all C libraries are broken anyway.
+
+For instance, you can write for a list:
+
+type 'a mut_list = {hd: 'a; mutable tl: 'a list}
+external inj : 'a mut_list -> 'a list = "%identity"
+
+Limitation: for sum types, this only works for the first parameterized
+constructor (the tag has to be 0). For records there is no problem.
+
+Also, you must be very careful about not letting a mut_list value leak
+out (respect the linearity), otherwise inferred information such as
+variance will be incorrect, and you can break the type system.
+
+By the way, the above limitation is yet one more reason I think it
+would be really cool to allow records inside sum-type definitions.
+
+> If there is one thing I'm regretting with ExtLib, is that we've seemed to 
+> make using Obj.magic "cool", or at least "common and usefull".  Were holes 
+> added to the standard Ocaml compiler, I'd be re-rewritting ExtList to take 
+> those optimizations *out*.  There's other stuff in ExtLib which is usefull 
+> even without the new List code- Enum, for example.  So the project will 
+> survive regardless.
+
+The problem is that holes at the type level are a difficult feature to
+offer: they require linear types in the compiler. As an optimization,
+it is a rather high-level one, and maybe not so easy to know when it
+will apply.
+ 
+> Or maybe I'm overstating ExtLib's effect- and there has always been a lot 
+> of Obj.magic going around.
+
+I certainly hope this is not the case. Obj.magic is EVIL.
+It is only acceptable in this case because we want to optimize some
+well-known structure, and we can check the correctness for sure.
+At the user level, it is certainly preferable to use a mutable
+structure to start with.
+
+> > On a related note, I'd like a way to make an immutable
+> > representation of the built in array by not exporting the
+> > mutators, *and then* making the type parameter covariant, say a
+> > signature like the following  
+> > 
+> > module type FUNCTIONAL_ARRAY = 
+> >   sig
+> >     type (+'a) t
+> >     val init : int -> (int -> 'a) -> 'a t
+> >     val get : 'a t -> int -> 'a 
+> >     val length : 'a t -> int 
+> >     val map : ('a -> 'b) -> 'a t -> 'b t
+> >   end
+> > 
+> > The only safe ways to do this using array are to hide array in a class 
+> > definition or a function closure. It seems that I should be able to 
+> > just write 
+> > 
+> > 	type 'a t = 'a array
+> > 
+> > and have the type system figure out if it's OK. Arrays are efficient,
+> > and there are quite a few cases in my coding where they are not
+> > mutable.
+
+This one is just a typing problem. Nothing magic here, and it should
+actually be possible to infer correctly the variance of an abstract
+type, independently of its representation. But this is high-level and
+potentially dangerous stuff, so don't hold your breath for this.
+
+> All you have to do in this code is just not allow a mutation to occur in 
+> your code.  As I understand things, to everyone outside of the module 'a t 
+> is an abstract type- the only way to mutate it is to pass it to a function 
+> in the module that mutates it.
+
+Here the problem is variance. Currently ocaml does not allow the
+above, because 'a array is not covariant.
+
+Cheers,
+
+        Jacques
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

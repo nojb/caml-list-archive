@@ -1,0 +1,98 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA01182; Mon, 23 Apr 2001 09:56:31 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA01246 for <caml-list@pauillac.inria.fr>; Mon, 23 Apr 2001 09:56:31 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f3N7uRf20033;
+	Mon, 23 Apr 2001 09:56:27 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA01236; Mon, 23 Apr 2001 09:56:27 +0200 (MET DST)
+Date: Mon, 23 Apr 2001 09:56:27 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Georges Brun-Cottan <gbruncot@emc.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] equality over functional value
+Message-ID: <20010423095627.A517@pauillac.inria.fr>
+References: <200104202012.QAA09326@lub0127.lss.emc.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <200104202012.QAA09326@lub0127.lss.emc.com>; from gbruncot@emc.com on Fri, Apr 20, 2001 at 04:12:14PM -0400
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Hi, 
+> 
+> A friend of mine is just starting with ocaml. He was puzzled by the
+> following result:
+> 
+> # let a i = i;;
+> val a : 'a -> 'a = <fun>
+> # let b i = i;;
+> val b : 'a -> 'a = <fun>
+> # a=b;;
+> Uncaught exception: Invalid_argument "equal: functional value".
+> # a=a;;
+> - : bool = true
+> # 
+> 
+> That is 'a=a' does not return the expected exception.  Actually it
+> first hit this "curiosity" when creating a polymorphic 'sort' function
+> on lists - and by applying it to a [sort;sort..] list. It worked.
+> 
+> Is this a bug? 
+
+It's a questionable behavior.  As Alain Frisch said, polymorphic
+structural equality is implemented by first testing physical (pointer)
+equality.  Besides speed, this has the advantage that x == y implies x = y.
+
+However, this causes a = a where a is a function to return true
+instead of raising an exception as you expect.
+
+(Another weird consequence of this implementation of physical equality
+is that
+             (nan, nan) = (nan, nan)
+returns true, which is incorrect according to the IEEE specs: the NaN
+float is not equal to itself!)
+
+The special case (first test pointer equality) in structural equality
+could be eliminated, although I don't know how big a performance
+impact this would have.
+
+More generally, equality between functions can be interpreted in
+several ways:
+
+1- Extensional, pessimistic: f = g iff for all x, f x = g x,
+and since this is undecidable, equality always raises an exception
+when passed function values.
+
+2- Extensional, approximated: same definition as above, but we return
+"true" in some cases where the two functions are guaranteed to be
+extensionally equal, e.g. f and g point to the same closure, or even f
+and g have the same code pointer and contain equal values in their
+environments.  Otherwise, we raise an exception.
+
+3- By representation: two functions are equal iff their closures are
+structurally equal, i.e. they have the same code pointer and contain
+equal values in their environment.
+
+Interpretation 3- is useless I think, because it depends very much on
+the compiler's closure representation strategy.  In other terms, while
+a "true" result guarantees that the two functions are extensionally
+equal, a "false" result does not mean anything.
+
+The current interpretation 2- is semantically more sound: if it
+returns "true", then the two functions are extensionally equal;
+and it never returns "false", so it never claims that two functions
+are extensionally different!  Still, it is rather unintuitive.
+Also, the current implementation exposes too much the order of the tests,
+i.e. "(0, f) = (1, g)" returns "false", but
+"(f, 0) = (g, 1)" raises an exception.
+
+Interpretation 1- is easiest to explain, although it entails a bit of
+a performance penalty as I said above.
+
+Food for thoughts...
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

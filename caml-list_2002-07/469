@@ -1,0 +1,106 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA13141; Tue, 23 Jul 2002 15:15:38 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA13131 for <caml-list@pauillac.inria.fr>; Tue, 23 Jul 2002 15:15:37 +0200 (MET DST)
+Received: from relay.rinet.ru (relay.rinet.ru [195.54.192.35])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g6NDFa508390
+	for <caml-list@inria.fr>; Tue, 23 Jul 2002 15:15:36 +0200 (MET DST)
+Received: (from uucp@localhost)
+	by relay.rinet.ru (8.11.6/8.11.6) with UUCP id g6NDFW411050
+	for caml-list@inria.fr; Tue, 23 Jul 2002 17:15:32 +0400 (MSD)
+X-Envelope-To: caml-list@inria.fr
+Received: from dialin2.stormoff (ROVER1) [192.168.0.130] 
+	by stormoff with esmtp (Exim 3.12 #1 (Debian))
+	id 17WzS4-0000QD-00; Tue, 23 Jul 2002 17:11:45 +0400
+X-Comment-To: Xavier Leroy
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] CamlIDL and function pointers
+References: <NDBBLMPLBKBLINFBOEKLCEBFDLAA.engstad@naughtydog.com>
+	<Pine.BSF.4.44.0207221709280.40357-100000@bowser.eecs.harvard.edu>
+	<20020723103916.B30947@pauillac.inria.fr>
+From: Dmitry Bely <dbely@mail.ru>
+Date: Tue, 23 Jul 2002 17:11:33 +0400
+In-Reply-To: <20020723103916.B30947@pauillac.inria.fr> (Xavier Leroy's
+ message of "Tue, 23 Jul 2002 10:39:16 +0200")
+Message-ID: <ptxelhbu.fsf@mail.ru>
+Lines: 67
+User-Agent: Gnus/5.090005 (Oort Gnus v0.05) XEmacs/21.4 (Common Lisp
+ (Windows [3]), i586-pc-win32)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Xavier Leroy <xavier.leroy@inria.fr> writes:
+
+>>   How would one annotate the following C struct for camlidl:
+>> 
+>> typedef struct funp {
+>>    int i;
+>>    void (*funp_fun) ();
+>> } funp_t;
+>> 
+>>   Is it possible? Looking at the specs I don't see how one can have a
+>> field that is a pointer to a function. Any ideas, or pointers (no pun
+>> intended) to examples?
+>
+> CamlIDL, like the DCE and Microsoft IDL from which it derives, doesn't
+> support exchanging function pointers between C and Caml.  Your best
+> bet is to declare funp_t as an abstract type in the IDL file:
+>
+>         typedef [abstract] struct funp * funp_t;
+
+I was able to make a normal C function pointer form Ocaml closure using the
+"trampoline" technique and ffcall library from 
+http://clisp.cons.org/~haible/packages-ffcall.html
+
+Here is the working example from my HighGUI binding (a library from OpenCV
+distribution):
+
+Original C definition:
+
+void (*HG_on_notify)(int);
+int cvvCreateTrackbar( const char* name, const char* window_name,
+                                   int* value, int count, HG_on_notify on_notify );
+
+My IDL definition:
+
+typedef [abstract,mltype("int->unit")] void* ON_NOTIFY; // void (*ON_NOTIFY)(int)
+quote(c,"\
+#include <callback.h>                                \n\
+static int _slider_val;                              \n\
+static void _ON_NOTIFY (void* cback, va_alist alist) \n\
+{                                                    \n\
+  int handle;                                        \n\
+  va_start_void(alist);                              \n\
+  handle = va_arg_int(alist);                        \n\
+  callback(*(value*)cback,Val_int(_slider_val));     \n\
+  va_return_void(alist);                             \n\
+}")
+
+int cvvCreateTrackbar([string] const char* trackbar_name, [string] const char* window_name,
+                         [ref,in] int* val, int count, ON_NOTIFY call_back)
+quote(call,"\
+{                                                                                   \n\
+  value* p_call_back;                                                               \n\
+  __TR_function cback;                                                              \n\
+  p_call_back = stat_alloc(sizeof(value));                                          \n\
+  *p_call_back = _v_call_back;                                                      \n\
+  register_global_root(p_call_back); /*both caml and C closure will live forever */ \n\
+  cback = alloc_callback(_ON_NOTIFY, p_call_back);                                  \n\
+  _slider_val = *val;                                                               \n\
+  _res = cvvCreateTrackbar(trackbar_name,window_name,&_slider_val,count,cback);     \n\
+}");
+
+Now you can pass the normal OCaml closure to C function:
+
+let f_sl1 x = print_string "slider 1:"; print_int x; print_newline ();;
+cvvCreateTrackbar "sl1" "test_window" 5 10 f_sl1;;
+
+- Dmitry Bely
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

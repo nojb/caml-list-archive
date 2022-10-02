@@ -1,0 +1,127 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA19264; Fri, 18 Oct 2002 03:41:36 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA19033 for <caml-list@pauillac.inria.fr>; Fri, 18 Oct 2002 03:41:35 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g9I1fYD26301
+	for <Caml-list@inria.fr>; Fri, 18 Oct 2002 03:41:34 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 17 Oct 2002 20:40:28 -0500
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 17 Oct 2002 20:41:33 -0500
+Date: Thu, 17 Oct 2002 20:47:09 -0500 (CDT)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Jeffrey Palmer <jeffrey.palmer@acm.org>
+cc: Brian Hurt <brian.hurt@qlogic.com>, Chris Hecker <checker@d6.com>,
+        Ocaml Mailing List <Caml-list@inria.fr>
+Subject: Re: [Caml-list] Re: Camlp4 optimizations (was: productivity  
+ improvement)
+In-Reply-To: <200210171637.15448.jeffrey.palmer@acm.org>
+Message-ID: <Pine.LNX.4.33.0210171922430.1981-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 18 Oct 2002 01:41:33.0182 (UTC) FILETIME=[7D01C9E0:01C27647]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+One thing that occurs to me in this discussion is that there seems to be 
+two types of LinAlg library users:
+
+- Those who work on lots of "small" matricies (4x4 or smaller).  
+The classic example of this is doing 3D rendering.
+
+- Those who work on a few "large" matricies- weather modeling, cad/cam 
+solvers, etc.
+
+There are lots of differences between the two categories of problems.  
+For example- large matricies benefit enormously (both in terms of
+computation required and memory required) from "specialized" forms having
+special representations, while small matricies don't.  Consider banded,
+symmetic, triangluar forms.  
+
+A matrix-matrix multiply for 4x4 matricies is only 128 FLOPs- easily
+inlinable and unrollable, and worthwhile to do both. A matrix-matrix
+multiply for matricies of 1,000 x 1,000 elements would be two billion
+(10**9) FLOPs- if the compiler tried to inline such a function, it'd
+choke.  If it didn't choke, it'd produce a binary with a size measured in
+gigabytes.  What the 1Kx1K matrix multiply wants is good blocking and
+copying to take full advantage of cache- code which is worthless in the
+4x4 case.
+
+The 4x4 matrix is only 128 bytes in size (dense, full)- while we don't 
+want to create lots of spurious copies, some copies aren't a problem.  
+That 1Kx1K matrix weighs in at almost 8 meg- we don't want to create 
+spurious copies if we can at all avoid it.  Etc.
+
+The solution, I think, is to provide two interfaces- one optimized (and 
+strictly constrained) to small matricies- 3x3, 4x4 at most.  We implement 
+operator overloading here.  Small matricies only have one form (dense, 
+full, not complex, same precision as float).  Then other people could 
+write the "big" matrix library- with special forms, multiple precisions, 
+comples numbers, etc.
+
+Brian  
+
+On Thu, 17 Oct 2002, Jeffrey Palmer wrote:
+
+> On Thursday 17 October 2002 4:19 pm, Brian Hurt wrote:
+> > I will say- there is a way to get both the ease of development of
+> > operator overloading *and* the performance of BLAS.  Make matrices
+> > first class types known to the compiler, like ints, floats, and
+> > strings (vectors can be considered m-by-1 matrices).  Now the
+> > compiler knows what substitutions are legal or not- it can easily
+> > replace a = b + c + d; with a = b; a += c; a += d;, or even a = d; a
+> > += c; a += b; if it feels like it.
+> >
+> 
+> There are alternatives to adding these as primitive types to the 
+> language. In the case of C++, the concept of template metaprogramming 
+> (basically a weakened macro system) has shown that it's possible to 
+> generate numeric code on par with Fortran by rewriting expressions to 
+> avoid pairwise evaluation. See:
+> 
+> http://osl.iu.edu/~tveldhui/papers/iscope97/index.html
+> http://osl.iu.edu/~tveldhui/papers/Expression-Templates/exprtmpl.html
+> http://osl.iu.edu/~tveldhui/papers/Template-Metaprograms/meta-art.html
+> 
+> for the background and some examples of this approach.
+> 
+> However, the (obvious) problem with this approach, from a C++ 
+> perspective, is that it is not supported by the language. This stuff 
+> was basically "discovered", rather than designed, and if you've ever 
+> tried to use these techniques, this becomes VERY clear. The syntax is a 
+> disaster. An in-language mechanism for this type of macro expansion (a 
+> la lisp/scheme macros) would simplify this immensely.
+> 
+> Is this approach implementable in ocaml? The C++ template mechanism has 
+> complete access to the C++ type system, which makes it significantly 
+> more useful than the standard preprocessor. I seem to remember an 
+> earlier posting (today) indicating that this type information isn't 
+> available in ocamlp4.
+> 
+> Does anyone know of any strongly-typed languages where this type of 
+> macro expansion/partial evaluation is available?  (I seem to remember 
+> GHC providing a hook mechanism for term rewriting during optimization, 
+> but I don't think that's quite the same...)
+> 
+> Cheers,
+> 
+> 	- j
+> 
+> (Actually, now that I think about it, I recall someone on one of the C++ 
+> newsgroups discussing the possibility of using a functional language 
+> for the template language, since it seems like most of the interesting 
+> things you can do with templates are functional in nature.)
+> 
+> 
+> 
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

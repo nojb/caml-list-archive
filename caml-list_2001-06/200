@@ -1,0 +1,71 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA04500; Tue, 12 Jun 2001 16:55:57 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA04401 for <caml-list@pauillac.inria.fr>; Tue, 12 Jun 2001 16:55:56 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f5CEtrj19830;
+	Tue, 12 Jun 2001 16:55:53 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA04434; Tue, 12 Jun 2001 16:55:53 +0200 (MET DST)
+Date: Tue, 12 Jun 2001 16:55:53 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: "Charles 'Buck' Krasic" <krasic@acm.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] interfacing C threads with OCaml
+Message-ID: <20010612165553.B3463@pauillac.inria.fr>
+References: <200106052004.f55K41r27032@hamilton.cse.ogi.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <200106052004.f55K41r27032@hamilton.cse.ogi.edu>; from krasic@acm.org on Tue, Jun 05, 2001 at 01:04:01PM -0700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> It all works fine for a single pipeline, but I would like to support
+> concurrent pipelines where each pipeline is implemented by a separate
+> system thread (Linux pthreads).  
+> 
+> My OCaml pipeline function does a segmentation fault when I do this.
+> I have built the OCaml code using the -thread flag, and my link step
+> does -lthreadsnat.  I understand that the OCaml runtime is not
+> thread-safe, but I got the impression is that using -thread causes it
+> to use a single master lock, which is released when calling out to C
+> code; making it safe to mix threaded-C with OCaml.
+
+This is almost correct: the master lock is not automatically released
+when calling C code, because for short-running C functions this would
+be too slow.  Instead, the C function can choose to relinquish and
+reacquire the master mutex using enter_blocking_section() and
+leave_blocking_section(), e.g.
+
+        value C_function_called_from_Caml(...) {
+          /* Convert parameters from Caml to C */
+          enter_blocking_section();
+          /* Long-running C code that doesn't interact with the Caml runtime */
+          leave_blocking_section();
+          /* Convert results from C to Caml and return */
+        }
+
+I assume your pipeline uses callbacks from C to Caml.  If this is
+correct, you also need to reacquire the master mutex before entering Caml
+(using leave_blocking_section()) and release it after the Caml
+callback has returned (using enter_blocking_section()), e.g.
+
+        leave_blocking_section();
+        /* Convert parameters from C to Caml */
+        res = callback(closure, argument);
+        /* Convert results from Caml to C */
+        enter_blocking_section();
+
+> Are the marshalling macros in Chapter 17 (Store_field, etc.) safe wrt
+> the OCaml master lock?  
+
+They are safe (just like the whole run-time system) as long as the
+master lock is held, i.e. you're not between an enter_blocking_section()
+and a leave_blocking_section().
+
+Hope this helps,
+
+- Xavier Leroy
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

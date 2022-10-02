@@ -1,0 +1,95 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id EEE7EBB83
+	for <caml-list@yquem.inria.fr>; Tue, 23 May 2006 02:04:51 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k4N04pHx006593
+	for <caml-list@yquem.inria.fr>; Tue, 23 May 2006 02:04:51 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA23267 for <caml-list@pauillac.inria.fr>; Tue, 23 May 2006 02:04:50 +0200 (MET DST)
+Received: from ug-out-1314.google.com (ug-out-1314.google.com [66.249.92.175])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k4N04oN5006590
+	for <caml-list@inria.fr>; Tue, 23 May 2006 02:04:50 +0200
+Received: by ug-out-1314.google.com with SMTP id o2so1413977uge
+        for <caml-list@inria.fr>; Mon, 22 May 2006 17:04:50 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition;
+        b=kLC7fGR33EdiE5GSDVBfLTMEs06ybQ0Qz2b1ptdk0bK8IByTj0gMXcY7jRgwV3O0GZ60cykmde5iU7VvbUPitsXMT2Xl3C8WGbNG70es0jEWQtua+c74MgrLxPYW66af7ZvywW0HcVNI0k+5TLrs8dnGNY7pg0EIu8AvcXW9ekw=
+Received: by 10.78.31.18 with SMTP id e18mr1260655hue;
+        Mon, 22 May 2006 17:04:50 -0700 (PDT)
+Received: by 10.78.16.10 with HTTP; Mon, 22 May 2006 17:04:50 -0700 (PDT)
+Message-ID: <53c655920605221704r5ff97fdfj1fa953f6f858a8b1@mail.gmail.com>
+Date: Tue, 23 May 2006 02:04:50 +0200
+From: "David Baelde" <david.baelde@gmail.com>
+Reply-To: david.baelde@ens-lyon.org
+To: Ocaml <caml-list@inria.fr>
+Subject: Freezing
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+X-j-chkmail-Score: MSGID : 447251A2.000 on nez-perce : j-chkmail score : X : 0/20 1
+X-Miltered: at nez-perce with ID 447251A3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 447251A2.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; bug:01 unix:01 unix:01 waitpid:01 gdb:01 gdb:01 lib:01 libpthread:01 lib:01 libpthread:01 interprete:01 exn:01 exn:01 libc:01 lll:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.3
+
+Hi list,
+
+This could be a bug report but I have only a very bad description of
+it, and it may also be nothing but an unfortunate feature...
+
+I have a program streaming audio, and occasionally downloading files,
+using ocaml-smbclient wrapped in ocaml-fetch. I want to avoid too long
+(or frozen) downloads. To do so, here is essentially the code I use:
+
+<<<
+flush_all () ;
+let pid = Unix.fork () in
+if pid = 0 then begin
+  ignore (Unix.alarm 20) ;
+  Fetch.cp there here ;
+  exit 0
+end else
+  Unix.waitpid [] pid
+>>>
+
+It's that simple (modulo the mess inside the Fetch.cp) and it works as
+it should.. until some download process gets stuck, never returns. At
+the end of this message is the gdb trace I got from such a frozen
+process. It looks like the process wants to flush IO (could it be part
+of the exit procedure ?) but cannot because some other thread is
+blocking.
+
+The main process is threaded but the child isn't. Isn't it weird that
+it gets blocked in such a way ? Gdb doesn't show me any other thread
+in the child process.
+
+Another question: assuming this kind of hangup is unavoidable if I try
+to flush in a threaded process, is there a way to terminate a caml
+process without any extra possibly-blocking stuff ?
+
+I'm sorry to experience and report such a mess..
+
+(gdb) bt
+#0  0xffffe410 in __kernel_vsyscall ()
+#1  0xb7bc556e in __lll_mutex_lock_wait ()
+   from /lib/tls/i686/cmov/libpthread.so.0
+#2  0xb7bc323b in pthread_cond_signal@@GLIBC_2.3.2 ()
+   from /lib/tls/i686/cmov/libpthread.so.0
+#3  0x08066ad5 in caml_thread_enter_blocking_section ()
+#4  0x0806c006 in caml_enter_blocking_section ()
+#5  0x08066c72 in caml_io_mutex_lock ()
+#6  0x0807025d in caml_ml_flush ()
+#7  0x08079f8d in caml_interprete ()
+#8  0x08075eb0 in caml_callbackN_exn ()
+#9  0x08075efa in caml_callback_exn ()
+#10 0x080670b8 in caml_thread_start ()
+#11 0xb7bc0e60 in start_thread () from /lib/tls/i686/cmov/libpthread.so.0
+#12 0xb7afe8ee in clone () from /lib/tls/i686/cmov/libc.so.6
+

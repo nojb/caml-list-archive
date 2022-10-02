@@ -1,0 +1,80 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id C6C6EBB84
+	for <caml-list@yquem.inria.fr>; Thu, 18 May 2006 19:15:55 +0200 (CEST)
+Received: from smtp6-g19.free.fr (smtp6-g19.free.fr [212.27.42.36])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4IHFtNv011466
+	for <caml-list@yquem.inria.fr>; Thu, 18 May 2006 19:15:55 +0200
+Received: from [192.168.1.2] (che78-2-82-237-71-191.fbx.proxad.net [82.237.71.191])
+	by smtp6-g19.free.fr (Postfix) with ESMTP id 454BB2264B;
+	Thu, 18 May 2006 19:15:55 +0200 (CEST)
+Message-ID: <446CABCA.8000906@inria.fr>
+Date: Thu, 18 May 2006 19:15:54 +0200
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050317)
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+To: Dan Koppel <superluminal1905@yahoo.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] compiler bug?
+References: <20060517231426.30289.qmail@web32203.mail.mud.yahoo.com>
+In-Reply-To: <20060517231426.30289.qmail@web32203.mail.mud.yahoo.com>
+X-Enigmail-Version: 0.91.0.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 446CABCB.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; compiler:01 bug:01 bug:01 ocaml:01 compiler:01 inserting:01 iteration:01 ocaml:01 compilers:01 ocamlopt:01 garbage:01 stack:01 ocamlopt:01 stack:01 compilation:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+>   I would like to report what I think might be a bug in the Ocaml
+> compiler.  But first I wanted to run this by this group in case there's
+> something I'm missing.  I have some very simple code that consists of 2
+> nested loops.  Inside the inner loop, is a simple statement.
+> Furthermore, the inner loop is not "tight".  Ie. the number of
+> iterations within the inner loop is very large and the number of
+> iterations of the outer loop is very small.  I then manually time this.
+> I then change the code by inserting a simple function call between the
+> inner and outer loops.  This should have virtually no effect
+> whatsoever.  However, when I time this, I get exactly twice the time.
+> This is somewhat inexplicable.
+
+As John Carr mentioned, the function call forces the variables that
+are live across the call (i.e. dummy1) to be spilled, causing one additional
+memory read and one additional write at each iteration of the inner
+loop.  Since your inner loop is approximately 4 integer instructions,
+the additional memory traffic can easily halve performance.
+
+I grant you that spill code generation could be more clever here and
+spill/reload around the whole inner loop.  But, no, it's not a bug:
+Ocaml has a bug when the generated code crashes or produces incorrect
+results.
+
+> I learned in basic compiler theory that when a function is called, you
+> save all the registers before entering the function.
+
+That's an over-simplification.  First, many compilers designate a
+number of registers as "callee-save", meaning that all functions must
+preserve their values.  These would be preserved across a call.
+It happens that ocamlopt does not implement callee-save registers, as
+they make garbage collection (more exactly, stack traversal) and
+exception handling more expensive.  But even when a function call
+destroys all registers, as with ocamlopt, there are many possible
+placements for spills (saving a register in the stack) and reloads (of
+a register from the stack), and the placement you suggest (only around
+calls) is rarely optimal.  Well, in your example it is :-)
+
+Generation of spill code is a dark corner of compiler construction.
+As with many other compilation problems, there are a bunch of
+NP-completeness results.  Unlike many other compilation problems, I'm
+not aware of any published heuristics that works well in most cases.
+Well, there is the paper by George and Appel where they use an ILP
+solver (integer linear programming) to produce optimal spills, but
+that's kind of expensive...
+
+- Xavier Leroy
+

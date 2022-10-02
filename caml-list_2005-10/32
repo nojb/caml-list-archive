@@ -1,0 +1,154 @@
+Return-Path: <Alexander.Bottema@mathworks.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 847A9BB94
+	for <caml-list@yquem.inria.fr>; Tue,  4 Oct 2005 17:56:59 +0200 (CEST)
+Received: from smtp2.mathworks.com (smtp2.mathworks.com [144.212.95.218])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j94FuwRY007908
+	for <caml-list@yquem.inria.fr>; Tue, 4 Oct 2005 17:56:58 +0200
+Received: from mail-vif.mathworks.com (fred-ce0.mathworks.com [144.212.95.18])
+	by smtp2.mathworks.com (8.12.11/8.12.11) with ESMTP id j94Fuvsf029131
+	for <caml-list@yquem.inria.fr>; Tue, 4 Oct 2005 11:56:57 -0400 (EDT)
+Received: from MESSAGE-AH.ad.mathworks.com (ex-01-ah.mathworks.com [144.212.95.156])
+	by mail-vif.mathworks.com (8.11.7/8.11.7) with ESMTP id j94Fuvv29109
+	for <caml-list@yquem.inria.fr>; Tue, 4 Oct 2005 11:56:57 -0400 (EDT)
+X-MimeOLE: Produced By Microsoft Exchange V6.5.7226.0
+Content-class: urn:content-classes:message
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+Subject: RE: [Caml-list] Dynamic linking
+Date: Tue, 4 Oct 2005 11:56:53 -0400
+Message-ID: <DB873318D1A41648BEAC4B5AAB63B3E10AC3B0EC@MESSAGE-AH.ad.mathworks.com>
+X-MS-Has-Attach: 
+X-MS-TNEF-Correlator: 
+Thread-Topic: [Caml-list] Dynamic linking
+Thread-Index: AcXI8pibbFk0q9rnQbyQyahvE4t0agABx6Pw
+From: "Alexander Bottema" <Alexander.Bottema@mathworks.com>
+To: <caml-list@yquem.inria.fr>
+X-Miltered: at nez-perce with ID 4342A64A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 gcc:01 -fpic:01 extern:01 foo:01 argc:01 char:01 argv:01 foo:01 gcc:01 -fpic:01 globl:01 globl:01 popl:01 ocaml:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+But the problem with a DLL is that you never now what address will be
+allocated for your executable. It can be located anywhere between 0 and
+2^64-1. Thus, when a DLL calls another DLL a 64-bit call is potentially
+required. AMD64 supports global address tables that enable you to
+translate a 32-bit call into a 64-bit one (likewise with data access).
+If you compile a C file with gcc (-fPIC -S) you'll get code that looks
+like this:
+
+The C file (amd64.c)
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D
+extern int foo();
+
+int xyzzy =3D 42;
+
+int main(int argc, char *argv)
+{
+    xyzzy =3D 4711;
+    return foo();
+}
+
+The assembly output (amd64.S) for gcc -O2 -fPIC -S
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=3D=
+
+
+	.file	"amd64.c"
+.globl xyzzy
+	.data
+	.align 4
+	.type	xyzzy,@object
+	.size	xyzzy,4
+xyzzy:
+	.long	42
+	.text
+	.p2align 2,,3
+.globl main
+	.type	main,@function
+main:
+	pushl	%ebp
+	movl	%esp, %ebp
+	pushl	%ebx
+	pushl	%eax
+	call	.L2
+.L2:
+	popl	%ebx
+	addl	$_GLOBAL_OFFSET_TABLE_+[.-.L2], %ebx
+	movl	xyzzy@GOT(%ebx), %eax
+	andl	$-16, %esp
+	movl	$4711, (%eax)
+	call	foo@PLT
+	movl	-4(%ebp), %ebx
+	leave
+	ret
+.Lfe1:
+	.size	main,.Lfe1-main
+	.ident	"GCC: (GNU) 3.2.3"
+
+For OCaml to work you need to emit instructions of type 'call foo@PLT'
+and 'movl xyzzy@GOT(%ebx)'. Currently, the OCaml does not do this for
+AMD64, which is the heart of the problem. If you think this is trivial
+to fix, please go head and do it; I'd be very happy.
+
+Alexander Bottema
+The MathWorks
+
+-----Original Message-----
+From: skaller [mailto:skaller@users.sourceforge.net]=20
+Sent: Tuesday, October 04, 2005 10:48 AM
+To: Alexander Bottema
+Cc: caml-list@yquem.inria.fr
+Subject: RE: [Caml-list] Dynamic linking
+
+On Tue, 2005-10-04 at 08:47 -0400, Alexander Bottema wrote:
+
+> Now, as a developer it would be nice if it was possible to write
+certain
+> parts in OCaml. The foreign language interface is good enough to be
+used
+> in conjunction with C/C++, but the lack of support to use it in DLLs
+> makes it impossible for us to have any OCaml code in our leaf product.
+>=20
+> Nevertheless, I really tried to make it work (and I almost did). It's
+> only Linux/AMD64 that I couldn't solve and I really tried to modify
+the
+> AMD64 emitter.
+
+I actually find this very strange. The x86 is incapable of
+supporting position independent code without hackery or=20
+segmentation:
+
+(a) there is no IP relative call instruction (only short branches)
+(b) there is no IP relative data access (at all)
+
+The amd64 (x86_64) on the other hand supports IP relative
+calls and data access (with 32 bit offsets only, but
+usually enough for all code and global data).
+
+
+> > The only platform which I couldn't get to work was Linux AMD64. I
+> tried
+> > to modify the OCaml emitter for AMD64 to accommodate position
+> > independent code using the offset tables, but it was too hard.
+
+There is no need for offset tables. Just make sure all
+'absolute' addresses accesses are changed to be RIP relative
+and the assembler will do the rest automatically.
+
+[There may be a problem on Windows, apparently the linker
+can't add two offsets together due to a constraint in COFF
+format, not sure about that though]
+
+See section 2.2.5 of the AMD document 24592.
+
+--=20
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

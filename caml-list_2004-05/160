@@ -1,0 +1,90 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA11671; Sat, 8 May 2004 00:11:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA11790 for <caml-list@pauillac.inria.fr>; Sat, 8 May 2004 00:11:21 +0200 (MET DST)
+Received: from rabelais.socialtools.net (rabelais.socialtools.net [81.2.94.243])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i47MBJEV024982
+	for <caml-list@inria.fr>; Sat, 8 May 2004 00:11:20 +0200
+Received: by rabelais.socialtools.net (Postfix, from userid 108)
+	id 95DB2232DF; Fri,  7 May 2004 23:11:19 +0100 (BST)
+Received: from socialtools.net (chaucer.socialtools.net [81.2.94.242])
+	by rabelais.socialtools.net (Postfix) with ESMTP
+	id 520EF232DE; Fri,  7 May 2004 23:11:18 +0100 (BST)
+Message-ID: <409C0985.9060703@socialtools.net>
+Date: Fri, 07 May 2004 23:11:17 +0100
+From: Benjamin Geer <ben@socialtools.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.6) Gecko/20040113
+X-Accept-Language: en-gb, en, fr, it
+MIME-Version: 1.0
+To: "Vladimir N. Silyaev" <vsilyaev@mindspring.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Common IO structure
+References: <20040503061212.GA64216@server.vns.oc.ca.us> <40980BA2.1010102@socialtools.net> <20040505173149.GA72564@server.vns.oc.ca.us>
+In-Reply-To: <20040505173149.GA72564@server.vns.oc.ca.us>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Checker-Version: SpamAssassin 2.63 (2004-01-11) on 
+	rabelais.socialtools.net
+X-Spam-Status: No, hits=-4.9 required=5.0 tests=BAYES_00 autolearn=ham 
+	version=2.63
+X-Miltered: at nez-perce with ID 409C0987.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 inherently:01 model:01 buffer:01 non-blocking:01 buffer:01 non-blocking:01 multi-byte:01 byte:01 byte:01 writes:01 simpler:01 signatures:02 signatures:02 bytes:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Vladimir N. Silyaev wrote:
+> This signature looks like a good starting point. However I would rather
+> separate this code to three different pieces
+
+That seems fine to me.  I just wanted to give you a very rough idea of 
+what I had in mind; I was pretty sure you'd see a better way to design 
+it. :)
+
+> Please note,  that write and read inherently separated in signatures,
+> it allows simpler interface, supports read/write only streams
+> and better feet common model, where read and writes are separated.
+> However, module couldn't implement both read and write signatures, if
+> it's required.
+
+The main thing I wanted to point out was that there needs to be a way to 
+read data into a buffer from a non-blocking socket into a buffer, and 
+then write the data from the *same buffer* into another non-blocking 
+socket.  Then compact the buffer (move any unwritten data to the 
+beginning of the buffer) and start again, like in this loop:
+
+let copy_fd in_fd out_fd =
+   let b = AsyncBuffer.create () in
+     try
+       while (true) do
+         AsyncBuffer.from_fd b in_fd;
+         AsyncBuffer.flip b;
+         AsyncBuffer.to_fd b out_fd;
+         AsyncBuffer.compact b
+       done
+     with End_of_file -> ()
+
+Can that still be done if the read and write signatures are separated?
+
+The other thing that's important is that character encoder/decoders 
+would need to be able to read characters from one buffer and write them 
+to another buffer in a different encoding.  An encoder/decoder would 
+need to gracefully handle the case where it reads from a buffer 
+containing incomplete characters.  That's another reason for the 
+'compact' function: you could read 10 bytes from a socket into a buffer, 
+and those 10 bytes could contain 9 bytes worth of complete UTF-8 
+characters; the 10th byte would be the first byte of a multi-byte 
+character.  You'd pass the buffer to an encoder/decoder, which would 
+read 9 bytes and write them into another buffer in a different encoding 
+(say UTF-16), leaving the last byte.  You would then call 'compact' to 
+move that byte to the beginning of the buffer, and repeat.
+
+Is there a way to fit this approach into what you've proposed for 
+encoder/decoders?
+
+Ben
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

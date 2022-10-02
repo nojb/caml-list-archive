@@ -1,0 +1,156 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 031D3D560
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jul 2005 19:03:16 +0200 (CEST)
+Received: from ash25e.internode.on.net (ash25e.internode.on.net [203.16.214.182])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j6RH3EIh018570
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jul 2005 19:03:15 +0200
+Received: from rosella (ppp6-113.lns1.syd3.internode.on.net [59.167.6.113])
+	by ash25e.internode.on.net (8.12.9/8.12.6) with ESMTP id j6RH35Xf039655;
+	Thu, 28 Jul 2005 02:33:05 +0930 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: Re: [Caml-list] How to do this properly with OCaml?
+From: skaller <skaller@users.sourceforge.net>
+To: Brian Hurt <bhurt@spnz.org>
+Cc: Jon Harrop <jon@ffconsultancy.com>, caml-list@yquem.inria.fr
+In-Reply-To: <Pine.LNX.4.63.0507252016220.19547@localhost.localdomain>
+References: 
+	 <Pine.LNX.4.61.0507221552070.27560@katrin.cip.physik.uni-muenchen.de>
+	 <200507241623.13705.Stephane.Glondu@crans.org>
+	 <1122251570.9027.362.camel@localhost.localdomain>
+	 <200507260205.45941.jon@ffconsultancy.com>
+	 <Pine.LNX.4.63.0507252016220.19547@localhost.localdomain>
+Content-Type: multipart/signed; micalg=pgp-sha1; protocol="application/pgp-signature"; boundary="=-cucFIoDIgGvpx5dKtCSB"
+Date: Thu, 28 Jul 2005 03:03:05 +1000
+Message-Id: <1122483785.6768.121.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.2.1.1 
+X-Miltered: at concorde with ID 42E7BE52.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 ocaml:01 arrays:01 arrays:01 stack:01 hashtable:01 inlining:01 ocaml:01 rewriting:01 caching:01 optimise:01 non-trivial:01 unpacking:01 tail-call:01 ocamlopt:01 
+X-Attachments: type="application/pgp-signature" name="signature.asc" 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+Status: O
+Content-Length: 3748
+Lines: 115
+
+
+--=-cucFIoDIgGvpx5dKtCSB
+Content-Type: text/plain
+Content-Transfer-Encoding: quoted-printable
+
+On Mon, 2005-07-25 at 20:20 -0500, Brian Hurt wrote:
+
+> No- variable length arrays are needed when you're implementing other data=
+=20
+> structures on top of arrays, like stacks or queues.  At which point I=20
+> start asking which data structure you really need- a variable length=20
+> array, or a stack or queue?
+
+I need to represent what is naturally a graph of some kind:
+I have a Hashtable mapping function number to code,
+where the code is a list of instructions (including labels
+and branches to them). The main
+kind of optimisation is inlining function calls.
+
+I am not currently using any sophisticated analysis,
+although I would like to: in part this is because
+the data structure I'm using isn't very good.
+
+There is a tension between a good data structure
+in the abstract (for example a graph) and one which
+is good in Ocaml -- Ocaml can work with inductive
+data structures like lists well because of pattern
+matching, but abstract data structures are much
+harder to use.
+
+The main problem is that rewriting rules are intrinsically
+mutations, which makes caching very hard. I do some of this
+and it is a mess if I forget to update a cache.
+
+An entirely functional approach is likely to be absurdly
+inefficient: you simply cannot recalculate the properties
+of the code after a rewrite rule is applied from
+scratch every time.
+
+What my code actually does is optimise special cases
+found by pattern matching -- and other algorithms
+try to coerce the code into this form. For example:
+
+
+	fun f (x:int):int =3D {
+		y :=3D f (x - 1);
+		return y
+	|
+
+This representation of a function does not contain
+a direct tail call. However by subtitution of y
+we can reduce the code to:
+
+	return f (x - 1);
+
+which is in tail form, and can be recognized by a
+pattern match as a tail call. Additional logic determines
+the call is a self call, so the function is rewritten as:
+
+	fun f(x:int):int =3D {
+		var a =3D x;
+	loop:>
+	 	a' :=3D a - 1;
+		a =3D a';
+		goto loop;
+	}
+
+and a bit more work eliminates a' (this is entirely
+non-trivial when the parameter is a tuple, recall
+previous discussion of parallel assignment).
+
+The point is that processing this requires three or four=20
+distinct processes: the substitution is justified by a limited
+kind of linear data flow analysis which is enough to handle
+unpacking an expression in to SSA form, the tail-call is
+done with a single pattern match, and the tail-recursion
+is handled by a check and a transformation that needs
+to know the current function name, and also needs to=20
+modify the code at the start of the function.  In addition
+you don't want to do that twice if there are TWO=20
+self-tail-rec calls.
+
+Whilst there is no particular guarantee of closure
+elimination, in common cases the process does seem
+to generate efficient code -- testing on Ackermann's
+function shows the result is faster than any other
+language translator including both Ocamlopt and gcc,
+probably because one less word is required on the
+machine stack.
+
+In addition, I doubt there is any single best
+theory of optimisation with guarantees, at least
+in 2005 :)
+
+So given my explanation of the kinds of things
+I'm doing I'd be interested to learn what kind
+of data structure you think I should be using.
+
+--=20
+John Skaller <skaller at users dot sourceforge dot net>
+
+
+--=-cucFIoDIgGvpx5dKtCSB
+Content-Type: application/pgp-signature; name=signature.asc
+Content-Description: This is a digitally signed message part
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.2.5 (GNU/Linux)
+
+iD8DBQBC575JsRp8/9aGVGsRAoIdAJ0TbLc06WPHln1ArIUJ9/BITKISBQCdHcS0
+8zyCk44Lp6KIrPNllbDw5co=
+=RVHg
+-----END PGP SIGNATURE-----
+
+--=-cucFIoDIgGvpx5dKtCSB--
+

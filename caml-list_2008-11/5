@@ -1,0 +1,195 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE,
+	DNS_FROM_SECURITYSAGE autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 11749BB84
+	for <caml-list@yquem.inria.fr>; Sat,  1 Nov 2008 10:52:39 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApoEAFPEC0mCNhAB/2dsb2JhbADKN4NR
+X-IronPort-AV: E=Sophos;i="4.33,526,1220220000"; 
+   d="scan'208";a="19454693"
+Received: from kurims.kurims.kyoto-u.ac.jp ([130.54.16.1])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 01 Nov 2008 10:52:34 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.8/8.13.8) with ESMTP id mA19qJlG019808;
+	Sat, 1 Nov 2008 18:52:19 +0900 (JST)
+Date: Sat, 01 Nov 2008 18:52:13 +0900 (JST)
+Message-Id: <20081101.185213.23711494.garrigue@math.nagoya-u.ac.jp>
+To: darioteixeira@yahoo.com
+Cc: dra-news@metastack.com, caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Private types
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <761104.6489.qm@web54602.mail.re2.yahoo.com>
+References: <20081031.090842.254669920.garrigue@math.nagoya-u.ac.jp>
+	<761104.6489.qm@web54602.mail.re2.yahoo.com>
+X-Mailer: Mew version 4.2 on Emacs 22.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+X-Spam: no; 0.00; abbreviation:01 struct:01 foo:01 foobar:01 foobar:01 abbreviation:01 sig:01 foo:01 val:01 val:01 bool:01 bool:01 struct:01 quantified:01 sig:01 
+
+Dear Dario,
+
+Since you use a private abbreviation, extraction from the private type
+must be explicit before you can do anything on its representation.
+So the solution is simple enough:
+
+module Mymod =3D
+  struct
+    let is_foo2 x =3D
+      match (x : _ Foobar.t :> [> ]) with `A -> true | `B -> false
+  end
+
+The [> ] as target type just says that you expect a polymorphic
+variant, which is incompatible with Foobar.t, and triggers its
+expansion.
+
+If you want to avoid this explicit coercion, you must use a private
+row type in place of a private abbreviation. However, you loose the
+ability to distinguish between values created by make_a and make_b at
+the type level.
+
+module Foobar: sig
+  type foo_t =3D [ `A ]
+  type bar_t =3D [ `B ]
+  type foobar_t =3D [ foo_t | bar_t ]
+  type t =3D private [< foobar_t]
+
+  val make_a: unit -> t
+  val make_b: unit -> t
+  val is_foo: t -> bool
+  val is_bar: t -> bool
+end =3D struct
+  type foo_t =3D [ `A ]
+  type bar_t =3D [ `B ]
+  type foobar_t =3D [ foo_t | bar_t ]
+  type t =3D foobar_t
+
+  let make_a () =3D `A
+  let make_b () =3D `B
+  let is_foo =3D function `A -> true | `B -> false
+  let is_bar =3D function `B -> true | `A -> false
+end
+
+You may recover this distinction by adding an extra parameter to t,
+just as in your original code.
+
+  type 'a t =3D private [< foobar_t]
+
+but since you won't be able to relate it directly to the expansion of
+the type (the row variable is quantified at the module level, so you
+cannot capture it with 'a), you would have to recover it by hand.
+
+Jacques Garrigue
+
+> I have also been playing with 3.11's private types, and I would like =
+to
+> share a problem I've come across.  Suppose I have a Foobar module def=
+ined
+> as follows (note the use of a type constraint):
+> =
+
+> =
+
+> module Foobar:
+> sig
+> 	type foo_t =3D [ `A ]
+> 	type bar_t =3D [ `B ]
+> 	type foobar_t =3D [ foo_t | bar_t ]
+> 	type 'a t =3D 'a constraint 'a =3D [< foobar_t ]
+> =
+
+> 	val make_a: unit -> foo_t t
+> 	val make_b: unit -> bar_t t
+> 	val is_foo: [< foobar_t] t -> bool
+> 	val is_bar: [< foobar_t] t -> bool
+> end =3D
+> struct
+> 	type foo_t =3D [ `A ]
+> 	type bar_t =3D [ `B ]
+> 	type foobar_t =3D [ foo_t | bar_t ]
+> 	type 'a t =3D 'a constraint 'a =3D [< foobar_t ]
+> =
+
+> 	let make_a () =3D `A
+> 	let make_b () =3D `B
+> 	let is_foo =3D function `A -> true | `B -> false
+> 	let is_bar =3D function `B -> true | `A -> false
+> end
+> =
+
+> =
+
+> Suppose also that I want to define a "is_foo" function in an external=
+ module.
+> This function only needs to pattern-match on Foobar.t values.  The fo=
+llowing
+> code will work:
+> =
+
+> module Mymod:
+> sig
+> 	open Foobar
+> =
+
+> 	val is_foo2: [< foobar_t] t -> bool
+> end =3D
+> struct
+> 	let is_foo2 =3D function `A -> true | `B -> false
+> end
+> =
+
+> =
+
+> But now consider that I want to enforce the creation of Foobar.t valu=
+es only
+> via Foobar's constructor functions, but I would like to keep the poss=
+ibility of
+> external modules to pattern-match on Foobar.t values.  In other words=
+, change
+> Foobar but don't break Mymod.  The immediate (na=EFve) solution is to=
+ make
+> use of private types, thus changing the signature of Foobar to the fo=
+llowing:
+> =
+
+> =
+
+> module Foobar:
+> sig
+> 	type foo_t =3D [ `A ]
+> 	type bar_t =3D [ `B ]
+> 	type foobar_t =3D [ foo_t | bar_t ]
+> 	type 'a t =3D private 'a constraint 'a =3D [< foobar_t ]
+> =
+
+> 	val make_a: unit -> foo_t t
+> 	val make_b: unit -> bar_t t
+> 	val is_foo: [< foobar_t] t -> bool
+> 	val is_bar: [< foobar_t] t -> bool
+> end =3D (...)
+> =
+
+> =
+
+> But this will break Mymod.  The compile will complain with the follow=
+ing error:
+> =
+
+>       Values do not match:
+>          val is_foo2 : [< `A | `B ] -> bool
+>        is not included in
+>          val is_foo2 : [< Foobar.foobar_t ] Foobar.t -> bool
+> =
+
+> Any ideas on how can I get around this problem?
+> =
+
+> Thanks!
+> Cheers,
+> Dario Teixeira
+

@@ -1,0 +1,140 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA21462; Thu, 17 Jul 2003 22:27:43 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA06395 for <caml-list@pauillac.inria.fr>; Thu, 17 Jul 2003 22:27:42 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h6HKRef25356;
+	Thu, 17 Jul 2003 22:27:41 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA24658; Thu, 17 Jul 2003 22:27:40 +0200 (MET DST)
+Date: Thu, 17 Jul 2003 22:27:40 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Mary Fernandez <mff@research.att.com>
+Cc: caml-list@inria.fr, "Ricardo H. Medel" <rmedel@research.att.com>,
+        Kathleen S Fisher <kfisher@research.att.com>,
+        Robert E Gruber <gruber@research.att.com>
+Subject: Re: [Caml-list] Two questions about using the CamlIDL
+Message-ID: <20030717222740.B12466@pauillac.inria.fr>
+References: <1058455592.1492.73.camel@squeak.research.att.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <1058455592.1492.73.camel@squeak.research.att.com>; from mff@research.att.com on Thu, Jul 17, 2003 at 11:26:33AM -0400
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 simplistic:01 coercions:01 unpack:01 struct:01 extern:01 malloc:01 sizeof:01 refcount:01 camlparam:01 camllocal:01 callbackn:01 camlreturn:01 stub:01 idl:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Our Caml application is unusual in that the Caml
+> app calls C functions, which in turn may call
+> Caml functions that return Caml objects to C, 
+> which in turn return those Caml objects back to the 
+> Caml app.  
+> 
+> 1. It is not clear how to use the CamlIDL type syntax 
+> to define the type of a Caml value that will be returned from C.
+
+Here is a simplistic solution:
+
+  quote(c, "#include "camlobj.h")
+
+  typedef [mltype(string), c2ml(long_to_camlobj), ml2c(camlobj_to_long)]
+    long camlobj;
+
+  camlobj f(camlobj v);
+
+where camlobj.h contains:
+
+  typedef long camlobj;
+  #define long_to_camlobj(c) (*(c))
+  #define camlobj_to_long(v,c) (*(c) = (v))
+
+Basically, a "camlobj" is a long integer whose coercions to and from
+the Caml "value" type are the identity function.  
+
+You didn't say what Caml type the Caml objects should have.  I put
+"string" here, but any closed type will do.  
+
+The problem with this solution is that the Caml values that transit
+through the C code under the type "camlobj" are not known to the GC.
+Hence, if a GC occurs (e.g. because your C functions call several Caml
+functions in turn), the "camlobj" values will become wrong.
+
+A way to avoid this is to wrap the Caml values in a malloced block that
+is registered with the Caml GC:
+
+  quote(c, "#include <camlobj.h>)
+
+  typedef [mltype(string), c2ml(unpack_camlobj), ml2c(pack_camlobj)]
+    struct packed_camlobj * camlobj;
+
+  camlobj f(camlobj v);
+
+where camlobj.h is
+
+  typedef struct packed_camlobj { value v; } * camlobj;
+  extern void pack_camlobj(value v, camlobj * c);
+  extern value unpack_camlobj(camlobj * c);
+
+and camlobj.c contains
+
+  void pack_camlobj(value v, camlobj * c)
+  {
+    camlobj p = malloc(sizeof(struct packed_camlobj));
+    p->v = v;
+    register_global_root(&(p->v));
+    *c = p;
+  }
+
+  value unpack_camlobj(camlobj * c)
+  {
+    camlobj p = *c;
+    value v = p->v;
+    remove_global_root(&(p->v));
+    free(p);
+    return v;
+  }
+
+Notice that unpack_camlobj removes the GC root and destroys the
+block allocated by malloc().  This is adequate (I hope :-) if your C
+code never stores a camlobj in a global data structure, but simply
+passes them around.  In more complex situations, you'd need to add a
+reference count to the struct packed_camlobj and make sure that the C
+code maintains this refcount properly.
+
+> 2. Assuming we can specify the above type, the c_function 
+> that calls back into Caml will look something like this:
+> 
+>   CamlObj c_function() { 
+>     CAMLparam0();
+>     CAMLlocal2(caml_obj, args);
+> 
+>     ... Usual set up to get pointer to Caml function 
+>     and allocate space for args ...
+>     
+>     caml_obj = callbackN(*caml_function_closure, 0, args)
+> 
+>     CAMLreturn(caml_obj);
+>   }
+> 
+> Because c_function will be called from the IDL stub functions,
+> do we have to modify the stub functions to follow the same
+> function-call protocol as above?
+
+I'm not sure I completely understand your question.  If you're asking
+about GC registration of memory roots, I think the "packed_camlobj"
+approach above addresses the issue in a way that does not need
+modifying the stub functions nor the intermediate C functions themselves.
+
+One last word: in cases of complex C/Caml interactions, as in your
+example, it's often easier to work out the (GC) issues first by
+writing by hand the stubs for a few functions.  Using CamlIDL from the
+beginning makes things even more obscure :-)
+
+Hope this helps,
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

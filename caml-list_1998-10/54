@@ -1,0 +1,120 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA17883 for caml-redistribution; Fri, 30 Oct 1998 17:36:28 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA10797 for <caml-list@pauillac.inria.fr>; Fri, 30 Oct 1998 11:17:36 +0100 (MET)
+Received: from p-biset.issy.cnet.fr (p-biset.issy.cnet.fr [139.100.0.33])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with SMTP id LAA13580
+	for <caml-list@inria.fr>; Fri, 30 Oct 1998 11:17:35 +0100 (MET)
+Received: from l-mhs1.lannion.cnet.fr ([161.104.1.59]) by p-biset.issy.cnet.fr with SMTP (Microsoft Exchange Internet Mail Service Version 5.5.2232.9)
+	id VZR6A93D; Fri, 30 Oct 1998 11:17:37 +0100
+Received: from lsun162 (lsun162.lannion.cnet.fr [161.104.8.27]) by l-mhs1.lannion.cnet.fr with SMTP (Microsoft Exchange Internet Mail Service Version 5.5.1960.3)
+	id 4DJ6GFLY; Fri, 30 Oct 1998 11:17:38 +0100
+From: Pascal Brisset <pascal.brisset@cnet.francetelecom.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <13881.37437.266875.483207@lsun162>
+Date: Fri, 30 Oct 1998 11:17:33 +0100 (MET)
+To: Thierry Bravier <thierry.bravier@dassault-aviation.fr>
+CC: caml-list@inria.fr
+Subject: Re: problem with ocamlmktop -output-obj
+In-Reply-To: <36349D52.1E7B@dassault-aviation.fr>
+References: <3624D5BE.3060@dassault-aviation.fr>
+	<19981015192243.14795@pauillac.inria.fr>
+	<3627228B.20CE@dassault-aviation.fr>
+	<36349D52.1E7B@dassault-aviation.fr>
+X-Mailer: VM 6.47 under Emacs 19.34.1
+Sender: weis
+
+Thierry Bravier writes:
+ > > Are there any clues to help me build this toplevel with C++ code
+ > > without -output-obj ?
+
+I've been calling C++ libraries from caml code since ocaml-1.03
+without resorting to any particular hack (see example below). I tend
+to avoid things like global objects and c++ exceptions (which were
+seriously flawed at that time), so this might not cover all of your
+problems. Also, it may fail with compilers other than gcc (because gcc
+called as a linker resolves c++ symbols).
+
+- Pascal Brisset <pascal.brisset@cnet.francetelecom.fr> +33296051928 -
+- France Telecom CNET DTL/MSV | 2 av Pierre Marzin | F-22307 Lannion -
+
+-------------------------- mlcell.C ---------------------------------
+
+#include <stdio.h>
+
+extern "C" {
+# include <caml/mlvalues.h>
+# include <caml/alloc.h>
+}
+
+class Cell {
+public:
+  Cell(int init) : val(init) { }
+  void set(int x) { val = x; }
+  int get() { return val; }
+private:
+  int val;
+};
+
+typedef struct {
+  final_fun f;
+  Cell *c;
+} mlcell;
+
+static void free_cell(value mlc) {
+  printf("freeing %p\n", mlc);
+  delete ((mlcell*)mlc)->c;
+}
+
+extern "C" value caml_cell_create(value mlv) {
+  mlcell *res = (mlcell*)alloc_final(sizeof(mlcell)/sizeof(value),
+				     free_cell, 1, 1000); /* ? */
+  res->c = new Cell(Int_val(mlv));
+  return (value)res;
+}
+			  
+extern "C" value caml_cell_set(value mlc, value mlv) {
+  ((mlcell*)mlc)->c->set(Int_val(mlv));
+  return Val_unit;
+}
+
+extern "C" value caml_cell_get(value mlc) {
+  int v = ((mlcell*)mlc)->c->get();
+  return Val_int(v);
+}
+
+-------------------------- cell.ml --------------------------------
+
+module Cell = struct
+  type t
+  external create : int -> t = "caml_cell_create"
+  external set : t -> int -> unit = "caml_cell_set"
+  external get : t -> int = "caml_cell_get"
+end
+
+let _ =
+  let c = Cell.create 99 in
+  Printf.printf "%d\n" (Cell.get c);
+  Cell.set c 42;
+  Printf.printf "%d\n" (Cell.get c);
+  flush stdout
+
+let _ = Gc.full_major ()
+
+-------------------------- Testing --------------------------------
+
+$ g++ --version
+2.8.1
+$ g++ -I/usr/local/lib/ocaml -c mlcell.C
+$ ocamlc -v -custom mlcell.o cell.ml -o cell.out
+The Objective Caml compiler, version 1.07
+Standard library directory: /usr/local/lib/ocaml
+$ ./cell.out
+99
+42
+freeing a2944
+
+------------------------------------------------------------------
+
+
+

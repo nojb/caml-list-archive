@@ -1,0 +1,233 @@
+Return-Path: <gares@fettunta.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id A64BC7EE4E
+	for <caml-list@sympa.inria.fr>; Mon, 14 Oct 2013 17:30:24 +0200 (CEST)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  enrico.tassi@inria.fr) identity=pra; client-ip=87.98.168.143;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="gares@fettunta.org";
+  x-sender="enrico.tassi@inria.fr";
+  x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  gares@fettunta.org) identity=mailfrom;
+  client-ip=87.98.168.143;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="gares@fettunta.org";
+  x-sender="gares@fettunta.org"; x-conformance=sidf_compatible
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@fettunta.org) identity=helo;
+  client-ip=87.98.168.143;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="gares@fettunta.org";
+  x-sender="postmaster@fettunta.org";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Av4AALEMXFJXYqiPl2dsb2JhbABZhAW+CIUwDgEBAQEBCBYHPIJTfw80BSgNQodvnFihOpJ4gQQDkCuBMIYpAZUo
+X-IPAS-Result: Av4AALEMXFJXYqiPl2dsb2JhbABZhAW+CIUwDgEBAQEBCBYHPIJTfw80BSgNQodvnFihOpJ4gQQDkCuBMIYpAZUo
+X-IronPort-AV: E=Sophos;i="4.93,493,1378850400"; 
+   d="ml'?mli'?scan'208";a="36978068"
+Received: from fettunta.hackadomia.org (HELO fettunta.org) ([87.98.168.143])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 14 Oct 2013 17:30:22 +0200
+Received: from birba.invalid (unknown [193.55.250.104])
+	by fettunta.org (Postfix) with ESMTPSA id 1A3D6D066
+	for <caml-list@inria.fr>; Mon, 14 Oct 2013 17:30:24 +0200 (CEST)
+Received: from gares by birba.invalid with local (Exim 4.80)
+	(envelope-from <gares@birba.invalid>)
+	id 1VVk6B-0005Mj-PI
+	for caml-list@inria.fr; Mon, 14 Oct 2013 17:30:23 +0200
+Date: Mon, 14 Oct 2013 17:30:23 +0200
+From: Enrico Tassi <enrico.tassi@inria.fr>
+To: caml-list@inria.fr
+Message-ID: <20131014153023.GA19032@birba.invalid>
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="gBBFr7Ir9EOA20Yy"
+Content-Disposition: inline
+User-Agent: Mutt/1.5.21 (2010-09-15)
+Subject: [Caml-list] Marshalling: automatic discard of unmashalable data via
+ ephemerons
+
+
+--gBBFr7Ir9EOA20Yy
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+
+Hello caml-list.  I'm new here, It's my fist post, and I want to share
+an hack I came up with to systematically solve some marshalling problems
+I have in the context of Coq development.  I hope the hack is of general
+interest, maybe it is folklore, maybe not... 
+
+The Coq architecture is switching to a multi process one, where slave
+processes are fed a system state, a portion of the proof script (an
+entire proof at the moment) and are expected to return the resulting
+proof term.  Data is marshalled using the standard Marshal module.
+
+The system state is made of pretty much anything, and is also user
+extensible via plugins.  Nothing prevents someone to stick in there
+values that can hardly be marshalled, like callbacks, file descriptors,
+lazy_t, and the like.  Of course it is nice to be able to store
+callbacks or lazy values in the system state, so forbidding all that is
+not nice.
+
+Luckily enough, I don't need this data in the slave processes.
+Hence I could pre-process the system state and throw it away.
+But the system state is big, and traversing it to prune out some bits is
+likely to be expensive.  Moreover I'm lazy, I don't want to code that
+pruning function, hence the following solution.  
+
+Values that can't, or should not, be marshalled are stored in the system
+state using a unique key, and given a key one can retrieve the
+corresponding value.  These (key,value) pairs are ephemeron, if the key
+is not reachable, the value (if it has no extra references) will be
+eventually collected too.  When a key is marshalled, no error occurs
+(keys are just doubly boxed integers).  When a key is unmarshalled it
+becomes invalid, i.e. the associated value cannot be retrieved anymore.
+
+In some sense it is like if marshalling was forgetting the part of
+the marshalled value that is stored as a key.  All automatically, no
+need to pre/post process the marshalled value and no extra memory
+management hassle.
+
+Thanks to Damien Doligez for his preliminary comments on the attached
+files.
+
+All sort of comments is welcome,
+Cheers
+-- 
+Enrico Tassi
+
+--gBBFr7Ir9EOA20Yy
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="ephemeron.mli"
+
+(* Use case:
+     You have a data structure that needs to be marshalled but it contains
+     unmarshallable data (like a closure, or a file descriptor).  Actually
+     you don't need this data to be preserved by marshalling, it just happens
+     to be there.
+     You could produced a trimmed down data structure, but then, once
+     unmarshalled, you can't used the very same code to process it, unless you
+     re-inject the trimmed down data structure into the standard one, using
+     dummy values for the unmarshallable stuff.
+     Similarly you could change your data structure turning all types [bad]
+     into [bad option], then just before marshalling you set all values of type
+     [bad option] to [None].  Still this pruning may be expensive and you have
+     to code it.
+
+   Desiderata:
+     The marshalling operation automatically discards values that cannot be
+     marshalled or cannot be properly unmarshalled.
+
+   Proposed solution:
+     Turn all occurrences of [bad] into [bad key] in your data structure.
+     Use [crate bad_val] to obtain a unique key [k] for [bad_val], and store
+     [k] in the data structure.  Use [get k] to obtain [bad_val].
+
+     An ['a key] can always be marshalled.  When marshalled, a key loses its
+     value.  The function [get] raises Not_found on unmarshalled keys.
+     
+     If a key is garbage collected, the corresponding value is garbage
+     collected too (unless extra references to it exist).
+     In short no memory management hassle, keys can just replace their
+     corresponding value in the data structure.  *)
+
+type 'a key
+
+val create : 'a -> 'a key
+val get : 'a key -> 'a
+
+--gBBFr7Ir9EOA20Yy
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="ephemeron.ml"
+
+type key_type = int
+
+type boxed_key = key_type ref ref
+
+let mk_key : unit -> boxed_key =
+  (* We should take a random value here, is there a random function in OCaml?*) 
+  let bid = ref 0 in
+  (* According to OCaml Gc module documentation, Pervasives.ref is one of the
+     few ways of getting a boxed value the compiler will never alias. *)
+  fun () -> incr bid; Pervasives.ref (Pervasives.ref !bid)
+
+(* A phantom type to preserve type safety *)
+type 'a key = boxed_key
+
+(* Comparing keys with == grants that if a key is unmarshalled (in the same
+   process where it was created or in another one) it is not mistaken for
+   an already existing one (unmarshal has no right to alias).  If the initial
+   value of bid is taken at random, then one also avoids potential collisions *)
+module HT = Hashtbl.Make(struct
+  type t = key_type ref
+  let equal k1 k2 = k1 == k2
+  let hash id = !id
+end)
+
+(* A key is the (unique) value inside a boxed key, hence it does not
+   keep its corresponding boxed key reachable (replacing key_type by boxed_key
+   would make the key always reachable) *)
+let values : Obj.t HT.t = HT.create 1001
+
+let collect k = HT.remove values !k
+
+(* The only reference to the boxed key is the one returned, when the user drops
+   it the value eventually disappears from the values table above *)
+let create (v : 'a) : 'a key =
+  let k = mk_key () in
+  HT.add values !k (Obj.repr v);
+  Gc.finalise collect k;
+  k
+
+let get (k : 'a key) : 'a = Obj.obj (HT.find values !k)
+
+--gBBFr7Ir9EOA20Yy
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="test.ml"
+
+
+module E = Ephemeron ;;
+
+let test0 () =
+  let f = E.create (fun () -> prerr_endline "OK") in
+  try E.get f ()
+  with Not_found -> prerr_endline "WTF"
+;;
+
+let test1 () =
+  let f = E.create (fun () -> prerr_endline "OK") in
+  Gc.full_major ();
+  try E.get f ()
+  with Not_found -> prerr_endline "WTF"
+;;
+
+let test2 () =
+  let str =
+    let f = E.create (fun () -> prerr_endline "WTF") in
+    Marshal.to_string f [] in
+  Gc.full_major ();
+  let f : (unit -> unit) E.key = Marshal.from_string str 0 in
+  try E.get f ()
+  with Not_found -> prerr_endline "OK"
+;;
+
+
+let test3 () =
+  let str =
+    let f = E.create (fun () -> prerr_endline "WTF") in
+    Marshal.to_string f [] in
+  let f : (unit -> unit) E.key = Marshal.from_string str 0 in
+  try E.get f ()
+  with Not_found -> prerr_endline "OK"
+;;
+
+test0 ();;
+test1 ();;
+test2 ();;
+test3 ();;
+
+--gBBFr7Ir9EOA20Yy--

@@ -1,0 +1,140 @@
+Return-Path: <tf@functionality.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id E1054BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 15:56:16 +0200 (CEST)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.188])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l5RDuGR2005107
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jun 2007 15:56:16 +0200
+Received: from [141.84.136.30] (helo=[152.78.96.56])
+	by mrelayeu.kundenserver.de (node=mrelayeu8) with ESMTP (Nemesis),
+	id 0ML31I-1I3Xzl2FHV-00045K; Wed, 27 Jun 2007 15:55:45 +0200
+Message-ID: <46826C69.5060802@functionality.de>
+Date: Wed, 27 Jun 2007 14:55:53 +0100
+From: Thomas Fischbacher <tf@functionality.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.7.12) Gecko/20060607 Debian/1.7.12-1.2
+X-Accept-Language: en
+MIME-Version: 1.0
+To: =?ISO-8859-1?Q?Qu=F4c_Peyrot?= <chojin@lrde.epita.fr>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] The Implicit Accumulator: a design pattern using
+ optional arguments
+References: <200706271314.35134.jon@ffconsultancy.com> <1A1D6F56-B3DB-4552-969C-9859482175AC@lrde.epita.fr>
+In-Reply-To: <1A1D6F56-B3DB-4552-969C-9859482175AC@lrde.epita.fr>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+X-Provags-ID: V01U2FsdGVkX19lzRMJ/Y1NV8MLFy8ows6nUTbv49BlgkLmQbR
+ qPcdJ72/gyRGSElhrj/uFFzUKD4U1AE/5KdtIbYhlTsBkFbjvt
+ 4o8uuGQP9k6i5wPka+DZw==
+X-Miltered: at concorde with ID 46826C80.001 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; speedup:01 buffer:01 allocating:01 ocaml:01 ocaml:01 factorial:01 buffer:01 1.0:98 1.0:98 2.0:98 wrote:01 rec:01 dynamically:01 caml-list:01 functions:01 
+
+Quôc Peyrot wrote:
+
+> It's funny that you speak about this, because I recently (few days  ago) 
+> used
+> a pattern similar to yours, but to actually improve performances.
+> I had something like that (which is quite different than my actual  
+> code, but
+> the idea is the same):
+> 
+> let encrypt str =
+>   let len = String.length str in
+>   let encrypted = String.create len in
+>   (* ... *)
+>   encrypted
+
+vs.
+
+ > let encrypt ?encrypted str =
+ >   let len = String.length str in
+ >   let result = match encrypted with
+ >     | None -> String.create len
+ >     | Some s -> s
+ >   in
+ >   (* ... *)
+ >   result
+
+> Which gave me more than a 2x speedup while still being able to call a  
+> simple:
+> let encrypted = encrypt str
+> during normal usage
+
+I use this strategy a lot and found that it eventually pays to use
+uniform conventions for that: all my functions that can benefit from
+having space pre-allocated where to write a result to use ?target
+as their very first named optional argument (and also return that
+target buffer afterwards).
+
+However, unless I am mistaken, I fear that this also does introduce
+some intrinsic/unavoidable inefficiency, as providing a ?target
+argument will (presuambly?) require dynamic consing of a <thingy>
+option cell - so not a good idea for a very small function that is
+called very very often.
+
+There are many many way more advanced tricks one would want to play
+with the idea of "allocating buffers at the appropriate time". For
+example, if this were LISP, one could often use dynamically scoped (in
+the sense of (declare (dynamic-extent buffer-stack))) contextual
+variables for great benefit (and these gory details often can also be
+hidden quite conveniently under a few (maybe even in-place macrolet)
+macros...), but unfortunately, OCaml does not support anything like
+that. Of course, re-entrantness of your code may always become an
+issue if you move buffers to higher scopes.
+
+One thing OCaml can do better than, say, CMU CL, is to define globally
+visible functions that depend on some otherwise inaccessible context,
+as in the following example:
+
+let float_factorial =
+   let _known_factorials = ref [|1.0;1.0;2.0;6.0;24.0;120.0;720.0|] in
+   (fun n ->
+     let known_factorials = !_known_factorials in
+     let nr_known = Array.length known_factorials in
+     if n < nr_known
+     then
+       known_factorials.(n)
+     else
+       let new_known_factorials = Array.make (n+1) 0.0 in
+       begin
+	for i=0 to nr_known-1 do
+	  new_known_factorials.(i) <- known_factorials.(i)
+	done;
+	(let rec fill f_pos pos =
+	  if pos > n then ()
+	  else
+	    let () = new_known_factorials.(pos) <- f_pos in
+	    fill (f_pos *. (float_of_int (pos+1))) (pos+1)
+	in
+	fill (known_factorials.(nr_known-1)*.(float_of_int nr_known)) nr_known);
+	_known_factorials := new_known_factorials;
+	new_known_factorials.(n)
+       end)
+;;
+
+A corresponding
+
+(let ((buffer (make-array ...)))
+  (defun float-factorial (n)
+     ...))
+
+just plainly does not work with CMU CL/SBCL. :-(
+
+Other advanced optimization techniques that can be used for benefit
+in very specialized situations include (explicit) continuation coding:
+rather than returning a value (e.g. a tuple), you take as an argument
+a function to which you then pass on your return value(s). This is quite
+useful whenever "execution flow branches out into multiple paths that
+have to be taken", and may sometimes (though rarely) also be used for
+good as a poor man's VALUES/MULTIPLE-VALUE-BIND substitute.
+
+-- 
+best regards,
+Thomas Fischbacher
+tf@functionality.de
+

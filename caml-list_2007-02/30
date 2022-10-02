@@ -1,0 +1,112 @@
+Return-Path: <a6b37331@telus.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A9BA3BC0B
+	for <caml-list@yquem.inria.fr>; Sat,  3 Feb 2007 06:10:39 +0100 (CET)
+Received: from defout.telus.net (defout.telus.net [199.185.220.240])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l135AbfE016207
+	for <caml-list@yquem.inria.fr>; Sat, 3 Feb 2007 06:10:39 +0100
+Received: from priv-edtnaa06.telusplanet.net ([154.20.161.125])
+          by priv-edtnes87.telusplanet.net
+          (InterMail vM.7.05.01.01 201-2174-106-103-20060222) with ESMTP
+          id <20070203023925.TJOB5367.priv-edtnes87.telusplanet.net@priv-edtnaa06.telusplanet.net>
+          for <caml-list@yquem.inria.fr>; Fri, 2 Feb 2007 19:39:25 -0700
+Received: from localhost.localdomain (d154-20-161-125.bchsia.telus.net [154.20.161.125])
+	by priv-edtnaa06.telusplanet.net (BorderWare MXtreme Infinity Mail Firewall) with ESMTP id D32ERHRL0P
+	for <caml-list@yquem.inria.fr>; Fri,  2 Feb 2007 19:39:25 -0700 (MST)
+Received: from a6b37331 by localhost.localdomain with local (Exim 4.50)
+	id 1HDAf6-0007fu-G5
+	for caml-list@yquem.inria.fr; Fri, 02 Feb 2007 18:29:56 -0800
+Date: Fri, 2 Feb 2007 18:29:56 -0800
+From: Bob Williams <a6b37331@telus.net>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Exception Unix_error problem in toplevel
+Message-ID: <20070203022956.GC29434@telus.net>
+References: <20070202011014.GA27655@telus.net> <3564akdaob.fsf@hod.lan.m-e-leypold.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <3564akdaob.fsf@hod.lan.m-e-leypold.de>
+User-Agent: Mutt/1.5.13 (2006-08-11)
+X-Miltered: at concorde with ID 45C4194D.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; toplevel:01 0100,:01 3.08.3:01 mismatch:01 ocaml:01 bug:01 ocaml:01 markus:01 markus:01 rauglaudre:01 bug:01 toplevel:01 cmo:01 exn:01 compiler:01 
+
+On Fri, Feb 02, 2007 at 01:08:20PM +0100, ls-ocaml-developer-2006@m-e-leypold.de wrote:
+> Bob Williams <a6a37331@telus.net> writes:
+>
+> I couldn't reproduce that on Debian Sarge (Stable is Sarge as of this
+> date) neither with
+> 
+>  - Objective Caml version 3.08.3 -- as distributed with Sarge.
+> 
+> nor with
+> 
+>  - Objective Caml version 3.09.2 -- as compiled by me from GODI 2
+>    months ago.
+> 
+> Are you running Testing or something like this? Since I assume that
+> exceptions are represented just by integer "tags" at the VM level:
+> Might there be a library mismatch in your case? (This is a question to
+> the experts here, since my understanding was that that is prevented by
+> checksums in the interfaces).
+> 
+> Whatever: If your ocaml comes from Debian (and not from GODI or
+> similar), I suggest you report a bug to the Debian BTS, too. It woul
+> be terrible, if we had to live with a buggy OCaml for the next 3 years
+> :-) after the Etch release.
+> 
+> Regards -- Markus
+
+Thank you, Markus, and thanks to everyone else who has tried to help.
+Special thanks go to Daniel de Rauglaudre, who tried hard to reproduce
+the problem.
+
+The explanation for the weird behavior turns out to be partly my
+fault, and partly a possible real bug in toplevel.
+
+It turns out that
+
+	ocaml unix.cma bug.cmo
+
+loads "unix.cma" twice, because I have an .ocamlinit (left over from a
+previous project) that also loads "unix.cma"!  My stupid fault, mea
+culpa.
+
+Now to the possible bug in toplevel.  According to section 6.8.2 of
+the OCaml manual,
+
+	exception Unix_error of ...
+
+simply declares another variant of the built-in variant type "exn".  I
+haven't looked into the implementation of OCaml, but I assume the
+compiler statically assigns a tag number to every variant of a normal
+variant type.  For exn, however, the tag numbers must be assigned at
+load time or run time.
+
+And that is the problem I stumbled over.  The second copy of
+"unix.cma" allocates a new tag number for exception Unix_error.
+However, the tag number of the *first* copy of Unix_error has already
+been bound into "bug.cmo".  So when the second Unix_error is raised,
+"bug.cmo" catches it but fails to see it as a Unix_error. 
+
+My first impulse was to suggest that toplevel disallow the
+redefinition of anything.  But Daniel has convinced me that reloading
+an object file can be useful during development.  So how about this:
+when toplevel redefines an exception, the exception's tag number
+should not change.
+
+Daniel mentioned a related problem, with similar pitfalls:
+
+	type t = C;;
+	... define function Foo using t ...
+	type t = D;;
+	... what should we do about Foo? ...
+
+Foo is now clearly obsolete, as are any blocks on the heap that were
+constructed by C.  What should be done here?
+

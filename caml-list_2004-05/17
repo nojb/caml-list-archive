@@ -1,0 +1,124 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA25475; Sat, 1 May 2004 15:58:46 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA25303 for <caml-list@pauillac.inria.fr>; Sat, 1 May 2004 15:58:45 +0200 (MET DST)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i41DwhSH027383
+	for <caml-list@inria.fr>; Sat, 1 May 2004 15:58:44 +0200
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id i41DwdR19584;
+	Sat, 1 May 2004 08:58:40 -0500 (CDT)
+Date: Sat, 1 May 2004 09:03:56 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: =?iso-8859-1?q?Andr=E9=20Luiz=20Moura?= <aluizmoura@yahoo.com.br>
+cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Reading a large text file
+In-Reply-To: <20040428152813.47355.qmail@web60608.mail.yahoo.com>
+Message-ID: <Pine.LNX.4.44.0405010847480.9460-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=ISO-8859-1
+Content-Transfer-Encoding: 8BIT
+X-Miltered: at concorde with ID 4093AD13.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 digging:01 appending:01 appending:01 caml-list:01 implemented:01 seus:99 amigos:99 million:98 ocaml:01 ocaml:01 rec:01 rec:01 catching:02 marker:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I'm still digging through a serious backlog of email, so your question may 
+have already been answered.  If so, ignore this.
+
+But what I'm guessing is happening is that you are appending (adding to 
+the end of) your list, and that this is what is killing you.  To add an 
+element to the *end* of a list, Ocaml has to completely reallocate the 
+entire list- turning what you might think is an O(1) operation into an 
+O(n) operation.
+
+The solution to this is to build the list backwards- instead of adding 
+things to the end of the list, add them to the begining.  Then, when 
+you're done, just reverse the list using List.rev.
+
+Lets look at the example of just reading the lines from a file and making 
+a list of them.  This code is bad:
+
+let readfile chan =
+    let rec loop lst =
+        try
+            loop (lst @ [ (input_line chan) ])
+        with
+            | End_of_file -> lst
+    in
+    loop []
+;;
+
+It works, but to read n lines requires O(n^2) work, because the @ has to
+reallocate the entire list every iteration.  Worse yet it isn't tail
+recursive (a recursive call inside a try/catch isn't a tail call).
+
+A better implementation of this would be:
+let readfile chan =
+    let rec loop rlst =
+       let line, eof = 
+           try
+               (input_line chan), false
+           with
+               | End_of_file -> "", true
+       in
+       if not eof then
+           loop (line :: rlst)
+       else
+           List.rev rlst
+   in
+   loop []
+;;
+
+Now, the first thing to notice is that we're using the :: operator (which
+is O(1)), not the @ operator (which is O(n))- we're prepending things onto
+the list, not appending them.  We're building up the list backwards, and
+then, when we hit the end of the file, reversing the entire list.  This is
+a standard pattern in Ocaml.
+
+The second thing to notice is that the recursive call has been hoisted up 
+out of the try/catch block.  We've introduced a new boolean flag to note 
+when we've hit the end of the file- catching the exception simply sets the 
+flag to true.  So now our function is tail recursive, and operates in 
+constant stack space.
+
+Brian
+
+On Wed, 28 Apr 2004, André Luiz Moura wrote:
+
+> Hi List, 
+>  
+> I wrote an OCaml function to read a text file with a million of lines with  five separate columns for spaces. I based myself on previous messages of Caml-list, but however the work is taking time frightful (many minutes). 
+> This function written in C, for example, does not take more than 4 seconds. 
+>  
+> I am executing the program in a PC Pentium III of 128 MB of RAM under Windows platform. How would be implemented the function to decide this problem?
+> 
+> File format:
+> <vertex #> <x> <y> [attributes] [boundary marker] 
+> 
+> Thanks, 
+> 
+> André
+> 
+> 
+> 
+> 
+> 
+> 
+> ---------------------------------
+> Yahoo! Messenger - Fale com seus amigos online. Instale agora!
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

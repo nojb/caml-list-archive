@@ -1,0 +1,99 @@
+Return-Path: <alain@frisch.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id A6BD3BC57
+	for <caml-list@yquem.inria.fr>; Mon, 13 Dec 2010 09:43:50 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtUBAKBrBU3B/BfWkWdsb2JhbACkEwECCQsKBxEDJsEIhUoEinmDFA
+X-IronPort-AV: E=Sophos;i="4.59,335,1288566000"; 
+   d="scan'208";a="82496229"
+Received: from msa05.smtpout.orange.fr (HELO msa.smtpout.orange.fr) ([193.252.23.214])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 13 Dec 2010 09:43:36 +0100
+Received: from [192.168.1.63] ([83.199.16.217])
+	by mwinf5d18 with ME
+	id iYja1f00F4gzykb03Yjagj; Mon, 13 Dec 2010 09:43:35 +0100
+Message-ID: <4D05DCB6.2060100@frisch.fr>
+Date: Mon, 13 Dec 2010 09:43:34 +0100
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686 (x86_64); en-US; rv:1.9.2.13) Gecko/20101207 Thunderbird/3.1.7
+MIME-Version: 1.0
+To: Benedikt Meurer <benedikt.meurer@googlemail.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: Value types (Was: [Caml-list] ocamlopt LLVM support)
+References: <036001cb9a0c$725acef0$57106cd0$@com>	<20101212175524.73a8e285@deb0> <9264BEE6-DBAE-4523-93AC-4560615D2AC5@googlemail.com>
+In-Reply-To: <9264BEE6-DBAE-4523-93AC-4560615D2AC5@googlemail.com>
+Content-Type: text/plain; charset=windows-1252; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; frisch:01 frisch:01 ocamlopt:01 compiler:01 conceptually:01 speedups:01 viewcvs:01 ocaml:01 bytecomp:01 10,:98 wrote:01 heap:01 caml-list:01 alain:01 alain:01 
+
+On 12/12/2010 08:09 PM, Benedikt Meurer wrote:
+> The boxing involved is relevant, but boxing in general is not the
+> issue. In this special case, the "let nlen, n = if..." code requires
+> heap allocation, because of the way the pattern is compiled. This could
+> be fixed by moving the condition out of the code and using two if's to
+> select n/nlen separately (doesn't speed up that much). Fixing the
+> pattern compiler to handle these cases might be interesting for general
+> benefit.
+
+Instead of duplicating the conditional, you could also push the 
+assignments to bound variables down the expression. For instance:
+
+let (x, y) = if b then (u, v) else (v, u) in ...
+
+can be replaced, conceptually, by:
+
+let x = <dummy> in
+let y = <dummy> in
+if b then (x <- u; y <- v) else (x <- v; y <- u);
+...
+
+and similarly when the bound expression is a pattern matching.
+
+
+I've played with this a few months ago and could observe important 
+speedups (27%, 20%) on two micro-benchmarks.
+
+The diff is really small:
+
+http://caml.inria.fr/cgi-bin/viewcvs.cgi/ocaml/branches/inplace_let/bytecomp/matching.ml?rev=10475&sortby=date&r2=10475&r1=10474
+
+
+-- Alain
+
+
+
+Micro benchmark 1:
+
+let () =
+   for k = 1 to 10000 do
+     for i = 1 to 100000 do
+       let (x, y) =
+         if i mod 2 = 0 then (1, i * 2)
+         else (2, i * 3)
+       in
+       r := !r * x + y
+     done
+   done
+
+
+
+Micro benchmark 2:
+
+let f x y z =
+   let a, b =
+     match z with
+     | Some (u, v) -> u, v * 2
+     | None -> 10, 20
+   in
+   a * x + b * y
+
+let () =
+   let r = ref 0 in
+   for k = 1 to 2000 do
+     for i = 1 to 100000 do
+       r := !r + f k i (Some (k, i));
+       r := !r + f k i None
+     done
+   done
+

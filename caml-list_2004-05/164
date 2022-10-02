@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA30391; Sat, 8 May 2004 09:29:40 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA30572 for <caml-list@pauillac.inria.fr>; Sat, 8 May 2004 09:29:38 +0200 (MET DST)
+Received: from fed1rmmtao09.cox.net (fed1rmmtao09.cox.net [68.230.241.30])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i487TZSH019413
+	for <caml-list@inria.fr>; Sat, 8 May 2004 09:29:37 +0200
+Received: from server.vns.oc.ca.us ([68.5.38.56]) by fed1rmmtao09.cox.net
+          (InterMail vM.6.01.03.02 201-2131-111-104-20040324) with ESMTP
+          id <20040508072931.RPB19329.fed1rmmtao09.cox.net@server.vns.oc.ca.us>;
+          Sat, 8 May 2004 03:29:31 -0400
+Received: from server.vns.oc.ca.us (ceebe6e0d505910d34e1f3c92042d0e1@localhost.vns.oc.ca.us [127.0.0.1])
+	by server.vns.oc.ca.us (8.12.9p2/8.12.6) with ESMTP id i487TT7k006712;
+	Sat, 8 May 2004 00:29:29 -0700 (PDT)
+	(envelope-from vns@server.vns.oc.ca.us)
+Received: (from vsilyaev@localhost)
+	by server.vns.oc.ca.us (8.12.9p2/8.12.6/Submit) id i487TNxL006710;
+	Sat, 8 May 2004 00:29:23 -0700 (PDT)
+Date: Sat, 8 May 2004 00:29:22 -0700
+From: "Vladimir N. Silyaev" <vsilyaev@mindspring.com>
+To: Benjamin Geer <ben@socialtools.net>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Common IO structure
+Message-ID: <20040508072922.GA2771@server.vns.oc.ca.us>
+References: <20040503061212.GA64216@server.vns.oc.ca.us> <40980BA2.1010102@socialtools.net> <20040505173149.GA72564@server.vns.oc.ca.us> <409C0985.9060703@socialtools.net>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <409C0985.9060703@socialtools.net>
+User-Agent: Mutt/1.4.1i
+X-Miltered: at concorde with ID 409C8C5F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 2004:99 inherently:01 model:01 buffer:01 non-blocking:01 buffer:01 non-blocking:01 struct:01 val:01 val:01 struct:01 multi-byte:01 unbounded:01 threads:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, May 07, 2004 at 11:11:17PM +0100, Benjamin Geer wrote:
+
+> >This signature looks like a good starting point. However I would rather
+> >separate this code to three different pieces
+> 
+> That seems fine to me.  I just wanted to give you a very rough idea of 
+> what I had in mind; I was pretty sure you'd see a better way to design 
+> it. :)
+> 
+> >Please note,  that write and read inherently separated in signatures,
+> >it allows simpler interface, supports read/write only streams
+> >and better feet common model, where read and writes are separated.
+> >However, module couldn't implement both read and write signatures, if
+> >it's required.
+> 
+> The main thing I wanted to point out was that there needs to be a way to 
+> read data into a buffer from a non-blocking socket into a buffer, and 
+> then write the data from the *same buffer* into another non-blocking 
+> socket.  Then compact the buffer (move any unwritten data to the 
+> beginning of the buffer) and start again, like in this loop:
+> 
+> let copy_fd in_fd out_fd =
+>   let b = AsyncBuffer.create () in
+>     try
+>       while (true) do
+>         AsyncBuffer.from_fd b in_fd;
+>         AsyncBuffer.flip b;
+>         AsyncBuffer.to_fd b out_fd;
+>         AsyncBuffer.compact b
+>       done
+>     with End_of_file -> ()
+> 
+> Can that still be done if the read and write signatures are separated?
+Surely, just a little twist:
+module Block = struct
+  module type NbRead = sig
+    type t
+    val nb_read:  t -> string -> int -> int -> int
+  end
+  module type NbWrite = sig
+    type t
+    val nb_write:  t -> string -> int -> int -> int
+  end
+end
+
+Note, that both read or write are using supplied buffers, so zero
+copy is possible.
+module NbCopy (Src:Block.NbRead) (Dst:Block.NbWrite) = struct
+  let run s d = 
+   let blen = 4096 in
+   let buf = String.create blen in
+   let rec copy off = 
+     let  off  = if off = blen then 0 else off in
+     let  rlen = blen - off in
+     let  n = Src.nb_read s buf off rlen in
+     let  n = Dst.nb_write d buf off n in
+     copy (off+n)
+   in
+   try copy 0 with
+   End_of_file -> ()
+end
+
+> 
+> The other thing that's important is that character encoder/decoders 
+> would need to be able to read characters from one buffer and write them 
+> to another buffer in a different encoding.  An encoder/decoder would 
+> need to gracefully handle the case where it reads from a buffer 
+> containing incomplete characters.  That's another reason for the 
+> 'compact' function: you could read 10 bytes from a socket into a buffer, 
+> and those 10 bytes could contain 9 bytes worth of complete UTF-8 
+> characters; the 10th byte would be the first byte of a multi-byte 
+> character.  You'd pass the buffer to an encoder/decoder, which would 
+> read 9 bytes and write them into another buffer in a different encoding 
+> (say UTF-16), leaving the last byte.  You would then call 'compact' to 
+> move that byte to the beginning of the buffer, and repeat.
+> 
+> Is there a way to fit this approach into what you've proposed for 
+> encoder/decoders?
+That's more complicated. Basically what was initially proposed is for
+blocking IO, where read (get) guaranteed to return result or fail,
+and fail is terminal, filter is not required to support restart procedure.
+This works for any type of blocking IO, however it fails for non blocking
+IO where restart is common technique. Problem with restart, that it places
+unbounded restrictions of filter, it should be able to handle incomplete
+inputs and support backtracking.
+
+However non blocking IO usually used as an alternative for threads, in which
+case it might be beneficial just change control type and add support 
+for non blocking IO into the signature by using explicit continuation 
+passing. There is an example for get and put signature with CPS:
+ val get: t -> (symbol -> unit) -> unit
+ val put: t -> (unit -> unit) -> symbol -> unit
+
+Advantage of using CPS style, is that state of the "filter" captured
+by the compiler in a closure at the time of function application. Disadvantage
+of CPS style is rather unusual look of code and cost of closure 
+construction. Later could be significantly reduced by short circuiting
+filters (encoder/decoder) by providing filter with has block IO as input
+and stream of symbols as output. 
+
+---
+Vladimir
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

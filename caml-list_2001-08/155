@@ -1,0 +1,143 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA25455; Tue, 21 Aug 2001 21:20:59 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA25481 for <caml-list@pauillac.inria.fr>; Tue, 21 Aug 2001 21:20:58 +0200 (MET DST)
+Received: from localhost.localdomain (ppp87.dyn147.pacific.net.au [210.23.147.87])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f7LJKsj20658;
+	Tue, 21 Aug 2001 21:20:54 +0200 (MET DST)
+Received: from maxtal.com.au (IDENT:root@localhost [127.0.0.1])
+	by localhost.localdomain (8.9.3/8.8.7) with ESMTP id FAA14093;
+	Wed, 22 Aug 2001 05:20:51 +1000
+Message-ID: <3B82B493.BD6DCA52@maxtal.com.au>
+Date: Wed, 22 Aug 2001 05:20:51 +1000
+From: John Max Skaller <skaller@maxtal.com.au>
+X-Mailer: Mozilla 4.7 [en] (X11; I; Linux 2.2.12-20 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: David Mentre <David.Mentre@inria.fr>, caml-list@inria.fr
+Subject: Re: [Caml-list] Segfault in a native code program using pm variants
+References: <qtln15077gh.fsf@pochi.inria.fr> <3B7C5A74.15141D95@maxtal.com.au>
+		<qtlitfm6ajh.fsf@pochi.inria.fr> <3B7F0C99.FEDEAA86@maxtal.com.au> <qtl3d6m4vkt.fsf@pochi.inria.fr>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I hope it's not catching. Just after reproducing
+David Mentre's segfault, now I'm getting one in my code too ;-)
+
+Data: Ocaml 3.02, Linux on PIII 550E, i86 native code compiler, compiled
+with pthreads
+enabled. I am using the bignum module, but no threads, no magic, no
+marshal,
+no special integer types, no floats, and no non-standard modules. 
+The application is the Felix compiler.
+Parsing and desugaring passes have run (correctly, as far as I can tell)
+
+Noramlly, I'd suspect an infinite recursion, 
+(the code is very recursive, and I actually _expected_ it)
+but it happens very quickly without disk thrashing (I'm running as
+root),
+and all attempts to trace the recursion using prints
+have failed (so far). I've just got this code to compile
+after a significant rewrite in which I also switched
+almost all variant usage to polymorphic variants.
+
+What I am seeing, however, is an incorrect match using polymorphic
+variants: here's the debugging output:
+
+typeofindex finds declaration proc print: int = "printf(\"%d\",$1);";
+Found var
+:--->declaration proc print: int = "printf(\"%d\",$1);";
+
+That 'found var' comes from 
+
+and typeofindex 
+  (dfns:symbol_table_t) 
+  (counter:int ref)
+  (freg:instantiation_registry_t)
+  (exclude:int list)
+  (excluded_dirs:int list)
+  (index:int)
+: btypecode_t = 
+...
+  let bt t:btypecode_t = 
+    print_endline ("TYPEOFINDEX binding type " ^ string_of_typecode t);
+    flush stdout;
+    let t' = bind_type dfns counter freg env (index::exclude)
+excluded_dirs sr t in
+    print_endline "TYPE BOUND";
+    t'
+  in
+... 
+    print_endline ("typeofindex finds " ^ string_of_symdef entry id);
+    flush stdout;
+  match entry with
+....
+
+  | `SYMDEF_dcl (`DCL_var t) -> 
+    print_endline "Found var";
+    print_endline (":--->" ^ string_of_symdef entry id);
+    flush stdout;
+    bt t
+
+but the print routine looks like:
+and string_of_symdef entry name = match entry with
+  .....
+   | `SYMDEF_dcl d ->
+    "declaration " ^ string_of_dcl 0 name d
+  ....
+
+and string_of_dcl level name s = 
+  let se e = string_of_expr e in
+  match s with
+...
+  | `DCL_proc (args, code) ->
+    spaces level ^ 
+    "proc " ^ name ^ ": " ^ 
+     (string_of_typecode (type_of_argtypes args)) ^
+     " = " ^ string_of_string code ^ ";"
+...
+  | `DCL_var (ty) ->
+    spaces level ^ 
+    "var " ^ name ^ ": " ^ string_of_typecode ty ^ ";"
+
+
+The diagnostic listed is the last thing I see before the segfault.
+The next call, 
+
+	bt t
+
+should have executed:
+
+    print_endline ("TYPEOFINDEX binding type " ^ string_of_typecode t);
+    flush stdout;
+
+but hasn't. It would probably have crashed if it did,
+since the type of the variant being passed is wrong.
+(Did it crash forming the closure?)
+
+The routine, is, in fact, analysing the "proc print" entry,
+so the diagnostic output is correct, and it's the match
+in the 'typeofindex' routine that is failing.
+
+I've submitted a bug report, but bugs in Ocaml are rare enough
+for me to still believe it is possible that I'm doing something
+wrong -- but I have no idea what to try next. The source is
+too large for a bug report, and I haven't been able to
+reproduce the problem with a tiny test case involving
+nested PM variants. It's possible that my problem
+is related to Davids (and has nothing to do with PM variants,
+which David is not using). As far as I can remember,
+my code built fine using 3.01, but it has been rewritten
+in the last few weeks: and I installed 3.02 on Aug 4.
+
+-- 
+John (Max) Skaller, mailto:skaller@maxtal.com.au 
+10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+New generation programming language Felix  http://felix.sourceforge.net
+Literate Programming tool Interscript     
+http://Interscript.sourceforge.net
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

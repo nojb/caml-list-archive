@@ -1,0 +1,98 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id E7A58BD19
+	for <caml-list@yquem.inria.fr>; Mon, 15 Nov 2004 21:34:24 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iAFKYOIh027051
+	for <caml-list@yquem.inria.fr>; Mon, 15 Nov 2004 21:34:24 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA03171 for <caml-list@pauillac.inria.fr>; Mon, 15 Nov 2004 21:34:24 +0100 (MET)
+Received: from qrnik.knm.org.pl (paf87.warszawa.sdi.tpnet.pl [217.96.225.87])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iAFKYMkf027044
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Mon, 15 Nov 2004 21:34:23 +0100
+Received: from qrczak by qrnik.knm.org.pl with local (Exim 3.36 #1)
+	id 1CTnYJ-0003h3-00
+	for caml-list@inria.fr; Mon, 15 Nov 2004 21:34:19 +0100
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Hashtbls with physical equality?
+X-Face: OW>RV&gN+&b-aiNY|U)f=S%w+/rK!);f>/W9IXg})]&F>ht.1Up8@04+_!gOp(_/l_-+E^.
+ 2\vI)1=D,%HWiq)r(M/V~dr^5T^KF/[w5YZ4<0Sus3+O>l3uA/&W_21m?.s,Po8{pb0@
+References: <16791.56417.334890.765954@katsura.parc.xerox.com>
+	<20041115012212.GA6561@artisan.com>
+	<16792.4688.306149.402656@katsura.parc.xerox.com>
+	<419883E3.9040805@barettadeit.com>
+	<16792.56641.327236.665106@katsura.parc.xerox.com>
+From: "Marcin 'Qrczak' Kowalczyk" <qrczak@knm.org.pl>
+Mail-Followup-To: caml-list@inria.fr
+Date: Mon, 15 Nov 2004 21:34:19 +0100
+In-Reply-To: <16792.56641.327236.665106@katsura.parc.xerox.com> (Wheeler
+ Ruml's message of "Mon, 15 Nov 2004 08:45:53 PST")
+Message-ID: <8765463l84.fsf@qrnik.zagroda>
+User-Agent: Gnus/5.1006 (Gnus v5.10.6) Emacs/21.3 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: "Marcin 'Qrczak' Kowalczyk" <qrczak@knm.org.pl>
+X-Miltered: at concorde with ID 419912D0.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 419912CE.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 wheeler:01 ocaml:01 hash:01 hash:01 ocaml:01 haskell:01 haskell:01 lazy:01 garbage:01 hashing:01 hashing:01 transformed:01 equality:01 equality:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.0
+X-Spam-Level: 
+
+Wheeler Ruml <ruml@parc.com> writes:
+
+> OK, fair enough.  I guess there isn't any static "address-like" identity to
+> objects in OCaml, so I really do have to examine at least a few bits of the
+> object to compute a hash value.
+
+Indeed.
+
+Serialization uses an internal hash table hashed by addresses. It can
+do this because it's implemented in C and performs no GC during
+serialization, so address don't change. It would be impossible in pure
+OCaml.
+
+For my language Kogut I borrowed the idea of stable names from Glasgow
+Haskell, strengthening its guarantees a bit (GHC does not guarantee
+uniqueness of stable names, because Haskell is lazy and does not have
+a well-defined concept of object identity which does not change during
+evaluation).
+
+Here they are called object ids. An object id is a hashable value
+representing the identity of an arbitrary object, such that a given
+object each time yields the same object id.
+
+An object id doesn't keep the original object alive, can't be used
+to access it, and is not kept alive by the object either. If an
+object id is garbage collected, the new object id of the same object
+will not necessarily have the same hash value.
+
+This means that an object id must be kept alive during the time when
+the corresponding object is used in a hash table, and thus it cannot
+be used to obtain a universal "object -> hash" function (which does
+not use extra memory for the duration of the life of the object,
+otherwise it's possible with the help of weak references).
+
+Fortunately the design of my hash tables makes such universal hashing
+function unnecessary. If you want to use a different equality
+predicate, you don't specify the predicate with a corresponding hash
+function. Instead you specify a function which transforms keys into
+something which is comparable and hashable using standard generic
+functions for equality and hashing. Transformed keys are stored inside
+the hash table and used for lookup.
+
+So you can make a case-insensitive dictionary of strings by supplying
+a transformation function which folds case, or a dictionary based on
+object identity by supplying the ObjectId function.
+
+The implementation of object id uses an internal hash table based on
+physical addresses, which is rehashed on each GC (actually two tables,
+one per generation).
+
+-- 
+   __("<         Marcin Kowalczyk
+   \__/       qrczak@knm.org.pl
+    ^^     http://qrnik.knm.org.pl/~qrczak/
+

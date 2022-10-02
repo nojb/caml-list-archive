@@ -1,0 +1,123 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id BB40CBB83
+	for <caml-list@yquem.inria.fr>; Thu, 11 May 2006 08:22:01 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4B6M0CL022232
+	for <caml-list@yquem.inria.fr>; Thu, 11 May 2006 08:22:00 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA31846 for <caml-list@pauillac.inria.fr>; Thu, 11 May 2006 08:21:59 +0200 (MET DST)
+Received: from rabbit.math.nagoya-u.ac.jp (rabbit.math.nagoya-u.ac.jp [133.6.130.5])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k4B6Lvjd022223
+	for <caml-list@inria.fr>; Thu, 11 May 2006 08:21:58 +0200
+Received: from localhost (millas [172.16.30.29])
+	by rabbit.math.nagoya-u.ac.jp (8.12.11/3.7W) with ESMTP id k4B6LqAd017202;
+	Thu, 11 May 2006 15:21:52 +0900 (JST)
+Date: Thu, 11 May 2006 15:21:18 +0900 (JST)
+Message-Id: <20060511.152118.223263747.garrigue@math.nagoya-u.ac.jp>
+To: geoffw@cis.upenn.edu
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: OO design
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <44628062.6010509@cis.upenn.edu>
+References: <44621204.4020601@cs.washington.edu>
+	<Pine.LNX.4.58.0605101131140.25259@shell2.speakeasy.net>
+	<44628062.6010509@cis.upenn.edu>
+X-Mailer: Mew version 4.0.69 on Emacs 22.0.50 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4462D808.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 4462D805.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; monadic:01 monadic:01 ocaml:01 statically:01 environement:01 mli:01 val:01 val:01 mutable:01 mutable:01 rec:01 stays:98 caml-list:01 char:01 char:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+From: Dan Grossman
+
+> A monadic approach (where each
+> operation would return a "new" file) or linearity appears necessary for
+> the latter.
+
+And you can perfectly encode the monadic approach in ocaml.
+In our case, we need the type of the monad to keep information about
+open and closed files.
+I include such a solution, which ensures the safety of file accesses,
+at the end of this post. Note that file handles are indexed
+statically, but you can use as many as you wish.
+
+It should be safe with references (there is no file handle that you
+can keep around, everything stays in the monad.) But beware of fancy
+extensions, like continuations, that would allow you to capture your
+environement, included files that were open when you created the
+continuation...
+
+From: Geoffrey Alan Washburn
+
+> 	The only "solution" that I've seen that seems to actually solve the 
+> "problem" is to write a small interpreted language for performing I/O, 
+> but that is a bit heavy weight for general use.
+
+I see indeed no other easy option if you have continuations in the
+language.
+
+Jacques
+
+(* safeio.mli *)
+type ('a,'b) monad    (* A monad, with action 'a, returning 'b *)
+type ('a,'b) handle   (* A file handle to be used/modified *)
+type input = [`In]    (* Permissions *)
+type output = [`Out]
+type active = [`In|`Out]
+type closed = [`Closed]
+type all_closed = <c: closed; n: all_closed> (* All files closed *)
+
+val ch1 : (<c:'a;n:'b> -> <c:'c;n:'b>, 'a -> 'c) handle
+val succ : ('a -> 'b, 'c) handle -> (<c:'d;n:'a> -> <c:'d;n:'b>, 'c) handle
+val ch2 : (* shorthand for [succ ch1] *)
+    (<c:'a; n: <c:'b; n:'c> > -> <c:'a; n: <c:'d; n:'c> >, 'b -> 'd) handle
+
+val run : (all_closed -> all_closed, 'a) monad -> 'a
+
+val open_in : ('a, closed -> input) handle -> string -> ('a, unit) monad
+val open_out : ('a, closed -> output) handle -> string -> ('a, unit) monad
+val close : ('a, [< active] -> closed) handle -> ('a, unit) monad
+val input : ('a, input -> input) handle -> ('a, char option) monad
+val output : ('a, output -> output) handle -> char -> ('a, unit) monad
+
+val return : 'a -> ('b -> 'b, 'a) monad
+val bind :
+  ('a -> 'b, 'd) monad -> ('d -> ('b -> 'c, 'e) monad) -> ('a -> 'c, 'e) monad
+val ( $ ) :
+  ('a -> 'b, unit) monad -> ('b -> 'c, 'd) monad -> ('a -> 'c, 'd) monad
+
+(* safeio.ml *)
+type channel = Closed | In of in_channel | Out of out_channel
+type channels = {mutable c: channel; mutable n: channels option}
+type ('a,'b) monad = channels -> 'b
+type ('a,'b) handle = int
+(* Implementation left as exercise... *)
+
+(* Example of use *)
+open Safeio ;;
+
+let rec copy2 () =
+  bind (input ch1)
+    (function None -> return ()
+    | Some c -> bind (output ch2 c) copy2);;
+val copy2 : unit ->
+  (< c : input; n : < c : output; n : 'a > > ->
+   < c : input; n : < c : output; n : 'a > >, unit) monad
+
+let copy_file f1 f2 =
+  open_in ch1 f1 $
+  open_out ch2 f2 $
+  copy2 () $
+  close ch1 $
+  close ch2 ;;
+
+run (copy_file "a" "b") ;;
+

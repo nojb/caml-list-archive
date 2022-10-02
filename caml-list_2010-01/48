@@ -1,0 +1,111 @@
+Return-Path: <joost@damad.be>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 1480CBBAF
+	for <caml-list@yquem.inria.fr>; Tue,  5 Jan 2010 13:58:05 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqIEAOvFQktdurFZ/2dsb2JhbACBRdF2hDAE
+X-IronPort-AV: E=Sophos;i="4.47,505,1257116400"; 
+   d="scan'208";a="41045261"
+Received: from turin.teluna.org ([93.186.177.89])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 05 Jan 2010 13:58:04 +0100
+Received: from localhost (localhost.localdomain [127.0.0.1])
+	by turin.teluna.org (Postfix) with ESMTP id E38878DE1
+	for <caml-list@yquem.inria.fr>; Tue,  5 Jan 2010 13:56:45 +0100 (CET)
+X-Virus-Scanned: Debian amavisd-new at turin.teluna.org
+Received: from turin.teluna.org ([127.0.0.1])
+	by localhost (turin.teluna.org [127.0.0.1]) (amavisd-new, port 10024)
+	with ESMTP id TVb24+bp1t7r for <caml-list@yquem.inria.fr>;
+	Tue,  5 Jan 2010 13:56:43 +0100 (CET)
+Received: from glaurung.localnet (d54C25275.access.telenet.be [84.194.82.117])
+	(Authenticated sender: joost@damad.be)
+	by turin.teluna.org (Postfix) with ESMTPSA id 53A9C8D8A
+	for <caml-list@yquem.inria.fr>; Tue,  5 Jan 2010 13:56:43 +0100 (CET)
+From: Joost Yervante Damad <joost@damad.be>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Embedding the ocaml runtime in a shared library on amd64/x86_64 [update]
+Date: Tue, 5 Jan 2010 13:52:15 +0100
+User-Agent: KMail/1.12.4 (Linux/2.6.32-trunk-amd64; KDE/4.3.4; x86_64; ; )
+References: <200912021333.11599.joost@damad.be> <20091202223751.GA20553@usha.takhisis.invalid> <200912031157.00187.joost@damad.be>
+In-Reply-To: <200912031157.00187.joost@damad.be>
+MIME-Version: 1.0
+Content-Type: Text/Plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Message-Id: <201001051352.16612.joost@damad.be>
+X-Spam: no; 0.00; ocaml:01 runtime:01 ocaml:01 runtime:01 -fpic:01 asmrun:01 -fpic:01 makefile:01 asmrun:01 pointer:01 pointer:01 ocamlopt:01 -verbose:01 ocamlopt:01 -verbose:01 
+
+Hello all,
+
+a short update on my efforts to embed the ocaml runtime on amd64:
+
+static linking the ocaml runtime works rather fine like this:
+
+1. -fPIC
+
+Make sure all files in asmrun are compiled with -fPIC by adapting the Makefile.
+
+2) asmrun/amd64.S
+
+    use an adapted amd64.S where 3 symbols are marked with @PLT:
+    caml_program, caml_apply2, caml_apply3 like this:
+        leaq    G(caml_program)@PLT(%rip), %r12
+        leaq    G(caml_apply2)@PLT(%rip), %r12  /* code pointer */
+        leaq    G(caml_apply3)@PLT(%rip), %r12  /* code pointer */
+
+3) link the shared library
+
+    # ocaml test code:
+    ocamlopt -verbose -g -c mod.ml
+    # wrapper code in C:
+    ocamlopt -verbose -g -ccopt -fPIC -c mod_wrap.c
+    # linking of lib, including needed packages
+    ocamlfind ocamlopt -ccopt -Wl,-Bsymbolic -verbose -o modlib.native.so -
+ccopt -shared mod.cmx mod_wrap.o -package unix -package bigarray -linkpkg
+
+4) using the shared library
+    # compile a main:
+    ocamlopt -verbose -g -ccopt -Iinclude -c main.c
+    # link a main:
+    gcc -g -o main main.o -l:modlib.native.so -L. -Wl,-rpath=.
+
+However, dynamic linking has more troubles:
+
+I used an approach simular to the one already used for libcamlrun_shared.so to 
+end up with a libasmrun_shared.so.
+
+Whenever I try to use this by means of using -output-obj and then linking with 
+g++ I always end
+up with a program that crashes in caml_oldify_local_roots
+during GC in a non-trivial program.
+
+I finally got it working correctly by running ocamlopt with the verbose flag and 
+adapting
+the output to do something like this:
+
+gcc -o 'libembedded.so'   '-L/usr/lib/ocaml/threads' '-L/usr/lib/ocaml' 
+'/tmp/camlstartup.o' '/usr/lib/ocaml/std_exit.o' 'client.o' 'client.a' 
+'/usr/lib/ocaml/bigarray.a' '/usr/lib/ocaml/dbm.a' '/usr/lib/ocaml/str.a' 
+'/usr/lib/ocaml/threads/threads.a' '/usr/lib/ocaml/unix.a' 
+'/usr/lib/ocaml/stdlib.a' '-lbigarray' '-lmldbm' '-lgdbm_compat' '-lgdbm' '-
+lstr' '-lthreadsnat' '-lpthread' '-lunix' 'client_wrap.o' -L/usr/lib/ocaml -
+lasmrun_shared -lm  -ldl -L../../../target/foo/ -lfoo -L. -lbar -L. baz.o -
+shared -Wl,-Bsymbolic -ggdb3 -Wall -Wextra
+Where I first used on of the old camlstartup*.s that was still lying around and 
+compiling that to camlstartup.o:
+as -o /tmp/camlstartup.o /tmp/camlstartupaf7c1e.s
+
+The end result seems to work without crashing. It seems to me that in order to 
+have a usable libasmrun_shared.so some changes to the toolchain (ocamlopt) are 
+needed.
+
+Given this result I'll stick to statically linking in libasmrun.a until there 
+is a proper solution within the toolchain. Unless someone steps in and tells 
+me I did something wrong ;-)
+
+Greetings and happy new year, Joost Damad
+
+-- 
+Joost Yervante Damad - http://damad.be/joost/
+

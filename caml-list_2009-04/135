@@ -1,0 +1,252 @@
+Return-Path: <goswin-v-b@web.de>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id A115CBBAF
+	for <caml-list@yquem.inria.fr>; Tue,  7 Apr 2009 07:48:45 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Aj0HAO+F2knZSMDqZGdsb2JhbACBUpRIGgsDBwcPBbRIhA8G
+X-IronPort-AV: E=Sophos;i="4.38,431,1233529200"; 
+   d="scan'208";a="27178236"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 07 Apr 2009 07:48:45 +0200
+Received: from smtp08.web.de (fmsmtp08.dlan.cinetic.de [172.20.5.216])
+	by fmmailgate03.web.de (Postfix) with ESMTP id 9D66AFA081A1
+	for <caml-list@inria.fr>; Tue,  7 Apr 2009 07:48:44 +0200 (CEST)
+Received: from [78.43.226.218] (helo=frosties.localdomain)
+	by smtp08.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #277)
+	id 1Lr4Au-0000yv-00
+	for caml-list@inria.fr; Tue, 07 Apr 2009 07:48:44 +0200
+Received: from mrvn by frosties.localdomain with local (Exim 4.69)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1Lr4At-00061I-7W
+	for caml-list@inria.fr; Tue, 07 Apr 2009 07:48:43 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Subject: Subtyping
+Date: Tue, 07 Apr 2009 07:48:43 +0200
+Message-ID: <873aclf1z8.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) XEmacs/21.4.21 (linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX19bPTGYAWcQ7t+Tiv6paCeuJdF0e2NMtxb845rR
+	uaPsOeiXFnnbA+U8N4Afkw114DZUZAqZUBZ1OlI9t8MEuW7pzH
+	Yd1kJ+apc=
+X-Spam: no; 0.00; subtyping:01 subtyping:01 ocaml:01 val:01 foo:01 val:01 foo:01 ocaml:01 mutables:01 printf:01 printf:01 iter:01 associative:01 pervasives:01 trivial:01 
+
+Hi,
+
+In the last 2 weeks I've been playing around with lots of different
+ways to do the same thing to get a feel for what style suites me
+best. If you have improvements or alternative ways of doing the two
+things below let me know.
+
+
+One of the things was trying to build a type hierachy with
+coercion and subtyping.
+
+The obvious case would be ocaml objects:
+
+class base = object val x = 0 method print_x = print_int x end
+class foo = object inherit base val y = 1 method print_y = print_int y end
+let print_x o = o#print_x
+let _ =
+  print_x (new base); print_newline ();
+  print_x (new foo); print_newline ();;
+
+
+So what other ways are there of doing this? Records. Idealy I would
+like to do this:
+
+type base = { x : int }
+let make_base x = { x = x }
+let print_x r = print_int r.x
+type foo = { base with y : int }
+let make_foo x y = { x = x; y = y }
+let _ =
+  print_x (make_base 0); print_newline ();
+  print_x (make_foo 0 1); print_newline ();;
+
+Ocaml has no way of making this work like that, right?
+
+
+But lets look at things that actually work:
+(Some examples are more complicated than needed here but think about
+what happens with mutables and multiple methods)
+
+1) Magic
+
+type base = { x : int }
+let make_base x = { x = x }
+let print_x r = print_int r.x
+type foo = { x : int; y : int }
+let make_foo x y = { x = x; y = y }
+let as_base : foo -> base = Obj.magic
+let _ =
+  print_x (make_base 0); print_newline ();
+  print_x (as_base (make_foo 0 1)); print_newline ();;
+
+2) Polymorphic records
+
+type 'a base = { x: int; y : 'a }
+let make_a_base x y = { x = x; y = y }
+let make_base x = make_a_base x ()
+let print_x r = print_int r.x
+type foo = int base
+let make_foo x y = (make_a_base x y : foo)
+let _ =
+  print_x (make_base 0); print_newline ();
+  print_x (make_foo 0 1); print_newline ();;
+
+This wastest memory though if there are many base objects.
+
+3) Closure records
+
+type base_data = { x : int }
+type base = { print_x : unit -> unit }
+let make_base_fn print_x = { print_x = print_x }
+let make_base x =
+  let data = ref { x = x }
+  in
+    make_base_fn (fun () -> print_int !data.x)
+let print_x r = r.print_x ()
+type foo_data = { x : int; y : int }
+type foo = { print_x : unit -> unit; print_y : unit -> unit }
+let make_foo_fn print_x print_y = { print_x = print_x; print_y = print_y }
+let make_foo x y =
+  let data = ref { x = x; y = y }
+  in
+    make_foo_fn (fun () -> print_int !data.x) (fun () -> print_int !data.y)
+let as_base foo = make_base_fn foo.print_x
+let _ =
+  print_x (make_base 0); print_newline ();
+  print_x (as_base (make_foo 0 1)); print_newline ();;
+
+This wastest memory for the reference and per object for every closure
+being bound to it.
+
+4) Combining 1+2+3 for a memory efficient heterogeneous type:
+
+type 'a base_funs = { print : 'a base -> unit }
+and 'a base = { x: int; y : 'a; funs : 'a base_funs }
+let make_a_base x y funs = { x = x; y = y; funs = funs }
+let unit_base_funs = { print = (fun (r : unit base) -> print_int r.x) }
+let make_base x = make_a_base x () unit_base_funs
+let print r = r.funs.print r
+type foo = int base
+let foo_funs = { print = fun r -> Printf.printf "%d %d" r.x r.y }
+let make_foo x y = ((make_a_base x y foo_funs) : foo)
+let as_base : foo -> unit base = Obj.magic
+let lst = [make_base 0; as_base (make_foo 0 1)] in
+  List.iter (fun r -> print r; print_newline ()) lst
+
+
+
+
+Lets look another thing going in a similar direction. I want to
+have a structure where I can store key value pairs. But just for fun
+lets say I want to store values of different types and the key knows
+the type of value. In short a heterogeneous associative container:
+
+exception TypeError
+type kind = Int | Float
+class virtual key = object(self)
+  val virtual x : int
+  method x = x
+  method virtual kind : kind
+  method as_key = (self :> key)
+  method compare : 'a. (<as_key : key; ..> as 'a) -> int =
+   function o ->
+    let o = o#as_key
+    in
+      Pervasives.compare (self#kind, self#x) (o#kind, o#x)
+end
+class int_key x_init = object
+  inherit key
+  val x = x_init
+  method kind = Int
+  method int_foo = 0
+end
+class float_key x_init = object
+  inherit key
+  val x = x_init
+  method kind = Float
+  method float_foo = 0
+end
+class virtual key_data = object
+  inherit key
+  method virtual as_int : int_key_data
+  method virtual as_float : float_key_data
+end
+and int_key_data x_init i_init = object(self)
+  inherit int_key x_init
+  inherit key_data
+  val i = i_init
+  method i : int = i
+  method as_int = (self :> int_key_data)
+  method as_float = raise TypeError
+end
+and float_key_data x_init f_init = object(self)
+  inherit float_key x_init
+  inherit key_data
+  val f : float = f_init
+  method f = f
+  method as_int = raise TypeError
+  method as_float = (self :> float_key_data)
+end
+
+let empty = []
+let add lst v = (v :> key_data)::lst
+let find lst k = List.find (fun v -> (k :> key)#compare v = 0) lst
+
+let lst = empty in
+let lst = add lst (new int_key_data 1 23) in
+let lst = add lst (new float_key_data 2 1.2) in
+let o = find lst (new float_key 2)
+in
+  o#as_float#f
+
+
+
+Wow, this is complex even as a trivial example. In my use case I even
+have twice that many classes as for each class I have a variant that
+constructs a new object and one that reads the object from disk. Also
+I have a method to write each object to disk. But I left those out as
+this is long enough already.
+
+What I don't like about this is the shear size and the need for as_int
+and as_float.
+
+
+What I would like to do is this:
+
+type key = Int of int | Float of int
+type key_value = Int of int * int | Float of int * float
+let as_key v = (v :> key)
+let compare x y = Pervasives.compare (as_key x) (as_key y)
+
+With that one could build an ('a, (#'a as 'b)) container.
+Unfortunately the as_key needs Obj.magic and only works if the two
+types are in sync and have no mutables or references and no type
+specific closures.
+
+One can use a functor with a 'module type = sig type k type v val
+cmp : v -> v -> int val cmp_key : k -> v -> int : end' to get a magic
+free solution.
+
+The only other magic free solution I've come up with is using method 3
+(closure records) from above. Again with an as_int and as_float
+closure where one will always throw an exception.
+
+Method 2 can't be used as that doesn't give a heterogeneous type.
+
+MfG
+        Goswin
+

@@ -1,0 +1,111 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA12693; Thu, 26 Sep 2002 17:19:29 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA12698 for <caml-list@pauillac.inria.fr>; Thu, 26 Sep 2002 17:19:28 +0200 (MET DST)
+Received: from smtp.noos.fr (racine.noos.net [212.198.2.71])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g8QFJSD24015
+	for <caml-list@inria.fr>; Thu, 26 Sep 2002 17:19:28 +0200 (MET DST)
+Received: (qmail 34843421 invoked by uid 0); 26 Sep 2002 15:19:27 -0000
+Received: from unknown (HELO noos.fr) ([81.65.61.57]) (envelope-sender <nadji@noos.fr>)
+          by 212.198.2.71 (qmail-ldap-1.03) with SMTP
+          for <mvanier@cs.caltech.edu>; 26 Sep 2002 15:19:27 -0000
+Message-ID: <3D932579.1839FFF2@noos.fr>
+Date: Thu, 26 Sep 2002 17:19:21 +0200
+From: nadji@noos.fr
+X-Mailer: Mozilla 4.77 [en] (X11; U; Linux 2.4.19-gentoo-r9 i686)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: Michael Vanier <mvanier@cs.caltech.edu>
+CC: caml-list@inria.fr
+Subject: Re: [Caml-list] a design problem requiring downcasting? (long)
+References: <200209260901.g8Q910t03459@orchestra.cs.caltech.edu>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi,
+
+If I understood your problem, Jacques Garrigue has shown a way
+to allow "safe" downcast, that is to say that if you can't downcast you
+cleanly get an exeption. You are required to register your class for
+all the downcasts you wants, and it will work only for them (i.e. if
+you don't register you can't downcast). This is the "memo" class
+in the code below.
+Following this idea, your simulation manager has to define all the interfaces it
+will be using, and the simulations have to register themselves before
+beeing used.
+Code follows :
+
+(* In simulation infrastructure *)
+module Sim = struct
+  class ['ct] memo = object
+    val h = Hashtbl.create 0
+    method add : 'ct -> unit = fun x -> Hashtbl.add h (Obj.repr x) x
+    method get : 'a . 'a -> 'ct = fun x -> Hashtbl.find h (Obj.repr x)
+  end
+
+  class type base = object
+    method simname : string
+  end
+
+  class type ct1 = object
+    inherit base
+    method a : string
+  end
+
+  class type ct2 = object
+    inherit base
+    method b : int
+    method bin : 'a. (#ct1 as 'a) -> string
+  end
+
+  class type ct3 = object
+    inherit base
+    method a : string
+    method b : int
+  end
+
+  let h1 : ct1 memo = new memo
+  let h2 : ct2 memo = new memo
+  let h3 : ct3 memo = new memo
+
+  let nbsims = ref 0
+  let thesims : (int, base) Hashtbl.t = Hashtbl.create 0
+
+  let test a b =
+    let obj1 = h1#get a in
+    let obj2 = h2#get b in
+    obj2#bin obj1
+end
+
+(* in sim 1 *)
+class class1 = object (self)
+  method simname = "sim1"
+  method a = "foo"
+  method b = 4
+  initializer
+    Sim.h1#add (self:>Sim.ct1);
+    Sim.h3#add (self:>Sim.ct3);
+end
+
+(* in sim 2 *)
+class class2 = object (self)
+  method simname = "sim2"
+  method b = 5
+  method bin : 'a. (#Sim.ct1 as 'a) -> string =
+    fun x -> x#a
+
+  initializer
+    Sim.h2#add (self:>Sim.ct2);
+end
+
+This is only a suggestion, there are certainly other ways
+to achieve what you want.
+HTH,
+Nadji
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

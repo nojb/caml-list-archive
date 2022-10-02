@@ -1,0 +1,279 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q34DtNk6005056
+	for <caml-list@sympa-roc.inria.fr>; Wed, 4 Apr 2012 15:55:23 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsEEALlRfE/U4366jWdsb2JhbABFgxGCPbJPIgEBAQEJCQsJEgUkggkBAQUjBFIQIwICJgICITYGEwkSh3IHqCSRXoEviGmFJIEYBI1UiSCEX4VDh2Y
+X-IronPort-AV: E=Sophos;i="4.75,369,1330902000"; 
+   d="scan'208";a="139056995"
+Received: from moutng.kundenserver.de ([212.227.126.186])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 04 Apr 2012 15:55:22 +0200
+Received: from office1.lan.sumadev.de (dslb-084-059-067-230.pools.arcor-ip.net [84.59.67.230])
+	by mrelayeu.kundenserver.de (node=mreu1) with ESMTP (Nemesis)
+	id 0LnX58-1ShblO2tJu-00h6DM; Wed, 04 Apr 2012 15:55:20 +0200
+Received: from [192.168.5.106] (dslb-084-059-067-230.pools.arcor-ip.net [84.59.67.230])
+	by office1.lan.sumadev.de (Postfix) with ESMTPSA id 6D730C00CB;
+	Wed,  4 Apr 2012 15:55:20 +0200 (CEST)
+From: Gerd Stolpmann <info@gerd-stolpmann.de>
+To: Gabriel Scherer <gabriel.scherer@gmail.com>
+Cc: Hans Ole Rafaelsen <hrafaelsen@gmail.com>, caml-list@inria.fr
+In-Reply-To: <CAPFanBENqutOQvwGBWw69rEjnrX5L1P+=7pPsWoU70XS2gLJMA@mail.gmail.com>
+References: 
+	 <CALs4vDYGKNiYQZLDRVbBWDZibEXeU8T33Bw08G9xAT_-T-6h9A@mail.gmail.com>
+	 <20120401195733.GB15870@annexia.org>
+	 <CALs4vDbKf3Wgd_nyxEXDwWxDQ4j42gSSWM2aDzR05im+K3TPhQ@mail.gmail.com>
+	 <a1bc00e7c9117d08c1b486baa1a8abd4.squirrel@gps.dynxs.de>
+	 <20120403121327.GA29159@pps.jussieu.fr>
+	 <CALs4vDYYAjv0RN0kFx8wPqNzFW4t8LZNfaqE0-B5pzS69xB02g@mail.gmail.com>
+	 <CAPFanBENqutOQvwGBWw69rEjnrX5L1P+=7pPsWoU70XS2gLJMA@mail.gmail.com>
+Content-Type: text/plain; charset="UTF-8"
+Date: Wed, 04 Apr 2012 15:55:40 +0200
+Message-ID: <1333547740.2826.509.camel@thinkpad>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.28.3 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: V02:K0:zqf2vlpdutB0hIJp1my0S8yBQj6JNTBwQE6xzb+qAZk
+ vxGkaOLhxT0VxFhq+u2vu+LoS2iuyudsJ71ZcAcjtwT7s0q6+F
+ DINL1/ySJnQmJpohldAIVwK4S4poT/bwjoXidmtBLZVQKzVEvJ
+ oPslHLDdrA5v7UvriPnBPL5IOTJXsOrurR/TzDX7/hnOjI3gw7
+ xSH1Gii42jZmcEv+O3oWx+hpJgw//8NOZ/QK7D0qZnVIwAWW14
+ t7ZzBjDebfcQH8Rbj1f2YHkadivAO0nqv/0gNSjnJS0IC/yslQ
+ ud0YW0qL9Ccr6OQ7VoQlAmO25qkO17MvWfEcy8pC2f4G2a1J9B
+ ox8ezfbgZY2H3HpRIFYaKDeMlq0qnQS5hBES/r+Hg
+Subject: [Caml-list] GC speed for custom blocks, was: Strategies for finding memory
+ leaks
+
+I'm trying to think beyond this particular problem, and it seems to me
+that the current "GC speed control" for custom blocks is too simple.
+Right now, we can practically only base the speed on either
+
+ - the size of a custom object relative to the expected maximum
+   size of all custom objects of the type, or
+ - the number of a custom objects relative to the maximum number
+   of objects, or
+ - we don't control the speed, and hope that the normal GC speed
+   is sufficient to collect the custom blocks fast enough.
+
+The problem of the first two strategies is that we normally cannot
+predict how many objects we will create in a program, or how much memory
+we will spend, and that most C bindings just choose constants for
+used/max. For instance, the Lablgtk bindings assume that there are
+normally no more than 10 gdk pixbufs (max/used = 1000/100 = 10), i.e.
+after every 10 pixbuf allocations one GC cycle is performed.
+
+What about a different scheme: For each custom block we record the
+number of bytes allocated outside the heap (which is often known or can
+be well guessed), and when calculating the GC speed, the size of this
+external memory is just added to the numbers for the heap memory (i.e.
+the size of allocations in the last GC slice to caml_allocated_words and
+the total to caml_stat_heap_size), so we "virtually" consider the
+external memory as an extension of the heap. The effect is that the same
+speed control is used as for the heap (i.e. overhead-based control).
+
+An implementation could store the number of external bytes in the custom
+block (one more word is allocated than requested) - you need it for
+updating the total.
+
+Let's look a bit closer at the effect:
+
+- If the size of the external memory is moderate, the GC speed is 
+  linearly increased the more external memory is allocated. The
+  good thing is that the speed increase is now relative to the
+  size of the heap. If the heap is large anyway, the external memory
+  almost does not count, and can never dominate the speed controls
+  (which is a main problem with the current scheme). If the heap
+  is small, the speed-up can be substantial, but this is not as
+  problematic, because a small heap is quickly GC'ed.
+- If the size of the external memory is large relative to the heap,
+  it will still dominate the speed control. The user could, however,
+  still influence the speed by setting the overhead parameter. So,
+  still better than the current scheme.
+
+Well, it's just an idea. Any comments?
+
+Gerd
+
+Am Mittwoch, den 04.04.2012, 13:30 +0200 schrieb Gabriel Scherer:
+> May your program leak one of those GTK resources?
+> 
+> The effectiveness of your patch seems to indicate that you have a lot
+> of one of these values allocated (and that they were requesting the GC
+> much too frequently). The patch solves the CPU usage induced by
+> additional GC, but does not change the reason why those GC were
+> launched: apparently your code allocates a lot of those resources. If
+> there indeed is a leak in your program, it will use more and more
+> memory even if you fix the CPU-usage effect.
+> 
+> An interesting side-effect of your patch is that you could, by
+> selectively disabling some of the change you made (eg. by changing
+> Val_g_boxed but not Val_g_boxed_new), isolate which of those resources
+> were provoking the increased CPU usage, because it was allocated in
+> high number.
+> 
+> (Usual candidates that provoke leak are global data structures that
+> store references to your data. A closure will also reference the data
+> corresponding to the variables it captures, so storing closures in
+> such tables can be an indirect cause for "leaks". Do you have global
+> tables of callbacks or values for GTK-land?)
+> 
+> On Wed, Apr 4, 2012 at 12:53 PM, Hans Ole Rafaelsen
+> <hrafaelsen@gmail.com> wrote:
+> > Hi,
+> >
+> > Thanks for your suggestions. I tried to patch lablgtk2 with:
+> >
+> > --- src/ml_gdkpixbuf.c.orig     2012-04-03 13:56:29.618264702 +0200
+> > +++ src/ml_gdkpixbuf.c  2012-04-03 13:56:58.106263510 +0200
+> > @@ -119,7 +119,7 @@
+> >    value ret;
+> >    if (pb == NULL) ml_raise_null_pointer();
+> >    ret = alloc_custom (&ml_custom_GdkPixbuf, sizeof pb,
+> > -                     100, 1000);
+> > +                     0, 1);
+> >    p = Data_custom_val (ret);
+> >    *p = ref ? g_object_ref (pb) : pb;
+> >    return ret;
+> >
+> > --- src/ml_gobject.c.orig       2012-04-03 15:40:11.002004506 +0200
+> > +++ src/ml_gobject.c    2012-04-03 15:41:04.938002250 +0200
+> > @@ -219,7 +219,7 @@
+> >  CAMLprim value ml_g_value_new(void)
+> >  {
+> >      value ret = alloc_custom(&ml_custom_GValue,
+> > sizeof(value)+sizeof(GValue),
+> > -                             20, 1000);
+> > +                             0, 1);
+> >      /* create an MLPointer */
+> >      Field(ret,1) = (value)2;
+> >      ((GValue*)&Field(ret,2))->g_type = 0;
+> > @@ -272,14 +272,14 @@
+> >    custom_serialize_default, custom_deserialize_default };
+> >  CAMLprim value Val_gboxed(GType t, gpointer p)
+> >  {
+> > -    value ret = alloc_custom(&ml_custom_gboxed, 2*sizeof(value), 10, 1000);
+> > +    value ret = alloc_custom(&ml_custom_gboxed, 2*sizeof(value), 0, 1);
+> >      Store_pointer(ret, g_boxed_copy (t,p));
+> >      Field(ret,2) = (value)t;
+> >      return ret;
+> >  }
+> >  CAMLprim value Val_gboxed_new(GType t, gpointer p)
+> >  {
+> > -    value ret = alloc_custom(&ml_custom_gboxed, 2*sizeof(value), 10, 1000);
+> > +    value ret = alloc_custom(&ml_custom_gboxed, 2*sizeof(value), 0, 1);
+> >      Store_pointer(ret, p);
+> >      Field(ret,2) = (value)t;
+> >      return ret;
+> >
+> >
+> >
+> > At startup is uses
+> > top - 16:40:27 up 1 day,  7:01, 28 users,  load average: 0.47, 0.50, 0.35
+> > Tasks:   1 total,   0 running,   1 sleeping,   0 stopped,   0 zombie
+> > Cpu(s):  4.8%us,  1.3%sy,  0.0%ni, 93.6%id,  0.2%wa,  0.0%hi,  0.1%si,
+> > 0.0%st
+> > Mem:   4004736k total,  3617960k used,   386776k free,   130704k buffers
+> > Swap:  4070396k total,     9244k used,  4061152k free,  1730344k cached
+> >
+> >   PID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+
+> > COMMAND
+> > 10275 hans      20   0  529m  77m  13m S   14  2.0   0:01.66
+> > vc_client.nativ
+> >
+> > and 12 hours later
+> > top - 04:40:07 up 1 day, 19:01, 35 users,  load average: 0.00, 0.01, 0.05
+> > Tasks:   1 total,   0 running,   1 sleeping,   0 stopped,   0 zombie
+> > Cpu(s): 20.2%us,  3.4%sy,  0.0%ni, 76.1%id,  0.1%wa,  0.0%hi,  0.2%si,
+> > 0.0%st
+> > Mem:   4004736k total,  3828308k used,   176428k free,   143928k buffers
+> > Swap:  4070396k total,    10708k used,  4059688k free,  1756524k cached
+> >
+> >   PID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+
+> > COMMAND
+> > 10275 hans      20   0  534m  82m  13m S   17  2.1 110:11.19
+> > vc_client.nativ
+> >
+> > Without the patch
+> > top - 22:05:38 up 1 day, 12:26, 34 users,  load average: 0.35, 0.16, 0.13
+> > Tasks:   1 total,   0 running,   1 sleeping,   0 stopped,   0 zombie
+> > Cpu(s):  5.6%us,  1.5%sy,  0.0%ni, 92.6%id,  0.2%wa,  0.0%hi,  0.1%si,
+> > 0.0%st
+> > Mem:   4004736k total,  3868136k used,   136600k free,   140900k buffers
+> > Swap:  4070396k total,     9680k used,  4060716k free,  1837500k cached
+> >
+> >   PID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+
+> > COMMAND
+> > 25111 hans      20   0  453m  76m  13m S   14  2.0   0:13.68 vc_client_old.n
+> >
+> > top - 10:05:19 up 2 days, 26 min, 35 users,  load average: 0.01, 0.04, 0.05
+> > Tasks:   1 total,   0 running,   1 sleeping,   0 stopped,   0 zombie
+> > Cpu(s): 20.4%us,  3.2%sy,  0.0%ni, 75.8%id,  0.4%wa,  0.0%hi,  0.2%si,
+> > 0.0%st
+> > Mem:   4004736k total,  3830596k used,   174140k free,   261692k buffers
+> > Swap:  4070396k total,    13640k used,  4056756k free,  1640452k cached
+> >
+> >   PID USER      PR  NI  VIRT  RES  SHR S %CPU %MEM    TIME+
+> > COMMAND
+> > 25111 hans      20   0  453m  76m  13m S   49  2.0 263:05.34
+> > vc_client_old.n
+> >
+> > So from this it seems that with the patch it still uses more and more CPU,
+> > but at a much lower rate. However, it seems to increase memory usage with
+> > the patch. I also tried to patch the wrappers.h file, but the memory
+> > consumption just exploded.
+> >
+> > So it is working better, but still not good enough. Is there some way to
+> > prevent this kind of behavior? That is, no extra memory usage and no extra
+> > CPU usage.
+> >
+> > I have attached some additional profiling if that would be of any interest.
+> > In short it seems to be that it is the GC that is consuming the CPU.
+> >
+> > Best,
+> >
+> > Hans Ole
+> >
+> >
+> > On Tue, Apr 3, 2012 at 2:13 PM, Jerome Vouillon <vouillon@pps.jussieu.fr>
+> > wrote:
+> >>
+> >> On Tue, Apr 03, 2012 at 12:42:08PM +0200, Gerd Stolpmann wrote:
+> >> > This reminds me of a problem I had with a specific C binding (for
+> >> > mysql),
+> >> > years ago. That binding allocated custom blocks with badly chosen
+> >> > parameters used/max (see the docs for caml_alloc_custom in
+> >> > http://caml.inria.fr/pub/docs/manual-ocaml/manual032.html#toc144). If
+> >> > the
+> >> > ratio used/max is > 0, these parameters accelerate the GC. If the custom
+> >> > blocks are frequently allocated, this can have a dramatic effect, even
+> >> > for
+> >> > quite small used/max ratios. The solution was to change the code, and to
+> >> > set used=0 and max=1.
+> >> >
+> >> > This type of problem would match your observation that the GC works more
+> >> > and more the longer the program runs, i.e. the more custom blocks have
+> >> > been allocated.
+> >> >
+> >> > The problem basically also exists with bigarrays - with
+> >> > used=<size_of_bigarary> and max=256M (hardcoded).
+> >>
+> >> I have also observed this with input-output channels (in_channel and
+> >> out_channel), where used = 1 and max = 1000. A full major GC is
+> >> performed every time a thousand files are opened, which can result on
+> >> a significant overhead when you open lot of files and the heap is
+> >> large.
+> >>
+> >> -- Jerome
+> >
+> >
+> 
+> 
+
+-- 
+------------------------------------------------------------
+Gerd Stolpmann, Darmstadt, Germany    gerd@gerd-stolpmann.de
+Creator of GODI and camlcity.org.
+Contact details:        http://www.camlcity.org/contact.html
+Company homepage:       http://www.gerd-stolpmann.de
+*** Searching for new projects! Need consulting for system
+*** programming in Ocaml? Gerd Stolpmann can help you.
+------------------------------------------------------------
+

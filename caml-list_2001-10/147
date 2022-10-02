@@ -1,0 +1,87 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA20330; Fri, 12 Oct 2001 16:42:50 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA20307 for <caml-list@pauillac.inria.fr>; Fri, 12 Oct 2001 16:42:49 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f9CEglj00335;
+	Fri, 12 Oct 2001 16:42:47 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA20249; Fri, 12 Oct 2001 16:42:47 +0200 (MET DST)
+Date: Fri, 12 Oct 2001 16:42:47 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Don Syme <dsyme@microsoft.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Memory mapped values
+Message-ID: <20011012164247.F18676@pauillac.inria.fr>
+References: <BCDB2C3F59F5744EBE37C715D66E779C0248F44F@red-msg-04.redmond.corp.microsoft.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <BCDB2C3F59F5744EBE37C715D66E779C0248F44F@red-msg-04.redmond.corp.microsoft.com>; from dsyme@microsoft.com on Mon, Oct 08, 2001 at 12:24:23PM -0700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Would it be possible in theory for "input_value" to work by
+> memory-mapping the file being read, rather than by immediately reading
+> the file?  The idea would be that the structured value would then only
+> actually be realised in physical memory as it is touched by execution
+> and the corresponding pages of the memory-mapped file dragged in by the
+> virtual memory mechanism.  (To be honest, I haven't actually checked if
+> this is how input_value currently works, though I'm certain it can't
+> be.)
+
+No, that's not how input_value currently works :-)
+
+What you describe sounds feasible, with two caveats:
+
+- You need a serialization format that is "isomorphic" to the memory
+representation of the data, i.e. that occupies the same space.  The
+original Caml Light implementation of serialization used such a
+format: the on-disk representation was essentially produced by a
+copying GC applied to the value being externed, and input_value would
+just read it in heap and replace offsets by pointers.
+
+There were two problems with this approach.  One is 32/64 bit
+interoperability, where you need to expand or shrink the data
+accordingly during input_value; this is expensive and would prevent
+direct access to a page as you describe.  The other is that this
+serialization format wastes space, resulting in huge files that are
+slow to read.  The "compact" format that OCaml uses (basically, a
+prefix notation for the DAG of memory blocks composing the externed
+value) is much more compact (by a factor of 10, roughly), and while it
+takes more CPU time to do input_value, this is well offset by the
+reduced file reading time.
+
+- You need to relocate offsets into pointers when a page is first
+accessed.  Under Unix, this could possibly be done by mapping the file
+without read and write access, then catch the segmentation violation
+that occurs when one of the pages is accessed, patch the pointers, and
+change the page protections to read-write.  All this is highly
+non-portable and quite slow, though.  (I think it's Appel and Li that
+tried VM tricks to implement concurrent copying GC in the late 80s;
+they found out later that the cost of changing page permissions is so
+high under all Unix implementations they tested that the scheme was
+impractical.) 
+
+Because of this cost issue, your scheme would be interesting only if
+the program accesses a small fragment of the memory-mapped data.  If
+you're going to use all of the data, reading it in one step is more
+efficient (it saves the cost of trapping SEGV and changing page
+protections).
+
+> But if it could work, then that could
+> make for one of the very best and easiest ways of persisting data
+> structures - easier than moving to a relational database, and directly
+> related to the programming model.
+
+I'm pretty ignorant with databases, but still what you describe is
+vaguely reminiscent of some OO databases (ObjectStore, maybe?).  Two
+issues remain to be addressed, though: how to modify incrementally the
+data structure (modifying it in core and re-dumping it whole to disk
+doesn't suffice), and how to deal with atomicity of updates...
+
+Best wishes,
+
+- Xavier Leroy
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

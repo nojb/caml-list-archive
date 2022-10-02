@@ -1,0 +1,113 @@
+Return-Path: <bhurt@spnz.org>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 27086BD19
+	for <caml-list@yquem.inria.fr>; Mon, 15 Nov 2004 21:36:53 +0100 (CET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iAFKaoeD027336
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@yquem.inria.fr>; Mon, 15 Nov 2004 21:36:52 +0100
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.13.1/8.12.11) with ESMTP id iAFKaaaO004491
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Mon, 15 Nov 2004 14:36:40 -0600 (CST)
+Date: Mon, 15 Nov 2004 14:37:36 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Wheeler Ruml <ruml@parc.com>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Hashtbls with physical equality?
+In-Reply-To: <16791.56417.334890.765954@katsura.parc.xerox.com>
+Message-ID: <Pine.LNX.4.44.0411151400080.19815-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at concorde with ID 41991362.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 wheeler:01 wrote:01 ocaml:01 hash:01 hashtbl:01 filliatre:01 garbage:01 hash:01 traversing:01 integers:01 ocaml:01 intern:01 foo:01 foo:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+On Sun, 14 Nov 2004, Wheeler Ruml wrote:
+
+> Is it possible in OCaml to have a hash table that can insert and retrieve
+> values without walking over their structure?  I tried to hack something
+> together using Obj.magic (working from Hashtbl.ml and the size.ml example
+> by Filliatre) but it doesn't work for me and I'm concerned that the garbage
+> collector might be making the magic values obsolete.  
+
+There is no magic value associated with objects, unlike Java.  Personally, 
+I think that was one of the biggest screwups with Java.  Starting with the 
+fact that it returns a 32-bit *int* (and what happens when you have more 
+than 4 billion objects?  Possible in a 64-bit system!).
+
+> I have a hash table
+> of strings and I'd like to avoid traversing their length on every lookup.
+> Do I have to explicitly use integers instead?
+
+Note that Ocaml doesn't intern strings (using more Java speak) 
+automatically.  The result of "foo" == "foo" is false.  Or consider "foo" 
+== (let s = "goo" in s.(0) <- 'f'; s).  Note that I had a friend who was 
+burned by this recently- it seems that more recent versions of Java have 
+replaced the old mediocre-but-workable string hashcode implementation with 
+the default "magic number" implementation.  Well, my friend managed to 
+defeat the interning the compiler tried to do (not delibertly), and was 
+surprised when the hashtable lookup suddently failed.
+
+If the strings you are looking up in the hashtabl are known ahead of time
+(for example, they're keywords in a programming language), you might look
+at perfect hashes (see gperf for more info).  If you're not, I think what
+you're asking for is impossible.
+
+Consider the following impelementation: you have a resizeable array
+(there's one in ExtLib, or roll your own).  When you create a new object,
+you insert it into the array.  You can now use the array index as the
+magic number for the object.  You can use the array index as a key into a
+hash table, but why bother?  Why not just look the structure up in the
+array?  To look the structure up in either the array or the hash table,
+you need the array index (the key for the hash table)- how do you have the
+key?  You have two choices: you can seach the array (O(log N) if you're
+lucky), or the array index/hash table key has to come from the data
+itself.
+
+If you simply store the array index in with the rest of the data, doing
+something like:
+
+type my_type = {
+    array_index : int;
+    ...
+};;
+
+then by the time you get the array index, you already have the data.  The 
+other possibility is to compute the key from some or all of the data.  
+Welcome to the wonderfull world of hash functions.
+
+Any magic number mapping you can come up with is equivelent to the index 
+into the arrays problem I outlined above- except sometimes you don't have 
+the array.  The "address of" idea that Java's implementation was obviously 
+originally designed for is exactly this sort of implementation- memory 
+itself becomes the array.  And the question of how you get the magic 
+number of an object you don't already have is also a good question (if 
+you're passing around the magic number, I comment that passing around the 
+reference to the object itself is no more data).
+
+As a side note, be wary of hashtables.  They works real slick- right up to 
+the point where they don't.  If the hash functions fail to give you 
+sufficient dispersion over the field of interesting values, the nice O(1) 
+best-case performance of hashtables suddenly becomes O(N).  The nice thing 
+about balanced trees is that they're O(log N) worst case.  Hashtables are 
+*NOT* magic data structures.
+
+The other comment I'd make is that it sound like you're doing premature 
+optimization.  Stop it.  Get the code working first, and then measure to 
+see if it's a performance problem.  What is your average length string 
+going to be?  Walking down a 4- or even 16-character string isn't that 
+expensive.  How much dispersion is your hash function giving you?  Or is 
+some other part of the code the problem child?  Or is the code simply fast 
+enough, and doesn't need any performance tuning what so ever?
+
+Getting it working first, then worry about performance.
+
+Brian
+
+

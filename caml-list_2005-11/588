@@ -1,0 +1,131 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 18F25BB81
+	for <caml-list@yquem.inria.fr>; Wed, 30 Nov 2005 05:35:09 +0100 (CET)
+Received: from pih-relay04.plus.net (pih-relay04.plus.net [212.159.14.131])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jAU4Z8xI009577
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Wed, 30 Nov 2005 05:35:08 +0100
+Received: from [80.229.56.224] (helo=chetara)
+	 by pih-relay04.plus.net with esmtp (Exim) id 1EhJgR-0003ax-Qg
+	for caml-list@yquem.inria.fr; Wed, 30 Nov 2005 04:35:08 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Optimising: div and mod on AMD64
+Date: Wed, 30 Nov 2005 04:29:56 +0000
+User-Agent: KMail/1.8.2
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+Message-Id: <200511300429.56862.jon@ffconsultancy.com>
+X-Miltered: at nez-perce with ID 438D2BFC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; optimising:01 low-level:01 rec:01 recursive:01 rec:01 bool:01 ocaml:01 ocaml:01 recursion:01 unrolling:01 surprising:01 doubles:01 char:01 ocamlopt:01 integers:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+
+I've spent a little time playing around with my 19-line Sudoku program:
+
+  http://www.ffconsultancy.com/free/sudoku
+
+Algorithmic optimisations are clearly the way forward from my brute force=20
+approach. However, I am curious about low-level aspects of the performance =
+of=20
+the existing implementation in various ways.
+
+Note that 85-90% of the time is spent in the "invalid" function:
+
+let rec invalid ?(i=3D0) x y n =3D
+  i<9 && (m.(y).[i] =3D n || m.(i).[x] =3D n ||
+      m.(y/3*3 + i/3).[x/3*3 + i mod 3] =3D n || invalid ~i:(i+1) x y n)
+
+This is a simple recursive function. You can improve its performance a bit =
+by=20
+getting rid of the optional argument:
+
+let rec invalid i x y n =3D
+  i<9 && (m.(y).[i] =3D n || m.(i).[x] =3D n ||
+      m.(y/3*3 + i/3).[x/3*3 + i mod 3] =3D n || invalid (i+1) x y n)
+
+The C++ equivalent of this function (including bounds checking) is:
+
+bool invalid(int i, int x, int y, int n) {
+  return i<9 && (m.at(y).at(i) =3D=3D n || m.at(i).at(x) =3D=3D n ||
+                 m.at(y/3*3 + i/3).at(x/3*3 + i%3) =3D=3D n ||
+                 invalid(i+1, x, y, n));
+}
+
+When switching from 32-bit x86 to 64-bit AMD64, the C++ becomes slightly=20
+faster but the OCaml becomes much slower, to the extent that the OCaml is=20
+4.8x slower than the C++ on AMD64:
+
+Platform  x86 (900MHz) AMD64 (800MHz)
+OCaml     3.716        6.209
+C++       1.351        1.284
+
+After quite a bit of playing I found out some interesting things. Allocatio=
+n=20
+is very slow, but the "invalid" function does no allocation and incurs no G=
+C.=20
+Recursion can be slow. Unrolling the invalid function makes little differen=
+ce=20
+to performance. Removing bounds checking only improves performance by 6% on=
+=20
+both platforms.
+
+To my surprise, it seems that the vast majority of the time in the OCaml=20
+implementation is spent computing x/3*3, i/3 and i mod 3. This is surprisin=
+g=20
+because these operations are "normally" very fast, e.g. in the C++.
+
+Getting rid of integer div and mod in the "invalid" function by hoisting th=
+e=20
+computation of x/3*3 out of "invalid" and then out of the fold, and recursi=
+ng=20
+over ix=3D[0,3) and iy=3D[0,3) rather than i=3D[0,9) gives:
+
+let rec invalid ix iy fx fy x y n =3D
+  if ix=3D3 then invalid 0 (iy+1) fx fy x y n else
+    iy<3 && (m.(y).[ix + 3*iy] =3D n || m.(ix + 3*iy).[x] =3D n ||
+	m.(fy + iy).[fx + ix] =3D n || invalid (ix+1) iy fx fy x y n)
+
+Greatly improves performance, particularly on AMD64:
+
+OCaml     1.946        1.308
+
+Hoisting x/3*3 out of the fold (which isn't even the inner loop!) in the=20
+"search" function almost doubles the performance of the whole program:
+
+	let fx =3D x/3*3 and fy =3D y/3*3 in
+        fold (fun accu n ->
+                let n =3D Char.chr (n + 48) in
+                if invalid 0 0 fx fy x y n then accu else
+                  (m.(y).[x] <- n;
+                   let accu =3D search (x+1) y f accu in
+                   m.(y).[x] <- '0';
+                   accu)) accu 1 10
+
+=46rom my mediocre knowledge of x86 and AMD64 assembler, it looks as though=
+=20
+ocamlopt is generating naive integer divisions and modulos, even when the=20
+divisors are small, constant integers. In contrast, g++ is converting these=
+=20
+operations into multiplications by constants, shifts and=20
+addition/subtraction.
+
+I am surprised that this makes such a big difference but, assuming I'm righ=
+t,=20
+may we have optimised integer arithmetic for constant divisors please?
+
+=2D-=20
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+Objective CAML for Scientists
+http://www.ffconsultancy.com/products/ocaml_for_scientists
+

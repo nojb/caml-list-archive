@@ -1,0 +1,208 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA18216; Wed, 10 Jul 2002 22:35:07 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA18212 for <caml-list@pauillac.inria.fr>; Wed, 10 Jul 2002 22:35:06 +0200 (MET DST)
+Received: from jah.cs.unm.edu (mail.cs.unm.edu [64.106.20.33])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g6AKZ5b14907
+	for <caml-list@inria.fr>; Wed, 10 Jul 2002 22:35:05 +0200 (MET DST)
+Received: from amanda.cs.unm.edu ([64.106.20.36] ident=wneumann)
+	by jah.cs.unm.edu with esmtp (Exim 3.36 #2)
+	id 17SOAt-0008UR-00; Wed, 10 Jul 2002 14:34:59 -0600
+Date: Wed, 10 Jul 2002 14:34:52 -0600 (MDT)
+From: "William D. Neumann" <wneumann@cs.unm.edu>
+To: Oleg <oleg_inconnu@myrealbox.com>
+cc: sebastien FURIC <sebastien.furic@tni-valiosys.com>,
+        Shannon --jj Behrens <jjinux@yahoo.com>, caml-list@inria.fr
+Subject: [Caml-list] Re: Sieve of Eratosthenes Performance: various languages (Re:
+ [Caml-list] productivity improvement)
+In-Reply-To: <200207102014.QAA14544@dewberry.cc.columbia.edu>
+Message-ID: <Pine.LNX.4.21.0207101423130.13340-100000@amanda.cs.unm.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Gah!!! You guys are making me nuts!
+
+Not because of this topic (I actually find this somewhat interesting --
+even if I don't know why), but because every post on the subject has
+ignored the two most basic optimizations that should be done for this
+small prime generation:
+  Doing trial division only up to the square root of the candidate (and)
+  Incrementing your candidates by 2 rather than 1 (2 is the only even
+  prime -- don't waste your time on even numbers!)
+
+Seriously, why pull out vector libraries, etc. while leaving these pigs in
+your pantry?
+
+For what it's worth, here is my naive 10 minute solution that takes about
+0.2 seconds to generate the first 5000 primes on my 500MHz G4 (and no
+fair laughing at my poor programming chops!):
+
+(* ********************************** *)
+
+type pState = {primes : int array; 
+	       mutable top : int; 
+	       mutable cur : int;
+	       max : int};;
+
+let print_prime op =
+  match op with
+      None -> ()
+    | Some p -> Printf.printf "%d\n" p;;
+
+let next state = state.cur <- state.cur + 2;;
+let update state = 
+  begin
+    Array.set state.primes state.top state.cur;
+    state.top <- state.top + 1;
+    next state
+  end;;
+
+let is_prime state= 
+  let b = (int_of_float (sqrt (float_of_int state.cur))) and
+    index = ref 1 and
+    prime = ref true in
+    while ((state.primes.(!index) <= b) & !prime) do
+      if (state.cur mod state.primes.(!index) = 0) 
+      then prime := false
+      else index := (!index + 1)
+    done;
+    !prime;;
+
+let rec next_prime state =
+  if state.top >= state.max then
+    None
+  else
+    if is_prime state then
+      (update state; Some state.primes.(state.top - 1))
+    else
+      (next state; next_prime state);;
+
+let main () =
+  let num_primes = (int_of_string Sys.argv.(1)) in
+  let state = {primes = Array.make num_primes 2;
+	       top = 1;
+	       cur = 3;
+	       max = num_primes;} in
+  let p = ref (next_prime state) in
+    while (!p <> None) do
+      print_prime !p;
+      p := (next_prime state);
+    done;;
+
+main ();;
+
+(* ********************************** *)
+
+William D. "Cranky or something" Neumann
+
+On Wed, 10 Jul 2002, Oleg wrote:
+
+> On Wednesday 10 July 2002 06:02 am, sebastien FURIC wrote:
+> 
+> <snip>
+> 
+> > </caml>
+> >
+> > real    11m9.021s
+> > user    0m0.020s
+> > sys     0m0.030s
+> >
+> >  Sebastien.
+> 
+> I guess this is an example of when very idiomatic C++ shines:
+> 
+>     1   #include <iostream>
+>     2   #include <vector>
+>     3
+>     4   typedef std::vector<int> vec;
+>     5
+>     6   void next_prime_candidate(int c, vec& v) {
+>     7       for(int i = 0; i < v.size(); ++i) 
+>     8           if(c % v[i] == 0) return;
+>     9       v.push_back(c);
+>    10   }
+>    11
+>    12   void print_vec(vec& v) {
+>    13       for(int i = 0; i < v.size(); ++i)
+>    14           std::cout << ' ' << v[i];
+>    15   }
+>    16
+>    17   int main() {
+>    18       vec v; v.push_back(2);
+>    19       for(int i = 3; v.size() < 10000; ++i)
+>    20           next_prime_candidate(i, v);
+>    21       print_vec(v);
+>    22   }   
+> 
+> Compiled with g++-3.0 -O2 on my aging AMD K6-2 550 MHz, I get
+> 
+> real    0m4.632s
+> user    0m3.290s
+> sys     0m0.260s
+> 
+> while for Sebastien's findprimes_simple.ml, compiled with ocamlopt, I get
+> 
+> real    0m43.809s
+> user    0m41.590s
+> sys     0m0.040s
+> 
+> C++ version does not get faster if I add v.reserve(10000) in the beginning, 
+> so its bottleneck is probably not in memory allocation.
+> 
+> Perhaps O'Caml version can be made faster: here's my shot at it:
+> 
+>     1   let next_prime_candidate c v = 
+>     2   let _ = try 
+>     3   Array.iter (fun x -> if c mod x = 0 then failwith "not a prime") !v;
+>     4   v := Array.append !v [| c |];
+>     5   with Failure "not a prime" -> () in ();;
+>     6
+>     7   let print_array v = 
+>     8   Array.iter (fun i -> print_char ' '; print_int i) v;;
+>     9
+>    10   let v = ref [| 2 |] in
+>    11   let i = ref 2 in
+>    12   let _ =
+>    13   while Array.length !v < 10000 do
+>    14       i := !i + 1;
+>    15       next_prime_candidate !i v
+>    16   done in
+>    17   print_array !v;;
+> 
+> Timing:
+> 
+> real    0m11.645s
+> user    0m11.370s
+> sys     0m0.010s
+> 
+> Still 3-4 times slower.  Is it because exceptions are used instead of 
+> [non-existent ?] early function return or loop break?
+> 
+> A version of the last program with Lists instead of Arrays is 7-8 times 
+> slower than the Array version.
+> 
+> Oleg
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> 
+
+
+---
+
+"The magnum opus of rms and his Foundation is called 'GNU', a project to
+completely rewrite the propritorially soiled Unix operating system. 
+(Apparently, 'GNU' stands for "Gnu's Not Unix", and is proudly held to be
+the world's first 'recursive acronym'. Which, of course, proves that rms
+didn't get out enough in his youth.) 
+
+	-- Nick Roberts
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

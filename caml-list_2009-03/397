@@ -1,0 +1,145 @@
+Return-Path: <Xavier.Leroy@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 06240BBAF
+	for <caml-list@yquem.inria.fr>; Mon, 23 Mar 2009 15:19:05 +0100 (CET)
+X-IronPort-AV: E=Sophos;i="4.38,408,1233529200"; 
+   d="scan'208";a="26136647"
+Received: from estephe.inria.fr ([128.93.11.95])
+  by mail1-relais-roc.national.inria.fr with ESMTP; 23 Mar 2009 15:19:00 +0100
+Message-ID: <49C79A54.5020406@inria.fr>
+Date: Mon, 23 Mar 2009 15:19:00 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+User-Agent: Thunderbird 2.0.0.17 (X11/20080929)
+MIME-Version: 1.0
+To: Andrey Riabushenko <cdome@bk.ru>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Google summer of Code proposal
+References: <200903211439.47107.cdome@bk.ru>
+In-Reply-To: <200903211439.47107.cdome@bk.ru>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 ocaml:01 run-time:01 emits:01 compiler:01 compiler:01 run-time:01 c--:01 ocaml's:01 interfacing:01 ocaml's:01 parsetree:01 untyped:01 inference:01 typedtree:01 
+
+> I would like to develop LLVM frontend to Ocaml language. LLVM  does 
+> participate in GSoC. LLVM do not mind to developed a ocaml frontend as LLVM 
+> GSoC project. I want to discuss details with you before I will make an 
+> official proposal to LLVM. [...]
+>
+> Do authors of ocaml has something to say about the idea?
+
+Da. A number of things, actually.
+
+1- I know of at least 3, maybe 4 other projects that want to do
+something with OCaml and LLVM.  Clearly, some coordination between
+these efforts is needed.
+
+2- If you're applying for funding through a summer of code project,
+you need to articulate good reasons why you want to combine OCaml and
+LLVM.  "Ocaml is cool, LLVM is cool, so OCaml+LLVM would be extra
+cool" is not enough.  "It will generate PIC-16 code" isn't either.
+Run-time code generation could be a good enough reason, but you still
+need to weigh the development cost of the LLVM approach against, for
+example, hacking the current OCaml code generator so that it emits
+machine code in memory instead of assembly code.
+
+3- A language implementation like OCaml breaks down in four big parts:
+        1- Front-end compiler
+        2- Back-end compiler and code emitter
+        3- Run-time system
+        4- OS interface
+Of these four, the back-end is not the biggest part nor the most
+complicated part.  LLVM gives you part 2, but you still need to
+consider the other 3 parts.  Saying "I'll do 1, 3 and 4 from scratch",
+Harrop-style, means a 5-year project.  To get somewhere within a
+reasonable amount of time, you really need to reuse large parts of the
+existing OCaml code base.
+
+4- From a quick look at LLVM specs, the two aspects that appear most
+problematic w.r.t. Caml are exception handling and GC interface.
+LLVM seems to implement C++/Java "zero-cost" exceptions, which are
+known to be quite costly for Caml.  (Been there, done that, in the
+early 1990s.)  I regret that LLVM does not provide support for
+alternate implementations of exceptions, like the C-- intermediate
+language of Ramsey et al does:
+   http://portal.acm.org/citation.cfm?id=349337
+
+The big issue, however, is GC interface.  There are GC techniques that
+need no support from the back-end: stack maps and conservative
+collection.  Stack maps are very costly in execution time.
+Conservative GC like the Boehm-Weiser GC is already much better.  But
+for full efficiency, back-end support is required.  LLVM documents a
+minimal interface to produce stack maps and make them available to the
+GC at run-time:
+   http://llvm.org/docs/GarbageCollection.html
+
+The first thing you want to investigate is whether this interface is
+enough to support an exact, relocating collector such as
+OCaml's. According to
+   http://www.nabble.com/Garbage-collection-td22219430.html
+Gordon Henriksen did succeed in interfacing OCaml's GC with LLVM.
+Maybe there is still some more work to do here, in which case I
+recommend you look into this first.
+
+6- Here is a schematic of the Caml compiler.  (Use a fixed-width font.)
+
+             |
+             | parsing and preprocessing
+             v
+          Parsetree (untyped AST)
+             |
+             | type inference and checking
+             v
+          Typedtree (type-annotated AST)
+             |
+             | pattern-matching compilation, elimination of modules, classes
+             v
+          Lambda
+           /  \
+          /    \ closure conversion, inlining, uncurrying,
+         v      \  data representation strategy
+      Bytecode   \
+                  \
+                 Cmm
+                  |
+                  | code generation
+                  v
+               Assembly code
+
+In my opinion, the simplest approach is to start at Cmm and generate
+LLVM code from there.  Starting at one of the higher-level
+intermediate forms would entail reimplementing large chunks of the
+OCaml compiler.  Note that Cmm is quite close to the C-- intermediate
+language mentioned earlier, so there is a lot to learn from Fermin
+Reig's experience with an OCaml/C-- back-end.
+
+7- To finish, I'll preventively deflect some likely reactions by Jon
+Harrop:
+
+"But you'll be tied to OCaml's data representation strategy!"
+   Right, but 1- implementing you own data representation strategy is
+   a lot of work, especially if it is type-based, and 2- OCaml's
+   strategy is close to optimal for symbolic computing.
+
+"But LLVM assembly is typed, so you must have types!"
+   Just use int32 or int64 as your universal type and cast to
+   appropriate pointer types in loads or stores.
+
+"But your code will be tainted by OCaml's evil license!"
+   It is trivial to make ocamlopt dump Cmm code in a file or pipe.
+   (The -dcmm debug option already does this.)  Then, you can have a
+   separate, untainted program that reads the Cmm code and transforms it.
+
+"But shadow stacks are the only way to go for GC interface!"
+   No, it's probably the worst approach performance-wise; even a
+   conservative GC should work better.
+
+Hope this helps,
+
+- Xavier Leroy
+

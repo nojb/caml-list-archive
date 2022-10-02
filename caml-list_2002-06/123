@@ -1,0 +1,96 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA22804; Wed, 12 Jun 2002 02:10:58 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA22811 for <caml-list@pauillac.inria.fr>; Wed, 12 Jun 2002 02:10:57 +0200 (MET DST)
+Received: from favie.faith.gr.jp (favie.faith.gr.jp [61.127.175.250])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g5C0AtH01929
+	for <caml-list@inria.fr>; Wed, 12 Jun 2002 02:10:56 +0200 (MET DST)
+Received: from localhost (dhcp7.faith.gr.jp [192.168.1.17])
+	by favie.faith.gr.jp (8.9.3/8.9.3) with ESMTP id JAA27298;
+	Wed, 12 Jun 2002 09:10:47 +0900
+To: max630@mail.ru
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Unix.file_descr -> int ???
+In-Reply-To: <20020612022611.B680@max.home>
+References: <20020611213158.A680@max.home>
+	<20020611174527.A14450@pauillac.inria.fr>
+	<20020612022611.B680@max.home>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020612091037I.garrigue@kurims.kyoto-u.ac.jp>
+Date: Wed, 12 Jun 2002 09:10:37 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 63
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Max Kirillov <max630@mail.ru>
+
+> I was trying to trace a code with some significant amount of
+> select'ed fds. At some point, I faced the fact that I just
+> have no way to "show" a descriptor value. That was a real
+> shock. At the moment, the bug is found and fixed
+> deductively, but the question remains.
+
+If your goal is debugging, then you can dump the value in this way.
+Note that this is safe (we check the data representation before
+dumping), but system dependent.
+
+Unix version:
+
+let dump_fd (h : Unix.file_descr) =
+  let obj = Obj.repr h in
+  if Obj.is_int h then string_of_int (Obj.obj obj)
+  else invalid_arg "dump_fd"
+
+Windows version:
+
+let dump_handle (h : Unix.file_descr) =
+  let obj = Obj.repr h in
+  if Obj.is_block obj && Obj.tag obj = Obj.custom_tag then
+    Nativeint.format "%x" (Obj.obj obj)
+  else invalid_arg "dump_handle"
+
+> I know almost nothing about win32, but I was very surprised
+> to discover that win32 has functions, isomorphic to
+> low-level unix calls. However, I suspect (I don't have win32
+> headers to look in just now) that HANDLE is again a
+> "typedef" of intteger.
+
+As you can see, win32 fd's have to be handled differently.
+One reason is that caml fits both HANDLE and SOCKET in the same
+abstract datatype.  But even HANDLE is not an int, it is a long, and
+you cannot be sure it would fit in an ocaml int, so you would need a
+nativeint anyway.
+
+> Anyway, any meaningful type barrier is good. Maybe the
+> discussed too. But, since we all know that file_descr and
+> dir_handle are integers, could it be worthwhile to have
+> functions *_of_int and int_of_*?
+
+If it's okay to be unix specific, then something like that could do
+the job.
+let file_descr_of_int n =
+  let fd : Unix.file_descr = Obj.magic (n : int) in
+  try Unix.close (Unix.dup fd); fd
+  with _ -> invalid_arg "file_descr_of_int"
+
+However, I would not take any responsibility for problems with this
+code.
+
+On windows it's more painful. For this kind of use it might be more
+reasonable to use a windows specific library, as not all notions can
+be mapped to unix ones.
+
+        Jacques Garrigue
+
+P.S. The above uses of Obj.obj and Obj.magic are in some way legal, as
+they are just breaking an abstraction barrier. But any error in the
+code can still get you a segmentation fault...
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

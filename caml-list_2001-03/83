@@ -1,0 +1,100 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA14945; Fri, 9 Mar 2001 11:54:23 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA14942 for <caml-list@pauillac.inria.fr>; Fri, 9 Mar 2001 11:54:22 +0100 (MET)
+Received: from cremant.inria.fr (cremant.inria.fr [128.93.8.143])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f29AsJn02642;
+	Fri, 9 Mar 2001 11:54:19 +0100 (MET)
+Received: (from lefessan@localhost)
+	by cremant.inria.fr (8.11.0/8.11.0) id f29AsJp10223;
+	Fri, 9 Mar 2001 11:54:19 +0100
+X-Authentication-Warning: cremant.inria.fr: lefessan set sender to fabrice.le_fessant@inria.fr using -f
+From: Fabrice Le Fessant <fabrice.le_fessant@inria.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15016.46681.967782.380481@cremant.inria.fr>
+Date: Fri, 9 Mar 2001 11:54:17 +0100 (CET)
+To: Chris Hecker <checker@d6.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] dynamically loading C functions
+References: <slrn9a80vk.nqi.qrczak@qrnik.zagroda>
+	<4.3.2.7.2.20010304235205.00dea6a0@shell16.ba.best.com>
+	<4.3.2.7.2.20010305164831.00e2cd60@shell16.ba.best.com>
+	<4.3.2.7.2.20010306094319.00e2b8e0@shell16.ba.best.com>
+	<4.3.2.7.2.20010308010305.00cd4140@shell16.ba.best.com>
+X-Mailer: VM 6.75 under Emacs 20.7.1
+Reply-To: fabrice.le_fessant@inria.fr
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I've updated the dlopen ocaml port:
+http://pauillac.inria.fr/~lefessan/src/dlopen/
+
+It now works on 4 systems: x86, alpha, sparc and PPC.
+
+It can use either printf formats or type combinators to specify
+returned functions types. 
+
+Type combinators must be use if you want to pass structs to C
+functions (encoded by tuples in Caml), or get side-effects.
+
+For example, it test.c defines:
+
+struct tt {
+  char field1;
+  int  field2;
+  char field3;
+  double field4;
+};
+
+int set_tuple(struct tt* t)
+{
+  printf("%c - %d - %c - %f\n", t->field1, t->field2, t->field3, t->field4);
+  t->field2 = 24;
+  return 0;
+}
+
+You can use the following code:
+
+# open Dlopen;; 
+# let dll = dlopen "./test.so"  [RTLD_NOW];;
+val dll : Dlopen.dll = <abstr>
+
+# let struct_t =  record4_t (char_t, mutable_t int_t, char_t, float_t);;
+val struct_t : (char * int ref * char * float) Dlopen.meta = <abstr>
+
+# let set_tuple = dlsym_t dll "set_tuple" (
+    star_t (mutable_t struct_t) @-> int_t);;
+val set_tuple : (char * int ref * char * float) ref option -> int = <fun>
+
+# let x =ref 1;;
+val x : int ref = {contents=1}
+# let y = ref ('a',x,'b',2.0);;
+val y : (char * int ref * char * float) ref =
+  {contents='a', {contents=1}, 'b', 2}
+
+# set_tuple (Some y);;
+a - 1 - b - 2.000000
+- : int = 0
+
+# x,y;;
+- : int ref * (char * int ref * char * float) ref =
+{contents=24}, {contents='a', {contents=24}, 'b', 2}
+
+where both the references x and y capture the side-effect of the
+function on the record (note that sharing is not preserved, ie in the
+final result, 
+   {contents=24}, {contents='a', {contents=24}, 'b', 2}
+       ^                                ^
+       ^-------------- != --------------^
+
+Be careful to exactly encode the C arguments format in the Caml type
+combinators (in particular, pointers are encoded by star_t as in the
+example).
+
+Regards,
+
+- Fabrice
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

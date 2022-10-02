@@ -1,0 +1,159 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA12493; Wed, 8 May 2002 22:10:50 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA12559 for <caml-list@pauillac.inria.fr>; Wed, 8 May 2002 22:10:50 +0200 (MET DST)
+Received: from sunny.pacific.net.au (sunny.pacific.net.au [203.25.148.40])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g48KAlD02905
+	for <caml-list@inria.fr>; Wed, 8 May 2002 22:10:48 +0200 (MET DST)
+Received: from wisma.pacific.net.au (wisma.pacific.net.au [210.23.129.72])
+          by sunny.pacific.net.au with ESMTP
+          id g48KAjXt028718 for <caml-list@inria.fr>; Thu, 9 May 2002 06:10:46 +1000 (EST)
+Received: from ozemail.com.au (ppp98.dyn146.pacific.net.au [210.23.146.98])
+        by wisma.pacific.net.au with ESMTP
+        id GAA29536 for <caml-list@inria.fr>; Thu, 9 May 2002 06:10:43 +1000 (EST)
+Message-ID: <3CD98643.9080603@ozemail.com.au>
+Date: Thu, 09 May 2002 06:10:43 +1000
+From: John Max Skaller <skaller@ozemail.com.au>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:0.9.2.1) Gecko/20010901
+X-Accept-Language: en-us
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: [Caml-list] Bug in typing polymorphic variants found
+References: <Pine.LNX.3.95.1020502132155.214A-100000@first.in-berlin.de> <20020507154306.B18437@pauillac.inria.fr> <3CD93D21.6030505@ozemail.com.au> <3CD9480E.2000502@ozemail.com.au>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>
+>
+>> Question: I previously found a serious bug with polymorphic
+>> variants in Ocaml 3.02.  The code that triggered the bug
+>> works fine with 3.01 and with 3.04. Has that bug been
+>> identified and fixed (or was I just lucky ..and now unlucky again)? 
+>
+>
+> Hmmm. That is bug #491 in the bug tracker,
+> and its categorized "not a bug" which it clearly is. 
+
+OK. I think I have found it. Heh. Or rather, Ocaml 3.01
+found it for me. There is a bug in the typing of polymophic variants.
+
+What happens: Ocaml 3.01 reports a type error.
+Ocaml 3.04 does not, it crashes at run time instead.
+[.. this is confusing but, I think it crashes even when the bug
+in my code is fixed .. this is definitely the same problem I
+had before and reported in bug #491]
+
+The offending lines of code are:
+
+       match dcl with
+
+        | `DCL_val_typeof e ->
+          Hashtbl.add dfns n (id,sr,parent,`SYMDEF_dcl dcl)
+
+The match is matching on values of type dcl_t
+
+The value `DCL_val_typeof _ is NOT a member of the type dcl_t,
+so this code will never be executed.
+
+The type of the Hashtable being used here requires the fourth
+component of the data part to be of a type which includes
+constructor `SYMDEF_dcl of dcl_t.
+
+Were the above code ever executed, a bad variant would be
+glued into the hash table, since the type of dcl is infered to
+include `DCL_val_typeof _.
+
+The *problem* is that the type of the constructor argument
+influences its run-time hash? And so the following code,
+which IS executed
+
+        | `DCL_val t ->
+          Hashtbl.add dfns n (id,sr,parent,`SYMDEF_dcl dcl)
+          ;
+
+is producing the *wrong* hash for the variant `SYMDEF_dcl dcl,
+because the inference engine thinks the type of dcl is something
+other than dcl_t. When I do a lookup of the hash table later in another 
+module,
+I get a bad value out, since in *that* module, the correct type of the dcl
+is calculated. At least, thats my guess.
+
+I'll try to make a small example,
+my initial attempts have failed. Otherwise, I'll have to post the
+bogus code to sourceforge where
+the developers can download it.
+
+Here is the Ocaml 3.01 error which
+Ocaml 3.04 does not report:
+
+This pattern matches values of type
+  [< `DCL_module_binding of 'a
+   | `DCL_typed_functor of 'b * 'c * 'd
+   | `DCL_untyped_functor of 'e * 'f
+   | `DCL_function of 'g * 'h * 'i
+   | `DCL_match_check of 'j * 'k
+   | `DCL_header of 'l
+   | `DCL_module of 'm
+   | `DCL_interface of 'n
+   | `DCL_lazy of 'o
+   | `DCL_procedure of 'p * 'q
+   | `DCL_if_fun of 'r
+   | `DCL_if_proc of 's
+   | `DCL_type
+   | `DCL_val of 't
+   | `DCL_val_typeof of 'u
+   | `DCL_var of 'v
+   | `DCL_var_typeof of 'w
+   | `DCL_type_alias of 'x
+   | `DCL_abs of 'y
+   | `DCL_const of 'z * 'a1
+   | `DCL_fun of 'b1 * 'c1 * 'd1
+   | `DCL_proc of 'e1 * 'f1
+   | `DCL_union of 'g1
+   | `DCL_struct of 'h1]
+but is here used to match values of type
+  Flx_types.dcl_t =
+    [ `DCL_header of string
+    | `DCL_function of
+        Flx_types.parameter_t list * Flx_types.typecode_t *
+        Flx_types.asm_t list
+    | `DCL_lazy of Flx_types.expr_t
+    | `DCL_procedure of Flx_types.parameter_t list * Flx_types.asm_t list
+    | `DCL_union of (Flx_types.id_t * Flx_types.typecode_t) list
+    | `DCL_struct of (Flx_types.id_t * Flx_types.typecode_t) list
+    | `DCL_match_check of Flx_types.pattern_t * string
+    | `DCL_val of Flx_types.typecode_t
+    | `DCL_var of Flx_types.typecode_t
+    | `DCL_type_alias of Flx_types.typecode_t
+    | `DCL_module of Flx_types.asm_t list
+    | `DCL_typed_functor of
+        Flx_types.parameter_t list * Flx_types.typecode_t *
+        Flx_types.asm_t list
+    | `DCL_untyped_functor of
+        Flx_types.parameter_t list * Flx_types.asm_t list
+    | `DCL_module_binding of Flx_types.expr_t
+    | `DCL_interface of Flx_types.asm_t list
+    | `DCL_if_proc of Flx_types.typecode_t
+    | `DCL_if_fun of Flx_types.typecode_t
+    | `DCL_type
+    | `DCL_abs of Flx_types.c_t
+    | `DCL_const of Flx_types.typecode_t * Flx_types.c_t
+    | `DCL_fun of
+        Flx_types.typecode_t list * Flx_types.typecode_t * Flx_types.c_t
+    | `DCL_proc of Flx_types.typecode_t list * Flx_types.c_t]
+
+
+-- 
+John Max Skaller, mailto:skaller@ozemail.com.au
+snail:10/1 Toxteth Rd, Glebe, NSW 2037, Australia.
+voice:61-2-9660-0850
+
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

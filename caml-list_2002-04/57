@@ -1,0 +1,213 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA29125; Mon, 8 Apr 2002 16:40:30 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA02317 for <caml-list@pauillac.inria.fr>; Mon, 8 Apr 2002 16:40:30 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g38EeTP08244
+	for <caml-list@inria.fr>; Mon, 8 Apr 2002 16:40:29 +0200 (MET DST)
+Received: (from fpottier@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA32227 for caml-list@inria.fr; Mon, 8 Apr 2002 16:40:29 +0200 (MET DST)
+Date: Mon, 8 Apr 2002 16:40:29 +0200
+From: Francois Pottier <francois.pottier@inria.fr>
+To: caml-list@inria.fr
+Subject: [Caml-list] A re-implementation of module [Queue]
+Message-ID: <20020408164029.A31674@pauillac.inria.fr>
+Reply-To: Francois.Pottier@inria.fr
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="sdtB3X0nJg68CQEu"
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 1.0i
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--sdtB3X0nJg68CQEu
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+
+
+Hello everyone,
+
+Attached is a re-implementation of the standard library module [Queue],
+which I believe offers a few advantages over the standard one:
+
+  + more space efficient (one memory block per element in the queue,
+    instead of two), while equally fast;
+
+  + the function [length] is tail recursive;
+
+  + I have added an extra operation, [transfer], for my own convenience;
+    it copies the contents of a queue to another queue in constant time.
+
+Disclaimer: I haven't seriously tested this code. Comments are welcome.
+
+-- 
+François Pottier
+Francois.Pottier@inria.fr
+http://pauillac.inria.fr/~fpottier/
+
+--sdtB3X0nJg68CQEu
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="fQueue.mli"
+
+(* $Header: /home/pauillac/formel1/fpottier/cvs/modulo/fQueue.mli,v 1.1 2002/04/08 14:34:59 fpottier Exp $ *)
+
+(** First-in first-out queues.
+
+   This module implements queues (FIFOs), with in-place modification.
+*)
+
+type 'a t
+(** The type of queues containing elements of type ['a]. *)
+
+
+exception Empty
+(** Raised when {!Queue.take} or {!Queue.peek} is applied to an empty queue. *)
+
+
+val create : unit -> 'a t
+(** Return a new queue, initially empty. *)
+
+val add : 'a -> 'a t -> unit
+(** [add x q] adds the element [x] at the end of the queue [q]. *)
+
+val take : 'a t -> 'a
+(** [take q] removes and returns the first element in queue [q],
+   or raises [Empty] if the queue is empty. *)
+
+val peek : 'a t -> 'a
+(** [peek q] returns the first element in queue [q], without removing
+   it from the queue, or raises [Empty] if the queue is empty. *)
+
+val clear : 'a t -> unit
+(** Discard all elements from a queue. *)
+
+val length : 'a t -> int
+(** Return the number of elements in a queue. *)
+
+val iter : ('a -> unit) -> 'a t -> unit
+(** [iter f q] applies [f] in turn to all elements of [q],
+   from the least recently entered to the most recently entered.
+   The queue itself is unchanged. *)
+
+val transfer: 'a t -> 'a t -> unit
+(** [transfer q1 q2] adds all of [q1]'s elements at the end of
+    the queue [q2], then clears [q1]. It is equivalent to the
+    sequence [iter (fun x -> add x q2) q1; clear q1], but runs
+    in constant time. *)
+
+
+--sdtB3X0nJg68CQEu
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="fQueue.ml"
+
+(* $Header: /home/pauillac/formel1/fpottier/cvs/modulo/fQueue.ml,v 1.1 2002/04/08 14:34:59 fpottier Exp $ *)
+
+exception Empty
+
+(* O'Caml currently does not allow the components of a sum type to be
+   mutable. Yet, for optimal space efficiency, we must have cons cells whose
+   [next] field is mutable. This leads us to define a type of cyclic lists, so
+   as to eliminate the [Nil] case and the sum type. *)
+
+type 'a cell = {
+    content: 'a;
+    mutable next: 'a cell
+  } 
+
+(* A queue is a reference to either nothing or some cell of a cyclic list. By
+   convention, that cell is to be viewed as the last cell in the queue. The
+   first cell in the queue is then found in constant time: it is the next cell
+   in the cyclic list. *)
+
+type 'a t =
+    'a cell option ref
+
+(* Standard operations. *)
+
+let create () =
+  ref None
+
+let clear q =
+  q := None
+
+let add x q =
+  match !q with
+  | None ->
+      let rec cell = {
+	content = x;
+	next = cell
+      }	in
+      q := Some cell
+  | Some last ->
+      let first = last.next in
+      let cell = {
+	content = x;
+	next = first
+      }	in
+      last.next <- cell;
+      q := Some cell
+
+let peek q =
+  match !q with
+  | None ->
+      raise Empty
+  | Some last ->
+      last.next.content
+
+let take q =
+  match !q with
+  | None ->
+      raise Empty
+  | Some last ->
+      let first = last.next in
+      if first == last then
+	q := None
+      else
+	last.next <- first.next;
+      first.content
+
+let length q =
+  match !q with
+  | None ->
+      0
+  | Some last ->
+      let rec length accu cell =
+	if cell == last then accu
+	else length (accu + 1) cell.next in
+      length 1 last.next
+
+let iter f q =
+  match !q with
+  | None ->
+      ()
+  | Some last ->
+      let rec iter cell =
+	f cell.content;
+	if cell != last then
+	  iter cell.next in
+      iter last.next
+
+(* Extra operations. *)
+
+let transfer q1 q2 =
+  match !q1 with
+  | None ->
+      ()
+  | (Some last1) as some_last1 ->
+      q1 := None;
+      match !q2 with
+      |	None ->
+	  q2 := some_last1
+      |	Some last2 ->
+	  let first1 = last1.next in
+	  let first2 = last2.next in
+	  last1.next <- first2;
+	  last2.next <- first1;
+	  q2 := some_last1
+
+
+--sdtB3X0nJg68CQEu--
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

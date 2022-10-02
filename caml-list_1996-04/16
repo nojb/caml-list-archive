@@ -1,0 +1,126 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id LAA02385 for caml-redistribution; Mon, 29 Apr 1996 11:27:42 +0200
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id KAA01485; Mon, 29 Apr 1996 10:54:23 +0200
+From: Xavier Leroy <xleroy@pauillac.inria.fr>
+Message-Id: <199604290854.KAA01485@pauillac.inria.fr>
+Subject: Re: recursive definition
+To: tarizzo@worldnet.fr (Tarizzo Martial)
+Date: Mon, 29 Apr 1996 10:54:23 +0200 (MET DST)
+Cc: caml-list@pauillac.inria.fr
+In-Reply-To: <199604252141.XAA23450@storm.certix.fr> from "Tarizzo Martial" at Apr 25, 96 11:41:04 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Content-Length: 3654      
+Sender: weis
+Status: O
+
+
+[English summary: Caml's restrictions on let rec are not there just to
+bug the users, but to ensure that a fixpoint is actually computed at
+run-time. The proper ways to do recursive memo functions are: 1- don't
+do it, 2- do it in-line, and 3- go through a memo fixpoint combinator.]
+
+> Soit. Mais alors, pourquoi est-il si simple de coder l'exemple de M Quercia
+> en SCHEME, pour lequel (dans le probleme qui nous occuppe) la principale
+> difference me semble etre l'absence de typage ?
+
+La grande difference est que Scheme n'offre aucune garantie a la
+compilation que le let rec ne va pas provoquer une erreur a
+l'execution, ni meme qu'il va bien calculer un point fixe. Les
+restrictions syntaxiques de Caml, pour aussi drastiques qu'elles
+paraissent, garantissent que le let rec s'execute sans erreurs et
+calcule bien un point fixe.
+
+Il n'y a essentiellement qu'une maniere de compiler des definitions
+recursives complexes (c.a.d. pas de la forme let rec f x = ...):
+
+compilation de let rec x = e:
+        - initialiser x avec une valeur bidon bien choisie
+        - calculer e avec cette valeur de x
+        - identifier (par manipulation de pointeurs convenable)
+          la valeur obtenue pour e et la valeur initiale de x
+
+Pour que ca marche, il faut etre certain que le calcul de e ne va pas
+avoir besoin de la "vraie" valeur de x, mais traite x
+(essentiellement) de maniere abstraite. Par exemple, si x est de type
+fonction, il faut etre sur que l'evaluation de e ne va pas effectuer
+un appel a x.
+
+Les restrictions syntaxiques sur le let rec de Caml garantissent cela. 
+Votre code Scheme respecte aussi cette propriete (mais il faut le
+prouver a la main). Cependant, si on le modifie un peu (pour que
+"remember" calcule a l'avance les valeurs de f en 0, 1 et 2 par exemple),
+vous allez obtenir une erreur a l'execution, car f va etre appelee
+trop tot:
+
+> (define (remember f)
+>   (let ((t (list (cons 0 (f 0)) (cons 1 (f 1)) (cons 2 (f 2)))))
+>     (lambda l
+>       (let ((a (assoc l t)))
+>         (if a
+>           (cdr a)
+>           (let ((y (apply f l)))
+>             (set! t (cons `(,l . ,y) t))
+>             y))))))
+
+Revenons au probleme initial de faire des memos-fonctions recursives.
+
+1- Je comprends mal cette fixation sur les memos-fonctions,
+qui sont une bidouille peu recommandable pour programmeur trop
+paresseux pour trouver un algorithme naturellement efficace pour son
+probleme.
+
+2- La maniere la plus claire d'ecrire une memo-fonction
+recursive reste d'expanser dans la definition de la fonction le code
+de memoisation:
+
+let memo_fib = hashtbl__new 17;;
+let rec fib n =
+  if n < 2 then 1 else begin
+    try
+      hashtbl__find memo_find n
+    with Not_found ->
+      let r = fib(n-1) + fib(n-2) in
+      hashtbl__add memo_find n r;
+      r
+  end;;
+
+Au moins, on comprend quand les choses sont evaluees. Ceci evite en
+particulier les bugs d'eta-expansion sauvage qui font perdre tout
+comportement memo sans que le programmeur s'en rende compte, comme
+nous l'avons vu dans des messages precedents de cette liste.
+
+3- Si on veut absolument avoir une fonctionnelle de memoisation qui
+marche pour des fonctions recursives, il faut ecrire un combinateur de
+point fixe a memoire:
+
+let memo_fix func =
+  let memo = hashtbl__new 17 in
+  let rec f x =
+    try
+      hashtbl__find memo x
+    with Not_found ->
+      let res = func f x in
+      hashtbl__add memo x res;
+      res
+  in f;;
+
+let fib = memo_fix (fun fib n -> print_int n; print_newline();
+                                 if n < 2 then 1 else fib(n-1) + fib(n-2));;
+
+(* #fib 5;;
+5
+3
+1
+2
+0
+4
+- : int = 8 *)
+
+Mais par pitie ne montrez pas ca a vos eleves.
+
+- Xavier Leroy
+
+
+
+

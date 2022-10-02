@@ -1,0 +1,162 @@
+Return-Path: <mandrykin@ispras.ru>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 62F4B7EEBF
+	for <caml-list@sympa.inria.fr>; Fri, 24 Jul 2015 20:42:03 +0200 (CEST)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  mandrykin@ispras.ru) identity=pra; client-ip=83.149.199.45;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="mandrykin@ispras.ru";
+  x-sender="mandrykin@ispras.ru"; x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  mandrykin@ispras.ru) identity=mailfrom;
+  client-ip=83.149.199.45;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="mandrykin@ispras.ru";
+  x-sender="mandrykin@ispras.ru"; x-conformance=sidf_compatible
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@mail.ispras.ru) identity=helo;
+  client-ip=83.149.199.45;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="mandrykin@ispras.ru";
+  x-sender="postmaster@mail.ispras.ru";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: A0BtBQCxhbJV/y3HlVNcgxVUab1EgxWCcAKBSkwBAQEBAQGBC4QkAQEEIwQLAQVAARALGAICBRYLAgIJAwIBAgFFBg0BBQIBAReIF7ktlggBAQgBAQEBHoEiiiuEPBgzB4JpgUMBBI0uhzWEdodGgguGR5BSJoILH4FWbIJLAQEB
+X-IPAS-Result: A0BtBQCxhbJV/y3HlVNcgxVUab1EgxWCcAKBSkwBAQEBAQGBC4QkAQEEIwQLAQVAARALGAICBRYLAgIJAwIBAgFFBg0BBQIBAReIF7ktlggBAQgBAQEBHoEiiiuEPBgzB4JpgUMBBI0uhzWEdodGgguGR5BSJoILH4FWbIJLAQEB
+X-IronPort-AV: E=Sophos;i="5.15,539,1432591200"; 
+   d="scan'208";a="141119109"
+Received: from mail.ispras.ru ([83.149.199.45])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 24 Jul 2015 20:42:01 +0200
+Received: from [10.10.2.183] (pluton2.ispras.ru [83.149.199.44])
+	by mail.ispras.ru (Postfix) with ESMTPSA id E5705540065;
+	Fri, 24 Jul 2015 21:41:58 +0300 (MSK)
+Message-ID: <55B286F3.5080401@ispras.ru>
+Date: Fri, 24 Jul 2015 21:41:55 +0300
+From: Mikhail Mandrykin <mandrykin@ispras.ru>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:31.0) Gecko/20100101 Thunderbird/31.8.0
+MIME-Version: 1.0
+To: =?UTF-8?B?TWFya3VzIFdlacOfbWFubg==?= <markus.weissmann@in.tum.de>
+CC: caml-list@inria.fr
+References: <c44d210f0c2b3f58a45e95a8d81ddb2d@in.tum.de>
+In-Reply-To: <c44d210f0c2b3f58a45e95a8d81ddb2d@in.tum.de>
+Content-Type: text/plain; charset=utf-8; format=flowed
+Content-Transfer-Encoding: 8bit
+Subject: Re: [Caml-list] Clever typing for client-server communication?
+
+Hello,
+> but is there some clever way to only have the socket annotated with 
+> one type while keeping only one send and one recv function?
+> Something in the spirit of this:
+>
+> type 'a socket
+> val send : 'a socket -> 'a message -> unit
+> val recv : [server socket -> client message | client socket -> server 
+> message]
+>
+> there is no "(client, client) socket" or "(server, server) socket";
+>
+The closest solution I can suggest is with a recv signature
+
+val recv : ('a, 'b) recv_t -> 'a socket -> 'b message
+
+(one extra argument while socket is annotated with only one type and 
+there's only one send and recv function). This uses GADTs:
+
+type 'a socket =
+| Client_socket : ... -> client socket
+| Server_socket : ... -> server socket
+
+type 'a message =
+| Client_message : ... -> client message
+| Server_message : ... -> server message
+
+let send =  ...
+
+type (_, _) recv_t =
+   | From_client : (server, client) recv_t
+   | From_server : (client, server) recv_t
+
+let recv : type a b. (a, b) recv_t -> a socket -> b message =
+   function
+   | From_client -> fun Server_socket -> ... Client_message (...)
+   | From_server -> fun Client_socket -> ... Server_message (...)
+
+The "[server socket -> client message | client socket -> server message] 
+" (without an extra argument) looks like a dependent type (in spirit of 
+" 'a socket -> (reverse 'a) message"), which makes me doubt about 
+whether it's possible in OCaml.
+
+Regards,
+Mikhail
+
+On 07/24/2015 02:01 PM, Markus Weißmann wrote:
+> Hello OCaml list,
+>
+> I'm trying to do something clever regarding the interface for a 
+> communication library:
+> There is a server and a client which can only send "client" (client to 
+> server) and "server" (server to client) messages.
+> The current idea is to use a phantom type to annotate the socket as 
+> either being "client to server" or "server to client";
+>
+> type client
+> type server
+>
+> type ('a, 'b) socket
+> type 'a message
+>
+> I've got a bunch of functions that only work on either "client 
+> messages", "server messages" or some on both. Something like:
+>
+> val p1 : 'a message -> int
+> val p2 : server message -> float
+> val p3 : client message -> char
+>
+> You can only send "client messages" on the "client socket" and "server 
+> messages" on the "server socket".
+>
+> val send : ('a, _) socket -> 'a message -> unit
+>
+> You can get these messages only on the respective other side.
+>
+> val recv : (_, 'b) socket -> 'b message
+>
+> but is there some clever way to only have the socket annotated with 
+> one type while keeping only one send and one recv function?
+> Something in the spirit of this:
+>
+> type 'a socket
+> val send : 'a socket -> 'a message -> unit
+> val recv : [server socket -> client message | client socket -> server 
+> message]
+>
+> there is no "(client, client) socket" or "(server, server) socket";
+>
+>
+> regards
+> -Markus
+>
+> PS: Under the hood its basically
+>
+> type 'a message = bytes
+> type ('a, 'b) socket = mysocket
+>
+> But the underlying system allows me to add filters that guarantee me 
+> the aforementioned properties of send/receive.
+>
+> regards
+> Markus
+>
+
+
+-- 
+Mikhail Mandrykin
+Linux Verification Center, ISPRAS
+web: http://linuxtesting.org
+e-mail: mandrykin@ispras.ru
+

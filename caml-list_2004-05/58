@@ -1,0 +1,135 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA28081; Mon, 3 May 2004 02:02:23 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA28077 for <caml-list@pauillac.inria.fr>; Mon, 3 May 2004 02:02:20 +0200 (MET DST)
+Received: from qrnik.knm.org.pl (paf87.warszawa.sdi.tpnet.pl [217.96.225.87])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i4302ISH016850
+	for <caml-list@inria.fr>; Mon, 3 May 2004 02:02:19 +0200
+Received: from qrnik ([192.168.0.1] ident=qrczak)
+	by qrnik.knm.org.pl with esmtp (Exim 3.36 #1)
+	id 1BKQuY-0008Ss-00
+	for caml-list@inria.fr; Mon, 03 May 2004 02:02:18 +0200
+Subject: Re: [Caml-list] [ANN] The Missing Library
+From: "Marcin 'Qrczak' Kowalczyk" <qrczak@knm.org.pl>
+To: caml-list <caml-list@inria.fr>
+In-Reply-To: <1083173516.9537.1162.camel@pelican.wigram>
+References: <Pine.LNX.4.44.0404272326450.9460-100000@localhost.localdomain>
+	 <200404280613.19547.jdh30@cam.ac.uk>
+	 <1083141467.9537.845.camel@pelican.wigram>
+	 <200404281018.14913.jdh30@cam.ac.uk>
+	 <1083151482.9537.904.camel@pelican.wigram>
+	 <93ADD9EA-9936-11D8-BD03-000A958FF2FE@wetware.com>
+	 <1083173516.9537.1162.camel@pelican.wigram>
+Content-Type: text/plain; charset=ISO-8859-2
+Message-Id: <1083542538.9152.65.camel@qrnik>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.5.7 
+Date: Mon, 03 May 2004 02:02:18 +0200
+Content-Transfer-Encoding: quoted-printable
+X-Miltered: at concorde with ID 40958C0B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 marcin:01 'qrczak':01 kowalczyk:01 qrczak:01 glue:01 reuse:01 gcc:01 closures:01 pointers:01 implemented:01 expander:01 implemented:01 inlining:01 dynamically:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+W li=B6cie z czw, 29-04-2004, godz. 03:31 +1000, skaller napisa=B3:
+
+> I have quite a lot of 'multi-pass' phases in my Felix compiler
+> where i build temporary data structures in between.
+>=20
+> I'd love to glue some of these together to eliminate building
+> whole data structures.
+
+I'm not sure it's worth the trouble. There are two issues of compiler
+phases: organization and efficiency.
+
+Concerning the organization, my opinion is that we do want to separate
+it into several small phases, so each pass becomes easier to manage.
+Trying to do too much at once sometimes requires to recompute the same
+thing several times, because there is no convenient intermediate form
+to store it for reuse, and it's especially bad if source and target
+languages require very different code structure - then it's very hard
+to get right at all.
+
+And for the efficiency, today's computers are usually capable of fitting
+two successive phases of the whole module in memory. GCC recently
+switched to optimizing a module at a time rather than a function at a
+time as previously. Also, lazy structures with some smart inversion of
+control flow typically introduce an overhead of creating many closures
+and calling many functions through pointers.
+
+>  For example I have phases:
+>=20
+> 	tokeniser -> rewrite token stream -> parser ->
+> 	macro expansion and constant folding ->
+> 	desugaring (syntactic term rewriting) ->
+> 	lifting (separate declarations from executable code)
+
+In my compiler of my language (implemented in itself) I have the
+following phases. They came out of necessity - I wasn't able to manage
+more complex transformations at once.
+
+Code representation                | Compiler phase
+-----------------------------------+-----------------------------------
+Source string                      |
+                                   | Lexer
+List of tokens (strict)            |
+                                   | Parser
+Source syntax tree                 |
+                                   | Expander which translates syntactic
+                                   | sugar and resolves names; macros
+                                   | will be here when implemented;
+                                   | an interface file is written and
+                                   | interfaces of used modules are read
+More abstract tree, capturing the  |
+essence of the semantics; smart    |
+constructors compute the set of    |
+free local variables of function   |
+nodes                              |
+                                   | Various optimizations will be here:
+                                   | inlining, lambda-lifting of some
+                                   | functions, type analysis (the
+                                   | language is dynamically typed);
+                                   | this phase is not implemented yet
+The same representation of abstract|
+tree as before                     |
+                                   | Planner which lifts functions and=20
+                                   | constant data to the toplevel
+                                   | and determines the sequence of
+                                   | operations to perform inside each
+                                   | function
+A set of global definitions,       |
+including function bodies expressed|
+as almost flat sequences of        |
+statements (modulo conditionals)   |
+                                   | C coder which splits functions into
+                                   | fragments between calls (needed
+                                   | because of tail calls), allocates
+                                   | virtual registers, stack frame
+                                   | slots & temporary C variables,
+                                   | determines where the stack frame
+                                   | is active and generates C code
+C abstract syntax tree             |
+                                   | Pretty printer for a subset of
+                                   | C syntax
+The C output string                |
+
+Phases are executed strictly in order, with no overlap. Each
+representation of code uses different types with different structure,
+except that information about a name (11 fields) is shared between
+the "abstract" and "sequential" representation, and various atomic
+data are shared between many phases (e.g. literal values, source
+locations).
+
+The slowest part is currently the pretty printer.
+
+--=20
+   __("<         Marcin Kowalczyk
+   \__/       qrczak@knm.org.pl
+    ^^     http://qrnik.knm.org.pl/~qrczak/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

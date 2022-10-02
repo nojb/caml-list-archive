@@ -1,0 +1,223 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id 7C9F7BC0B
+	for <caml-list@yquem.inria.fr>; Sun, 10 Dec 2006 03:40:33 +0100 (CET)
+Received: from ipmail02.adl2.internode.on.net (ipmail02.adl2.internode.on.net [203.16.214.141])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id kBA2eUKQ025242
+	for <caml-list@inria.fr>; Sun, 10 Dec 2006 03:40:31 +0100
+Received: from ppp14-213.lns2.syd7.internode.on.net (HELO rosella) ([59.167.14.213])
+  by ipmail02.adl2.internode.on.net with ESMTP; 10 Dec 2006 13:10:25 +1030
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao8CAMYCe0U7pw7V/2dsb2JhbAA
+X-IronPort-AV: i="4.09,517,1157293800"; 
+   d="scan'208"; a="57978556:sNHT27685889"
+Subject: Re: [Caml-list] Today's inflamatory opinion: exceptions are bad
+From: skaller <skaller@users.sourceforge.net>
+To: Brian Hurt <bhurt@spnz.org>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <Pine.LNX.4.64.0612091823020.24657@barrayar.nyct.net>
+References: <Pine.LNX.4.64.0612091823020.24657@barrayar.nyct.net>
+Content-Type: text/plain
+Date: Sun, 10 Dec 2006 13:40:23 +1100
+Message-Id: <1165718423.31215.57.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.6.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at discorde with ID 457B739E.002 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; syntax:01 getline:01 filedesc:01 stdin:01 ocaml:01 'let:01 rec':01 ocaml:01 syntax:01 variants:01 hashtbl:01 hashtbl:01 endline:01 unreadable:01 compilation:01 
+
+On Sat, 2006-12-09 at 20:42 -0500, Brian Hurt wrote:
+> I think I've come to the conclusion that exceptions are bad.
+
+Surely this has been known for at least 10 years -- qualified
+by the comment "in the form they're in at the moment in most
+languages".
+
+Exceptions are basically a way to escape context, and possibly
+restart in an old context with a new continuation.
+
+Static exceptions are just fine, that is, those where you
+have a 'catch' which is visible at the throw point.
+
+But with full dynamic exceptions, there's no assurance of this.
+
+What Felix does is: it provides 'static exceptions' (actually
+it is a non-local goto), but you can wrap them in a function
+and pass a closure in the usual way.
+
+This ensures you cannot throw an exception which is not caught,
+and factors the static and dynamic parts of the 'path' of the
+thrown exception. The cost is passing the closure as an argument
+explicitly everywhere: both more typing for the programmer
+and loss of performance.
+
+
+> For the former, returning a variant type ('a option if nothing else) is a 
+> better idea, for (at least) two reasons. 
+
+The main difficulty with this is the syntax of matches.
+
+In 'micky mouse' cases it is easy:
+
+> let getline ?channel () =
+>  	match filedesc with
+>  		| Some(c) -> input_line c
+>  		| None -> (* read from stdin *) read_line ()
+
+
+But in REAL code 'the rest of the program' has to go
+where you wrote 'input_line c'.
+
+So you either suffer HUGE matches or you have to pass
+a LOT of context explicitly to an external function.
+
+In Ocaml it is every worse, since only 'let rec' allows
+you to ignore order of writing of functions, and that
+cannot span module boundaries easily (yeah, i know that
+is being worked on).
+
+Ocaml has a number of things which make matches better than
+'standard' match syntax -- polymorphic variants allow
+handling whole groups of cases, and alternatives can be
+joined provided they share arguments and guards.
+
+These things help (thanks!) but they aren't enough to
+reduce clutter to the same extent as exceptions do.
+
+
+> let fixed_input_line channel =
+>  	try
+>  		Some(input_line channel)
+>  	with
+>  		| End_of_file -> None
+> ;;
+> 
+> and call it instead.  
+
+That is useless in general .. see below ..
+
+> Except often times this function is hand-inlined and 
+> only serves to obfuscate the code.
+
+In Felix I sometimes get 'Not_found' exception .. and I am using
+hundreds of Hashtbl.find table key which I have to 'hand annotate'
+with code like
+
+	begin try Hashtbl.find table key 
+	with Not_found -> print_endline "ERROR "; raise MyError
+	end
+
+Your function above is actually useless, because it doesn't
+have an argument representing the current location in the
+code, nor does it allow a flexible error handling policy.
+
+These cases are usually real errors, I don't want any None
+case I just want to know where the error occurred. However
+sometimes  I have:
+
+	begin Hashtbl.find table key with Not_found -> [] end
+
+and that tends to be written out literally every time. Large
+numbers of named functions make for unreadable code too,
+require extra work to propagate across compilation unit
+boundaries, and can make a mess of your build system
+in Ocaml (because you really have to define that
+function in the first translation unit that uses it,
+since Ocaml can't propagate functions backwards).
+
+> This does force error handling to be *somewhat* local, but I think this is 
+> a good thing, not a bad thing.  
+
+I think that is only half the story. Localisation is a key
+concept in programming -- one which researchers don't seem
+to have paid much attention to.
+
+The implication is that if there are case where you want
+thing localised .. there are cases where you don't :)
+
+Most C++ programmers will tell you exceptions provide a welcome
+relief from C error handling.
+
+So I would put the issue more like: programmers need
+control over the localisation.
+
+For example in Haskell you could use a monad to obtain a secure,
+well principled, but 'not so local' way of handling
+exceptions.
+
+
+> The farther away the error handling is 
+> from the error source, the harder it is to figure out what caused the 
+> error, and what to do about it (other than just die).  If that's the 
+> behavior I want, it's easy to just do:
+>  	| Read_error (_) -> exit (-1)
+
+Felix libraries do that. If there's a program error ..
+it just aborts. 
+
+> I suppose you could want to write code like "normally use conjugate 
+> gradiant, unless you hit a problem, in which case back off and do the much 
+> more numerically stable (if slower) gaussian elimination", with the 
+> definition of "problem" being "hit a signalling float".  But this is very 
+> much the exception that proves the rule- this is how rarely exceptions are 
+> usefull.
+
+I agree with your sentiments, but not the implied argument.
+
+Basically we have exceptions because we have stacks.
+
+If we did everything on the heap, and used continuations,
+there would be no need for exceptions. Instead you'd just
+choose which continuation to run next.
+
+With that kind of programming model, especially one supported
+with multiple threads of control (such as in Felix) new
+development paradigms develop. If I may give just one example,
+consider GLR parsing. Instead of backtracking -- which for
+parsers cannot be generalised using a stack -- you spawn
+parser threads.
+
+With a suitable tool, you can do this .. but it is quite
+hard to do natively -- the stack gets in the way, time
+and again.
+
+> The fact that I always feel dirty when I do this, and feel the need to 
+> include a comment defending this decision is, I think, indicative ("Hmmm. 
+> This means something!" -- Closet Encounters of the Nerd Kind).  
+
+Lol!
+
+> My point here is this: Ocaml is not Java (a fact we should all be 
+> gratefull for, IMHO).  Simply because Java and C++ do something, doesn't 
+> mean that it's a good thing to do.
+
+Ocaml has exceptions because it uses a stack model.
+
+It has 'bad' exceptions because that's all we really know
+how to do. Perhaps an expert would comment but I see
+activity on delimited continuations (which I don't understand)
+which looks like it is making progress.
+
+> Major changes to the language itself I see as unlikely in the near term. 
+
+IMHO: The Ocaml team has shown a willingness -- even eagerness -- to
+make quite major changes -- polymorphic variants, labelled arguments
+being two that come to mind. Some are less obvious but probably
+also classify in terms of difficulty, such as inter-module
+recursion.
+
+But for changes you have to remember they're French!
+
+"It works in practice .. but does it work in theory?"
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

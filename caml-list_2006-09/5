@@ -1,0 +1,161 @@
+Return-Path: <tews@cs.ru.nl>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 39AB7BF95
+	for <caml-list@yquem.inria.fr>; Fri,  1 Sep 2006 11:26:43 +0200 (CEST)
+Received: from pandora.cs.kun.nl (pandora.cs.kun.nl [131.174.33.4])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k819QecY001980
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Fri, 1 Sep 2006 11:26:42 +0200
+Received: from tandem.cs.ru.nl [131.174.142.18]  (helo=tandem.cs.ru.nl)
+	by pandora.cs.kun.nl (8.13.7/5.9) with ESMTP id k819Mb7m001392
+	for <caml-list@inria.fr>; Fri, 1 Sep 2006 11:26:34 +0200 (MEST)
+Received: from tews by tandem.cs.ru.nl with local (Exim 4.62)
+	(envelope-from <tews@tandem.cs.ru.nl>)
+	id 1GJ5FC-0004fP-1c
+	for caml-list@inria.fr; Fri, 01 Sep 2006 11:23:22 +0200
+From: Hendrik Tews <tews@cs.ru.nl>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] SafeUnmarshal: questions/problems/timings
+References: <17652.53276.522158.649480@tandem.cs.ru.nl>
+	<DC78C5F1-121B-4E73-82FA-D5FCAA074D6F@pps.jussieu.fr>
+Date: Fri, 01 Sep 2006 11:23:22 +0200
+In-Reply-To: <DC78C5F1-121B-4E73-82FA-D5FCAA074D6F@pps.jussieu.fr>
+ (=?iso-8859-1?Q?Gr=E9goire?=
+	Henry's message of "Thu, 31 Aug 2006 12:01:19 +0200")
+Message-ID: <wwufyfcos8l.fsf@tandem.cs.ru.nl>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) Emacs/21.4 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Spam-Score: 1.567 (*) BAYES_50
+X-Scanned-By: MIMEDefang 2.56 on 131.174.33.4
+X-Miltered: at concorde with ID 44F7FCD0.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; hendrik:01 tews:01 tews:01 timings:01 gregoire:01 gregoire:01 hendrik:01 syntax:01 parser:01 recursive:01 parser:01 flags:01 nativeint:01 nativeint:01 ocaml:01 
+
+Grégoire Henry <gregoire.henry@pps.jussieu.fr> writes:
+
+   Hendrik wrote:
+
+   > 1. I made some measurements that suggest that the
+   >    unmarshal has quadratic complexity in the data size, see
+
+   Therefore, if your data contains shared parts but no cycle, then it
+   should be close to linear. Currently, mapping shared blocks to their
+   type is represented by an association list: accessing such type
+   information could explain this quadratic behaviour.
+
+That would explain something: An association list hardly scales
+to several megabyte of data.
+
+   Could you please send us more information about the shape of your data
+   (sharing or not, cycles or not, and wether sharing increase linearly
+   or not with the size)?
+
+The data contains sharing and cycles. I have no idea about the
+height of the cycles. It might well be the case that the amount
+of shared data grows faster than the overal size. But almost all
+shared data has type string * int * int.
+
+The data are abstract syntax trees of C++ programs (produced by a
+modified elsa/elkhound parser). Its type is defined with about 40
+recursive variant and record types. Its monomorphic, no aliasing
+or other fancy features. I would say the type is bigger, but not
+more complex than "int list". I would be really surprised if the
+stronly connected components are necessary for my application.
+
+I am working on a release of the modified elsa parser (hopefully
+early next week). Then you can examine the data and its type
+yourself.
+
+Maybe you can follow the approach of the Marshal module, where
+the user can choose (via the flags) between different algorithms?
+
+   > 2.	    Objective Caml version 3.09.3+dev0+ty1
+   >
+   >     # SafeUnmarshal.copy [^nativeint^] 4;;
+   >     Segmentation fault
+
+   See your fifth question :)
+
+I don't quite understand. My point is that even if nativeint is
+not supported yet, it should not end in a segmentation fault,
+should it?
+
+   My hope for reducing the complexity is to make some "pre-processing"
+   on the value when the unmarshaller reallocates it in the memory.
+   In this case, the Check.check function can't operate on "standard"
+   values, and should not be exported.
+
+   Yet I don't know if the "preprocessor" would be tightly bound to the
+   unmarshaller or have a chance to be exported too.
+
+   We can keep exporting a quadratic check for "standard" values.
+
+My application scenario is as follows: I have this big C++
+program (a C++ parser) that eventually generates an ocaml value
+(the abstract syntax tree of a C++ program, possibly > 10MB). I
+would then like to enter the clean world of ocaml to
+manipulate/process those abstract syntax trees. 
+
+If everything goes wrong I would first like to check the
+integrety of the abstract syntax tree. If the integrety check
+fails I need to know which node and which of its fields contain
+the bad data (otherwise I can't fix the problem). To locate the
+bad data I currently invoke check on the top node, and if it
+fails I call it on the child nodes and descend into one for which
+the check fails. That is, I invoke check very often, but always
+on the same unmodified data.
+
+It would be nice if the interface of SafeUnmarshal permits this
+kind of use. What's necessary is 
+- either a fast unmarshal function with the ability to output
+  some error trace if requested
+- or a check function that is fast as long as one works on the
+  same unmodified data.
+
+
+   >    I would strongly suggest to replace the catch all cases
+   >
+   >     | _ -> false
+   >
+   >    in check.ml with some more precise code (it took me several
+   >    hours of bug hunting until I found out that the above line
+   >    made my unmarshal fail without even looking at the
+   >    nativeints).
+
+   Something like printing the type clash (looking for ty_xx, found ty_yy)?
+
+   Or pretty-printing part of the value that have been checked before
+   failure?
+
+No, we probably have some misunderstanding here. I meant the
+following: Instead of 
+
+      | _ -> false
+
+enumerate all possible constructors and carefully distinguish
+those cases for check should return false from those cases that
+have not been implemented yet and which should therefore trigger
+an assertion. (Because: your original code delivered false on a
+nativeint. If it delivered an assertion instead I would have
+immediately known that nativeints are not supported. Instead I
+spent several hours to search for the inconsistency in my data.)
+
+
+I tell you how to reproduce those unmarshals that run for hours
+when I made the release of the modified elsa parser. I would be
+very much interested in trying a new version of SafeUnmarshal,
+especially one where the association list problem has been fixed
+(I still have a problem in one ast of 4.7MB, it's only that check
+runs from more than 2 hours on it, so I can't track it)
+
+Bye,
+
+Hendrik
+
+
+PS. I assume that Michel Mouny and Grégoire Henry are subscribed
+to the caml list, so I don't cc them.
+

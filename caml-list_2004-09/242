@@ -1,0 +1,129 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id FAA08007; Sat, 11 Sep 2004 05:16:07 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA06486 for <caml-list@pauillac.inria.fr>; Sat, 11 Sep 2004 05:16:06 +0200 (MET DST)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id i8B3G3rh022632;
+	Sat, 11 Sep 2004 05:16:04 +0200
+Received: from [192.168.1.200] (ppp210-32.lns2.syd3.internode.on.net [203.122.210.32])
+	by smtp1.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id i8B3G14Y058185;
+	Sat, 11 Sep 2004 12:46:01 +0930 (CST)
+Subject: Re: [Caml-list] Gripes with array
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: Damien Doligez <damien.doligez@inria.fr>
+Cc: caml users <caml-list@inria.fr>
+In-Reply-To: <1094866987.23076.132.camel@pelican.wigram>
+References: <200409090310.29295.jon@jdh30.plus.com>
+	 <EA60BA7F-0243-11D9-AAE1-00039310CAE8@inria.fr>
+	 <200409091758.05679.jon@jdh30.plus.com>
+	 <BD38E8B6-032F-11D9-8FD7-00039310CAE8@inria.fr>
+	 <1094866987.23076.132.camel@pelican.wigram>
+Content-Type: text/plain
+Message-Id: <1094872560.23076.176.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 11 Sep 2004 13:16:00 +1000
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 41426DF3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 sourceforge:01 2004:99 2004:99 damien:01 initialising:01 initialising:01 'object':01 doubly:01 struct:01 pia:99 pia:99 prev:01 list':01 pointers:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sat, 2004-09-11 at 11:43, skaller wrote:
+> On Fri, 2004-09-10 at 23:45, Damien Doligez wrote:
+> 
+> >  An intermediate solution would
+> > be to make a "Array.unsafe_make" primitive, which would use memset 
+> > instead of initialising the array properly.  
+
+> 
+> AFAICS tracking how much of an array is initialised
+> with an index the GC can use costs a single
+> comparison when you're not initialising arrays.
+
+Specifically: I assume there is some GC 'object'
+containing the state data for the collector.
+
+Suppose we add a doubly linked list
+of the type
+
+struct pia { 
+  pia *next; 
+  pia *prev; 
+  caml_heap_block *block; 
+  unsigned long index; 
+} *pial;
+
+to the GC state data. pial means
+'pointer to initialising array list'
+
+In order to sweep a block *p for pointers,
+you'd need to do this:
+
+if (pial == NULL) usual_scan(p)
+else {
+  unsigned long index = find_index(pias,p);
+  if (index) scan_array(p,index));
+  else usual_scan(p);
+} 
+
+usual_scan() is the usual scanning algorithm
+for a heap block, array_scan is a special
+one where the initialised block length is
+tracked. The index is incremented when filling
+in the array. If the fill is using a fixed value,
+every 4K elements, if a function, each element.
+
+All the scan calls are tail recurisve.
+I imagine usual_scan and array_scan would
+be the different entry points to the same
+routine. Clearly the array initialiser
+has to be able to add and remove a the pia descriptor
+from the list. In addition, the compactor would
+need to adjust the heap pointers in the list.
+
+So in the case we're not currently initialising
+an array, we require one memory fetch, a load
+of the value 'pial'.
+
+Perhaps 'pial' would reside in the cache,
+even if it does it is displacing one other value.
+So there is a definite cost for all code with
+this technique.
+
+BTW: the Felix collector has an array index count
+in every heap header block. The actual block
+size is independent of this count. As I understand
+it the block size indicator in Ocaml is *also* used
+to determine string and array sizes which prevents
+it being adjusted dynamically during initialisation?
+
+This would be in case there is an exception thrown 
+and the array become prematurely unreachable,
+since otherwise the array can't be disposed until
+it is initialised, and the disparity between
+the dynamic and static length would not matter.
+The static length is required to free the memory.
+
+This suggests an alternate solution with zero
+impact on the sweep: swap the meaning of the
+length count in the heap block and pial list.
+
+This means the 'free' routine that disposes
+of unreachable heap memory would have to check
+the list to find the real memory length.
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

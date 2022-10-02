@@ -1,0 +1,85 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA07450; Wed, 29 Oct 2003 08:23:31 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA19380 for <caml-list@pauillac.inria.fr>; Wed, 29 Oct 2003 08:23:30 +0100 (MET)
+Received: from grisu.bik-gmbh.de (grisu.bik-gmbh.de [217.110.154.194])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h9T7NT123756
+	for <caml-list@inria.fr>; Wed, 29 Oct 2003 08:23:29 +0100 (MET)
+Received: from bik-gmbh.de ([192.168.125.193])
+	by grisu.bik-gmbh.de (8.12.8p2/8.12.8) with ESMTP id h9T7NND5063490;
+	Wed, 29 Oct 2003 08:23:24 +0100 (CET)
+	(envelope-from hars@bik-gmbh.de)
+Message-ID: <3F9F6AE6.9030102@bik-gmbh.de>
+Date: Wed, 29 Oct 2003 08:23:18 +0100
+From: Florian Hars <hars@bik-gmbh.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.5) Gecko/20030925
+X-Accept-Language: en-us, de-de, en
+MIME-Version: 1.0
+To: Dustin Sallings <dustin@spy.net>
+CC: caml-list@inria.fr
+Subject: Re: [Caml-list] newbie type problem
+References: <087CB9D7-05FB-11D8-B1A2-000393DC8AE4@spy.net>
+In-Reply-To: <087CB9D7-05FB-11D8-B1A2-000393DC8AE4@spy.net>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Status: No, hits=-2.6 required=5.0
+	tests=EMAIL_ATTRIBUTION,IN_REP_TO,QUOTED_EMAIL_TEXT,REFERENCES,
+	      REPLY_WITH_QUOTES,USER_AGENT_MOZILLA_UA,X_ACCEPT_LANG
+	version=2.55
+X-Spam-Checker-Version: SpamAssassin 2.55 (1.174.2.19-2003-05-19-exp)
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; florian:01 hars:01 hars:01 bik-gmbh:01 caml-list:01 newbie:01 evt:99 struct:01 textfile:01 cleanup:01 dangling:01 florian:01 checking:01 match:02 float:02 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Dustin Sallings wrote:
+>     Well, part of the problem is that my log files aren't necessarily 
+> sequential, so I have to be able to go back to any point in time and 
+> update the thing.
+
+Last time I had that problem I used two structures: one to keep the open events 
+that come in from the logfiles and one to keep the data for the complete 
+transactions where I have read all the relevant events.
+If your logfiles are line-oriented (as these critters tend to be), you might 
+want to write a function thats folds a function over all lines of a text file.
+Then your program will look something like (add error checking, logic for 
+handling overlapping transactions of the same type and missing functions to taste):
+
+type evt = Start of string * float | End of string * float | Junk
+
+module M = Map.make (struct type t = string let compare = compare end)
+
+let parse_line s =
+   if is_start s then
+     Start (get_transaction_type s, get_time_form_log_line s)
+   else if is_end s then
+     End (get_transaction_type s, get_time_from_log_line s)
+   else
+      Junk
+
+let operate_on_line (start_events, transactions as init) s =
+   match parse_line s with
+   | Junk -> init
+   | Start (t_type, time) ->
+         M.add t_type time start_events, transactions
+   | End (t_type, time) ->
+	let start_time = M.find t_type start_events in
+	let l = try M.find t_type transactions with Not_found -> [] in
+         M.remove t_type start_events,
+         M.add t_type ((time - start_time)::l) transactions
+
+let parse_logfile filename =
+   let ic = open_in filename in
+   let start_events, transactions =
+     Textfile.fold operate_on_line (M.empty, M.empty) ic in
+   close_in ic;
+   cleanup_dangling_events start_events transactions
+
+let _ = print_transaction_info (parse_logfile "my_logfile")
+
+Yours, Florian.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

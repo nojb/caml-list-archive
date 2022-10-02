@@ -1,0 +1,213 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA01133; Thu, 30 Jan 2003 20:37:04 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA01100 for <caml-list@pauillac.inria.fr>; Thu, 30 Jan 2003 20:37:03 +0100 (MET)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h0UJb2v28333
+	for <caml-list@inria.fr>; Thu, 30 Jan 2003 20:37:02 +0100 (MET)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Thu, 30 Jan 2003 13:36:41 -0600
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Thu, 30 Jan 2003 13:36:40 -0600
+Date: Thu, 30 Jan 2003 13:46:14 -0600 (CST)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Olivier Andrieu <andrieu@ijm.jussieu.fr>
+cc: Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] @, List.append, and tail recursion
+In-Reply-To: <15929.27280.245255.70626@akasha.ijm.jussieu.fr>
+Message-ID: <Pine.LNX.4.33.0301301335570.3577-400000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: MULTIPART/MIXED; BOUNDARY="336237089-1379523458-1043955974=:3577"
+X-OriginalArrivalTime: 30 Jan 2003 19:36:40.0812 (UTC) FILETIME=[E982FAC0:01C2C896]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+  This message is in MIME format.  The first part should be readable text,
+  while the remaining parts are likely unreadable without MIME-aware tools.
+  Send mail to mime@docserver.cac.washington.edu for more info.
+
+--336237089-1379523458-1043955974=:3577
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+
+
+For short lists, this is the worst performer overall.  I whipped up a 
+quick microbenchmark to compare the various implementations- the three 
+implementations are included in this email.  The three programs are:
+
+list1.ml: lappend uses the @ operator to append the list
+
+list2.ml: uses local rev_append and rev functions (similiar to those in 
+List) to append the list
+
+list3.ml: uses Olivier's set_cdr function.
+
+The results I saw (compiling with ocamlopt -o list list.ml on a 1.4GHz P4
+running Linux and ocaml 3.06) are:
+
+list1: 1.462s
+list2: 1.757s
+list3: 1.824s
+
+List2 is about 17% slower than list1, while list3 is almost 20% slower 
+than list1, and 4% slower than list2.
+
+Brian
+
+
+On Thu, 30 Jan 2003, Olivier Andrieu wrote:
+
+>  Brian Hurt [Thursday 23 January 2003] :
+>  > I hit a bug recently wiith @ and List.append.  Since they're recursive, 
+>  > not tail-recursive, on long enough lists Ocaml thinks you've gone 
+>  > infinitely recursive and aborts. 
+> 
+>  > List.append x [] ;;
+>  > Exits with:
+>  > Stack overflow during evaluation (looping recursion?).
+>  > 
+>  > So does:
+>  > x @ [] ;;
+> (not surprising, List.append 's definition is (@))
+> 
+>  > And it has occured to me that all of these forms *should* be
+>  > optimizable into loops.  The general case would work something like
+>  > this in C:
+>  > 
+>  > struct list_t {
+>  >     void * datum;
+>  >     struct list_t * next_p;
+>  > }
+>  > 
+>  > struct list_t * foo (struct list_t * x) {
+>  >     struct list_t * retval = NULL;
+>  >     struct list_t ** ptr_pp = &retval;
+>  > 
+>  >     while (x != NULL) {
+>  >         struct list_t * temp = alloc(sizeof(struct list_t));
+>  >         *ptr_pp = temp;
+>  >         temp->datum = expr(x->datum);
+>  >         temp->next_p = NULL; /* be nice to the GC */
+>  >         ptr_pp = &(temp->next_p);
+>  >         x = x->next_p;
+>  >     }
+>  >     return retval;
+>  > }
+> 
+> Well, all of this can be translated directly to caml, using the famous
+> Obj module. All you need is a lispish setcdr function :
+> 
+> ,----
+> | let setcdr : 'a list -> 'a list -> unit = fun c v -> 
+> |   let c = Obj.repr c in
+> |   assert(Obj.is_block c) ;
+> |   Obj.set_field c 1 (Obj.repr v)
+> `----
+> 
+> Then one can write a tail-recursive append or a tail-recursive map :
+> ,----
+> | let tr_append l1 l2 =
+> |   let rec proc cell = function
+> |     | [] ->
+> | 	setcdr cell l2
+> |     | x :: l -> 
+> | 	let nxt = [ x ] in
+> | 	setcdr cell nxt ;
+> | 	proc nxt l
+> |   in
+> |   match l1 with
+> |   | [] -> l2
+> |   | x :: l ->
+> |       let head = [ x ] in
+> |       proc head l ;
+> |       head
+> | 	
+> | let tr_map f l = 
+> |   let rec proc cell = function
+> |     | [] -> ()
+> |     | x :: l -> 
+> | 	let nxt = [ f x ] in
+> | 	setcdr cell nxt ;
+> | 	proc nxt l
+> |   in
+> |   match l with
+> |   | [] -> [] 
+> |   | x :: l ->
+> |       let head = [ f x ] in
+> |       proc head l ;
+> |       head
+> `----
+> This seems safe to me, as setcdr is only called on new cons cells, so
+> it shouldn't mess up the arguments.
+> 
+> Anyway, the hole abstraction thing is cleaner but needs compiler
+> support. 
+> 
+> 
+
+
+--336237089-1379523458-1043955974=:3577
+Content-Type: TEXT/PLAIN; charset=US-ASCII; name="list1.ml"
+Content-Transfer-Encoding: BASE64
+Content-ID: <Pine.LNX.4.33.0301301346140.3577@eagle.ancor.com>
+Content-Description: uses @ operator
+Content-Disposition: attachment; filename="list1.ml"
+
+DQpsZXQgbGFwcGVuZCB4IHkgPSB4IEAgWyB5IF0gOzsNCg0KbGV0IG1ha2Vs
+aXN0IGMgPQ0KICAgIGxldCByZWMgbWFrZWxpc3RfaW50IGMgYWNjdW0gPQ0K
+ICAgICAgICBpZiAoYyA+IDApIHRoZW4NCiAgICAgICAgICAgIG1ha2VsaXN0
+X2ludCAoYyAtIDEpIChsYXBwZW5kIGFjY3VtIGMpDQogICAgICAgIGVsc2Ug
+DQogICAgICAgICAgICAobGFwcGVuZCBhY2N1bSBjKQ0KaW4NCiAgICBtYWtl
+bGlzdF9pbnQgYyBbXQ0KOzsNCg0KbGV0IF8gPSBtYWtlbGlzdCA1MDAwOzsN
+Cg==
+--336237089-1379523458-1043955974=:3577
+Content-Type: TEXT/PLAIN; charset=US-ASCII; name="list2.ml"
+Content-Transfer-Encoding: BASE64
+Content-ID: <Pine.LNX.4.33.0301301346141.3577@eagle.ancor.com>
+Content-Description: uses List.rev
+Content-Disposition: attachment; filename="list2.ml"
+
+DQpsZXQgcmVjIHJldl9hcHBlbmQgeCB5ID0NCiAgICBtYXRjaCB4IHdpdGgN
+CiAgICAgICAgW10gLT4geQ0KICAgICAgICB8IGggOjogdCAtPiByZXZfYXBw
+ZW5kIHQgKGggOjogeSkNCjs7DQoNCmxldCByZXYgeCA9DQogICAgbGV0IHJl
+YyByZXZfaW50IHggYWNjdW0gPQ0KICAgICAgICBtYXRjaCB4IHdpdGgNCiAg
+ICAgICAgICAgIFtdIC0+IGFjY3VtDQogICAgICAgICAgICB8IGggOjogdCAt
+PiByZXZfaW50IHQgKGggOjogYWNjdW0pDQogICAgaW4NCiAgICAgICAgcmV2
+X2ludCB4IFtdDQo7Ow0KDQpsZXQgbGFwcGVuZCB4IHkgPSANCiAgICByZXZf
+YXBwZW5kIChyZXYgeCkgKCBbIHkgXSApIDs7DQoNCmxldCBtYWtlbGlzdCBj
+ID0NCiAgICBsZXQgcmVjIG1ha2VsaXN0X2ludCBjIGFjY3VtID0NCiAgICAg
+ICAgaWYgKGMgPiAwKSB0aGVuDQogICAgICAgICAgICBtYWtlbGlzdF9pbnQg
+KGMgLSAxKSAobGFwcGVuZCBhY2N1bSBjKQ0KICAgICAgICBlbHNlIA0KICAg
+ICAgICAgICAgKGxhcHBlbmQgYWNjdW0gYykNCmluDQogICAgbWFrZWxpc3Rf
+aW50IGMgW10NCjs7DQoNCmxldCBfID0gbWFrZWxpc3QgNTAwMDs7DQo=
+--336237089-1379523458-1043955974=:3577
+Content-Type: TEXT/PLAIN; charset=US-ASCII; name="list3.ml"
+Content-Transfer-Encoding: BASE64
+Content-ID: <Pine.LNX.4.33.0301301346142.3577@eagle.ancor.com>
+Content-Description: uses Olivier's set_cdr
+Content-Disposition: attachment; filename="list3.ml"
+
+DQoNCmxldCBzZXRjZHIgOiAnYSBsaXN0IC0+ICdhIGxpc3QgLT4gdW5pdCA9
+IGZ1biBjIHYgLT4gDQogICAgbGV0IGMgPSBPYmoucmVwciBjIGluDQogICAg
+YXNzZXJ0KE9iai5pc19ibG9jayBjKSA7DQogICAgT2JqLnNldF9maWVsZCBj
+IDEgKE9iai5yZXByIHYpDQo7Ow0KDQpsZXQgbGFwcGVuZCBsMSBsMiA9DQog
+ICAgbGV0IHJlYyBwcm9jIGNlbGwgPSBmdW5jdGlvbg0KICAgICAgICB8IFtd
+IC0+DQogICAgICAgICAgICBzZXRjZHIgY2VsbCBsMg0KICAgICAgICB8IHgg
+OjogbCAtPiANCiAgICAgICAgICAgIGxldCBueHQgPSBbIHggXSBpbg0KICAg
+ICAgICAgICAgICAgIHNldGNkciBjZWxsIG54dCA7DQogICAgICAgICAgICAg
+ICAgcHJvYyBueHQgbA0KICAgIGluDQogICAgbWF0Y2ggbDEgd2l0aA0KICAg
+ICAgICB8IFtdIC0+IGwyDQogICAgICAgIHwgeCA6OiBsIC0+DQogICAgICAg
+ICAgICBsZXQgaGVhZCA9IFsgeCBdIGluDQogICAgICAgICAgICAgICAgcHJv
+YyBoZWFkIGwgOw0KICAgICAgICAgICAgICAgIGhlYWQNCjs7DQoNCmxldCBt
+YWtlbGlzdCBjID0NCiAgICBsZXQgcmVjIG1ha2VsaXN0X2ludCBjIGFjY3Vt
+ID0NCiAgICAgICAgaWYgKGMgPiAwKSB0aGVuDQogICAgICAgICAgICBtYWtl
+bGlzdF9pbnQgKGMgLSAxKSAobGFwcGVuZCBhY2N1bSBbIGMgXSkNCiAgICAg
+ICAgZWxzZSANCiAgICAgICAgICAgIChsYXBwZW5kIGFjY3VtIFsgYyBdKQ0K
+aW4NCiAgICBtYWtlbGlzdF9pbnQgYyBbXQ0KOzsNCg0KbGV0IF8gPSBtYWtl
+bGlzdCA1MDAwOzsNCg==
+--336237089-1379523458-1043955974=:3577--
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

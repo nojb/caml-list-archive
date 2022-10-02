@@ -1,0 +1,317 @@
+Return-Path: <martin.jambon@ens-lyon.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id EE732BC37
+	for <caml-list@yquem.inria.fr>; Fri, 12 Jun 2009 15:01:36 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsgBAPPuMUpCbwQak2dsb2JhbACYQQEBAQEJCQoJEgS3Z4QLBQ
+X-IronPort-AV: E=Sophos;i="4.42,209,1243807200"; 
+   d="scan'208";a="27924292"
+Received: from out2.smtp.messagingengine.com ([66.111.4.26])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 12 Jun 2009 15:01:36 +0200
+Received: from compute1.internal (compute1.internal [10.202.2.41])
+	by out1.messagingengine.com (Postfix) with ESMTP id A2C36357009;
+	Fri, 12 Jun 2009 09:01:35 -0400 (EDT)
+Received: from heartbeat2.messagingengine.com ([10.202.2.161])
+  by compute1.internal (MEProxy); Fri, 12 Jun 2009 09:01:35 -0400
+X-Sasl-enc: lPI0mjDmFieCiPaMshRYDNh9+NkH0PshErOnTQQ63OdJ 1244811694
+Received: from [192.168.1.10] (ALyon-157-1-70-183.w81-251.abo.wanadoo.fr [81.251.157.183])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id 392AB3922D;
+	Fri, 12 Jun 2009 09:01:34 -0400 (EDT)
+Message-ID: <4A325075.7040909@ens-lyon.org>
+Date: Fri, 12 Jun 2009 14:56:21 +0200
+From: Martin Jambon <martin.jambon@ens-lyon.org>
+User-Agent: Thunderbird 2.0.0.17 (X11/20081008)
+MIME-Version: 1.0
+To: Andrej Bauer <andrej.bauer@andrej.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] ocamllex and python-style indentation
+References: <7d8707de0906110557n6a1511a2k9f4f00827f954cb6@mail.gmail.com>	<4A310A5B.9010404@ens-lyon.org> <7d8707de0906120120x10cc8fe0p54adbd189003f3da@mail.gmail.com>
+In-Reply-To: <7d8707de0906120120x10cc8fe0p54adbd189003f3da@mail.gmail.com>
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ens-lyon:01 ocamllex:01 andrej:01 inserting:01 tokens:01 separators:01 separators:01 ocamllex:01 crlf:01 parser:01 lexing:01 lexing:01 printf:01 sprintf:01 failwith:01 
+
+Andrej Bauer wrote:
+> Thanks to Andreas, I'll have a look at the "old" code.
+> 
+> I think I understand the general idea of inserting "virtual" tokens,
+> but the details confuse me still. So starting with
+> 
+>> if True:
+>>     x = 3
+>>     y = (2 +
+>>       4 + 5)
+>> else:
+>>     x = 5
+>>     if False:
+>>         x = 8
+>>         z = 2
+> 
+> Martin suggests the following:
+> 
+>> {
+>> if True:
+>> ;
+>>    {
+>>    x = 3
+>>    ;
+>>    y = (2 +
+>>    ;
+>>      {
+>>      4 + 5)
+>>      }
+>>    }
+>> ;
+>> else:
+>> ;
+>>    {
+>>    x = 5
+>>    ;
+>>    if False:
+>>    ;
+>>        {
+>>        x = 8
+>>        ;
+>>        z = 2
+>>        }
+>>    }
+>> }
+> 
+> I have two questions. Notice that the { ... } and ( ... ) need not be
+> correctly nested (in the top half), so how are we going to deal with
+> this? The second question is, why are there the separators after and
+> just before "else:". I would expect separators inside { .... }, but
+> not around "else".
+
+Original example:
+
+if True:
+    x = 3
+    y = (2 +
+      4 + 5)
+else:
+    x = 5
+    if False:
+        x = 8
+        z = 2
+
+
+For pure indentation concerns, it is equivalent to:
+
+x
+  x
+  x
+    x
+x
+  x
+  x
+    x
+    x
+
+
+Which is parsed into:
+
+[
+  Line;
+  Block
+    [
+      Line;
+      Line;
+      Block
+       [
+         Line
+       ]
+    ];
+  Line;
+  Block
+    [
+       Line;
+       Line
+    ];
+  Block
+    [
+      Line;
+      Line
+    ]
+]
+
+
+I wrote the following code, which does the job.  You might want to use
+ocamllex instead in order to better manage newline characters (CRLF...), line
+number directives and allow input from something else than a file or in_channel.
+
+
+Note that the following must be rejected:
+
+x
+    x
+  x (indentation here could be only 0, 4 or more)
+
+
+But this is accepted:
+
+x
+    x
+x
+  x
+
+
+You could also enforce that the indentation of a block must be the current
+indentation + k, for example k=2 for the whole input.
+
+
+
+(******************* indent_parser.ml **********************)
+
+type indent_line = Lexing.position * (int * string)
+
+type indent_tree =
+    [ `Line of (Lexing.position * string)
+    | `Block of (Lexing.position * indent_tree list) ]
+
+
+let split s =
+  let len = String.length s in
+  let result = ref None in
+  try
+    for i = 0 to len - 1 do
+      if s.[i] <> ' ' then (
+	result := Some (i, String.sub s i (len - i));
+	raise Exit
+      )
+    done;
+     None
+  with Exit -> !result
+
+let parse_lines fname ic : indent_line list =
+  let lines = ref [] in
+  let lnum = ref 0 in
+  try
+    while true do
+      let bol = pos_in ic in
+      let s = input_line ic in
+      incr lnum;
+      match split s with
+	  None -> ()
+	| Some ((n, _) as x) ->
+	    let pos = {
+	      Lexing.pos_fname = fname;
+	      pos_lnum = !lnum;
+	      pos_bol = bol;
+	      pos_cnum = bol + n;
+	    } in
+	    lines := (pos, x) :: !lines
+    done;
+    assert false
+  with End_of_file -> List.rev !lines
+
+let parse_lines_from_file fname =
+  let ic = open_in fname in
+  try
+    let x = parse_lines fname ic in
+    close_in ic;
+    x
+  with e ->
+    close_in_noerr ic;
+    raise e
+
+let error pos msg =
+  let cpos = pos.Lexing.pos_cnum - pos.Lexing.pos_bol in
+  let msg =
+    Printf.sprintf "File %S, line %i, characters %i-%i:\n%s"
+      pos.Lexing.pos_fname pos.Lexing.pos_lnum 0 cpos msg
+  in
+  failwith msg
+
+let rec block_body cur_indent sub_indent cur_block l :
+    indent_tree list * indent_line list =
+  match l with
+      [] -> (List.rev cur_block, [])
+    | (pos, (n, s)) :: tl ->
+	if n = cur_indent then
+	  block_body cur_indent sub_indent (`Line (pos, s) :: cur_block) tl
+	else if n > cur_indent then (
+	  (match sub_indent with
+	       None -> ()
+	     | Some n' ->
+		 if n <> n' then
+		   error pos "Inconsistent indentation"
+	  );
+	  let sub_block, remaining =
+	    block_body n None [ `Line (pos, s) ] tl in
+
+	  block_body
+	    cur_indent (Some n) (`Block (pos, sub_block) :: cur_block)
+	    remaining
+	)
+	else
+	  (List.rev cur_block, l)
+
+
+let parse_indentation fname =
+  let l = parse_lines_from_file fname in
+  let result, remaining = block_body 0 None [] l in
+  assert (remaining = []);
+  result
+
+
+let test () =
+  let fname = Filename.temp_file "test" ".ind" in
+  let oc = open_out fname in
+  output_string oc "
+if True:
+    x = 3
+    y = (2 +
+      4 + 5)
+else:
+    x = 5
+    if False:
+        x = 8
+        z = 2
+";
+  close_out oc;
+
+  try
+    let result = parse_indentation fname in
+    Sys.remove fname;
+    result
+  with Failure msg as e ->
+    Printf.eprintf "%s\n%!" msg;
+    Sys.remove fname;
+    raise e
+
+
+(*****************************************************************)
+
+
+
+
+
+
+> Presumably the intermediate stage that I would preprocess the token
+> stream would have to know about indentation levels. I have not tried
+> this, but ocaml lexer will correctly match things like
+> 
+> | '\n' [' ' '\t']* -> { INDENTATION (compute_indentation (lexeme buf)) }
+> 
+> Yes?
+
+Kind of.  Don't discard the rest of the line...
+If you have a choice, reject tabs.
+Beware of CRLF newlines (\r\n) and missing \n before the end of file.
+Also ocamllex does not keep track of newlines automatically.  See the
+documentation for Lexing.lexbuf.
+
+
+
+Martin
+
+-- 
+http://mjambon.com/
+

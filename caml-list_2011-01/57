@@ -1,0 +1,105 @@
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p06D3YN2005346
+	for <caml-list@sympa-roc.inria.fr>; Thu, 6 Jan 2011 14:03:34 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmkBAI9MJU1CbwQZkWdsb2JhbACWCY4PFQEBAQEHDQoHEQQgvV4FhUyEa4Yi
+X-IronPort-AV: E=Sophos;i="4.60,283,1291590000"; 
+   d="scan'208";a="86165186"
+Received: from out1.smtp.messagingengine.com ([66.111.4.25])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 06 Jan 2011 14:03:28 +0100
+Received: from compute3.internal (compute3.nyi.mail.srv.osa [10.202.2.43])
+	by gateway1.messagingengine.com (Postfix) with ESMTP id A5E1E2133A
+	for <caml-list@inria.fr>; Thu,  6 Jan 2011 08:03:27 -0500 (EST)
+Received: from frontend2.messagingengine.com ([10.202.2.161])
+  by compute3.internal (MEProxy); Thu, 06 Jan 2011 08:03:27 -0500
+DKIM-Signature: v=1; a=rsa-sha1; c=relaxed/relaxed; d=messagingengine.com; h=date:from:to:subject:message-id:mime-version:content-type; s=smtpout; bh=POCZ7RjZNnvuFNdGtMFfGvu39nE=; b=NGtCq5MypN0i6s20hH5rLCTOPQo3sh+xYR1PnpgwqnmB9IaU/TQLRAuNQLbeGynoIFKkJHBynpI2kuDBSCxEK/fGZT5jF2pC4d7t+9GvHyJpeutULoH6+8NYIM81VbPX5v4gRDkuAA221W88rCQBSx88em59ApEGBj3EMunpWc4=
+X-Sasl-enc: oF9UoO0G+igxC1rRXmPPGpC5U11g426MBgNwUzaW8zai 1294319007
+Received: from localhost (user-12hdvta.cable.mindspring.com [69.22.255.170])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id 38735445F94
+	for <caml-list@inria.fr>; Thu,  6 Jan 2011 08:03:27 -0500 (EST)
+Date: Thu, 6 Jan 2011 08:05:39 -0500
+From: Jim Pryor <lists+caml@jimpryor.net>
+To: caml-list@inria.fr
+Message-ID: <20110106130539.GB12229@vaio.hsd1.pa.comcast.net>
+Mail-Followup-To: caml-list@inria.fr
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.5.21 (2010-09-15)
+Subject: [Caml-list] memory leak in toplevel? or, how to implement sizeof
+
+Starting up the toplevel fresh, with no .ocamlinit file, I see this:
+
+    $ /usr/bin/ocaml
+            Objective Caml version 3.12.0
+
+    # Gc.(compact();counters());;                         
+    - : float * float * float = (79217., 32932., 82668.)
+    # Gc.(compact();counters());;
+    - : float * float * float = (93530., 32932., 85816.)
+    # Gc.(compact();counters());;
+    - : float * float * float = (107843., 32932., 88964.)
+
+Why do both the minor_words and major_words keep climbing? Do these
+indicate the number of words _ever_ allocated, and so the overhead of
+doing the garbage collection and compacting has pushed them up? Or do
+they indicate the number of words _now_ allocated, so the fact that they
+continue to climb indicates something is leaking memory?
+
+Omitting the collection, I still see persisting climbs:
+
+    $ /usr/bin/ocaml
+            Objective Caml version 3.12.0
+
+    # Gc.(counters());;
+    - : float * float * float = (227355., 69894., 150533.)
+    # Gc.(counters());;
+    - : float * float * float = (240969., 73385., 154024.)
+    # Gc.(counters());;
+    - : float * float * float = (254583., 73385., 154024.)
+
+
+Two questions:
+
+1. Is there anything here to be worried about? A memory leak that needs
+to be tracked down? (If so, won't in be in the toplevel or some other
+piece of the core system? I haven't loaded any other libraries.) Or is
+there nothing to worry about?
+
+2. What bit of the Gc should I poll to find out how much memory I just
+allocated? I was trying to write a function like this:
+
+    let sizeof maker =
+        let baseline = get_baseline_from_gc () in
+        let res = maker () in
+        let final = get_final_from_gc () in
+        (final -. baseline, res);;
+
+This post at the Jane Street blog
+<http://ocaml.janestreet.com/?q=node/30> suggests (among other things)
+that:
+
+    # (Gc.stat()).Gc.minor_words;;
+
+is the right way to poll the Gc. However:
+
+    # (Gc.stat()).Gc.minor_words;;
+    - : float = 226623.
+    # (Gc.stat()).Gc.minor_words;;
+    - : float = 229632.
+    # (Gc.stat()).Gc.minor_words;;
+    - : float = 232641.
+    # let a = Some 1;;
+    val a : int option = Some 1
+    # (Gc.stat()).Gc.minor_words;;
+    - : float = 242131.
+    # (Gc.stat()).Gc.minor_words;;
+    - : float = 245140.
+
+says there are 9 words allocated just for each poll of the Gc, and
+then 9490 (!) words allocated for the `Some 1`. Something is amiss.
+
+
+-- 
+Jim Pryor
+profjim@jimpryor.net

@@ -1,0 +1,62 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q3KGg4kh002770
+	for <caml-list@sympa-roc.inria.fr>; Fri, 20 Apr 2012 18:42:04 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuYFAD+RkU+wCYo3/2dsb2JhbABEgxyCS6tRgQeCCQEBBSMPAQ0BATYCDwsYAgIFFgsCAgkDAgECAUUTCAKID6Z6boNDAY9bBoEvjBOCDYEYiGGNHIV0ikmCag
+X-IronPort-AV: E=Sophos;i="4.75,454,1330902000"; 
+   d="scan'208";a="154918995"
+Received: from mail.etorok.net ([176.9.138.55])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 20 Apr 2012 18:41:59 +0200
+Received: from [192.168.1.101] (unknown [86.125.225.83])
+	by mail.etorok.net (Postfix) with ESMTPSA id 1C48146A2
+	for <caml-list@inria.fr>; Fri, 20 Apr 2012 18:41:58 +0200 (CEST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/simple; d=etorok.net;
+	s=MAILOUT; t=1334940118;
+	bh=C5i+0U6fJZSUsrqPypoi//aR4MjfW5BT9zk6e3RIpH8=;
+	h=Message-ID:Date:From:MIME-Version:To:Subject:References:
+	 In-Reply-To:Content-Type:Content-Transfer-Encoding;
+	b=MVOx6KOzW52ZPT+syBGJVSs1VUdsHOO9CvBl3AP8gFfLCs2acRvgRnAZHta7f4iOC
+	 64utvVA3NEvMTvMlANRtCEqv9jp1jzzfp4RKJM3tENNfxGwPpbdeW4iD5X8cwwGzNg
+	 kOtgRBSSPlb2BdqHclzQFxPMZQMUdsz0y6EAVruA=
+Message-ID: <4F9191D5.6060809@etorok.net>
+Date: Fri, 20 Apr 2012 19:41:57 +0300
+From: =?UTF-8?B?VMO2csO2ayBFZHdpbg==?= <edwin+ml-ocaml@etorok.net>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:10.0.3) Gecko/20120329 Icedove/10.0.3
+MIME-Version: 1.0
+To: caml-list@inria.fr
+References: <CAHgca+9-K71NynNVzS0Stnb2v5Tc6n5ecCnJHZorhuB8y8EdTw@mail.gmail.com> <CAHgca+_OD0twkZ6WPc2bkQtEAS6Qnj1ogTDLE-S4esw6GKAV9A@mail.gmail.com>
+In-Reply-To: <CAHgca+_OD0twkZ6WPc2bkQtEAS6Qnj1ogTDLE-S4esw6GKAV9A@mail.gmail.com>
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-Virus-Scanned: clamav-milter 0.97.3 at mail
+X-Virus-Status: Clean
+Subject: Re: [Caml-list] Memory fragmentation
+
+On 04/20/2012 06:12 PM, SerP wrote:
+> Hi!
+> We have developped a daemon on ocaml using the lwt lib(libev). It processes about 800 requests per second, but it increases to 2 Gb in memory for a hour of work. We have studied the problem for a long
+> time, using mtrace, mallinfo and other tools,
+> and we tried to change GC params. We found out that setting up GC.minor_heap_size=10Mb а major_heap_increment=2Мb will make the daemon grow slower.
+> mallinfо shows that the memory (1,5G) is allocated using mmap (blkhd field in mallinfo struct) and arena size - about 20M In this case, first calls of GC.compact compress the daemon to 200 Mb (live
+> -110Mb) , and mallinfo show decreasing of total size of memory allocated by mmap. The daemon keeps growing, but it allocates the memory to arena (using brk), and calls of GC.compact leads to decrease
+> of heap_bytes to 200M, but arena size (1.5 Gb) does not decrease, just doing less uordblks and more fordblks (fileds I.e., after first calls of GC.compact, the daemon starts using brk much more than
+> mmap, and cant memory given back to the system.
+
+Sounds like a fragmentation problem in glibc's heap that causes increased VIRT usage.
+IIRC glibc has a default threshold of 128k for deciding to use brk() vs mmap(), and OCaml's default major_heap_increment (124k) is just below that,
+which would explain the behaviour you see, and also explain why using a larger major_heap_increment (2M) improves the situation:
+ brk() cannot free "holes", while mmap arenas can.
+
+You can use malloc_stats() to check whether OCaml gives back all memory to glibc or not, and you can try to use
+an alternative malloc implementation (like jemalloc) that might cope better with fragmentation.
+
+However this doesn't explain why memory keeps growing after a Gc.compact, unless calls to malloc
+are mixed between the OCaml runtime, Lwt and libev. If that is the case then maybe it would help
+to try and allocate memory in the OCaml's runtime by using mmap() directly.
+
+Is your application completely single-threaded (since you're using lwt), or do you also use multiple threads?
+I think that glibc caches mmap-ed areas even if you free them (i.e. they're still mapped into your process
+but they might be changed via mprotect() to PROT_NONE), which is especially a problem if you use multiple threads.
+
+Best regards,
+--Edwin

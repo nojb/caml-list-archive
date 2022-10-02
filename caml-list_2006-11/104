@@ -1,0 +1,156 @@
+Return-Path: <H.Tews@cs.ru.nl>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id BDBE6BC0A
+	for <caml-list@yquem.inria.fr>; Thu, 16 Nov 2006 17:11:39 +0100 (CET)
+Received: from smeltpunt.science.ru.nl (smeltpunt.science.ru.nl [131.174.16.145])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id kAGGBdNi023282
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Thu, 16 Nov 2006 17:11:39 +0100
+Received: from tandem.cs.ru.nl [131.174.142.18]  (helo=tandem.cs.ru.nl)
+	by smeltpunt.science.ru.nl (8.13.7/5.10) with ESMTP id kAGGBcPY016536
+	for <caml-list@inria.fr>; Thu, 16 Nov 2006 17:11:38 +0100 (MET)
+Received: from tews by tandem.cs.ru.nl with local (Exim 4.63)
+	(envelope-from <tews@tandem.cs.ru.nl>)
+	id 1Gkjpy-0004BE-Jj
+	for caml-list@inria.fr; Thu, 16 Nov 2006 17:11:38 +0100
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <17756.36282.578402.233704@tandem.cs.ru.nl>
+Date: Thu, 16 Nov 2006 17:11:38 +0100
+To: caml-list@inria.fr
+Subject: SafeUnmarshal: more problems
+X-Mailer: VM 7.19 under Emacs 21.4.1
+From: Hendrik Tews <H.Tews@cs.ru.nl>
+X-Scanned-By: MIMEDefang 2.56 on 131.174.16.145
+X-Miltered: at discorde with ID 455C8DBB.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; hendrik:01 tews:01 tews:01 ocaml:01 printf:01 printf:01 ocaml:01 hash:01 mut:01 mut:01 mutable:01 mutable:01 bug:01 bug:01 hash:01 
+
+Hi,
+
+in the context of olmar I am using the SafeUnmarshal module to
+check if some ocaml value created in C/C++ is consistent with its
+supposed type. I came across the following two problems:
+
+1. tyrepr's cannot be build in the program:
+
+  Assume I have a value v which is supposed to have type "blah list"
+  and suppose that SafeUnmarshal.check v [^ blah list ^] fails.
+
+  I would now like to diagnose whether the problem is in the list
+  structure or in one of the blah's inside the list. I would like
+  to write code like this
+
+    let check_list (value : 'a list) (list_elem_type : 'a tyrepr) =
+      if SafeUnmarshal.check value (Ty.apply list_elem_type [^ list ^])
+      then 
+	printf "everything fine\n"
+      else if SafeUnmarshal.check value [^ 'a list ^]
+      then begin
+	printf "list structure ok, problem inside\n";
+	(* check all the elements of the list *)
+	end 
+      else
+	printf "list structure broken";
+
+  In this code (Ty.apply list_elem_type [^ list ^]) should give
+  somthing like [^ list_elem_type list ^]. However, there is
+  nothing to build values of type tyrepr and 
+  [^ list_elem_type list ^] does not work because list_elem_type
+  is a variable and not an ocaml type expression.
+
+  I would even like to abstract away the list in the code above,
+  because I need the same for options, references and hash
+  tables.
+
+  What is missing, is function Ty.description -> tyrepr.
+
+
+2. Checking polymorphic types
+
+  Point 1 makes it clear that it makes sense to check against
+  poymorphic types, even against invalid polymorphic types. With
+  the latter I mean that I want
+
+     SafeUnmarshal.check (ref 2) [^ 'a ref ^]
+
+  to return true, because the reference cell is ok, EVEN THOUGH I
+  want 
+
+     SafeUnmarshal.from_string (Marshal.to_string (ref 2) []) [^ 'a ref ^]
+
+  to fail, because (ref 2) cannot safely given the type 'a ref.
+  In the current source SafeUnmarshal.from_string calls check, so
+  it is impossible to satisfay both requirements.
+
+  At the moment 
+
+     SafeUnmarshal.check (ref 2) [^ 'a ref ^]
+
+  fails, because there Check.check_int maps Tabstract to false
+  (similar to SafeUnmarshal.check 2 [^ 'a ^]). However, one can
+  also find the following code inside Check.check_block (which is
+  actually excuted before check_int fails:
+
+    | Trecord ntys when tag = 0 -> 
+	Array.length ntys = size && 
+	ObjHelpers.for_all2 
+	  (fun obj (_,mut,ty) ->
+	     let ty = cut_head_quantification ty in
+	     if mut && not (is_monomorphic ty) then false
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+	     else check_obj obj ty) 
+	  obj ntys
+
+  read mut as mutable (which apprears to be true for mutable
+  fields) then the marked line seems to be a check that mutable
+  fields must have monomorphic type. The trouble is only that
+  is_monomorphic returns true on [^ 'a ref ^].
+
+  Is this last point a bug or a feature?
+
+  Assuming it is a bug, how can I check for a mutable data
+  structure, such as a hash table, that the top level structure
+  is ok?
+
+
+Finally I would like to stress that the problems mentioned here
+(as well as the onces mentioned in August and other bugs (try
+SafeUnmarshal.check [| 2 |] [^ int array ^] )) come all from the
+use of catch all cases that deliver a value, like
+
+  and is_monomorphic_desc context desc =
+    match desc with
+	  ....
+    | ty -> true
+
+
+  and check_int i ty =
+    match Ty.repr ty with
+	....
+    | _ -> false
+
+
+I would like to suggest again to use only 
+
+    | _ -> assert false
+
+because the careful analysis necessary to justify the catch all
+cases has apparently not been done (and will not be redone on
+every change of the source). 
+
+Using assert false would also safe the users a lot of time,
+because they would immediately see that they hit an unsupported
+feature. 
+
+
+Bye,
+
+Hendrik
+

@@ -1,0 +1,137 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id EAA20063; Wed, 4 Aug 2004 04:39:10 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA17007 for <caml-list@pauillac.inria.fr>; Wed, 4 Aug 2004 04:39:08 +0200 (MET DST)
+From: effbiae@ivorykite.com
+Received: from ensim.smartydns22.com (ev1s-67-15-74-65.ev1servers.net [67.15.74.65] (may be forged))
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i742d7mL011045
+	for <caml-list@inria.fr>; Wed, 4 Aug 2004 04:39:08 +0200
+Received: from www.ivorykite.com (localhost.localdomain [127.0.0.1])
+	by ensim.smartydns22.com (8.12.10/8.12.10) with SMTP id i742d7SY018220
+	for <caml-list@inria.fr>; Wed, 4 Aug 2004 12:39:07 +1000
+Received: from 60.246.254.84
+        (SquirrelMail authenticated user effbiae@ivorykite.com)
+        by www.ivorykite.com with HTTP;
+        Wed, 4 Aug 2004 12:39:07 +1000 (EST)
+Message-ID: <36002.60.246.254.84.1091587147.squirrel@www.ivorykite.com>
+Date: Wed, 4 Aug 2004 12:39:07 +1000 (EST)
+Subject: [Caml-list] c is 4 times faster than ocaml?
+To: caml-list@inria.fr
+User-Agent: SquirrelMail/1.4.2
+MIME-Version: 1.0
+Content-Type: text/plain;charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Priority: 3
+Importance: Normal
+X-Miltered: at nez-perce with ID 41104C4B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; 'higher:01 level':01 resorting:01 shootout:01 bagley:01 shootout:01 mandrake:01 timings:01 cbs:99 0.54:01 0.51:01 0.51:01 optimise:01 prevost:01 ocamlopt:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+hello,
+
+my first post to the list.  not intended to be inflammatory or to generate
+ill feeling in any way. :)
+
+i am evaluating languages for implementing a fast dbms.  i would like to
+use a 'higher level' language without resorting to portable assembler. 
+ocaml looks really nice, and it drew my attention in doug's language
+shootout:
+ http://www.bagley.org/~doug/shootout/craps.shtml
+and i have noticed that it is used to win programming contests -- indeed
+the language for a discriminating hacker!
+
+it was with great hope that i started on my first benchmark -- testing
+what all fast dbmses use: mmap.  after a bit of searching, i found that
+Bigarray was the way to go (short of writing my own C extension).  the
+benchmark sources in c and ocaml are appended, along with the Makefile.
+
+in summary, on my  Mandrake 10  PIII 500 system, i get these timings:
+ $ time -p ./cbs 26         (* the C version *)
+ real 1.06
+ user 0.54
+ sys 0.51
+ $ time -p ./ocbs 26        (* the O'Caml version *)
+ real 2.95
+ user 2.39
+ sys 0.51
+the real time can vary a bit due to different states of cache, but user
+and sys remain fairly constant.  the real time is not significant for my
+purposes because the dbms will not be IO bound for most of it's queries.
+
+so there you have it!  i would really like to be able to optimise the
+ocaml benchmark to be within 10% of C.  i have read a post by John Prevost
+"mmap for O'Caml" in which he implies he wrote mmap primitives but not
+using the O'Caml-C interface.  what does he mean?  i assume Bigarray is
+written in the fastest possible way -- or is there a faster way?
+
+also note that i'll need msync, so i will need to extend O'Caml in some
+way regardless (unless there's some library out there for mmap that i
+haven't discovered).
+
+any help greatly appreciated,
+
+
+jack.
+$ cat Makefile
+oc:
+        ocamlopt -unsafe -inline 2 bigarray.cmxa unix.cmxa -o ocbs bs.ml
+c:
+        gcc -O3 -o cbs bs.c
+
+$ cat bs.ml
+let f x y z = x + y + z;;
+let g x = function y -> function z -> f x y z;;
+let h x = let k=1 in function y ->  f x y k;;
+let mapit =  let k=(-1) in function ty -> function fd ->
+ Bigarray.Array1.map_file fd ty Bigarray.c_layout true k;;
+let maprwbs=mapit Bigarray.int8_unsigned;;
+
+if Array.length Sys.argv = 2 then begin
+ let p=int_of_string Sys.argv.(1)
+ and fn=Sys.argv.(0) ^ ".bs" in
+  let fd=Unix.openfile fn [Unix.O_RDWR;Unix.O_CREAT;Unix.O_TRUNC] 0o640
+  and n=1 lsl p in
+   let _=Unix.lseek fd (n-1) Unix.SEEK_SET
+   and _=Unix.write fd "\000" 0 1
+   and _=assert (Unix.lseek fd 0 Unix.SEEK_END == n)
+   and ar=mapit Bigarray.int8_unsigned fd in
+    let _=for i=0 to n-1 do ar.{i} <- i done
+    and odds=ref 0 in for i=0 to n-1 do
+     if ar.{i} land 1 = 1 then odds:=!odds+1 done
+end else begin
+ print_endline "Usage: bs <power-of-2>" end;;
+
+$ cat bs.c
+#include <stdlib.h>
+#include <stdio.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+
+#define CHKact(x,act) do \
+ if(!(x)){fprintf(stderr,"!CHK (%s:%d)\n",__FILE__,__LINE__);act;} while(0)
+#define CHK(x) CHKact(x,return -1)
+#define CHKp(x) CHKact(x,perror(0);return -1)
+main(int argc,char**argv)
+{if(argc==2)
+ {char fn[1024];CHK(sprintf(fn,"%s.bs",argv[0]));int p=atoi(argv[1]);
+  int fd;CHKp(-1!=(fd=open(fn,O_RDWR|O_CREAT|O_TRUNC,S_IRUSR|S_IWUSR)));
+  int n=1<<p;lseek(fd,n-1,SEEK_SET);int zero=0;CHKp(write(fd,&zero,1)==1);
+  CHKp(lseek(fd,0,SEEK_END)==n);unsigned char*ar;
+  CHKp(-1!=(int)(ar=mmap(0,n,PROT_READ|PROT_WRITE,MAP_FILE|MAP_SHARED,fd,0)));
+  int i;for(i=0;i<n;++i)ar[i]=i;
+  int odds=0;for(i=0;i<n;++i)if(ar[i]&1)odds++;
+  CHKp(!munmap(ar,n));
+ }else fprintf(stderr, "Usage: %s <power-of-2>\n",argv[0]);
+}
+
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

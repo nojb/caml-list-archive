@@ -1,0 +1,121 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 9AC2CBC37
+	for <caml-list@yquem.inria.fr>; Mon, 11 Jan 2010 10:33:19 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ar8BAKN+SkvUnwckimdsb2JhbACDXpgBAQEBCgkMBxEGrD+LYYErgi5WBA
+X-IronPort-AV: E=Sophos;i="4.49,255,1262559600"; 
+   d="scan'208";a="44598331"
+Received: from relay.ptn-ipout02.plus.net ([212.159.7.36])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 11 Jan 2010 10:33:19 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApsEAFd/SkvUnw4T/2dsb2JhbACDXsUIi2GBK4IuVgQ
+Received: from pih-relay06.plus.net ([212.159.14.19])
+  by relay.ptn-ipout02.plus.net with ESMTP; 11 Jan 2010 09:33:18 +0000
+Received: from [87.115.174.155] (helo=leper.local)
+	 by pih-relay06.plus.net with esmtp (Exim) id 1NUGeD-0006QB-Rh; Mon, 11 Jan 2010 09:33:18 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Re: HLVM ray tracer performance
+Date: Mon, 11 Jan 2010 10:48:00 +0000
+User-Agent: KMail/1.9.9
+Cc: Jeff Shaw <shawjef3@msu.edu>
+References: <20100110132942.1995706rwh00q1zq@mail.msu.edu> <201001102014.29726.jon@ffconsultancy.com> <4B4A751E.1050905@msu.edu>
+In-Reply-To: <4B4A751E.1050905@msu.edu>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="utf-8"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <201001111048.01032.jon@ffconsultancy.com>
+X-Plusnet-Relay: 4da3ffacf5605095a4753c0a09ef3bf6
+X-Spam: no; 0.00; haskell:01 predictable:01 haskell:01 bounded:01 ocaml:01 lennart:01 non-trivial:01 compiler:01 compiler:01 command-line:01 ubuntu:98 12.:98 wholly:98 frog:98 threads:01 
+
+On Monday 11 January 2010 00:47:26 Jeff Shaw wrote:
+> > Are you running x64 or on Intel hardware? What results do you get for 12,
+> > 13 or 14 instead of 9?
+>
+> I am running an AMD Phenom 9950, but the Ubuntu I'm using is just
+> 32-bit given that we're running the same architecture.
+
+Then I'm even more surprised that you would see significantly different 
+results to mine.
+
+> I tried 5/ray.hs with level=12 instead of 9 but it ran into a 
+> stack overflow problem.
+
+Yes. Many of the Haskell versions regularly die with stack overflows. They are 
+not predictable.
+
+> When I increased the stack size it completed but 
+> it also took more time than 1/ray.hs, which required no stack size
+> increase.
+
+This is an interesting result. I hadn't noticed that the most optimized 
+Haskell implementation is not necessarily the fastest. However, I think I can 
+explain the phenomenon: with a huge number of spheres, some groups of spheres 
+(branches of scene tree) are always occluded and never need to be explicitly 
+generated but only the Haskell is generating the scene tree lazily. In fact, 
+it may be the case that with level->infinity only the Haskell required 
+bounded space.
+
+For example, at level=13 the 1/ray.hs Haskell takes 25.8s, 2/ray.hs takes 93s 
+and the 5/ray.ml OCaml takes 118s. Presumably Lennart made the more optimized 
+Haskell implementations eager in order to improve performance at level=9 but, 
+in doing so, he degraded performance for level>9.
+
+Unpredictable...
+
+> I made sure that the other arguments I fed it were the same. I 
+> think there is some problem that needs to be worked out in the 5/ray.hs.
+
+There is no easy solution to this because the performance is a non-trivial 
+function of "level" and "n".
+
+> I tried level=14 but I ran out of memory for 5/ray.ml and 5/ray.hs.
+
+But 1/ray.hs can handle level=14 and 15:
+
+$ time ./ray 14 512 >image.pgm
+
+real    0m27.581s
+user    0m26.790s
+sys     0m0.764s
+
+$ time ./ray 15 512 >image.pgm
+
+real    0m29.532s
+user    0m28.982s
+sys     0m0.552s
+
+In fact, that is faster than any other version.
+
+> It seems that 5/ray.ml and 5/ray.hs aren't quite equivalent in some
+> important way since 1/ray.ml is faster than 5/ray.ml for both level=9
+> and level=12.
+
+Did you mean .hs instead of .ml here?
+
+> Whether it's a code problem or compiler problem, I cannot 
+> say.
+
+The relative performance of the Haskell implementations also varies with 
+compiler versions, of course. I cannot tell when it will run out of memory or 
+even out of stack space. You just have to try it and, when Haskell dies with 
+a stack overflow after several minutes, you just have to tweak the 
+command-line parameters to try again until it happens to work.
+
+Finally, I'd add that this "benefit" of the Haskell will almost certainly 
+destroy its scalability in the parallel case because you'll have threads 
+competing to force the evaluation of thunks in the shared scene tree which 
+incurs global synchronization in wholly unpredictable ways (it even depends 
+upon the layout of the scene!). So, while this is academically interesting, 
+I'd argue that it is practically useless.
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/?e
+

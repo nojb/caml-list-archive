@@ -1,0 +1,249 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA03625 for caml-redist@pauillac.inria.fr; Tue, 16 May 2000 12:44:32 +0200 (MET DST)
+Resent-Message-Id: <200005161044.MAA03625@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA27803 for <weis@pauillac.inria.fr>; Tue, 16 May 2000 04:53:36 +0200 (MET DST)
+Received: from babbage.ececs.uc.edu (mail.ececs.uc.edu [129.137.8.2])
+	by nez-perce.inria.fr (8.10.0/8.10.0) with ESMTP id e4G2rZP02288;
+	Tue, 16 May 2000 04:53:35 +0200 (MET DST)
+Received: from gatekeeper-internal.ececs.uc.edu (gatekeeper-internal.ececs.uc.edu [129.137.8.10])
+	by babbage.ececs.uc.edu (8.9.3+Sun/8.9.3) with ESMTP id WAA21569;
+	Mon, 15 May 2000 22:53:26 -0400 (EDT)
+Date: Mon, 15 May 2000 22:53:26 -0400 (EDT)
+From: Hongwei  Xi  <hwxi@ececs.uc.edu>
+To: Pierre Weis <Pierre.Weis@inria.fr>
+cc: caml-list@inria.fr
+Subject: Re: reference initialization
+In-Reply-To: <20000515233316.57620@pauillac.inria.fr>
+Message-ID: <Pine.GSO.4.21.0005152159450.13064-100000@gatekeeper.ececs.uc.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Tue, 16 May 2000 12:44:32 +0200
+Resent-To: caml-redist@pauillac.inria.fr
+
+> When you need more complex initializations, then you need a smarter
+> version of Array.init (still you want to keep the same good properties
+> as the simple version).
+> 
+> For instance, a simple generalization of Array.init, that allows
+> access to the locations that are already initialized into the array,
+> could be written as:
+> 
+>   exception Uninitialized_access of int;;
+> 
+>   let initialize f n =
+>    if n = 0 then [||] else
+>    let get v i j =
+>     if j < i && j >= 0 then v.(j) else raise (Uninitialized_access j) in
+>    let v = Array.make n (f (get [||] 0) 0) in
+>    for i = 1 to n - 1 do
+>     v.(i) <- f (get v i) i
+>    done;
+>    v;;
+> 
+> Using initialize, we can easily define a vector containing the
+> fibonacci numbers:
+> 
+>   let init_fib g = function
+>     | 0 | 1 -> 1
+>     | n -> g (n - 1) + g (n - 2);;
+> 
+>   let fib10 = initialize init_fib 10;;
+>   val fib10 : int array = [|1; 1; 2; 3; 5; 8; 13; 21; 34; 55|]
+
+This looks pretty neat to me. Probably 'initialize' can be implemented
+in C so that we can squeeze out some extra efficiency.
+
+> Initialize provides the following properties:
+> 
+> If v is defined as ``let v = Array.initialize f n'' then
+> 
+>   1) v is completely initialized:
+>      for all i, v.(i) has been assigned exactly once during the
+>      initialization of v
+>   2) not yet initialized locations in v are never accessed during the
+>      initialization process:
+>      for all i, for all j, if j > i then the location j is not accessed during
+>      the initialization of v.(i)
+>   3) elements of v are values computed by f:
+>      for all i, v.(i) = f (fun i -> (Array.sub v 0 (i - 1)).(i)) (i)
+> 
+>   Once more there is no need to dynamically check accesses to a vector
+>   initialized unsing the function initialize.
+
+Yes, I thought along very much the same line.
+
+> 3) New random_initialize function for ``random'' initialization
+> ----------------------------------------------------------------
+> 
+> Now, you can still argue that you have even more complex
+> initialisation schemes: then you need to define a more complex
+> initialization function. For instance:
+> 
+> [random_initialize f i0 n] returns a vector [v] of length [n],
+> initialized using the function [f], starting from index [i0]. The
+> function [f] takes two arguments, an access function [g : int -> 'a]
+> that gives access to already initialized elements of the vector [v],
+> and an index [i]; given those arguments [f] returns a pair [next, a],
+> where [a] is the value to be stored at index [i] of vector [v], and
+> [next] the index of the next element of [v] to initialize. [f] should
+> raise the predefined exception [Exit] to mean that index [i] is out of
+> range, presumably at the end of initialization.
+> 
+> The following properties hold:
+> 
+> If v is defined as ``let v = random_initialize f i0 n'' then
+> 
+>   1) v is completely initialized:
+>      for all i, v.(i) has been assigned exactly once during the
+>      initialization of v
+>   2) not yet initialized locations in v are never accessed during the
+>      initialization process:
+>      for all i, for all j, if v.(j) has not yet been assigned then the
+>      location j is not accessed during the initialization of v.(i)
+>   3) all elements of v are values computed by calls to f.
+> 
+> Implementation
+> 
+>   (* Already_initialized is raised when there is an attempt to
+>      initialize an array location more than once. *)
+>   exception Already_initialized of int;;
+> 
+>   (* Partial_initialization is raised when there is a location that is
+>      not initialized at the end of initilization. *)
+>   exception Partial_initialization of int;;
+> 
+>   let random_initialize f i0 n =
+>    if n = 0 then [||] else
+>    let initialized = Array.make n 0 in
+>    let set v i a =
+>     if initialized.(i) = 0 then (initialized.(i) <- 1; v.(i) <- a)
+>     else raise (Already_initialized i) in
+>    let get v j =
+>     if j >= 0 && j < n && initialized.(j) = 1 then v.(j)
+>     else raise (Uninitialized_access j) in
+>    let nexti0, a0 = f (get [||]) i0 in
+>    let v = Array.make n a0 in
+>    set v 0 a0;
+>    let rec init i =
+>     let nexti, ai = f (get v) i in
+>     set v i ai;
+>     init nexti in
+>    try init nexti0 with
+>    | Exit ->
+>       for i = 0 to n - 1 do
+>        if initialized.(i) = 0 then raise (Partial_initialization i)
+>       done;
+>       Array.init n (fun i -> v.(i));;
+>
+> Example: we can define a suitable initialization function for your
+> example of combinatorial numbers,
+> 
+>   let init_chooses n get i =
+>    let next i j = if j <> i then j else n + 1 in
+>    let ai i = get (i - 1) * (n - i + 1) / i in
+>    if i = 0 then (next 0 n, 1) else
+>    if i = n then (next n 1, 1) else
+>    if i > n then raise Exit else 
+>    if i <= n / 2 then (next i (n - i), ai i)
+>    else (next i (n - i + 1), get (n - i));;
+> 
+>   let chooses n = random_initialize (init_chooses n) 0 (n + 1);;
+> 
+>   let v4 = chooses 4;;
+>   val v4 : int array = [|1; 4; 6; 4; 1|]
+
+I don't know about this. It seems a bit too involved to me
+(at this moment)
+
+> 4) Further work
+> ---------------
+> 
+> The general vector initialization function should probably take as
+> argument f a function that uses 2 functions get and set to handle the
+> initialized vector. In any case, the properties 1, 2, and 3 should
+> still hold.
+> 
+> 5) Conclusion
+> -------------
+> 
+> I'm not sure we need a complex additional machinery to solve a problem
+> that can be elegantly solved with some library functions (admittedly
+> at the price of some linear additional cost at initialization time);
+
+Me neither (at this moment).
+
+> however, following Xavier, I would also be glad to read articles on
+> dependant type systems and their applications to vector initialisation
+> (if any);
+
+Sorry. I don't have any paper on this subject :-)
+
+> also, I would be delighted to try such an experimental type
+> system, if it is tractable in practice (I mean, we don't want a type
+> system that obliges the programmer to rewrite his pattern matchings in
+> a strange and awful maneer, nor a type system that emits error
+> messages that are incredibly more difficult to understand than those
+> of usual ML typecheckers, nor a type system that is so slow that
+> modern machines are turned into good old Apple IIs, don't we ?).
+
+These are very legitimate points. The design of DML actually
+addresses all these points in certain ways as our goal is also
+towards having a practical programming system.
+
+> I mean, we don't want a type system that obliges the programmer to
+> rewrite his pattern matchings in a strange and awful maneer
+
+The problem here is that unlike ML, sequentiality of pattern
+matching must be taken into consideration in DML, but this can
+be done automatically using Laville's approach (with some
+modification).
+
+> type system that emits error messages that are incredibly more
+> difficult to understand than those of usual ML typecheckers
+
+I find that in practice, the location of a type error in a DML
+program is reported very accurately (mainly because that the user
+has to provide dependent type annotations). Unless one uses the
+type system to encode sophisticated information, the error messages
+are not so hard to understand. Of course, one needs to gain some
+exprience first but this is the same thing with ML.
+
+> nor a type system that is so slow that modern machines are turned
+> into good old Apple IIs, don't we ?).
+
+Yes, type-checking can be slow, but this is also the case in ML.
+I recently used Okasaki's parsing combinators to implement
+parsers; I noticed that ML type-checking in this case is
+indeed much slower (because larger higher-order types are involved)
+than average cases.
+
+A strong point of DML is its compatibility with ML. If you don't
+use dependent types, you won't pay the price (no type-checking
+slowdown). One can essentially just build a front-end. For OCaml,
+one may simply first try whether it is effective to eliminate run-
+time array bound checks; if it is good, further work can be done to
+support dependent refinement types; if it is not, then it is nothing
+more than a front-end. We need to make *no* changes to OCaml's backend!
+
+> also, I would be delighted to try such an experimental type system
+
+I would be happy to write such a front-end for OCaml, but I have
+some serious difficulties:
+
+(1) I am no expert of the OCaml front-end and often have
+serious difficulty figuring out the code, which is neat but
+has almost none comments.
+
+(2) The syntax for OCaml is evolving so fast recently; this makes
+it too difficult for me to support such a front-end even if it is
+written.
+
+If these problems can be addressed, such a front-end can be
+quickly constructed (my estimate: no more than 3 person * months
+work).
+
+Best Regards,
+
+--Hongwei
+
+

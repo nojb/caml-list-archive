@@ -1,0 +1,120 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA16515 for caml-redistribution; Mon, 30 Nov 1998 19:39:15 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA15857 for <caml-list@pauillac.inria.fr>; Mon, 30 Nov 1998 13:36:18 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id NAA16948;
+	Mon, 30 Nov 1998 13:35:53 +0100 (MET)
+Received: (from vouillon@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA02172; Mon, 30 Nov 1998 13:35:53 +0100 (MET)
+Message-ID: <19981130133553.45757@pauillac.inria.fr>
+Date: Mon, 30 Nov 1998 13:35:53 +0100
+From: Jerome Vouillon <Jerome.Vouillon@inria.fr>
+To: Anton Moscal <msk@post.tepkom.ru>, Didier.Remy@inria.fr
+Cc: caml-list@inria.fr
+Subject: Re: Objects as sums
+References: <19981126165842.07547@morgon.inria.fr> <Pine.LNX.4.03.9811281337550.22023-100000@post.tepkom.ru>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Mailer: Mutt 0.89.1
+In-Reply-To: <Pine.LNX.4.03.9811281337550.22023-100000@post.tepkom.ru>; from Anton Moscal on Sat, Nov 28, 1998 at 01:46:12PM +0300
+Sender: weis
+
+On Sat, Nov 28, 1998 at 01:46:12PM +0300, Anton Moscal wrote:
+
+[...]
+> This is not solution of my task. I want to simulate by ocaml classes the
+> following C++ program:
+> 
+> # include <stdlib.h>
+> 
+> enum {NODE, LEAF};
+> class Node;
+> class Leaf;
+> class Tree { public:
+>   virtual int tag () = 0;
+>   virtual Node * node () { abort (); return 0; }
+>   virtual Leaf * leaf () { abort (); return 0; }
+> };
+> 
+> class Leaf: public Tree { public:
+>   int val;
+>   int tag () { return LEAF; }
+>   Leaf * leaf () { return this; }
+> };
+> 
+> class Node: public Tree { public:
+>   Tree * l, * r;
+>   int tag () { return NODE; }
+>   Node * node () { return this; }
+> };
+> 
+> int sum (Tree * tree)
+> {
+>   switch (tree -> tag ()) 
+>     {
+>     case LEAF: return tree -> leaf () -> val;
+>     case NODE: return sum (tree -> node () -> l) + sum (tree -> node () -> r);
+>     }
+> }
+>
+[...]
+> 
+> PS: this trick implements type-safe conversion down to objects hierarchy.
+>     Question of my interest is the following: whether such
+>     conversion is possible or not?
+
+Yes, it is possible to translate the program into Ocaml.
+
+The difficulty you have probably encounter is that in class "leaf",
+for instance, the type of self is not "leaf", but a more general type.
+The implementation of method "full_object" below must therefore
+contain a coercion. As it is not possible to coerce to a type that is
+not yet completely defined (this is the case for type "leaf" at this
+point), I used an extra class "leaf_intf" to provide a type for the
+coercion.
+
+I have used a single method "full_object" rather than two methods
+"node" and "leaf". This way, there is no need to raise any
+exception. But this change was not necessary.
+
+Regards,
+
+-- Jérôme
+
+type ('a, 'b) alt = First of 'a | Second of 'b;;
+
+class virtual tree = object
+  method virtual full_object : (leaf_intf, node_intf) alt
+end and virtual leaf_intf = object
+  inherit tree
+  method virtual v : int
+end and virtual node_intf = object
+  inherit tree
+  method virtual l : tree
+  method virtual r : tree
+end;;
+
+class leaf v0 = object (self)
+  inherit leaf_intf
+  method full_object = First (self :> leaf_intf)
+  method v = v0
+end;;
+
+class node l0 r0 = object (self)
+  inherit node_intf
+  method full_object = Second (self :> node_intf)
+  method l :> tree = l0
+  method r :> tree = r0
+end;;
+
+let rec sum t =
+  match t#full_object with
+    First t' ->
+      t'#v
+  | Second t' ->
+      sum (t'#l) + sum (t'#r);;
+
+# sum (new node (new leaf 3) (new node (new leaf 1) (new leaf 2)) :> tree);;
+- : int = 6
+
+
+

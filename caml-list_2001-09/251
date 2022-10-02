@@ -1,0 +1,146 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA28789; Sun, 23 Sep 2001 21:29:17 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA28785 for <caml-list@pauillac.inria.fr>; Sun, 23 Sep 2001 21:29:16 +0200 (MET DST)
+Received: from penguin.housemarque.fi (www.housemarque.fi [212.213.160.98])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f8NJTFn24974
+	for <caml-list@inria.fr>; Sun, 23 Sep 2001 21:29:15 +0200 (MET DST)
+Received: from [192.168.42.66] (helo=frodo)
+	by penguin.housemarque.fi with smtp (Exim 3.00 #1)
+	id 15lEsw-000289-00
+	for caml-list@inria.fr; Sun, 23 Sep 2001 22:25:50 +0300
+Message-ID: <000901c14466$7848e280$422aa8c0@housemarque.fi>
+From: "Vesa Karvonen" <vesa.karvonen@housemarque.fi>
+To: <caml-list@inria.fr>
+References: <000b01c143aa$d5218690$422aa8c0@housemarque.fi> <20010922211013.A580@eecs.harvard.edu> <001501c1444c$a7b0a720$422aa8c0@housemarque.fi> <20010923134425.A28129@lakeland.eecs.harvard.edu>
+Subject: Re: [Caml-list] On ocamlyacc and ocamllex
+Date: Sun, 23 Sep 2001 22:32:23 +0300
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook Express 5.50.4807.1700
+X-MimeOLE: Produced By Microsoft MimeOLE V5.50.4807.1700
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: "Christian Lindig" <lindig@eecs.harvard.edu>
+[snip]
+> You can pass the map to the lexer such that it does not has to be
+> global:
+>
+>     rule token = parse
+>         eof         { fun map -> P.EOF          }
+>       | ws+         { fun map -> token lexbuf map }
+>       | tab         { fun map -> tab lexbuf map; token lexbuf map }
+>       | nl          { fun map -> nl lexbuf map ; token lexbuf map }
+>       | nl '#'      { fun map -> line lexbuf map 0; token lexbuf map }
+>       ....
+>
+> The lexer built from the above specification takes a lexbuf and map as
+> arguments.
+
+That is neat, although there is a lot of repetition due to the function
+definitions. Thanks for the tip, I'll have to try it. Can this technique be
+used for adding context to parsers generated using ocamlyacc, too?
+
+I'd prefer that the lexer generator would be extended so that additional
+arguments could be added in a manner similar to this:
+
+    rule token map = parse
+        eof         { P.EOF }
+      | ws+         { token map lexbuf }
+      | tab         { tab map lexbuf; token map lexbuf }
+      | nl          { nl map lexbuf ; token map lexbuf }
+      | nl '#'      { line map lexbuf 0; token map lexbuf }
+       ...
+
+I think that it is quite common to need to pass additional context to the
+lexer. Direct support for this in in the lexer generator is quite justified.
+
+> > Furthermore, the records need to be manually removed (in order to save
+> > memory) after a file has been processed completely and the recorded
+> > connections for the file are no longer needed.
+>
+> I assume that in a functional programming style without a global mutable
+> value the garbage collector will remove the map once I cannot access it
+> any longer.
+
+Yes. Using the above functional technique that goal can be achieved.
+
+> > The basic idea was to put the token type definition into a separate
+> > module.  Instead of two source files, you would have three source
+> > files:
+> >
+> >     lexer.mll token.ml parser.mly
+>
+> > In parser.mly there would be code that would tell ocamlyacc to look at
+> > token.ml for the token type.
+>
+> Now you would have to keep the token type and the grammar up to dateup
+> to date manually.
+
+The parser/lexer generators, and especially the Ocaml compiler, would of
+course perform sufficient type checking. So, should any file get out of sync,
+it would be noticed at the next compile.
+
+I don't see how having the %token definitions in the .mly file would make the
+process of keeping the token type and the grammar in sync more automatic. The
+%token definitions are effectively a completely separate part of the .mly
+file.
+
+>  The parser generator also needs more informations
+> than just the token types: precedences, associativity, and return types
+> are tied to a token - where do you keep them?.
+
+First of all, the .mly file would not have any %token definitions. The %token
+definitions are basically an elaborated kludge for defining a variant type
+named 'token' so that the parser generator does not have to understand Ocaml.
+
+The %left, %right, %nonassoc (and %type) definitions would still be in the
+.mly file. The information in %left, %right and %nonassoc definitions is not
+intrinsic to the tokens. They are just a way of resolving ambiquities in the
+grammar.
+
+Also note that the grammar does not define the tokens, although the grammar
+does depend on the abstract tokens. The sets of lexemes compromising tokens
+are defined by the lexer.
+
+> I still think that
+> generating the token type from the grammar is the easiest way.
+
+I agree that it may be somewhat easier for the parser generator, but I find
+that separating the token type definition from the grammar definition can be
+justified using quantitative technical arguments.
+
+Separating the token type definition from the parser definition breaks the
+undesirable dependency from the lexer to the parser. This has at least the
+following benefits:
+
+1. You trivially choose in which order you develop the lexer and parser.
+
+Starting from the lexer, currently you either write a token type definition
+and throw it away when you start writing the parser or begin by writing a
+dummy parser from which the token type is generated.
+
+2. Modifying the grammar does not result in recompiling the lexer.
+
+Kludges, such as modifying file dates, will not be need to prevent
+recompilation.
+
+The only liability is that an additional file will be needed. However, the
+type checking of the Ocaml compiler is already powerful enough to make sure
+that the files do not get out of sync.
+
+I recommend reading the chapters 3 to 7 from the book Large Scale C++ Software
+Design by John Lakos, ISBN 0-201-63362-0. Although the language used in the
+book is C++ (and management of physical dependencies is perhaps more important
+in C++ than in Ocaml) the principles and techniques apply to practically every
+programming language.
+
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

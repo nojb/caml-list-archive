@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA04092; Tue, 13 Apr 2004 12:42:34 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA04551 for <caml-list@pauillac.inria.fr>; Tue, 13 Apr 2004 12:42:32 +0200 (MET DST)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i3DAhVjq006763
+	for <caml-list@inria.fr>; Tue, 13 Apr 2004 12:43:32 +0200
+Received: from ibm3.cicrp.jussieu.fr (ibm3.cicrp.jussieu.fr [134.157.15.3])
+          by shiva.jussieu.fr (8.12.10/jtpda-5.4) with ESMTP id i3DAgSN0072953
+          for <caml-list@inria.fr>; Tue, 13 Apr 2004 12:42:28 +0200 (CEST)
+X-Ids: 164
+Received: from ibm1.cicrp.jussieu.fr (ibm1.cicrp.jussieu.fr [134.157.15.1])
+          by ibm3.cicrp.jussieu.fr (8.8.8/jtpda/mob-V8) with ESMTP id MAA45806
+          for <caml-list@inria.fr>; Tue, 13 Apr 2004 12:40:57 +0200
+Received: from localhost (fernande@localhost)
+          by ibm1.cicrp.jussieu.fr (8.8.8/jtpda/mob-v8) with ESMTP id MAA761912
+          for <caml-list@inria.fr>; Tue, 13 Apr 2004 12:42:14 +0200
+X-Authentication-Warning: ibm1.cicrp.jussieu.fr: fernande owned process doing -bs
+Date: Tue, 13 Apr 2004 12:42:14 +0200 (DST)
+From: Diego Olivier Fernandez Pons <Diego.FERNANDEZ_PONS@etu.upmc.fr>
+X-X-Sender: fernande@ibm1
+To: caml-list@inria.fr
+Subject: [Caml-list] My function is too eager
+Message-ID: <Pine.A41.4.44.0404131152180.512088-100000@ibm1>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Miltered: at shiva.jussieu.fr with ID 407BC414.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; pons:01 pons:01 etu:99 subtrees:01 generality:01 lazyness:01 subtrees:01 statistic:99 statistic:99 lazily:01 fernandez:01 fernandez:01 bool:01 computed:01 black:98 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 269
+
+    Bonjour,
+
+I have to compute statistics over all the subtrees of a tree keeping
+generality and efficiency. The function I have written is clearly too
+eager but I haven't been able to rewritte it in a proper lazy way
+because the lazyness I need seems to be "transversal".
+
+The problem is to count all subtrees having a property (P) which is
+checked via a boolean function f : int -> int -> int -> int -> bool
+where the first four parameters are the
+- shortest path of the tree
+- longest path of the tree
+- size of the tree
+- total path lengt of the tree
+
+all computed incrementally in a bottom-up manner. Then, they have to
+be sorted according to a parameter among these.
+
+example :
+
+avl_subtrees Shortest x;;
+- : (int * int * int) list =
+[(1, 50, 501); (2, 21, 251); (4, 13, 63); (5, 3, 31); (6, 1, 16);
+(7, 0, 8); (8, 0, 4); (9, 1, 2)]
+
+means that in the tree x there are 501 subtrees of shortest path equal
+to 1 and 50 of them are avl trees, etc.
+
+
+I wrote the following code. It just computes the data incrementally,
+checks the boolean function and updates the counters (a bag -
+insertion increments the counter if the element is already there).
+
+
+type evaluation = Shortest | Longest | Size | Average
+
+let extract_statistics = function stats -> DoubleBag.fold_right (fun k
+v v' l -> (k, v, v') :: l) stats []
+
+(* Core function strict version *)
+
+let make_distribution_function = fun f statistic_mode ->
+  let rec subtree bag = function
+    | E -> (0, 0, 0, 0, bag)
+    | N (l, v, r, _) ->
+      let (l_shortest, l_longest, l_size, l_total, bag') =
+          subtree bag l in
+      let (r_shortest, r_longest, r_size, r_total, bag'') =
+          subtree bag' r in
+      let
+          shortest = 1 + min l_shortest r_shortest and
+          longest  = 1 + max l_longest r_longest and
+          size     = 1 + l_size + r_size and
+          total    = 1 + l_size + r_size + l_total + r_total
+      in
+      let parameter = match statistic_mode with
+        | Shortest -> shortest
+        | Longest -> longest
+        | Size -> size
+        | Average -> total / (size + 1)
+      in
+        (shortest, longest, size, total,
+         if f l_shortest r_shortest
+              l_longest  r_longest
+              l_size     r_size
+         then DoubleBag.insert_both parameter bag''
+         else DoubleBag.insert_two parameter bag'')
+      in
+        subtree
+
+let make_subtrees = fun f mode tree ->
+  let (_, _, _, _, stats) =
+    (make_distribution_function f mode) DoubleBag.empty tree
+  in extract_statistics stats
+
+
+(* boolean function examples *)
+
+let avl_subtrees = fun mode tree ->
+  make_subtrees (fun _ _ ll lr _ _ -> abs (ll - lr) <= 1) mode tree
+
+let red_black_subtrees = fun mode tree ->
+  make_subtrees (ls rs ll rl _ _ -> ls <= 2 * ll && rs <= 2 * rl) mode
+tree
+
+etc.
+
+One can see that only part of the data will be really used
+  fun _ _ ll lr _ _ -> abs (ll - lr) <= 1
+
+therefor I made my function lazy applying a classical transformation
+
+let
+   shortest = lazy (1 + min (force l_shortest) (force r_shortest))
+   longest = lazy (1 + max (force l_longest) (force l_longest))
+   ...
+in
+
+but computing these lazily is not faster than their strict
+counterpart. What I would need is to make lazy the complete
+incremental computation "data by data" and not "level by level".
+
+Does anyone have an idea of how I could achieve this ?
+
+    Cordialement,
+
+        Diego Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

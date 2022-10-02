@@ -1,0 +1,126 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA17803; Wed, 15 Oct 2003 03:48:55 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA11917 for <caml-list@pauillac.inria.fr>; Wed, 15 Oct 2003 03:48:53 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from vsmtp9.tin.it (vsmtp9.tin.it [212.216.176.185] (may be forged))
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h9F1mr102231
+	for <caml-list@inria.fr>; Wed, 15 Oct 2003 03:48:53 +0200 (MET DST)
+Received: from vsmtp8.tin.it (212.216.176.235) by vsmtp9.tin.it (7.0.019)
+        id 3F1BE7360365EAAD for caml-list@inria.fr; Wed, 15 Oct 2003 03:48:52 +0200
+Received: from furia (80.181.167.54) by vsmtp8.tin.it (7.0.019)
+        id 3F7C4CA7018086C1 for caml-list@inria.fr; Wed, 15 Oct 2003 03:48:52 +0200
+Received: from localhost ([127.0.0.1])
+	by furia with esmtp (Exim 3.36 #1 (Debian))
+	id 1A9arC-0000Gg-00
+	for <caml-list@inria.fr>; Wed, 15 Oct 2003 03:53:46 +0200
+From: Nick Name <nick.name@inwind.it>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Is arrow programming impossible in ocaml?
+Date: Wed, 15 Oct 2003 03:53:45 +0200
+User-Agent: KMail/1.5.3
+References: <200310132133.13347.oleg_trott@columbia.edu> <200310141326.22497.nick.name@inwind.it> <20031015092206F.garrigue@kurims.kyoto-u.ac.jp>
+In-Reply-To: <20031015092206F.garrigue@kurims.kyoto-u.ac.jp>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+Message-Id: <200310150353.46072.nick.name@inwind.it>
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 jacques:01 haskell:01 val:01 val:01 const:01 struct:01 ,0.0:01 const:01 abstr:01 decidability:01 ocaml:01 caml:01 sig:01 sig:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Alle 02:22, mercoled=EC 15 ottobre 2003, Jacques Garrigue ha scritto:
+> I'm afraid you will have to state in more detail what you want to do.
+> Or to show some Haskell code.
+
+Here it is:
+
+module type ARROW =3D
+sig
+  type ('a,'b) t
+
+  val arr : ('a -> 'b) -> ('a,'b) t
+  val (>>>) : ('a,'b) t -> ('b,'c) t -> ('a,'c) t
+  val (&&&) : ('a,'b) t -> ('a,'c) t -> ('a,('b * 'c)) t
+end
+
+module Time : sig
+
+  include ARROW
+
+  val time : ('a,float) t
+  val run : (unit,'a) t -> float -> 'a option
+  val const : 'a -> ('b,'a) t
+end =3D
+struct
+  type state =3D (float * float)
+
+  (* A signal transformer is a function wich takes the current time (and =20
+     dt) and maybe returns a value, or stops with None *)
+
+  type ('a,'b) t =3D T of ((state * 'a) -> (('b * ('a,'b) t) option))
+
+  let rec arr f =3D T (fun (_,x) -> Some (f x,arr f))
+
+  let rec (>>>) (T a1) (T a2) =3D
+    T (fun (s,x) ->
+	 match a1 (s,x) with
+	     None -> None
+	   | Some (r1,n1) ->
+	       match a2 (s,r1) with
+		   None -> None
+		 | Some (r2,n2) ->
+		     Some (r2,n1 >>> n2))
+
+  let rec (&&&) (T a1) (T a2) =3D
+    T (fun arg ->
+	 match (a1 arg,a2 arg) with
+	     ((None,_)|(_,None)) -> None
+	   | (Some (r1,n1),Some (r2,n2)) -> Some ((r1,r2),n1 &&& n2))
+
+  let rec time =3D T (fun ((t,_),_) -> Some (t,time))
+
+  let run (T f) t =3D=20
+    match f ((t,0.0),()) with
+	None -> None
+      | Some (r,_) -> Some r
+
+  let const x =3D arr (fun _ -> x)=20
+end
+
+(* now in the toplevel
+
+  # let t =3D time >>> time;;
+  val t : ('_a, float) Var.Time.t =3D <abstr> *)
+=20
+Well, that '_a is exactly what I wish to avoid; I had this suggestion=20
+privately (with simplified type declarations):
+
+# type ('a,'b) sf =3D Arr of ('a * float -> 'b);;
+type ('a, 'b) sf =3D Arr of ('a * float -> 'b)
+# let (>>>) f1 f2  =3D match f1(),f2() with (Arr f1),(Arr f2) -> Arr (fun=20
+(a,s) -> f2 (f1(a,s),s));;
+val ( >>> ) : (unit -> ('a, 'b) sf) -> (unit -> ('b, 'c) sf) -> ('a, 'c)=20
+sf =3D
+  <fun>
+# let time () =3D Arr (fun (_,t) -> t);;
+val time : unit -> ('a, float) sf =3D <fun>
+# let t () =3D time >>> time;;
+val t : unit -> ('a, float) sf =3D <fun>
+
+
+and yet I don't know if it's satisfactory, however I realize that this=20
+is a general problem with caml view of polymorphism, probably driven by=20
+type-inference decidability issues; in fact I can't write a polymorphic=20
+compose operator in general, because I will get exactly the same=20
+problems.
+
+Vincenzo
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,168 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p41DQCQG030991
+	for <caml-list@sympa-roc.inria.fr>; Sun, 1 May 2011 15:26:12 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuUCAANfvU3UGyoBkWdsb2JhbACECkeTUY15FAEBAQEJCwsHFAMiiHGqCI9mgSqDVYEBBJMSHYlu
+X-IronPort-AV: E=Sophos;i="4.64,297,1301868000"; 
+   d="scan'208";a="94160158"
+Received: from smtp1-g21.free.fr ([212.27.42.1])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 01 May 2011 15:26:06 +0200
+Received: from [192.168.0.3] (unknown [82.226.84.212])
+	by smtp1-g21.free.fr (Postfix) with ESMTP id B1F5E940238;
+	Sun,  1 May 2011 15:25:59 +0200 (CEST)
+From: redfire <jeremie.salvucci@free.fr>
+To: Guillaume Yziquel <guillaume.yziquel@citycable.ch>
+Cc: caml-list@inria.fr
+In-Reply-To: <20110501130102.GX17796@localhost>
+References: <1304244654.4147.34.camel@localhost.localdomain>
+	 <20110501123045.bfd38cf6.basile@starynkevitch.net>
+	 <1304247307.4147.53.camel@localhost.localdomain>
+	 <20110501130102.GX17796@localhost>
+Content-Type: text/plain; charset="UTF-8"
+Date: Sun, 01 May 2011 15:24:34 +0200
+Message-ID: <1304256274.4147.70.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.30.3 
+Content-Transfer-Encoding: 8bit
+Subject: Re: [Caml-list] Byte code generation for the Ocaml virtual machine
+ (ZAM)
+
+Bonjour,
+
+Le dimanche 01 mai 2011 à 15:01 +0200, Guillaume Yziquel a écrit :
+> Bonjour.
+> 
+> Je pense que cela serait une bonne idée que vous soyez plus explicite
+> sur ce que vous faites et là où cela ne marche pas. À priori, je ne vois
+> pas pourquoi cela ne serait pas possible, au contraire. Mais je me vois
+> mal vous répondre sans plus de détails.
+> 
+> Le Sunday 01 May 2011 à 12:55:07 (+0200), redfire a écrit :
+> > Salut Basile,
+> > 
+> > Je compile un sous ensemble de Scheme vers la ZAM. La machine virtuelle
+> > d'Ocaml n'étant pas typée pour Scheme, je dois implémenter un mécanisme
+> > qui va me permettre de tester les types à l'exécution.
+> > 
+> > D'après ce que j'ai compris, la machine virtuelle ne prend en compte que
+> > les entiers de base. Le reste est géré par l'intermédiaire de primitives
+> > C. Donc par exemple, si dans le programme source Scheme il est écrit
+> > (display 5), je voulais stocker dans l'environnement global un couple
+> > (2, 5). Le 2 représentant le type integer ici. Comme ça à l'exécution,
+> > je sais que je  dois convertir cet entier en une chaîne de caractères à
+> > l'aide de la primitive C correspondante.
+> > Donc ici, je souhaitais sérialiser (2, 5) dans la zone data (avec le
+> > module Marshall) en espérant récupérer un bloc composé d'au moins deux
+> > champs dont deux d'entre eux seraient, le type et la valeur.
+> > Malheureusement, je ne parviens pas à ce résultat. Je ne récupère que le
+> > 5.
+> 
+> C'est ici que j'aimerais plus de détails.
+
+J'ai choisi de représenter l'ensemble des valeurs manipulées par des
+couples (type, valeur). Donc par exemple, si je travaille sur le code
+Scheme suivant :
+
+(display 5)
+
+J'ai donc l'entier 5 et la primitive d'affichage de Scheme. Pour
+représenter l'entier sur la VM, je le considère comme un couple (2, 5).
+Maintenant à l'exécution, je veux que le code généré réalise les actions
+suivantes :
+
+- test du type de la valeur
+- suivant le type de cette dernière, conversion à l'aide d'une des
+primitives d'ocaml (caml_format_int, caml_format_*).
+- puis appel de la primitive caml_ml_output.
+- on pourrait imaginer un flush.
+
+Pour cela, j'ai choisi d'adopter la stratégie suivante, je place
+l'ensemble de mes couples dans l'environnement global (peut-être pas la
+meilleure solution mais déjà j'aimerais faire fonctionner quelque
+chose). Donc à la compilation, je crée un tableau contenant un ensemble
+de couples (type, valeur) que je sérialise à l'aide du module Marshall
+directement dans la zone data du fichier contenant le byte code.
+
+Maintenant à l'exécution, imaginons que le couples (2, 5) soit à l'index
+18 de l'environnement global. Je réalise un GETGLOBAL 18. Et pour tester
+le type j'enchaîne avec un GETFIELD 0, PUSH, CONSTINT <montype>, suivi
+d'un EQ. Or la valeur obtenue à l'aide du GETFIELD 0 est un 5 et non un
+2.
+
+La façon actuelle de créer ce tableau de couples est la suivante :
+
+table.(18) <- Obj.repr (2, 5) par exemple pour l'exemple ci-dessus
+(exemple de code que j'ai trouvé sur Internet sans garantie).
+
+Ce tableau est ensuite écrit à l'aide de output_value de Pervasives.
+
+Est-ce que ceci doit fonctionner et donc je m'y prends mal ailleurs. Ou
+ce n'est pas la bonne façon de faire ceci ?
+
+> 
+> > En écrivant ce mail, je pense à une autre technique qui consisterait
+> > plutôt à sérialiser seulement la valeur (vu que je ne parviens qu'à
+> > récupérer celle-ci) et à générer le bloc à l'aide de MAKEBLOCK. Mais ça
+> > me ferait modifier pas mal de choses.
+> > 
+> > Donc mon principal problème concerne la mise en place de ces couples
+> > dans la zone data et leur récupération. Dans le mail précédent,
+> > j'expliquais que j'ai trouvé un exemple sur internet qui sérialisait les
+> > données dans un tableau à l'aide de Obj.repr pour mettre des données de
+> > types différents dans un même tableau. Ensuite il fait un output value
+> > et ça fonctionne. Sauf que ce morceau de code ne travaille que sur des
+> > données de types primitifs et non pas de couples ou autres.
+> > 
+> > Je souhaite simplement pouvoir stocker un couple et récupérer chacun des
+> > champs. Mais je n'ai pas trouvé de documentation qui explique clairement
+> > et dans le détail comment tout ceci peut-être effectué.
+> > 
+> > J'espère avoir été un peu plus clair.
+> > 
+> > Il y a peut-être un moyen beaucoup plus simple de réaliser ceci mais je
+> > ne le connais pas.
+> > 
+> > Merci à toi ;-)
+> > 
+> > Amicalement.
+> > 
+> > --
+> > Jérémie Salvucci
+> > 
+> > Le dimanche 01 mai 2011 à 12:30 +0200, Basile Starynkevitch a écrit :
+> > > On Sun, 01 May 2011 12:10:54 +0200
+> > > redfire <jeremie.salvucci@free.fr> wrote:
+> > > 
+> > > > Hello all,
+> > > > 
+> > > > I'm currently doing a student project where I have to generate bytecode
+> > > > for the caml virtual machine. I convert a subset of the Scheme language.
+> > > > My main issue concerns the dynamic typing mechanism. My idea is to store
+> > > > every values I manipulate like this (type, value).
+> > > 
+> > > Salut Jérémie, 
+> > > 
+> > > je suis très heureux de te lire. Par contre, je n'ai pas compris ton message (alors que je connais bien Ocaml et bien son bytecode). C'est quoi ton but exact? Coder un Scheme en Ocaml?
+> > > 
+> > > Amicalement
+> > > 
+> > > 
+> > > 
+> > 
+> > 
+> > 
+> > -- 
+> > Caml-list mailing list.  Subscription management and archives:
+> > https://sympa-roc.inria.fr/wws/info/caml-list
+> > Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> > Bug reports: http://caml.inria.fr/bin/caml-bugs
+> > 
+> > 
+> 
+
+Merci à vous.
+
+--
+Jérémie Salvucci
+
+

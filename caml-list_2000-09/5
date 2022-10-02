@@ -1,0 +1,120 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA30626 for caml-red; Fri, 1 Sep 2000 18:31:49 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA06298 for <caml-list@pauillac.inria.fr>; Fri, 1 Sep 2000 13:55:26 +0200 (MET DST)
+Received: from mrwall.kal.com (mrwall.kal.com [194.193.14.236])
+	by concorde.inria.fr (8.10.0/8.10.0) with SMTP id e81BtPr11614
+	for <caml-list@inria.fr>; Fri, 1 Sep 2000 13:55:25 +0200 (MET DST)
+Received: from mrwall.kal.com [194.193.14.236]
+	(HELO localhost)
+	by mrwall.kal.com (AltaVista Mail V2.0J/2.0J BL25J listener)
+	id 0000_0050_39af_9934_080b;
+	Fri, 01 Sep 2000 12:55:32 +0100
+Received: from somewhere by smtpxd
+Message-ID: <3145774E67D8D111BE6E00C0DF418B662D78C0@nt.kal.com>
+From: Dave Berry <dave@kal.com>
+To: caml-list@inria.fr
+Subject: RE: Language Design
+Date: Fri, 1 Sep 2000 12:57:13 +0100 
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.0.1460.8)
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Sender: weis@pauillac.inria.fr
+
+Given a value in a monad, e.g. IO v, how can I remove v from the Monad?
+Surely this would be required to seamlessly integrate stateful and
+functional code?
+
+Dave the ingenue.
+
+
+-----Original Message-----
+From: Jerome Vouillon [mailto:Jerome.Vouillon@inria.fr]
+Sent: Friday, August 25, 2000 4:42 PM
+To: John Max Skaller; Francois.Pottier@inria.fr
+Cc: caml-list@inria.fr
+Subject: Re: Language Design
+
+
+On Fri, Aug 25, 2000 at 06:16:06AM +1000, John Max Skaller wrote:
+> Francois Pottier wrote:
+>  
+> > On Wed, Aug 23, 2000 at 03:55:36PM +1000, John Max Skaller wrote:
+> > > What is _actually_ required is a seamless way to integrate
+> > > stateful and function code:
+> > 
+> > Have you thought about employing some kind of monadic type system?
+> 
+> 	Yes, but I don't know enough to do it at the moment.
+> [Also, it turns out monads are not general enough to write
+> web services in, which puts me off a bit]
+
+I think you should really consider using monads. Here is an example.
+
+We define a value of type void to be either a continuation expecting a
+string or a final function that do not expect anything.
+
+    type void = Cont of (string -> void)
+              | Term of (unit -> unit)
+
+This is a procedure that does nothing.
+
+    let unit : void = Term (fun () -> ())
+
+And here is a possible implementation for read: the input string is
+assigned to v and then there is nothing more to do.
+
+    let read (v : string ref) : void = Cont (fun s -> v := s; unit)
+
+The following combinator takes two procedures p and p' and make them
+be evaluated in order.
+
+    let rec seq (p : void) (p': void) : void =
+      match p, p' with
+        Cont c, _ ->
+          Cont (fun s -> seq (c s) p')
+      | Term t, Cont c ->
+          Cont (fun s -> t (); c s)
+      | Term t, Term t' ->
+          Term (fun () -> t (); t' ())
+
+Finally, we have an operator to assign a value v to a reference x.
+
+    let set (x : 'a ref) (v : unit -> 'a) : void = Term (fun () -> x := v
+())
+
+Now we can for instance define a procedure that reads to strings and
+returns their concatenation. This procedure does not need to know the
+actual definition of type void.
+
+    let read2 x =
+      let a = ref "" in let b = ref "" in
+      seq (read a) (seq (read b) (set x (fun () -> !a ^ !b)))
+
+You can also use some symbols to make it more readable:
+
+    let ($) = seq
+    let (-<-) = set
+    let read2 x =
+      let a = ref "" in
+      let b = ref "" in
+      read a $
+      read b $
+      x -<- (fun () -> !a ^ !b)
+
+We can try this procedure. First we define an evaluator. It takes the
+input stream and a procedure call as inputs.
+
+    let rec eval l p =
+      match l, p with
+        _,      Term t -> t ()
+      | s :: r, Cont c -> eval r (c s)
+      | _              -> ((* Stuck evaluation *))
+
+Then we evaluate read2 when two strings "a" and "b" are given as
+input:
+
+  let x = ref "" in eval ["a"; "b"] (read2 x); !x
+
+-- Jerome
+
+

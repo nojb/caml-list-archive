@@ -1,0 +1,184 @@
+Return-Path: <malc@pulsesoft.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.3 required=5.0 tests=RCVD_IN_BL_SPAMCOP_NET 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id B95EABC29
+	for <caml-list@yquem.inria.fr>; Wed, 30 Aug 2006 02:45:01 +0200 (CEST)
+Received: from comtv.ru (comtv.ru [217.10.32.16])
+	by nez-perce.inria.fr (8.13.6/8.13.6) with ESMTP id k7U0j0VI032346
+	for <caml-list@inria.fr>; Wed, 30 Aug 2006 02:45:01 +0200
+X-UCL: actv
+Received: from av1474.oops ([10.0.66.9] verified)
+  by comtv.ru (CommuniGate Pro SMTP 4.1.8)
+  with ESMTP id 166114760; Wed, 30 Aug 2006 04:44:39 +0400
+Date: Wed, 30 Aug 2006 04:44:44 +0400 (MSD)
+From: malc <malc@pulsesoft.com>
+X-X-Sender: malc@home.oyster.ru
+To: Gerd Stolpmann <info@gerd-stolpmann.de>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: zcat vs CamlZip
+In-Reply-To: <1156881856.21883.124.camel@localhost.localdomain>
+Message-ID: <Pine.LNX.4.64.0608300433220.8632@home.oyster.ru>
+References: <44F48A17.5080005@podval.org> <ed22gp$un$1@sea.gmane.org>
+ <44F49267.9080904@podval.org> <1156881856.21883.124.camel@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at nez-perce with ID 44F4DF8C.004 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; malc:01 malc:01 pulsesoft:01 camlzip:01 gerd:01 stolpmann:01 ocamlnet:01 netchannels:01 admittedly:01 implements:01 netchannels:01 buffered:01 buf:01 buffer:01 buffer:01 
+
+On Tue, 29 Aug 2006, Gerd Stolpmann wrote:
+
+> Am Dienstag, den 29.08.2006, 15:15 -0400 schrieb Sam Steingold:
+>> at any rate, do you really expect that using Gzip.input and then
+>> searching the result for a newline, slicing and dicing to get the
+>> individual input lines, &c &c would be faster?
+>
+> Ah yes, and there is an easy solution with ocamlnet:
+
+[..snip..]
+
+> This adds a buffering layer.
+
+The Netchannels buffering looks very elegant, but my (admittedly rather
+cursory) testing shows that it's also rather slow.
+
+Following code implements 4 line readers:
+Sam's original [char]
+Netchannels [net]
+open_process_in [zcat]
+and buffered (trying to stay compatible with original interface) [block]
+
+While Netchannels do win over original implementation it looses to all
+other methods (on my machine).
+
+let buf = Buffer.create 1024
+let gz_input_line gz_in char_counter line_counter =
+   Buffer.clear buf;
+   let finish () = incr line_counter; Buffer.contents buf in
+   let rec loop () =
+     let ch = Gzip.input_char gz_in in
+     char_counter := Int64.succ !char_counter;
+     if ch = '\n' then finish () else ( Buffer.add_char buf ch; loop (); ) in
+   try loop ()
+   with End_of_file ->
+     if Buffer.length buf = 0 then raise End_of_file else finish ()
+
+class input_gzip_rec gzip_ch : Netchannels.rec_in_channel =
+object(self)
+   method input s p l =
+     let n = Gzip.input gzip_ch s p l in
+     if n = 0 then raise End_of_file;
+     n
+   method close_in() =
+     Gzip.close_in gzip_ch
+end
+
+let wrap_gz gz_in =
+   let s = String.create 4096 in
+   let b = Buffer.create 1024 in
+   let r = ref (fun _ _ -> assert false) in
+   let findlf s start finish =
+     let rec loop pos = if pos >= finish then None
+     else if String.unsafe_get s pos = '\n' then Some pos else loop (succ pos)
+     in loop start
+   in
+   let rec cont pos char_counter line_counter =
+     let n = Gzip.input gz_in s pos (String.length s - pos) in
+     let rec subcont pos len char_counter line_counter =
+       let finish = pos + len in
+       match findlf s pos finish with
+       | None ->
+           Buffer.add_substring b s pos len;
+           cont 0 char_counter line_counter
+
+       | Some lfpos ->
+           let runlen = lfpos - pos in
+           incr line_counter;
+           Buffer.add_substring b s pos runlen;
+           let s = Buffer.contents b in
+           Buffer.clear b;
+           r := subcont (succ lfpos) (len - succ runlen);
+           s
+     in
+     if n = 0
+     then raise End_of_file
+     else (
+       char_counter := Int64.add (Int64.of_int n) !char_counter;
+       subcont pos n char_counter line_counter
+      )
+   in
+   let exec c l = !r c l in
+   r := cont 0;
+   exec
+
+let char () =
+   let gz = Gzip.open_in_chan stdin in
+   let cc = ref 0L in
+   let lc = ref 0 in
+   try
+     while true
+     do
+       let _line = gz_input_line gz cc lc in
+       ()
+     done
+   with End_of_file ->
+     Format.printf "cc=%Ld lc=%d@." !cc !lc
+
+let block () =
+   let gz = Gzip.open_in_chan stdin in
+   let cc = ref 0L in
+   let lc = ref 0 in
+   let lg = wrap_gz gz in
+   try
+     while true
+     do
+       let _line = lg cc lc in
+       ()
+     done
+   with End_of_file ->
+     Format.printf "cc=%Ld lc=%d@." !cc !lc
+
+let zcat () =
+   let ic = Unix.open_process_in "zcat" in
+   let cc = ref 0L in
+   let lc = ref 0 in
+   try
+     while true
+     do
+       let _line = input_line ic in
+       cc := Int64.add (Int64.of_int (String.length _line + 1)) !cc;
+       incr lc
+     done
+   with End_of_file ->
+     Format.printf "cc=%Ld lc=%d@." !cc !lc
+
+let net () =
+   let gz_in = Gzip.open_in_chan stdin in
+   let gz_ch = Netchannels.lift_in (`Rec (new input_gzip_rec gz_in)) in
+   let cc = ref 0L in
+   let lc = ref 0 in
+   try
+     while true
+     do
+       let _line = gz_ch#input_line () in
+       cc := Int64.add (Int64.of_int (String.length _line + 1)) !cc;
+       incr lc
+     done
+   with End_of_file ->
+     Format.printf "cc=%Ld lc=%d@." !cc !lc
+
+let _ =
+   match Sys.argv with
+   | [| _; "char" |] -> char ()
+   | [| _; "zcat" |] -> zcat ()
+   | [| _; "block" |] -> block ()
+   | [| _; "net" |] -> net ()
+   | _ -> prerr_endline (Sys.argv.(0) ^ ": [char|zcat|block|net]")
+
+--
+mailto:malc@pulsesoft.com
+

@@ -1,0 +1,120 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA32263; Tue, 24 Apr 2001 17:52:51 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA32293 for <caml-list@pauillac.inria.fr>; Tue, 24 Apr 2001 17:52:50 +0200 (MET DST)
+Received: from mailgw1.fhg.de (mailgw1.fhg.de [153.96.1.2])
+	by nez-perce.inria.fr (8.11.1/8.10.0) with ESMTP id f3OFqnj21590
+	for <caml-list@inria.fr>; Tue, 24 Apr 2001 17:52:49 +0200 (MET DST)
+Received: from ilt.fhg.de (ilt.ilt.fhg.de [153.96.180.2])
+	by mailgw1.fhg.de (8.11.1/8.11.1) with ESMTP id f3OFqlf22324
+	for <caml-list@inria.fr>; Tue, 24 Apr 2001 17:52:47 +0200 (MET DST)
+Received: from eent230 (iltpc099.ilt.fhg.de [192.102.148.99])
+	by ilt.fhg.de (8.9.3/8.9.3) with SMTP id RAA22012
+	for <caml-list@inria.fr>; Tue, 24 Apr 2001 17:52:46 +0200 (MET DST)
+Message-Id: <200104241552.RAA22012@ilt.fhg.de>
+From: wester@ilt.fhg.de
+To: caml-list@inria.fr
+Date: Tue, 24 Apr 2001 17:52:46 +0200
+MIME-Version: 1.0
+Content-type: text/plain; charset=US-ASCII
+Content-transfer-encoding: 7BIT
+Subject: Re: [Caml-list] toplevel is hanging
+References: <200104231316.PAA14842@ilt.fhg.de>
+In-reply-to: <4.3.2.7.2.20010423115631.00dcecc0@shell16.ba.best.com>
+X-mailer: Pegasus Mail for Win32 (v3.01d)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi Chris,
+
+thanks for your reply. I consider to recompile Ocaml with the changes
+outlined by you. For the moment I put the code that makes the toplevel 
+and Emacs hang in a seperate file and load it with #use "file.ml" (a hack too).
+Does anybody know wether this same problem is also present when using
+XEmacs instead of Emacs? I installed the WinNT version of XEmacs but
+it behaves a little strange. If my problem could be solved by using XEmacs
+it could be worth to make XEmacs run correctly (if possible).
+
+Rolf Wester
+
+
+> 
+> >Did anybody have 
+> >similar experiences and is there any way around?
+> 
+> This sounds very similar to the problem I had running with the toplevel on
+> emacs 20.7.1 and Win2k.  If so, it's not Tuareg's fault (I use caml-mode),
+> it's emacs' fault.  I thought I posted about this, but I can't find it, so
+> I guess not.  I spent an entir e day debugging this, including building
+> the compiler, the bytecode runtime, emacs, and debugging a ton of code
+> interacting between the two processes.  Here goes:
+> 
+> What's happening is that the toplevel sends a string (either "# ", "  ",
+> or "* " depending on if you're in a comment ("* " is only in 3.01), it's
+> seen a ;;, etc.) after every line you send to it.  This is what keeps you
+> indented when you do multiline stuf f.  However, it also sends all those
+> strings even if you're piping code directly do it (it can't tell whether
+> you hit return at the prompt or sent it a \n in a region).
+> 
+> So, there's [what I'd call] a bug in the way process-send-region (which is
+> aliased to comint-send-region, which is what's called to send stuff to
+> consoles inside emacs) handles output.  If you have a lot of stuff and you
+> want to send it to the toplevel, p rocess-send-region will write to the
+> process' handle, but not try to read.  Well, if it's enough stuff that the
+> OS buffer fills up and emacs blocks on the write, then the other process
+> has to grind through the data to eat it all up and unblock emacs.  Unf
+> ortunately, the caml toplevel is busy outputting the two-character strings
+> (above) after every "\n" that it sees, and so if you send it a bunch of
+> code, the write pipe back to emacs fills up, because emacs isn't reading
+> from it.  So, you just deadlocked t he two processes.
+> 
+> There are two fixes:
+> 
+> 1.  Recompile the toplevel to not output "  " and "* " on newlines.  This
+> is trivial (make sure you copy the new toplevel lib into your lib dir so
+> ocamlmktop builds the new one).  This is what I did, and it fixed the
+> problem (and I don't care about the au to-indent on return at the prompt).
+>  The fix is to go to toplevel/toploop.ml, and the function refill_lexbuf
+> near the bottom.  There'll be an output_string at the top of the function
+> that outputs one of the strings.  Make the "  " a "" (and the "* " a "" if
+> you're on 3.01).  It's a hack, to be sure, but it's simple and it works.
+> 
+> 2.  Fix emacs.  The documentation for process-send-region says "If the
+> region is more than 500 characters long, it is sent in several bunches. 
+> This may happen even for shorter regions. Output from processes can arrive
+> in between bunches."  They did this to fix this exact process interlock
+> problem.  Of course, this is not what the source code does.  The source
+> only breaks up _lines_ that are longer than a certain length, but the
+> problem is the regions we're sending have short lines, but lots of
+> newlines. 
+>  If the code actually did what the docs say then this wouldn't have
+>  happened.  I did not feel like messing with the heinous emacs source
+>  (this function is particularly beautiful :), so I did #1.
+> 
+> Hope this helps.
+> 
+> As a bonus, this will also fix the weird thing where the error message
+> would be spaced way over in the inferior buffer (I don't know if you have
+> that problem or not).  This was because all the spaces got output before
+> the error message.
+> 
+> Chris
+> 
+> PS.  As another bonus, here's what I bind to ^C^T.  This evals the entire
+> file, which makes it really easy to interactively develop a standalone
+> program (obviously, since I was evaling entire files, I ran into the hang
+> problem pretty early on, once the so urce got to ~500 lines):
+> 
+> (define-key caml-mode-map "\C-c\C-t"
+>                (lambda ()
+>                  "Eval the entire buffer with *inferior-caml*"
+>                  (interactive)
+>                  (inferior-caml-eval-region (point-min) (point-max))))
+> 
+
+
+-------------------------------------
+Rolf Wester
+wester@ilt.fhg.de
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

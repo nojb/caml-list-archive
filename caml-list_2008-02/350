@@ -1,0 +1,179 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 6DF5BBBC1
+	for <caml-list@yquem.inria.fr>; Thu, 21 Feb 2008 02:54:18 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAIlovEfAXQInh2dsb2JhbACQXgEBAQgKKZ87
+X-IronPort-AV: E=Sophos;i="4.25,382,1199660400"; 
+   d="scan'208";a="8358792"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 21 Feb 2008 02:54:18 +0100
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id m1L1sHKG030874
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Thu, 21 Feb 2008 02:54:18 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao8CABhpvEeCNhAB/2dsb2JhbACwTw
+X-IronPort-AV: E=Sophos;i="4.25,382,1199660400"; 
+   d="scan'208";a="9407218"
+Received: from kurims.kurims.kyoto-u.ac.jp ([130.54.16.1])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 21 Feb 2008 02:54:13 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.8/8.13.8) with ESMTP id m1L1s9f6025147;
+	Thu, 21 Feb 2008 10:54:09 +0900 (JST)
+Date: Thu, 21 Feb 2008 10:54:05 +0900 (JST)
+Message-Id: <20080221.105405.42787647.garrigue@math.nagoya-u.ac.jp>
+To: David.Teller@univ-orleans.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Auto-closing polymorphic variants ?
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <1203541049.11853.36.camel@Blefuscu>
+References: <1203541049.11853.36.camel@Blefuscu>
+X-Mailer: Mew version 4.2 on Emacs 22.1 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 47BCD9C9.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; variants:01 univ-orleans:01 variants:01 val:01 val:01 unify:01 subtyping:01 wildcards:01 wildcard:01 ocamlc:01 inference:01 semantics:01 inference:01 monotonicity:01 arises:01 
+
+From: David Teller <David.Teller@univ-orleans.fr>
+
+>  There are still a number of things I don't quite understand about
+> polymorphic variants. For instance, polymorphic variants seem to be open
+> by default.
+> 
+> # let a = `a ;;
+> val a : [> `a ] = `a
+> # let b = `b ;;
+> val b : [> `b ] = `b
+> 
+> I can only assume this was done to keep the property that in
+>   if ... then some_p else some_q
+> it must be possible to unify the types of some_p and some_q, which
+> wouldn't be possible with closed types.
+
+Indeed, having only closed polymorphic variants type would be
+self-defeating. You would need to use explicit subtyping for every
+single value you want to put in a type with more than one
+constructor! Exactly the kind of things polymorphic variants are there
+to avoid.
+
+> However, as mentioned in the discussion regarding exceptionless error
+> management, in conjunction with wildcards, sanity checks become
+> irrelevant, which may lead to hard-to-track errors, e.g.
+> 
+> # let safe_div x = function
+>   | 0. -> `Div_by_zero
+>   | y -> `Ok (x /. y) ;;
+> val safe_div : float -> float -> [> `Div_by_zero | `Ok of float ] = <fun>
+> 
+> # let idiv x y =
+>   match safe_div (float_of_int x) (float_of_int y) with
+>   | `Success x -> x
+>   | _          -> nan ;;
+> val idiv : int -> int -> float = <fun>
+> 
+> Here, because of the wildcard, ocamlc didn't notice that we wrote
+> `Success where no such variant could happen.
+
+Indeed, while this code is probably incorrect, it is probably safe.
+
+> Now, it seems to me that this wouldn't a real problem if we had a way to
+> auto-close safe_div during the match, i.e. something like
+> 
+> # let idiv x y =
+>   match close (safe_div (float_of_int x) (float_of_int y)) with
+>   | `Success x -> x
+>      ^^^^^^^^^
+>   | _          -> nan ;;
+> 
+>  This pattern matches values of type [> `Success of 'a ]
+>  but is here used to match values of type [ `Div_by_zero | `Ok of  
+>  float ]
+>  The second variant type does not allow tag(s) `Success
+
+The trouble is that, in the presence of type inference, the semantics
+of close is not clear. Namely, type inference requires all typing
+operators to be monotonic. That is, if e1 has a type more general than
+e2, then you should be able to use e1 wherever e2 can be used.
+Now, with open polymorphic variants, a type with less tags is more
+general than a type with more types. But your operator would close it,
+preventing it from being used with more tags, thus breaking
+monotonicity.
+
+Here is an example where closing would be bad:
+
+let f x =
+  if x = `A then 1 else
+  match close x with
+    `B -> 2
+  | _ -> 0
+in f `B
+
+Of course this is not what you had in mind, but it's hard to get good
+properties at the typing level.
+
+This does not mean that we can try nothing. For instance we could
+introduce a warning when a pattern matching adds a new tag to a
+polymorphic input. The idea is that since the input is polymorphic, it
+is sure that it will never actually contain extra tags.
+And thanks to the relaxed value restriction, the result of safe_div
+would be just polymorphic enough to trigger the warning, while example
+like the above, by being not polymorphic, would not trigger it.
+But this would not be easy to implement...
+
+> Of course, we could do that by manually closing the type of safe_div,
+> but this would essentially mean duplicating information.
+> 
+> Either
+> # let idiv x y =
+>   match (safe_div (float_of_int x) (float_of_int y) :
+>          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+>   [ `Success of float | `Div_by_zero ] ) with
+>   | `Success x -> x
+>   | _          -> nan ;;
+>  This expression has type [> `Div_by_zero | `Ok of float ]
+>  but is here used with type [ `Div_by_zero | `Success of float ]
+>  The second variant type does not allow tag(s) `Ok
+> 
+> or
+> # let idiv x y =
+>     match(safe_div (float_of_int x) (float_of_int y) : 
+>     [`Div_by_zero | `Ok of float]) with
+>     | `Success x -> x
+>       ^^^^^^^^^^^
+>     | _          -> nan ;;      
+>  This pattern matches values of type [> `Success of 'a ]
+>  but is here used to match values of type [ `Div_by_zero | `Ok of
+>  float ]
+>  The second variant type does not allow tag(s) `Success
+
+Your two examples reflect the existence of two ways to avoid the
+problem: either use a closed subject, or a closed pattern matching.
+The problem only arises when both are open.
+I don't think that type annotations on the pattern-matching itself are
+the good solution for this.
+It is better to either define safe_div as returning a closed variant
+type (writing interfaces in ocaml _is not_ code duplication, it is
+code specification!) or not use wild cards in pattern matchings
+on open polymorphic variants.
+
+> Unfortunately, I can't seem to find anything comparable to that "close"
+> operator in the documentation, nor any design pattern which would attain
+> the same effect.
+
+You could use the two "design patterns" above. The first one might be
+called the "specify types" pattern, and is good when you don't need
+extensibility through polymorphism (which is needed only in rare
+cases), while the second one is the "no open doors" pattern (when you
+need extensibility, but are afraid of risks). Any approach that
+emphasises completely implicit extensibity is going to be risky...
+
+Jacques Garrigue
+

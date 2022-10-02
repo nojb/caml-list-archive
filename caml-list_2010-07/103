@@ -1,0 +1,1288 @@
+Return-Path: <dbm@refined-audiometrics.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 1888CBBAF
+	for <caml-list@yquem.inria.fr>; Thu, 15 Jul 2010 20:40:39 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmoCAFbzPkzRVlk/kGdsb2JhbACBQ54pFQEBAQEJCQwHEQMfv04CgnWCLQSDfg
+X-IronPort-AV: E=Sophos;i="4.55,209,1278280800"; 
+   d="scan'208,217";a="55613061"
+Received: from elasmtp-junco.atl.sa.earthlink.net ([209.86.89.63])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 15 Jul 2010 20:40:37 +0200
+Received: from [69.254.201.214] (helo=[10.0.1.6])
+	by elasmtp-junco.atl.sa.earthlink.net with esmtpa (Exim 4.67)
+	(envelope-from <dbm@refined-audiometrics.com>)
+	id 1OZTMK-0007oL-H2
+	for caml-list@yquem.inria.fr; Thu, 15 Jul 2010 14:40:37 -0400
+Mime-Version: 1.0 (Apple Message framework v753.1)
+In-Reply-To: <87zkxsfvsg.fsf@frosties.localdomain>
+References: <87sk3mcaeq.fsf@frosties.localdomain> <AANLkTilJUmUCQx2DiomhBNZdWEUinjnLeu2rFMMwcZ02@mail.gmail.com> <87zkxsfvsg.fsf@frosties.localdomain>
+Content-Type: multipart/alternative; boundary=Apple-Mail-9-264325716
+Message-Id: <9167C01A-EBE1-4761-B19A-276A131B29AD@refined-audiometrics.com>
+From: David McClain <dbm@refined-audiometrics.com>
+Subject: Re: [Caml-list] Smart ways to implement worker threads
+Date: Thu, 15 Jul 2010 11:40:36 -0700
+To: caml-list@yquem.inria.fr
+X-Mailer: Apple Mail (2.753.1)
+X-ELNK-Trace: 7a0ab3eafc8cf994b22988ad1c62733440683398e744b8a4f246482fc8fbd948441584db96acc554387f7b89c61deb1d350badd9bab72f9c350badd9bab72f9c
+X-Originating-IP: 69.254.201.214
+X-Spam: no; 0.00; lear:01 ocaml:01 ocaml:01 ocaml's:01 reppy:01 translated:01 implements:01 reppy:01 requestor:01 requestor:01 nesting:01 combinators:01 accessor:01 accessor:01 lambda:01 
+
+
+--Apple-Mail-9-264325716
+Content-Transfer-Encoding: 7bit
+Content-Type: text/plain;
+	charset=US-ASCII;
+	delsp=yes;
+	format=flowed
+
+It is too bad I don't want to lear CML but use Ocaml. The CML examples
+from the book don't translate into ocaml since the interface is just a
+little bit different and those differences are what throws me off. I
+
+That may appear to be the case from only a cursory review of CML. But  
+I find that OCaml's notions of Events, Channels, etc, correspond  
+quite closely to what John Reppy describes.
+
+The whole point of Reppy's work was to show how "Events" could be  
+made into functional objects, with operations for combination among  
+them.
+
+I don't have the "sort" routine translated, but here is some Lisp  
+code that attempts to provide the multiple-readers / single-writer  
+locks as might be used in a database application. It demonstrates the  
+use of wrap, sync, etc...
+
+-----------------------------------
+;; rwgate.lisp -- Multiple Reader/Single Writer using Reppy's Channels
+;;
+;; DM/MCFA  01/00
+;; ----------------------------------------------------
+
+(defpackage "RWGATE"
+   (:use "USEFUL-MACROS" "COMMON-LISP" "REPPY-CHANNELS" "SPM"  
+"LISPWORKS")
+   (:export "MAKE-LOCK"
+            "WRAP-RDLOCKEVT"
+            "WRAP-WRLOCKEVT"
+            "WITH-READLOCK"
+            "WITH-WRITELOCK"))
+
+(in-package "RWGATE")
+
+;; ---------------------------------------------------------------
+;; This package implements a multiple-reader/single-writer lock
+;; protocol using the amazing capabilities of the Reppy channels.
+;;
+;; Rule of engagement:
+;;
+;; 1. A lock is available for reading if no write locks are in place,
+;;    or else the read lock requestor is equal to the write lock holder.
+;;
+;; 2. A lock is available for writing if no read locks and no write  
+locks
+;;    are in place,
+;;    or else the write lock requestor is equal to the write lock  
+holder,
+;;    or else the write lock requestor is equal to every read lock  
+holder.
+;;
+;; These rules ensure that multiple readers can run, while only one
+;; writer can run. No requirements for nesting of read/write lock
+;; requests. That is, a writer can request a read lock and vice versa,
+;; and issue lock releases in any order.
+;;
+;; A lock holder can request any number of additional locks. The lock  
+will
+;; actually be released when an equal number of releases of like kind
+;; have been obtained. For every write lock there is a write release,
+;; and for every read lock there is a read release.
+;;
+;; The Reppy protocol is protected with UNWIND-PROTECT to ensure that
+;; locks held are released on exit from the function block being  
+executed
+;; within the province of a lock. Lock releases are handled  
+transparently
+;; to the user.
+;;
+;; ---------------------------------------------------------------
+;; Lock server protocol with event combinators
+
+(defclass rw-lock (<serviceable-protocol-mixin>)
+   ((rdlocks :accessor  rw-lock-rdlocks  :initform 0)
+    (wrlocks :accessor  rw-lock-wrlocks  :initform 0)
+    (wrowner :accessor  rw-lock-wrowner  :initform nil)
+    (rdqueue :accessor  rw-lock-rdqueue  :initform nil)
+    (rdowners :accessor rw-lock-rdowners :initform nil)
+    (wrqueue :accessor  rw-lock-wrqueue  :initform nil)))
+
+(defun make-lock ()
+   (make-instance
+    'rw-lock
+    :handlers (list
+
+               :read
+               #'(lambda (req gate who)
+                   (declare (ignore req))
+		  (labels ((take-it ()
+			     (incf (rw-lock-rdlocks gate))
+			     (push who (rw-lock-rdowners gate))
+			     (spawn #'send who t)))
+		    (cond ((eq who (rw-lock-wrowner gate))
+			   ;; we own a write lock already so go ahead...
+			   (take-it))
+			
+			  ((plusp (rw-lock-wrlocks gate))
+			   ;; outstanding write lock so enqueue in
+			   ;; pending readers queue...
+			   (push who (rw-lock-rdqueue gate)))
+			
+			  (t
+			   ;; no outstanding writer so take it...
+			   (take-it))
+			  )))
+	
+               :release-read
+               #'(lambda (req gate who)
+                   (declare (ignore req))
+		  (removef (rw-lock-rdowners gate) who :count 1)
+                   (if (and (zerop (decf (rw-lock-rdlocks gate)))
+                            (zerop (rw-lock-wrlocks gate)))
+		      ;; no more readers and no more writers
+		      ;; (a writer might have been me...)
+		      ;; so go ahead and start writers
+		      ;; there should be no pending readers
+		      ;; since there were no writers
+                       (let ((writer (pop (rw-lock-wrqueue gate))))
+                         (when writer
+                           (incf (rw-lock-wrlocks gate))
+                           (setf (rw-lock-wrowner gate) writer)
+                           (spawn #'send writer t))
+                         )))
+	
+               :write
+               #'(lambda (req gate who)
+                   (declare (ignore req))
+		  (labels ((take-it ()
+			     (incf (rw-lock-wrlocks gate))
+			     (setf (rw-lock-wrowner gate) who)
+			     (spawn #'send who t)))
+		    (cond ((and (zerop (rw-lock-rdlocks gate))
+				(zerop (rw-lock-wrlocks gate)))
+			   ;; gate available so take it
+			   (take-it))
+			
+			  ((eq who (rw-lock-wrowner gate))
+			   ;; gate already owned by requestor
+			   ;; so incr lock count and tell him its okay...
+			   (take-it))
+			
+			  ((every #'(lambda (rdr)
+				      (eq rdr who))
+				  (rw-lock-rdowners gate))
+			   ;; only one reader and it is me...
+                            ;; but I may be in the list numerous  
+times...
+			   ;; so go ahead and grab a write lock.
+			   (take-it))
+			
+			  (t
+			   ;; gate not available -- put caller on
+			   ;; waiting writers queue
+			   (conc1f (rw-lock-wrqueue gate) who))
+			  )))
+	
+               :release-write
+               #'(lambda (req gate who)
+                   (declare (ignore req who))
+                   (labels
+                       ((run-writer ()
+                          (let ((writer (pop (rw-lock-wrqueue gate))))
+                            (if writer
+                                (progn
+				 (incf (rw-lock-wrlocks gate))
+				 (setf (rw-lock-wrowner gate) writer)
+                                  (spawn #'send writer t)
+                                  t)
+			     nil)))
+                        (run-readers ()
+                          (let ((readers (rw-lock-rdqueue gate)))
+                            (if readers
+                                (progn
+                                  (setf (rw-lock-rdqueue gate) nil)
+				 (appendf (rw-lock-rdowners gate) readers)
+                                  (incf (rw-lock-rdlocks gate)  
+(length readers))
+                                  (dolist (reader readers)
+                                    (spawn #'send reader t))
+                                  t)
+                              nil))))
+                     (when (zerop (decf (rw-lock-wrlocks gate)))
+		      ;; no more writers (was only me anyway...)
+                       (setf (rw-lock-wrowner gate) nil)
+		      (if (zerop (rw-lock-rdlocks gate))
+			  ;; if no active readers either
+			  ;; then it is a toss up whether to
+			  ;; start writers or readers
+			  (if (zerop (random 2)) ;; add some non-determinism
+			      (unless (run-writer)
+				(run-readers))
+			    (unless (run-readers)
+			      (run-writer)))
+			;; but if I was a reader too,
+			;; then it is only safe to start other
+			;; readers.
+			(run-readers)))
+		    ))
+               )))
+
+(defun wrap-lockEvt (lock fn args req rel)
+   (guard
+    #'(lambda ()
+        (let ((replyCh (make-channel)))
+          (labels
+              ((acquire-lock ()
+                 (service-request req lock replyCh))
+               (release-lock ()
+                 (service-request rel lock replyCh)))
+            (spawn #'acquire-lock)
+            (wrap-abort
+             (wrap (recvEvt replyCh)
+                   #'(lambda (reply)
+                       (declare (ignore reply))
+                       (unwind-protect
+                           (apply fn args)
+                         (spawn #'release-lock))))
+             #'(lambda ()
+                 (spawn #'(lambda ()
+                            (recv replyCh)
+                            (release-lock)))))
+            )))
+    ))
+
+(defmethod wrap-rdLockEvt ((lock rw-lock) fn &rest args)
+   (wrap-lockEvt lock fn args :read :release-read))
+
+(defmethod wrap-wrLockEvt ((lock rw-lock) fn &rest args)
+   (wrap-lockEvt lock fn args :write :release-write))
+
+(defmethod with-readlock ((lock rw-lock) fn &rest args)
+   (sync (apply #'wrap-rdLockEvt lock fn args)))
+
+(defmethod with-writelock ((lock rw-lock) fn &rest args)
+   (sync (apply #'wrap-wrLockEvt lock fn args)))
+-----------------------------------
+
+Dr. David McClain
+Chief Technical Officer
+Refined Audiometrics Laboratory
+4391 N. Camino Ferreo
+Tucson, AZ  85750
+
+email: dbm@refined-audiometrics.com
+phone: 1.520.390.3995
+web: http://refined-audiometrics.com
+
+
+--Apple-Mail-9-264325716
+Content-Transfer-Encoding: quoted-printable
+Content-Type: text/html;
+	charset=US-ASCII
+
+<html><body style=3D"word-wrap: break-word; -webkit-nbsp-mode: space; =
+-webkit-line-break: after-white-space; ">
+<div style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" color=3D"#001dd7" =
+style=3D"font: 12.0px Helvetica; color: #001dd7">It is too bad I don't =
+want to lear CML but use Ocaml. The CML examples</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" color=3D"#001dd7" =
+style=3D"font: 12.0px Helvetica; color: #001dd7">from the book don't =
+translate into ocaml since the interface is just a</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" color=3D"#001dd7" =
+style=3D"font: 12.0px Helvetica; color: #001dd7">little bit different =
+and those differences are what throws me off. I</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; font: normal normal normal 12px/normal Helvetica; =
+min-height: 14px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">That may =
+appear to be the case from only a cursory review of CML. But I find that =
+OCaml's notions of Events, Channels, etc, correspond quite closely to =
+what John Reppy describes.&nbsp;</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; font: =
+normal normal normal 12px/normal Helvetica; min-height: 14px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">The whole point of Reppy's =
+work was to show how "Events" could be made into functional objects, =
+with operations for combination among them.</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; font: normal normal normal 12px/normal Helvetica; =
+min-height: 14px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">I don't =
+have the "sort" routine translated, but here is some Lisp code that =
+attempts to provide the multiple-readers / single-writer locks as might =
+be used in a database application. It demonstrates the use of wrap, =
+sync, etc...</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">-----------------------------------</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; rwgate.lisp -- Multiple Reader/Single Writer using =
+Reppy's Channels</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">;;</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; DM/MCFA =
+&nbsp;01/00</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; =
+----------------------------------------------------</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; font: normal normal normal 12px/normal Helvetica; =
+min-height: 14px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">(defpackage "RWGATE"</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;(:use "USEFUL-MACROS" "COMMON-LISP" =
+"REPPY-CHANNELS" "SPM" "LISPWORKS")</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;(:export "MAKE-LOCK"</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WRAP-RDLOCKEVT"</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WRAP-WRLOCKEVT"</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+"WITH-READLOCK"</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; "WITH-WRITELOCK"))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; font: =
+normal normal normal 12px/normal Helvetica; min-height: 14px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">(in-package =
+"RWGATE")</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; =
+---------------------------------------------------------------</font></di=
+v><div style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; This package implements a =
+multiple-reader/single-writer lock</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">;; =
+protocol using the amazing capabilities of the Reppy =
+channels.</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;;</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; Rule of engagement:</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;;</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">;; 1. A =
+lock is available for reading if no write locks are in =
+place,</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; &nbsp; &nbsp;or else the =
+read lock requestor is equal to the write lock holder.</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;;</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">;; 2. A =
+lock is available for writing if no read locks and no write =
+locks</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; &nbsp; &nbsp;are in =
+place,</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; &nbsp; &nbsp;or else the =
+write lock requestor is equal to the write lock holder,</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; &nbsp; &nbsp;or else the write lock requestor is =
+equal to every read lock holder.</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">;;</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; These rules ensure that =
+multiple readers can run, while only one</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; writer can run. No requirements for nesting of =
+read/write lock</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; requests. That is, a =
+writer can request a read lock and vice versa,</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; and issue lock releases in any =
+order.</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;;</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; A lock holder can request any number of additional =
+locks. The lock will</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">;; =
+actually be released when an equal number of releases of like =
+kind</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; have been obtained. For =
+every write lock there is a write release,</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; and for every read lock there is a read =
+release.</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;;</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; The Reppy protocol is protected with UNWIND-PROTECT =
+to ensure that</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;; locks held are released =
+on exit from the function block being executed</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; within the province of a lock. Lock releases are =
+handled transparently</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">;; to the =
+user.</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">;;</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; =
+---------------------------------------------------------------</font></di=
+v><div style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">;; Lock server protocol with event =
+combinators</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">(defclass rw-lock =
+(&lt;serviceable-protocol-mixin&gt;)</font></div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;((rdlocks :accessor &nbsp;rw-lock-rdlocks =
+&nbsp;:initform 0)</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; (wrlocks :accessor &nbsp;rw-lock-wrlocks =
+&nbsp;:initform 0)</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; (wrowner :accessor &nbsp;rw-lock-wrowner =
+&nbsp;:initform nil)</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; (rdqueue :accessor &nbsp;rw-lock-rdqueue =
+&nbsp;:initform nil)</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; (rdowners :accessor rw-lock-rdowners :initform =
+nil)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; (wrqueue =
+:accessor &nbsp;rw-lock-wrqueue &nbsp;:initform nil)))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; font: normal normal normal 12px/normal Helvetica; =
+min-height: 14px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">(defun =
+make-lock ()</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;(make-instance</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; 'rw-lock</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; :handlers (list</font></div><p =
+style=3D"margin: 0.0px 0.0px 0.0px 0.0px"><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;</font></p><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;:read</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;#'(lambda (req gate who)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;(declare (ignore req))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> =
+&nbsp;(labels ((take-it ()</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; (incf (rw-lock-rdlocks gate))</font></div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; (push who (rw-lock-rdowners gate))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; (spawn #'send who =
+t)))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp;(cond ((eq who =
+(rw-lock-wrowner gate))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+;; we own a write lock already so go ahead...</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; (take-it))</font></div><p =
+style=3D"margin: 0.0px 0.0px 0.0px 0.0px"><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;</font></p><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;((plusp (rw-lock-wrlocks =
+gate))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; outstanding write lock =
+so enqueue in&nbsp;</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+;; pending readers queue...</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+(push who (rw-lock-rdqueue gate)))</font></div><p style=3D"margin: 0.0px =
+0.0px 0.0px 0.0px"><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;</font></p><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;(t</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; no outstanding writer =
+so take it...</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; =
+(take-it))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;)))</font></div><p =
+style=3D"margin: 0.0px 0.0px 0.0px 0.0px"><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+&nbsp;</font></p><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;:release-read</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;#'(lambda (req gate who)</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(declare (ignore req))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> =
+&nbsp;(removef (rw-lock-rdowners gate) who :count 1)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp;(if (and (zerop (decf (rw-lock-rdlocks =
+gate)))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(zerop (rw-lock-wrlocks gate)))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; &nbsp;;; no more readers and no more writers</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; &nbsp;;; (a writer =
+might have been me...)</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; &nbsp;;; so go ahead and start writers</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; &nbsp;;; there =
+should be no pending readers</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; &nbsp;;; since there were no writers</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;(let ((writer (pop (rw-lock-wrqueue =
+gate))))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(when =
+writer</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(incf (rw-lock-wrlocks gate))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(setf (rw-lock-wrowner gate) =
+writer)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(spawn #'send writer t))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;)))</font></div><p style=3D"margin: 0.0px =
+0.0px 0.0px 0.0px"><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+&nbsp;</font></p><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;:write</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;#'(lambda (req gate who)</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(declare (ignore req))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> =
+&nbsp;(labels ((take-it ()</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; (incf (rw-lock-wrlocks gate))</font></div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; (setf (rw-lock-wrowner gate) who)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; (spawn #'send who =
+t)))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp;(cond ((and (zerop =
+(rw-lock-rdlocks gate))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span>(zerop =
+(rw-lock-wrlocks gate)))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+;; gate available so take it</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+(take-it))</font></div><p style=3D"margin: 0.0px 0.0px 0.0px =
+0.0px"><font face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica"><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+</span><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+</span><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+</span> &nbsp;</font></p><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;((eq who (rw-lock-wrowner =
+gate))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; gate already owned by =
+requestor</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; so incr lock count and =
+tell him its okay...</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+(take-it))</font></div><p style=3D"margin: 0.0px 0.0px 0.0px =
+0.0px"><font face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica"><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+</span><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+</span><span class=3D"Apple-tab-span" style=3D"white-space:pre">	=
+</span> &nbsp;</font></p><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;((every #'(lambda =
+(rdr)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; &nbsp;(eq rdr =
+who))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;(rw-lock-rdowners =
+gate))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; only one reader and it =
+is me...</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; ;; =
+but I may be in the list numerous times...</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; so go ahead and grab a =
+write lock.</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; (take-it))</font></div><p =
+style=3D"margin: 0.0px 0.0px 0.0px 0.0px"><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;</font></p><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;(t&nbsp;</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; gate not available -- =
+put caller on</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; ;; waiting writers =
+queue</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; (conc1f (rw-lock-wrqueue =
+gate) who))</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp;)))</font></div><p =
+style=3D"margin: 0.0px 0.0px 0.0px 0.0px"><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+&nbsp;</font></p><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;:release-write</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;#'(lambda (req gate who)</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(declare (ignore req who))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(labels</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;((run-writer =
+()</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (let =
+((writer (pop (rw-lock-wrqueue gate))))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (if writer</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(progn</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> (incf (rw-lock-wrlocks =
+gate))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> (setf (rw-lock-wrowner gate) =
+writer)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; (spawn #'send writer t)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+t)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+nil)))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (run-readers =
+()</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (let =
+((readers (rw-lock-rdqueue gate)))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (if readers</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(progn</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; (setf (rw-lock-rdqueue gate) nil)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> (appendf (rw-lock-rdowners gate) =
+readers)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; (incf (rw-lock-rdlocks gate) (length =
+readers))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; (dolist (reader readers)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(spawn #'send reader t))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+t)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; nil))))</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(when (zerop (decf =
+(rw-lock-wrlocks gate)))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp; =
+&nbsp; &nbsp;;; no more writers (was only me anyway...)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp;(setf (rw-lock-wrowner gate) =
+nil)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; &nbsp;(if (zerop =
+(rw-lock-rdlocks gate))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp;;; =
+if no active readers either</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp;;; =
+then it is a toss up whether to</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> &nbsp;;; =
+start writers or readers</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span> =
+&nbsp;(if (zerop (random 2)) ;; add some =
+non-determinism</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; &nbsp;(unless =
+(run-writer)</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span>(run-readers))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp;(unless =
+(run-readers)</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp; =
+&nbsp;(run-writer)))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span>;; but if =
+I was a reader too,</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span>;; then =
+it is only safe to start other</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica"><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span><span =
+class=3D"Apple-tab-span" style=3D"white-space:pre">	</span>;; =
+readers.</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica"><span class=3D"Apple-tab-span"=
+ style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span>(run-readers)))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica"><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span><span class=3D"Apple-tab-span" =
+style=3D"white-space:pre">	</span> &nbsp; &nbsp;))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;)))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">(defun wrap-lockEvt (lock fn args req =
+rel)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;(guard</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; #'(lambda ()</font></div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; (let ((replyCh =
+(make-channel)))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; (labels</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+((acquire-lock ()</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(service-request req lock replyCh))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(release-lock ()</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(service-request rel lock replyCh)))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (spawn =
+#'acquire-lock)</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; (wrap-abort</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(wrap (recvEvt =
+replyCh)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;#'(lambda =
+(reply)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(declare (ignore =
+reply))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp;(unwind-protect</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(apply fn args)</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(spawn =
+#'release-lock))))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;#'(lambda =
+()</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(spawn #'(lambda ()</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; (recv =
+replyCh)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; =
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; =
+(release-lock)))))</font></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; )))</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">&nbsp;&nbsp; ))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; font: =
+normal normal normal 12px/normal Helvetica; min-height: 14px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">(defmethod wrap-rdLockEvt =
+((lock rw-lock) fn &amp;rest args)</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;(wrap-lockEvt lock fn args :read =
+:release-read))</font></div><div style=3D"margin-top: 0px; margin-right: =
+0px; margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">(defmethod wrap-wrLockEvt ((lock rw-lock) fn &amp;rest =
+args)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp;(wrap-lockEvt =
+lock fn args :write :release-write))</font></div><div style=3D"margin-top:=
+ 0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; font: =
+normal normal normal 12px/normal Helvetica; min-height: 14px; =
+"><br></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">(defmethod with-readlock =
+((lock rw-lock) fn &amp;rest args)</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">&nbsp;&nbsp;(sync (apply #'wrap-rdLockEvt lock fn =
+args)))</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">(defmethod with-writelock ((lock rw-lock) fn &amp;rest =
+args)</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">&nbsp;&nbsp;(sync (apply =
+#'wrap-wrLockEvt lock fn args)))</font></div><div style=3D"margin-top: =
+0px; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px =
+Helvetica">-----------------------------------</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; font: normal normal normal 12px/normal Helvetica; =
+min-height: 14px; "><br></div><div style=3D"margin-top: 0px; =
+margin-right: 0px; margin-bottom: 0px; margin-left: 0px; "><font =
+face=3D"Helvetica" size=3D"3" style=3D"font: 12.0px Helvetica">Dr. David =
+McClain</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">Chief Technical =
+Officer</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">Refined Audiometrics =
+Laboratory</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">4391 N. Camino =
+Ferreo</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; "><font face=3D"Helvetica" =
+size=3D"3" style=3D"font: 12.0px Helvetica">Tucson, AZ&nbsp; =
+85750</font></div><div style=3D"margin-top: 0px; margin-right: 0px; =
+margin-bottom: 0px; margin-left: 0px; font: normal normal normal =
+12px/normal Helvetica; min-height: 14px; "><br></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">email: <a =
+href=3D"mailto:dbm@refined-audiometrics.com"><font color=3D"#001fe8" =
+style=3D"color: =
+#001fe8">dbm@refined-audiometrics.com</font></a></font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">phone: 1.520.390.3995</font></div><div =
+style=3D"margin-top: 0px; margin-right: 0px; margin-bottom: 0px; =
+margin-left: 0px; "><font face=3D"Helvetica" size=3D"3" style=3D"font: =
+12.0px Helvetica">web: <font color=3D"#001fe8" style=3D"color: =
+#001fe8"><a =
+href=3D"http://refined-audiometrics.com/">http://refined-audiometrics.com<=
+/a></font></font></div><div><br></div></body></html>=
+
+--Apple-Mail-9-264325716--
+

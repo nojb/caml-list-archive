@@ -1,0 +1,182 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id KAA15222 for caml-redistribution; Wed, 20 Mar 1996 10:53:52 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id KAA04448 for <caml-list@pauillac.inria.fr>; Tue, 19 Mar 1996 10:32:40 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by nez-perce.inria.fr (8.7.1/8.7.1) with ESMTP id KAA11252 for <caml-list@pauillac.inria.fr>; Tue, 19 Mar 1996 10:32:25 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by margaux.inria.fr (8.6.10/8.6.6) with ESMTP id KAA17688 for <caml-list@margaux.inria.fr>; Tue, 19 Mar 1996 10:31:24 +0100
+Received: from alize.univ-bpclermont.fr (alize.univ-bpclermont.fr [193.54.50.12]) by nez-perce.inria.fr (8.7.1/8.7.1) with ESMTP id KAA11239 for <caml-list@margaux.inria.fr>; Tue, 19 Mar 1996 10:31:08 +0100 (MET)
+Message-Id: <199603190931.KAA11239@nez-perce.inria.fr>
+Received: by alize.univ-bpclermont.fr
+	(1.37.109.16/16.2) id AA280777790; Tue, 19 Mar 1996 10:29:50 +0100
+From: Jocelyn Serot <Jocelyn.Serot@lasmea.univ-bpclermont.fr>
+Subject: Q: Module system and separate compilation
+To: caml-list@margaux.inria.fr
+Date: Tue, 19 Mar 1996 10:29:48 MET
+X-Mailer: Elm [revision: 109.14]
+Sender: weis
+Status: O
+
+
+Hello,
+
+I recently switched from Caml light to CSL and have been impressed
+both by the resulting speedup of my programs and the usefulness of the 
+module system. Thanks to X. Leroy and all the co-designers for making 
+such a tool available !..
+
+I have a question regarding relationships between the module system and
+separate file compilation. I will try to explain my pb with a (small ;-))
+but hopefully significant example:
+
+Let say i have a module defining a kind of "addition" on a (abstract)
+type t. Its signature might be:
+
+	module type Foo = sig
+		type t
+		val one : t
+		val add : t -> t -> t
+	end
+
+I want a module that defines a (restricted) notion of multiplication
+on this type t. It signature might be:
+ 
+	module type Bar = sig
+		type t
+		val one : t
+		val double : t -> t
+	end
+
+My goal is to use any module M that matches the signature Foo to build
+an implementation for Bar. This seems a good application for functors:
+
+	module MakeBar(M: Foo) =
+		(struct
+		type t = M.t
+		let one = M.one
+		let double x = M.add x x
+	end : Bar)
+
+Now, suppose i have an implementation for Foo. For example:
+
+	module Foo = struct
+		type t = int
+		let one = 1
+		let add x y = x + y
+	end
+
+All i have to do build a Bar implemtation is to apply functor:
+
+	module Bar = MakeBar(Foo)
+
+	open Bar
+	let two = double one
+
+If the previous (indented) phrases are written in the same file (eg: foobar.ml)
+and compiled as a whole, the command
+	cslc -i foobar.ml
+produces the following output:
+
+>module type Foo = sig type t val one : t val add : t -> t -> t end
+>module type Bar = sig type t val one : t val double : t -> t end
+>module MakeBar : functor(M : Foo) -> Bar
+>module Foo : sig type t = int val one : int val add : int -> int -> int end
+>module Bar : sig type t = MakeBar(Foo).t val one : t val double : t -> t end
+>val two : Bar.t
+
+That's fine (though i dont really understand why the type <t> in the last line
+is <MakeBar(Foo).t> and not simply <Bar.t>..)
+
+Now, the pb is that in general both Foo and Bar signatures (as well as 
+MakeBar functor definition) may be large and i want to put them in
+separate files, that is:
+
+	(* file "foo.mli": *)
+		
+	type t
+	val one : t
+	val add : t -> t -> t
+
+	(* file "foo.ml": *)
+
+	type t = int
+	let one = 1
+	let add x y = x + y
+
+	(* file "bar.mli": *)
+
+	type t
+	val one : t
+	val double : t -> t
+
+all these files compiles (cslc xxx.ml[i]) and produce corresponding .cmi and
+.cmo files.
+
+Now, i suppose i have to put MakeBar def in the "bar.ml" file:
+
+	module MakeBar(M: Foo) = (struct
+		type t = M.t
+		let one = M.one
+		let double x = M.add x x
+	end : Bar)
+
+but this doesnt compile: CSL complains that
+	"File "bar.ml", line 1, characters 18-21: Unbound module type Foo"
+In the CSL HTML manual (node4.html), it is said, however that
+	"When the compiler encounters a reference to a free module identifier Mod,
+	 it looks in the search path for a file mod.cmi (note lowercasing of first
+	 letter) and loads the compiled interface contained in that file."
+In this case, the file "foo.cmi" exists !...
+The same complain occurs with the Bar module type. Again the file bar.cmi
+exists.
+
+Ok, lets duplicate these sigs in the file bar.ml:
+
+	(* file "bar.ml": *)
+
+	module type Foo = sig type t val one : t val add : t -> t -> t end
+	module type Bar = sig type t val one : t val double : t -> t end
+
+	module MakeBar(M: Foo) = (struct
+		type t = M.t
+		let one = M.one
+		let double x = M.add x x
+	end : Bar)
+
+But CSL now complains that:
+
+"The implementation bar.ml does not match the interface bar.cmi:
+The field `double' is required but not provided
+The field `one' is required but not provided
+The field `t' is required but not provided"
+
+The only solution i found is then to rewrite to write bar.mli as:
+
+	(* file bar.mli *)
+	
+	module type Bar = sig
+		type t
+		val one : t
+		val double : t -> t
+	end
+
+But this seems contradictory with the fact that, as stated in node2.12 of
+CSL html manual
+
+"A compilation unit behaves roughly as the module definition
+	module unit-name : sig unit-interface end = struct unit-implementation end"
+
+Am i missing sth important, or even misusing the module system ?..
+In particular, the need for textual duplication of the Foo and Bar signatures
+(which have written and compiled in separate files) in the file defining
+the functor seems a bit annoying..
+
+Sorry for being so long, and thanks in advance for your help
+
+J. Serot
+--
+E-mail: Jocelyn.Serot@lasmea.univ-bpclermont.fr .............................
+S-mail: LASMEA - URA 1793 CNRS, Universite Blaise Pascal, 63177 Aubiere cedex
+Tel: (33) 73.40.73.30 - Fax: (33) 73.40.72.62 ...............................
+.... http://wwwlasmea.univ-bpclermont.fr/Personnel/Jocelyn.Serot/Welcome.html
+
+
+
+

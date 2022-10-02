@@ -1,0 +1,272 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA19355; Fri, 12 Oct 2001 16:29:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA19528 for <caml-list@pauillac.inria.fr>; Fri, 12 Oct 2001 16:29:43 +0200 (MET DST)
+Received: from cahors.inria.fr (cahors.inria.fr [128.93.8.84])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f9CETgj29333;
+	Fri, 12 Oct 2001 16:29:42 +0200 (MET DST)
+Received: from localhost (IDENT:furuse@cahors.inria.fr [128.93.8.84])
+	by cahors.inria.fr (8.11.0/8.8.7) with ESMTP id f9CETgB08542;
+	Fri, 12 Oct 2001 16:29:42 +0200
+Date: Fri, 12 Oct 2001 16:29:40 +0200 (CEST)
+Message-Id: <20011012.162940.74731964.Jun.Furuse@inria.fr>
+To: berke@altern.org
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Some suggested improvements to the Graphics and
+ Bigarray modules
+From: "Jun P. FURUSE" <Jun.Furuse@inria.fr>
+In-Reply-To: <20011009233142.A10140@gogol.zorgol>
+References: <20011009233142.A10140@gogol.zorgol>
+X-Mailer: Mew version 2.0 on Emacs 20.7 / Mule 4.1 (AOI)
+X-URL: http://pauillac.inria.fr/~furuse/
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello,
+
+> First the color cache in otherlibs/graph/color.c is too small (512
+> entries). So if I overlay my image with, say, red and blue zones,
+> totaling more than 512 colors, make_image gets terribly slow (I spent
+> an entire evening tracking out this mysterious slowdown). As a fix I
+> set it to 4096 entries which corrected the slowdown (until I buy a
+> color camera, that is).
+
+The color query of Graphics library in X11 is quite slow, 
+even with the caml color => pixel value cache, since
+to obtain the pixel value of a caml color, it calls XAllocColor
+function. That is, for each color query, Caml Graphics applications
+must communicate with the X server. This transaction slows down
+make_image function if images have too many colors.
+The cache works well for images like gif (less than 256 colors),
+but not for photos and still video images which may have thousands of
+colors.
+
+I just have written a small patch for this color conversion without 
+communication between X server. This speeds up make_image pretty well
+and the color cache is no more required. 
+The hack works only for TrueColor and DirectColor visuals, but
+nowadays it is difficult to find running X servers with other color
+models like Pseudo (=256 colors) and Monochrome.
+
+This change is still not commited to CVS, because I have not checked
+it in many environments. (At least it works well in my computer...)
+
+-----------------------------------------------------------------------
+Jun P. Furuse 					 Jun.Furuse@inria.fr
+
+Index: color.c
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/otherlibs/graph/color.c,v
+retrieving revision 1.13
+diff -c -r1.13 color.c
+*** color.c	2000/06/07 16:32:49	1.13
+--- color.c	2001/09/21 21:23:43
+***************
+*** 13,18 ****
+--- 13,19 ----
+  /* $Id: color.c,v 1.13 2000/06/07 16:32:49 furuse Exp $ */
+  
+  #include "libgraph.h"
++ #include <X11/Xatom.h>
+  
+  /* Cache to speed up the translation rgb -> pixel value. */
+  
+***************
+*** 30,39 ****
+  
+  static int num_overflows = 0;
+  
+  Bool direct_rgb = False;
+! int byte_order;
+! int bitmap_unit;
+! int bits_per_pixel;
+  
+  void gr_init_color_cache(void)
+  {
+--- 31,129 ----
+  
+  static int num_overflows = 0;
+  
++ /* rgb -> pixel conversion *without* display connection */
++ 
+  Bool direct_rgb = False;
+! int red_l, red_r;
+! int green_l, green_r;
+! int blue_l, blue_r;
+! unsigned long red_vals[256];
+! unsigned long green_vals[256];
+! unsigned long blue_vals[256];
+! 
+! void get_shifts( unsigned long mask, int *lsl, int *lsr )
+! {
+!   int l = 0;
+!   int r = 0;
+!   int bit = 1;
+!   if ( mask == 0 ){ *lsl = -1; *lsr = -1; return; }
+! 
+!   for( l = 0; l < 32; l++ ){
+!     if( bit & mask ){ break; }
+!     bit = bit << 1;
+!   }
+!   for( r = l; r < 32; r++ ){
+!     if( ! (bit & mask) ){ break; }
+!     bit = bit << 1;
+!   }
+!   /* fix r */
+!   if ( r == 32 ) { r = 31; }
+!   *lsl = l;
+!   *lsr = 16 - (r - l);
+! }
+! 
+! 
+! void gr_init_direct_rgb_to_pixel(void)
+! {
+!   Visual *visual;
+!   int i;
+!  
+!   visual = DefaultVisual(grdisplay,grscreen);
+!   
+!   if ( visual->class == TrueColor || visual->class == DirectColor ){
+!     int lsl, lsr;
+! #ifdef QUICKCOLORDEBUG
+!     fprintf(stderr, "visual %lx %lx %lx\n", 
+! 	    visual->red_mask, 
+! 	    visual->green_mask, 
+! 	    visual->blue_mask);
+! #endif
+! 
+!     get_shifts(visual->red_mask, &red_l, &red_r); 
+! #ifdef QUICKCOLORDEBUG
+!     fprintf(stderr, "red %d %d\n", red_l, red_r);
+! #endif
+!     for(i=0; i<256; i++){
+!       red_vals[i] = (((i << 8) + i) >> red_r) << red_l;
+!     }
+! 
+!     get_shifts(visual->green_mask, &green_l, &green_r); 
+! #ifdef QUICKCOLORDEBUG
+!     fprintf(stderr, "green %d %d\n", green_l, green_r);
+! #endif
+!     for(i=0; i<256; i++){
+!       green_vals[i] = (((i << 8) + i) >> green_r) << green_l;
+!     }
+! 
+!     get_shifts(visual->blue_mask, &blue_l, &blue_r); 
+! #ifdef QUICKCOLORDEBUG
+!     fprintf(stderr, "blue %d %d\n", blue_l, blue_r);
+! #endif
+!     for(i=0; i<256; i++){
+!       blue_vals[i] = (((i << 8) + i) >> blue_r) << blue_l;
+!     }
+!     
+!     if( red_l < 0 || red_r < 0 || 
+! 	green_l < 0 || green_r < 0 || 
+! 	blue_l < 0 || blue_r < 0 ){
+! #ifdef QUICKCOLORDEBUG
+!       fprintf(stderr, "Damn, boost failed\n");
+! #endif
+!       direct_rgb = False;
+!     } else {
+! #ifdef QUICKCOLORDEBUG
+!       fprintf(stderr, "Boost ok\n");
+! #endif
+!       direct_rgb = True;
+!     }
+!   } else {
+!     /* we cannot use direct_rgb_to_pixel */
+! #ifdef QUICKCOLORDEBUG
+!     fprintf(stderr, "No boost!\n");
+! #endif
+!     direct_rgb = False;
+!   }
+! }
+  
+  void gr_init_color_cache(void)
+  {
+***************
+*** 59,71 ****
+    b = rgb & 0xFF;
+  
+    if (direct_rgb){
+!     switch ( bits_per_pixel ){
+!     case 16:
+!         tmp = ((r >> 3) << 11) + ((g >> 2) << 5) + ((b >> 3) << 0);
+!         return (unsigned long) tmp;
+!     case 32:
+!       return (r << 16) + (g << 8) + (b << 0);
+!     }
+    }
+  
+    h = Hash_rgb(r, g, b);
+--- 149,155 ----
+    b = rgb & 0xFF;
+  
+    if (direct_rgb){
+!     return red_vals[r] | green_vals[g] | blue_vals[b];
+    }
+  
+    h = Hash_rgb(r, g, b);
+Index: make_img.c
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/otherlibs/graph/make_img.c,v
+retrieving revision 1.10
+diff -c -r1.10 make_img.c
+*** make_img.c	2000/04/05 18:30:17	1.10
+--- make_img.c	2001/08/30 17:39:47
+***************
+*** 42,62 ****
+                   ZPixmap, 0, NULL, width, height,
+                   BitmapPad(grdisplay), 0);
+  
+-   /* To optimize RGB => color id calculation */
+-   if( !direct_rgb ){
+-     /* they are declared in color.c */
+-     byte_order = idata->byte_order;
+-     bitmap_unit = idata->bitmap_unit;
+-     bits_per_pixel = idata->bits_per_pixel;
+- #ifdef DIRECT_RGB_DEBUG
+-     fprintf(stderr, "Byte_order: %d = %s\n", byte_order,
+-             byte_order ? "LSBFirst" : "MSBFirst");
+-     fprintf(stderr, "Bitmp_unit: %d\n", bitmap_unit);
+-     fprintf(stderr, "Bits per pixel: %d\n", idata->bits_per_pixel);
+- #endif
+-     direct_rgb = True;
+-   }
+- 
+    bdata = (char *) stat_alloc(height * idata->bytes_per_line);
+    idata->data = bdata;
+    has_transp = False;
+--- 42,47 ----
+Index: open.c
+===================================================================
+RCS file: /net/pauillac/caml/repository/csl/otherlibs/graph/open.c,v
+retrieving revision 1.26
+diff -c -r1.26 open.c
+*** open.c	2001/07/31 13:15:36	1.26
+--- open.c	2001/10/12 13:58:26
+***************
+*** 192,197 ****
+--- 192,198 ----
+    gry = 0;
+    /* Reset the color cache */
+    gr_init_color_cache();
++   gr_init_direct_rgb_to_pixel();
+    return Val_unit;
+  }
+  
+***************
+*** 257,262 ****
+--- 258,264 ----
+      XFlush(grdisplay);
+    }
+    gr_init_color_cache();
++   gr_init_direct_rgb_to_pixel();
+    return Val_unit;
+  }
+  
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

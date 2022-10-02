@@ -1,0 +1,137 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA09115 for caml-redistribution; Thu, 9 Dec 1999 08:43:55 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA21457 for <caml-list@pauillac.inria.fr>; Thu, 9 Dec 1999 08:16:29 +0100 (MET)
+Received: from isil.maya.com (HOPKINS.PC.CS.CMU.EDU [128.2.215.35])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id IAA24007
+	for <caml-list@inria.fr>; Thu, 9 Dec 1999 08:16:24 +0100 (MET)
+Received: (from prevost@localhost)
+	by isil.maya.com (8.9.3/8.9.3) id CAA09794;
+	Thu, 9 Dec 1999 02:07:16 -0500
+X-Authentication-Warning: isil.maya.com: prevost set sender to prevost@maya.com using -f
+Sender: weis
+To: caml-list@inria.fr
+Subject: mmap for O'Caml
+From: John Prevost <prevost@maya.com>
+Date: 09 Dec 1999 02:07:16 -0500
+Message-ID: <87aenkwq1n.fsf@isil.maya.com>
+Lines: 114
+User-Agent: Gnus/5.0803 (Gnus v5.8.3) Emacs/20.4
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+Summary: O'Caml is cool.  New primitives written in two hours for
+         ocamlopt.  How does one submit potential features for
+         inclusion in O'Caml?  Segfaults are bad, I need comments.
+
+
+I recently started thinking about writing some database code
+(implementation, not interface) in O'Caml, and that got me thinking
+that mmap might be a nice thing to have.  I thought about it a little
+while, then shelved it.
+
+Then a few days ago, a friend of mine, out of the blue, said "It sure
+would be nice if SML could do mmap" because of a project he's working
+on.  Something like a database, as it turns out.
+
+So I turned my mind to how to do this in O'Caml.
+
+The first cut didn't satisfy my friend (and not me either, really.)
+This was done traditionally with the O'Caml-C FFI mechanism.
+Unfortunately, the whole reason for doing mmap is that you don't have
+lots of overhead when accessing the bytes of a file.
+
+I thought about somehow working with strings, but since string space
+in managed by the GC, it's not safe (can't mmap into the space the
+string takes up in memory.)
+
+So, I thought, it seems that you can't really get good fast inline
+access for this kind of thing unless the compiler knows how to produce
+inline code.  I spent an hour or two playing with ocamlopt and looking
+at disassemblies of its output on Intel Linux.  (Gods, Intel assembly
+is nasty.)
+
+Then I spent another two hours implementing five new primitives:
+
+type region
+
+external region_length : region -> int = "%region_length"
+external region_get : region -> int -> char = "%region_safe_get"
+external region_set : region -> int -> char -> unit = "%region_safe_set"
+external region_unsafe_get : region -> int -> char = "%region_unsafe_get"
+external region_unsafe_set : region -> int -> char -> unit =
+        "%region_unsafe_set"
+
+
+*TWO HOURS*.  I like this compiler.  :)
+
+The internal structure of a region is a block with a finalizer, like so:
+
+(finalizer, void pointer, int)
+
+Where the finalizer could be used to munmap in the case of an mmap'd
+region, when no one is referring to the region any more.  The void
+pointer points at the data of the region, and the int gives the
+region's length.  (This will probably have another field with access
+control info in it for safety's sake when I'm done.)
+
+My mmap routine is the same as it was with the normal extension
+mechanism.  It just plugs things in.  The same external functions are
+also used by the byte runtime.  (If you *need* the speed, you use
+ocamlopt.)
+
+In theory, the same region type could be used by anything that wants
+to allow fast access to a block of memory outside the O'Caml heap.
+Just plug in your favorite finalizer, void *, and size (up to 31 bits.
+<sigh>)
+
+I was very very very happily surprised at how easy it was to add new
+primitive operations to both the byte compiler and the bare metal
+compiler.
+
+
+I'll post a pointer to my patches up soon if anybody is interested.  I
+was wondering if this would be an interesting addition to the standard
+distribution, since (especially in the absence of actual mmap) it
+doesn't affect the other built-in types, but does need support in the
+compiler and can't just be linked in a particular application.  How
+does one go about submitting interesting potential code for inclusion
+in O'Caml?  Would this be an appropriate time, with O'Caml 3 coming
+up, for me to send this code to someone?  The mmap code isn't really
+universal, but as I said, the arbitrary region code could be handy for
+other things too.
+
+
+Finally, the problem--something that I'd appreciate if anybody could
+give me a suggestion on.  My mmap works just fine, both read and
+write.  The only problem is that trying to write to a file opened with
+O_RDONLY causes a segv.  (Normally, you'd get an error, but since the
+kernel's doing the writing, well, you lose.)  Segfaulting is, of
+course, not acceptable, even if the programmer asks for something bad.
+
+As far as I can tell, there's no way to find out whether a given fd is
+open read only or read-write or even write-only without actually
+trying to read or write it.  This means I can't detect at mmap time
+that something's wrong.  So my options are:
+
+  1) My mmap takes a filename and does the open itself, guaranteeing
+     that the way the file descriptor is opened and the way the memory
+     is mapped are in sync.  Now I can remember the read-write status
+     and raise an exception in the safe versions.
+
+  2) Is there a way my reading and writing code can somehow manage to
+     catch these segfaults and turn them into exceptions?  Or would
+     this be bad?  It doesn't seem like it'd be particularly efficient
+     to wrap every access with something that causes signals to be
+     caught and then not caught, so I suppose not.
+
+Fortunately, 1 is sufficient for the uses I and my friend (maybe
+this'll convince him to use O'Caml more and SML/NJ less!) have for
+mmap.  I just thought I'd see if anybody had other suggestions.
+
+
+Anyway, when I get things polished up a bit more, I'll post the diff
+(against the CVS O'Caml for now) on a website somewhere.
+
+John.
+
+
+

@@ -1,0 +1,119 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA25535 for caml-redistribution; Fri, 15 Jan 1999 12:24:29 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA19451 for <caml-list@pauillac.inria.fr>; Fri, 15 Jan 1999 09:13:49 +0100 (MET)
+Received: from infbssys.ips.cs.tu-bs.de (infbssys.ips.cs.tu-bs.de [134.169.32.1])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id JAA06690
+	for <caml-list@inria.fr>; Fri, 15 Jan 1999 09:13:48 +0100 (MET)
+Received: from infbsstq.ips.cs.tu-bs.de (lindig@infbsstq.ips.cs.tu-bs.de [134.169.32.78])
+	by infbssys.ips.cs.tu-bs.de (8.9.1/8.9.1) with ESMTP id JAA06992
+	for <caml-list@inria.fr>; Fri, 15 Jan 1999 09:13:47 +0100
+Message-ID: <19990115091346.A8507@ips.cs.tu-bs.de>
+Date: Fri, 15 Jan 1999 09:13:46 +0100
+From: Christian Lindig <lindig@ips.cs.tu-bs.de>
+To: Caml Mailing List <caml-list@inria.fr>
+Subject: OCamlLex-Patch for Rule Parameters
+Mail-Followup-To: Caml Mailing List <caml-list@inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.93i
+Sender: weis
+
+
+
+This patch provides an enhancement to OCamlLex from OCaml 2.01.  It
+allows to pass additional values to rules.  Currently a user can only
+access the lexbuf parameter inside rules but no user provided
+parameters:
+
+    rule this = parse
+        eof                 { .. }
+      | "#"                 { that lexbuf }
+
+    and that = parse
+        '\n'                { access lexbuf }
+      | [^'\n']*            { that lexbuf }
+
+The patch provides an extended syntax for OCamlLex specification files
+that allows to pass user defined parameters:
+
+    rule this = parse
+        eof                 { .. }
+      | "#"                 { that true 2 lexbuf }  (* pass true and 2 *)
+
+    and that x y = parse    (* x,y are additional parameters *)
+        '\n'                { access x, y, and lexbuf }
+      | [^'\n']*            { that lexbuf }
+
+The number of parameters is variable. Typically at least one rule will
+have no because OCamlYacc generated parsers don't pass additional
+parameters.  When a rule calls another rule it must pass the
+additional parameters first and then lexbuf as usual:
+
+    rule_name x y lexbuf
+
+The patch is backward compatible: all OCamlLex files will work with
+the patched OcamlLex. 
+  
+What are these additional parameters good for? They come in handy
+whenever a semantic value is collected across many lexer calls. A
+good example is the file ocaml-2.01/parsing/lexer.mll from the OCaml
+parser/lexer:  while scanning a string, escape sequences must be decoded. 
+Without additional parameters the result string must be hold in a global
+variable which makes the lexer no longer reentrant. 
+
+Here is another silly example:  It scans a file and replaces C style
+comments by Pascal style comments.  The comment string is collected first
+using a parameter and then printed as a whole. 
+
+    (* 
+     * ocamllex example.mll
+     * ocamlc -o example example.ml
+     * ./example < foo.c
+     *)
+
+    {
+      let get   = Lexing.lexeme
+    }
+
+    (* lexer definitions *)
+
+    rule scanner = parse
+            eof                     { ()                                    }
+        |   "/*"                    { comment "(*" lexbuf; scanner lexbuf   }
+        |   [^'/' '\n']+            { print_string (get lexbuf); 
+                                      scanner lexbuf                  }
+        |   '\n'                    { print_char '\n' ; scanner lexbuf      }
+        |   '/'                     { print_char '/'  ; scanner lexbuf      }
+
+    and comment str = parse         
+            eof                     { print_string str                      }
+        |   "*/"                    { print_string (str ^ "*)")             }
+        |   [^'*' '\n']+            { comment (str ^ (get lexbuf)) lexbuf   }
+        |   '*'                     { comment (str ^ "*")  lexbuf           }
+        |   '\n'                    { comment (str ^ "\n") lexbuf           }
+
+    {
+            let _ =
+                let lexbuf = Lexing.from_channel stdin in
+                scanner lexbuf
+    }
+
+The small patch (3k gzip'ed) can be downloaded from the following web
+page:
+
+    http://www.cs.tu-bs.de/softech/people/lindig/software/lex-patch.html
+
+To apply the patch copy the lexer source from ocaml-2.01/lex into a
+fresh directory lex (don't miss the .depend file) and cd into it. 
+Then apply the patch and call make: 
+
+        patch -p5 < lex-2.01.patch ; make
+
+-- Christian
+
+-- 
+ Christian Lindig   Technische Universitaet Braunschweig, Germany
+                    http://www.cs.tu-bs.de/softech/people/lindig
+                    mailto:lindig@ips.cs.tu-bs.de
+
+
+

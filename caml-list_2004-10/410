@@ -1,0 +1,131 @@
+Return-Path: <hdaume@ISI.EDU>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 430CCBC40
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 17:06:39 +0100 (CET)
+Received: from vapor.isi.edu (vapor.isi.edu [128.9.64.64])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9VG6bvq011757
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 17:06:38 +0100
+Received: from albini.isi.edu (albini.isi.edu [128.9.216.111])
+	by vapor.isi.edu (8.11.6p2+0917/8.11.2) with ESMTP id i9VG5kt13362
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 08:05:46 -0800 (PST)
+Date: Sun, 31 Oct 2004 08:05:46 -0800 (PST)
+From: Hal Daume III <hdaume@ISI.EDU>
+To: caml-list@yquem.inria.fr
+Subject: bigarrays much lower than normal ones
+Message-ID: <Pine.LNX.4.44.0410310750180.22156-100000@albini.isi.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-ISI-4-32-5-MailScanner: Found to be clean
+X-MailScanner-From: hdaume@isi.edu
+X-Miltered: at nez-perce with ID 41850D8D.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; bigarrays:01 arrays:01 bigarray:01 unacceptable:01 bigarrays:01 bigarray:01 -unsafe:01 iter:01 rec:01 iter:01 slower:01 slower:01 normalize:01 normalize:01 unsafe:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+I've been hitting the limiting size of normal float arrays and was having 
+a look at the Bigarray module.  Unfortunately, it seems roughly 3-4 times 
+*slower* than the standard array, which is pretty much unacceptable for 
+me.  Am I doing something naively wrong, or are the Bigarrays truly this 
+slow?  The timing results I get (i686, redhat) are along the liens of:
+
+stdarray, safe:
+
+  12.000u 0.030s 0:12.18 98.7%    0+0k 0+0io 107pf+0w
+  12.060u 0.030s 0:12.22 98.9%    0+0k 0+0io 107pf+0w
+
+stdarray, unsafe:
+
+  11.990u 0.070s 0:12.21 98.7%    0+0k 0+0io 107pf+0w
+  12.130u 0.040s 0:12.31 98.8%    0+0k 0+0io 107pf+0w
+
+bigarray, 64 bit:
+
+  39.760u 0.040s 0:40.35 98.6%    0+0k 0+0io 110pf+0w
+  39.750u 0.030s 0:40.09 99.2%    0+0k 0+0io 110pf+0w
+
+bigarray, 32 bit:
+
+  41.950u 0.050s 0:42.60 98.5%    0+0k 0+0io 110pf+0w
+  42.070u 0.040s 0:42.53 99.0%    0+0k 0+0io 110pf+0w
+
+
+(safe vs. unsafe is when compiled normally or with -unsafe; 64bit vs 32bit 
+is the 'kind' used for the bigarrays.)
+
+I'm also really shocked that the 32 bit float bigarrays are slower than 
+the 64 bit ones!
+
+Can someone explain this to me?
+
+The code is:
+
+<standard array>
+
+open Array
+
+let normalize a = 
+  let s = fold_left (+.) 0. a in
+    for i = 0 to length a - 1 do
+      a.(i) <- a.(i) /. s;
+    done;
+    ()
+
+let _ =
+  let a = make 1000000 0. in
+    for iter = 1 to 100 do
+      for i = 0 to 999999 do
+        let i' = float_of_int i in
+          a.(i) <- log (0.01 *. i' *. i' +. 3. *. i' +. 4.);
+      done;
+      normalize a;
+    done;
+    ()
+
+
+
+<big array>
+
+open Bigarray
+
+let normalize a =
+  let _N = Array1.dim a in
+  let rec sum n acc =
+    if n >= _N then acc
+    else sum (n+1) (acc +. Array1.get a n) in
+  let s = sum 0 0. in
+    for i = 0 to _N - 1 do
+      Array1.set a i (Array1.get a i /. s);
+    done;
+    ()
+
+let _ =
+  let a = Array1.create float32 c_layout 1000000 in
+    for iter = 1 to 100 do
+      for i = 0 to 999999 do
+        let i' = float_of_int i in
+          Array1.set a i (log (0.01 *. i' *. i' +. 3. *. i' +. 4.));
+      done;
+      normalize a;
+    done;
+    ()
+
+
+
+
+
+If you put the array allocation inside the iter loop, nothing changes 
+much, relatively, on the timing results.
+
+ - Hal
+
+
+-- 
+ Hal Daume III                                   | hdaume@isi.edu
+ "Arrest this man, he talks in maths."           | www.isi.edu/~hdaume
+
+
+
+

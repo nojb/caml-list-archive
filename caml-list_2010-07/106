@@ -1,0 +1,121 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id EC5C3BBAF
+	for <caml-list@yquem.inria.fr>; Fri, 16 Jul 2010 05:52:54 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Aq4CAAJ0P0zZSMDqkWdsb2JhbACfaxUBAQEBCQsKBxEDH75whSQE
+X-IronPort-AV: E=Sophos;i="4.55,212,1278280800"; 
+   d="scan'208";a="66519591"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 16 Jul 2010 05:52:54 +0200
+Received:  from smtp08.web.de  ( [172.20.5.216])
+	by fmmailgate03.web.de (Postfix) with ESMTP id E289215B8AAA5;
+	Fri, 16 Jul 2010 05:52:53 +0200 (CEST)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp08.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #4)
+	id 1OZbyn-0003cU-00; Fri, 16 Jul 2010 05:52:53 +0200
+Received: from mrvn by frosties.localdomain with local (Exim 4.72)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1OZbyn-0007sB-8F; Fri, 16 Jul 2010 05:52:53 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: Romain Beauxis <toots@rastageeks.org>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Smart ways to implement worker threads
+References: <87sk3mcaeq.fsf@frosties.localdomain>
+	<201007151132.07821.toots@rastageeks.org>
+	<874og0hc36.fsf@frosties.localdomain>
+	<201007151344.12726.toots@rastageeks.org>
+Date: Fri, 16 Jul 2010 05:52:53 +0200
+In-Reply-To: <201007151344.12726.toots@rastageeks.org> (Romain Beauxis's
+	message of "Thu, 15 Jul 2010 13:44:12 -0500")
+Message-ID: <87lj9cw0a2.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX18D4l/MwhQNf20jsiGqsxa+WiNH61AZPkkNQ1I+
+	0kH2Xpv2OqTEp5DO4SGEulxlOFBOmE+N9oHL8MHdFxxm3ct0uU
+	hXKIE9Gi0=
+X-Spam: no; 0.00; buffer:01 scheduler:01 buf:01 buf:01 scheduler:01 mfg:98 threads:01 threads:01 rec:01 caml-list:01 writes:01 parse:02 seems:03 seems:03 handler:03 
+
+Romain Beauxis <toots@rastageeks.org> writes:
+
+> Le jeudi 15 juillet 2010 12:46:53, Goswin von Brederlow a écrit :
+>> I don't see where that helps at all. I don't want to offload the IO into
+>> threads and schedule them and Duppy seems to only handle IO tasks.
+>
+> I don't understand what you mean by IO tasks. Tasks in duppy are scheduled 
+> according to some events which, since it is select-based, are either an event 
+> on a socket or a timeout.
+
+But I don't have a socket. The main thread runs and at some point it has
+a Buffer.t that it needs to have checksummed. So that leaves timeout.
+
+> Once scheduled, the action that the task does is anything you programmed. Once 
+> finished, the tasks can return an array of new tasks which are then put in the 
+> queue.
+>
+> In your case, you probably only need the timeout event, which would mean that 
+> as soon as you have a new tasks to perform, you submit it to the scheduler 
+> with timeout 0 and it will be processed by one of the threads as soon as 
+> possible..
+
+So the code would be something like this?
+
+let with_checksum buf sum _ =
+  reply_request ();
+  []
+
+let do_checksum buf _ =
+  let sum = ...
+  in
+    { priority = 0; events = [`Delay 0.]; handler = with_checksum buf sum; }
+
+let main_task events =
+  let rec loop tasks = function
+      [] -> tasks
+    | (`Read fd)::events ->
+         let buf = parse_request fd in
+         let task1 = { priority = 1; events = [`Delay 0.]; handler = do_checksum buf; } in
+         let task2 = { priority = 0; events = [`Read fd]; handler = main_task; }
+         in
+           loop (task1::task2::tasks) events
+  in
+    loop events
+
+let main () =
+  let scheduler = Duppy.create ()
+  in
+    for i = 1 to num_cores do
+      Thread.create (Duppy.queue ~priorities=(fun x -> x = 1) scheduler "worker") ();
+    done;
+    Duppy.Task.add scheduler
+     { priority = 0; events = [`Read server_socket]; handler = main_task; }
+    Duppy.queue ~priorities=(fun x -> x = 0) scheduler "main") ();
+
+
+The main task will only process priority 0 events and bounce between
+main_task and with_checksum while the worker threads process priority 1
+events and do_checksum.
+
+Correct?
+
+>> Except if I pick Solution 1 and then it still doesn't help anything
+>> since I can already run select in every thread. The IO should not be
+>> scheduled by priorities and isn't the bottleneck anyway. Seems this
+>> would just add overhead.
+>
+> The idea of duppy was to have only one select running among the multiple queue 
+> threads.
+>
+>
+> Romain
+
+MfG
+        Goswin
+

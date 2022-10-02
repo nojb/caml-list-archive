@@ -1,0 +1,155 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA05047; Wed, 23 Jan 2002 09:05:47 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA04434 for caml-list@pauillac.inria.fr; Wed, 23 Jan 2002 09:05:47 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA25321 for <caml-list@pauillac.inria.fr>; Wed, 23 Jan 2002 03:45:12 +0100 (MET)
+Received: from ns.bagley.org (ns.bagley.org [216.30.46.2])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g0N2jAf04436
+	for <caml-list@inria.fr>; Wed, 23 Jan 2002 03:45:10 +0100 (MET)
+Received: by ns.bagley.org (TRS/80 Mail Daemon, from userid 500)
+	id 0CE29FBA57; Tue, 22 Jan 2002 20:45:10 -0600 (CST)
+From: Doug Bagley <doug@bagley.org>
+To: Caml List <caml-list@inria.fr>
+Subject: [Caml-list] beginner question about camlp4
+X-Face: "|NaWfYJ-]P="T#?R.9}QgGuFXUd@3vi[.E2q-;"NV3+k_y@zreL2w^ts0XPXtt9^9{uQ@.cu2GgUgK9@HXC\a}Rtah}0'eT~>or7[~Hd?;!\Bpo#"3<S%YOu{cRbrw?={32$(5@e/te?nkrEUlsBoWC,+N1M&g{:ej9?$c*7W?>w>0a0ft-MvvZ
+Date: 22 Jan 2002 20:45:10 -0600
+Message-ID: <m38zapkcp5.fsf@ns.bagley.org>
+Lines: 130
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Greetings,
+
+I'm just learning about camlp4, and I was wondering if anyone would
+care to comment on how I'm starting to go about it. If neither the
+subject of camlp4, nor reading the random wanderings of newbies is of
+interest, then please hit "n" now :)
+
+First, I chose a simple problem: extending the exception syntax with
+an "always" clause, to allow easy cleanup. My motivation came from
+haing previously written a few I/O routines that look sort of like
+this:
+
+  let chan = open_something () in
+  try
+    process chan;
+    close chan
+  with
+    Ouch -> close chan; maybe_do_something
+  | e    -> close chan; raise e
+
+(BTW, this finalization idiom is also mentioned in the caml docs). 
+It works, but hey, it looks like we repeat ourselves calling "close
+chan"! So, I thought maybe I could use camlp4 to write the code like
+this instead:
+
+  let chan = open_something () in
+  try
+    process chan;
+  always
+    close chan
+  with
+    Ouch -> maybe_do_something
+  | e    -> raise e
+
+Which I think looks a little cleaner. (Or, anyway provides a good
+exercise for learning camlp4 :)
+
+In my first attempt I decided to use an inner try block to catch all
+exceptions. In its expanded form, it specifies the cleanup expression
+(see $a$ below) in only 2 places, like so:
+
+  EXTEND
+    expr: LEVEL "expr1"
+    [[ "try"; e = expr; "always"; a = expr; 
+       "with"; OPT "|"; l = LIST1 
+       [[ x1 = patt; w = OPT [ "when"; e = expr -> e ]; "->";
+          x2 = expr -> (x1, w, x2 )
+       ]] SEP "|" -> 
+       <:expr<
+          try do {
+            try do {$e$; $a$} with ex -> do {$a$; raise ex}
+          } with [$list:l$] >>
+    ]];
+  END;;
+
+(The biggest reason I chose this implementation first was that it
+wasn't immediately apparent to me how to manipulate $list:l$ to
+produce code like what I originally started with). 
+
+In this case, the produced code will look something like this:
+
+  let chan = open_in "file" in
+  try
+    try
+      begin process chan end;
+      close chan
+    with
+      ex -> close chan; raise ex
+  with
+    Ouch -> maybe_do_something
+  | e -> raise e;;
+  
+After learning a little more, I found out it wasn't so hard to get
+what I'd originally planned, like this:
+
+  EXTEND
+    expr: LEVEL "expr1"
+    [[ "try"; e = expr; "always"; a = expr; 
+       "with"; OPT "|"; l = LIST1 
+       [[ x1 = patt; w = OPT [ "when"; e = expr -> e ]; "->"; 
+  	x2 = expr -> (x1, w, x2)
+       ]] SEP "|" ->
+       let l = List.map (fun (g,h,i) -> (g,h,<:expr< do{$a$;$i$} >>)) l in
+         <:expr<  try do { $e$; $a$ } with [$list:l$] >>
+    ]];
+  END;;
+  
+Which produces code that looks something like this:
+  
+  let chan = open_in "file" in
+  try
+    begin process chan end;
+    close chan
+  with
+    Ouch -> close chan; maybe_do_something
+  | e -> close chan; raise e;;
+
+Which looks good to me.
+
+
+So my questions to the gurus are:
+- Is one solution particularly better than the other?  (Do I lose or
+  gain anything by using the inner try block?)
+- Have I written any bad camlp4 here?  Please let me know if I've used
+  anything in an incorrect manner or am guilty of bad style.
+- Is this a worthwhile use of camlp4?  
+
+
+P.S. Incidentally, before I tried camlp4, I had come up with a HOF to
+encapsulate cleanup for exceptions, like this:
+
+let safely setup cleanup subject f =
+  let x = setup subject in
+  try f x; cleanup x with e -> cleanup x; raise e
+
+Which threads a value x through the setup/processing/cleanup functions,
+and works fine for processing files, for instance, where x is the opened
+channel, for example:
+
+  safely open_in close_in "somefile" process_channel;
+
+But in complicated situations, using this function becomes a little
+hard to follow, like if I'm nesting a few file opens.
+
+I happened to notice that FORT also uses pretty much the same HOF to
+do cleanups too, so maybe I'm not the only one who thinks simplifying
+finalization is a nice thing?
+
+cheers,
+doug
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

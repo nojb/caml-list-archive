@@ -1,0 +1,195 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA25955 for caml-redistribution@pauillac.inria.fr; Thu, 23 Mar 2000 13:39:56 +0100 (MET)
+Resent-Message-Id: <200003231239.NAA25955@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA18411 for <caml-list@pauillac.inria.fr>; Wed, 22 Mar 2000 21:21:19 +0100 (MET)
+Received: from csc-sun.math.utah.edu (csc-sun.math.utah.edu [128.110.198.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id VAA27978
+	for <caml-list@inria.fr>; Wed, 22 Mar 2000 21:21:18 +0100 (MET)
+Received: from suntan.math.utah.edu (suntan.math.utah.edu [155.99.144.26])
+	by csc-sun.math.utah.edu (8.9.3/8.9.3) with ESMTP id NAA28128;
+	Wed, 22 Mar 2000 13:21:06 -0700 (MST)
+Received: (from hohn@localhost)
+	by suntan.math.utah.edu (8.9.3/8.9.3) id NAA03988;
+	Wed, 22 Mar 2000 13:21:06 -0700 (MST)
+Date: Wed, 22 Mar 2000 13:21:06 -0700 (MST)
+Message-Id: <200003222021.NAA03988@suntan.math.utah.edu>
+X-Authentication-Warning: suntan.math.utah.edu: hohn set sender to hohn@math.utah.edu using -f
+From: Michael Hohn <hohn@math.utah.edu>
+To: caml-list@inria.fr
+Subject: Using Tk extensions under caml/labltk
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Thu, 23 Mar 2000 13:39:56 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+
+Recently, I needed to use the BLT extension to Tk.  Since all my data comes
+from ocaml, and there is a fair amount of data, I wrote a simple C interface.
+Below are the steps I took under ocaml-2.04.
+My questions are:
+
+1.  Why is tcl_eval not exported by default (in protocol.mli)?  I
+    don't like Tcl much, but 
+    for trivial commands like "package require blt", I don't see a
+    problem with direct string evaluation.
+    Also, it would be nice to have some interactive control over caml programs
+    compiled to native code; wouldn't Tcl work well for this?
+
+2.  Apparently, most high-level widget interfaces are defined in
+    otherlibs/labltk/Widgets.src, with special routines in 
+    otherlibs/labltk/builtin/* and general low level support in 
+    otherlibs/labltk/support.
+    Since I only needed a small subset of the BLT commands and
+    couldn't quite figure out the details in this setup, I used direct
+    string evaluation with some embedded caml callbacks, e.g.
+
+    tcl (g.g_name ^ " element create line_" ^ xv ^ " \
+	     -xdata "^ xv ^ " -ydata "^ yv ^ " \
+	     -symbol {} \
+	     -pixels 0.1c \
+	     -color "^
+	     (domain_color dom) ^ "\n")
+
+    Needless to say, a clean wrapper would be better.	   
+
+    Is there a particular approach to be followed when adding new
+    widgets?
+
+    Or better yet, does someone have a *documented* example for the
+    addition of a widget requiring additions in all three places :) ?
+
+
+Cheers,
+	Michael
+
+
+
+Here are my notes:
+    To really use Tcl with camltk requires some special
+    installation steps. 
+    
+    1.  Produce the include file camltk41/camltk.h
+	This include file must be manually installed from the
+	ocamltk41 distribution; e.g.
+	    cp ocamltk41/support/camltk.h /usr/local/lib/ocaml/camltk41
+    
+    2.  The caml header file protocol.mli is ....  It does not
+	provide the (very useful) function tcl_eval.
+    
+	To fix this, do:
+	    cd ./otherlibs/labltk/support
+	    [ cd ocamltk41/support in 2.04 ]
+	    cat >>  protocol.mli <<EOF
+    val tcl_eval : string -> string
+    EOF
+	BEFORE compiling the ocamltk41.
+	[Doing this after and re-installing only changed files causes
+	    inexplicable core dumps later.]
+    
+	[Compare:
+	     tcl_eval "package require BLT"
+	 vs. 
+	     tkEval [| TkToken "package"; TkToken "require"; TkToken "BLT"
+	     |];;
+	 On longer inputs, this would not be amusing... ]
+	
+Using these, the following worked:
+grid_ocaml.ml:
+    (*
+       set_blt_vector name array --
+	   set/create the BLT array "name" and
+	   set its entries to the values in <array>.
+    *)
+    external set_blt_vector : string -> float array -> unit = "set_blt_vector_" 
+	
+And the C file:
+    
+    #include <tcl.h>
+    #include <blt.h>
+    
+    #include "caml/mlvalues.h"
+    /* 
+       This include file must have been manually installed from the
+       ocamltk41 distribution; e.g.
+       cp ocamltk41/support/camltk.h /usr/local/lib/ocaml/camltk41
+    
+       Some code taken from the ocaml/fortran interface example.
+    
+    */
+    #include "camltk41/camltk.h"
+    
+    
+    value set_blt_vector_(value vName, value vA)
+    {
+	char *name  = String_val(vName);
+    
+	/*
+	 * Do we have a native, ocamlopt array or a bytecode, ocamlc one?
+	 */
+    
+	int isNative = Tag_val(vA) == Double_array_tag;
+    
+	/*
+	 * How big is it?
+	 */
+    
+	int arrayLength =
+	isNative ? Bosize_val(vA) / sizeof(double) : Wosize_val(vA);
+    
+	Blt_Vector *vecPtr;
+	double *newArr;
+    
+	/* 
+	 * Make sure the Tcl interpreter exists.
+	 */
+	if (cltclinterp == NULL) 
+	failwith("Tcl not initialized.");
+    
+	/*
+	 * Make [newArr] point to a C-friendly version of [vA]
+	 */
+    
+	/* Allocate the array on the C heap, and let BLT free() it (see
+	   below). */
+	newArr = (double *)malloc(arrayLength * sizeof(double));
+    
+	if (isNative)
+	{
+	    /* ocamlopt-style array: copy it using [Double_field] */
+		int i;
+		    for (i = 0; i < arrayLength; ++i)
+			newArr[i] = Double_field(vA, i);
+			}
+	else
+	{
+	    /* ocamlc-style array: copy it using [Double_val(Field(...))]
+	*/
+	    int i;
+		for (i = 0; i < arrayLength; ++i)
+		    newArr[i] = Double_val(Field(vA, i));
+		    }
+    
+    
+	/*
+	 * Prepare the BLT vector. 
+	 */
+	if (Blt_VectorExists(cltclinterp, name))  {
+	if (Blt_GetVector(cltclinterp, name, &vecPtr) != TCL_OK) 
+	    failwith("Tcl error.");
+	} else {
+	if (Blt_CreateVector(cltclinterp, name, 0, &vecPtr) != TCL_OK) 
+	    failwith("Tcl error.");
+	}
+	/*
+	 * Reset the vector to use the new array. Clients will be notified
+	 * when Tk is idle. 
+	 * TCL_DYNAMIC tells the vector to free the memory allocated
+	 * if it needs to reallocate or destroy the vector.
+	 */
+	if (Blt_ResetVector(vecPtr, newArr, arrayLength, arrayLength,
+				    TCL_DYNAMIC) != TCL_OK)
+				    failwith("Tcl error.");
+      
+	return Val_unit;
+    }
+	
+
+

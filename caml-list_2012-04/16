@@ -1,0 +1,127 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q32FFx2P011855
+	for <caml-list@sympa-roc.inria.fr>; Mon, 2 Apr 2012 17:15:59 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AqgCAHHBeU/RVdW2fWdsb2JhbABFpz2RSwgiAQELBwINBxQEI4IJAQEBBBICExkBGxILAQMMBgULAwoNISIBEQEFAQoSBhMSCAiHZwucagqMFoJxhGo/iHYBBQuKb4YiBJVhgRGNPz2EC4Fa
+X-IronPort-AV: E=Sophos;i="4.75,357,1330902000"; 
+   d="scan'208";a="152338378"
+Received: from mail-yx0-f182.google.com ([209.85.213.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 02 Apr 2012 17:15:54 +0200
+Received: by yenl9 with SMTP id l9so1849953yen.27
+        for <caml-list@inria.fr>; Mon, 02 Apr 2012 08:15:53 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20120113;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=vO0TgTn75mf2DZKtQBYXWBYQ2ANYwEhL4PaqKrAmutI=;
+        b=T1HDqySbbim+P4VA7VK0T6hhYcKt9Z7vI1Q2VHAPgkrBzHUG9cBQlwgPtBvl3pMPNM
+         AIbM5lgp1BHVwk87px8pBrTlhImMe5FJCLVeeTfrd2z8N9mSX2oJMJV+O3LSYzAAeJz5
+         AKBPMPBN6mdXYsTYPYGjy0qRn5/og9XYaw/h9I4czBzBBjJID/jo551P+/wXAQUEMRxK
+         gf+cVAdJ/nOy3R+vZbU9zrdlJknL1FFPtzKkXhcnhdcpbGWoUMH73o4/a7py9SROPZTL
+         /mCfQdzecdQPC0wl+9z2SYQ60RQaLTWYk7VNNp7rdLsRjQgb9lxw1NYNS3Nyja/dx7Fg
+         hRtA==
+Received: by 10.50.217.164 with SMTP id oz4mr5850650igc.70.1333379753074; Mon,
+ 02 Apr 2012 08:15:53 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.50.140.100 with HTTP; Mon, 2 Apr 2012 08:15:12 -0700 (PDT)
+In-Reply-To: <E51C5B015DBD1348A1D85763337FB6D9C28E6C07@Remus.metastack.local>
+References: <4F79B858.2090502@gmail.com> <E51C5B015DBD1348A1D85763337FB6D9C28E6C07@Remus.metastack.local>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Mon, 2 Apr 2012 17:15:12 +0200
+Message-ID: <CAPFanBGmCzjTZsUg=VdS3Jx=mTefsx=qZJC=qfe3cDrX=2+b9w@mail.gmail.com>
+To: David Allsopp <dra-news@metastack.com>
+Cc: Hongbo Zhang <bobzhang1988@gmail.com>, Caml List <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q32FFx2P011855
+Subject: Re: [Caml-list] How could I implement an efficient ring buffer?
+
+A small implementation of a FIFO queue implemented as a circular
+buffer of fixed length:
+
+type 'a circular_buffer = {
+  mutable pos : int;
+  mutable count : int;
+  data : 'a array;
+  size : int;
+}
+
+let create size dummy = {
+  pos = 0;
+  count = 0;
+  data = Array.make size dummy;
+  size;
+}
+
+let push buffer elem =
+  let k = buffer.pos + buffer.count in
+  buffer.data.(if k < buffer.size then k else 0) <- elem;
+  if buffer.count < buffer.size then
+    buffer.count <- buffer.count + 1
+  else
+    buffer.pos <- buffer.pos + 1;
+  ()
+
+let pop buffer =
+  if buffer.count = 0 then raise Not_found;
+  let result = buffer.data.(buffer.pos) in
+  (* if you want to free the buffer content, buffer.data.(pos) <- dummy *)
+  let pos' = buffer.pos + 1 in
+  buffer.pos <- (if pos' < buffer.size then pos' else 0);
+  buffer.count <- buffer.count - 1;
+  result
+
+(* test *)
+let () =
+  let buf = create 2 '0' in
+  (* *)
+  push buf '1';
+  (* 1 *)
+  push buf '2';
+  (* 1 2 *)
+  push buf '3';
+  (*   2 3 *)
+  assert (pop buf = '2');
+  (*     3 *)
+  push buf '4';
+  (*     3 4 *)
+  assert (pop buf = '3');
+  (*       4 *)
+  assert (pop buf = '4');
+  (*         *)
+  assert (try ignore (pop buf); false with Not_found -> true);
+  assert (try ignore (pop buf); false with Not_found -> true);
+
+
+On Mon, Apr 2, 2012 at 5:04 PM, David Allsopp <dra-news@metastack.com> wrote:
+> Hongbo Zhang wrote:
+>> Hi List,
+>>     I want to implement sliding window algorithm (in place, no memory
+>> copy), I wonder whether I need to write c code.
+>>
+>>     To make it clear and simple,
+>>        In c, you can record the head pointer of the array, and do the
+>> modulo operations when get and set
+>>        In ocaml, it seems you have an array a of type int array,  you can
+>> not do things like this *(&a+5).
+>
+> Perhaps I'm missing something, but if you're planning on using arrays, what's wrong with retrieving the item using the array index modulo the length of the array?
+>
+> i.e.
+>
+> let a = [| ... or whatever ... |] in
+> a.(5 mod Array.length a)
+>
+> If accessing an array by index instead of by pointer worries you, then you're looking at the wrong language ;o)
+>
+>
+> David
+>
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+

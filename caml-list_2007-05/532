@@ -1,0 +1,128 @@
+Return-Path: <psnively@mac.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 238B9BC69
+	for <caml-list@yquem.inria.fr>; Mon, 28 May 2007 19:08:50 +0200 (CEST)
+Received: from smtpout.mac.com (smtpout.mac.com [17.250.248.177])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4SH8m3E017120
+	for <caml-list@inria.fr>; Mon, 28 May 2007 19:08:49 +0200
+Received: from mac.com (smtpin06-en2 [10.13.10.151])
+	by smtpout.mac.com (Xserve/smtpout07/MantshX 4.0) with ESMTP id l4SH8i70022882;
+	Mon, 28 May 2007 10:08:45 -0700 (PDT)
+Received: from [192.168.0.100] (dsl092-032-215.lax1.dsl.speakeasy.net [66.92.32.215])
+	(authenticated bits=0)
+	by mac.com (Xserve/smtpin06/MantshX 4.0) with ESMTP id l4SH8h0f022478;
+	Mon, 28 May 2007 10:08:43 -0700 (PDT)
+In-Reply-To: <6AC4F0FE-E2D1-4EDD-87A5-2FA3CBB0FBBE@gmail.com>
+References: <71B2C4B5-3ECB-450F-B015-3C5EAB90855F@gmail.com> <75F71DDF-CACC-4AD9-A3DA-E0049FC9FB2F@gmail.com> <C40E6377-A236-4AAB-8B77-AD5A8CD93E27@gmail.com> <CAC7EB04-5208-4A58-9BB7-7DF59903B015@gmail.com> <6AC4F0FE-E2D1-4EDD-87A5-2FA3CBB0FBBE@gmail.com>
+Mime-Version: 1.0 (Apple Message framework v752.2)
+Content-Type: text/plain; charset=US-ASCII; delsp=yes; format=flowed
+Message-Id: <8204C486-19C3-479C-A573-0EED14ADCCE4@mac.com>
+Cc: OCaml List <caml-list@inria.fr>,
+	Gerd Stolpmann <gerd@gerd-stolpmann.de>
+Content-Transfer-Encoding: 7bit
+From: Paul Snively <psnively@mac.com>
+Subject: Re: [Caml-list] Solved! (was Re: Mac OSX getsocketpair/getsockname and IPv6)
+Date: Mon, 28 May 2007 10:08:41 -0700
+To: Joel Reymont <joelr1@gmail.com>
+X-Mailer: Apple Mail (2.752.2)
+X-Brightmail-Tracker: AAAAAA==
+X-Brightmail-scanned: yes
+X-Miltered: at concorde with ID 465B0CA0.002 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; osx:01 getsockname:01 o'caml:01 socketaddr:01 alloc:01 sockaddr:01 usr:01 alloc:01 sockaddr:01 ocamlnet:01 ocaml:01 stack:01 ocamlnet:01 ocaml:01 otherlibs:01 
+
+So: if a Mac OS X O'Caml user wanted to solve this, what is the  
+actual solution? Surely it's not:
+
+case AF_UNSPEC:
+case AF_UNIX:
+
+in socketaddr.c?
+
+Many thanks and best regards,
+Paul
+
+On May 5, 2007, at 8:16 AM, Joel Reymont wrote:
+
+> The culprit is in alloc_sockaddr [1].
+>
+> adr->s_gen.sa_family is 0 which stands for AF_UNSPEC in my /usr/ 
+> include/sys/socket.h.
+>
+> alloc_sockaddr does not handle this family type and throws  
+> EAFNOSUPPORT.
+>
+> I'm inclined to think that ocamlnet should be fixed and not the  
+> OCaml library, although it would be helpful if an error different  
+> from EAFNOSUPPORT was used.
+>
+> I would have been most helpful to have a stack trace on exception  
+> as this would have allowed me to narrow down the source of the  
+> problem in no time rather than going spelunking through ocamlnet  
+> and OCaml networking libraries.
+>
+> 	Thanks, Joel
+>
+> [1] otherlibs/unix/socketaddr.c
+>
+> value alloc_sockaddr(union sock_addr_union * adr /*in*/,
+>                      socklen_param_type adr_len, int close_on_error)
+> {
+>   value res;
+>   switch(adr->s_gen.sa_family) {
+> #ifndef _WIN32
+>   case AF_UNIX:
+>     { value n = copy_string(adr->s_unix.sun_path);
+>       Begin_root (n);
+>         res = alloc_small(1, 0);
+>         Field(res,0) = n;
+>       End_roots();
+>       break;
+>     }
+> #endif
+>   case AF_INET:
+>     { value a = alloc_inet_addr(&adr->s_inet.sin_addr);
+>       Begin_root (a);
+>         res = alloc_small(2, 1);
+>         Field(res,0) = a;
+>         Field(res,1) = Val_int(ntohs(adr->s_inet.sin_port));
+>       End_roots();
+>       break;
+>     }
+> #ifdef HAS_IPV6
+>   case AF_INET6:
+>     { value a = alloc_inet6_addr(&adr->s_inet6.sin6_addr);
+>       Begin_root (a);
+>         res = alloc_small(2, 1);
+>         Field(res,0) = a;
+>         Field(res,1) = Val_int(ntohs(adr->s_inet6.sin6_port));
+>       End_roots();
+>       break;
+>     }
+> #endif
+>   default:
+>     if (close_on_error != -1) close (close_on_error);
+>     unix_error(EAFNOSUPPORT, "", Nothing);
+>   }
+>   return res;
+> }
+>
+> --
+> http://wagerlabs.com/
+>
+>
+>
+>
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+

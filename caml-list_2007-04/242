@@ -1,0 +1,104 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 3E185BC6B
+	for <caml-list@yquem.inria.fr>; Wed, 18 Apr 2007 16:21:18 +0200 (CEST)
+Received: from ipmail01.adl2.internode.on.net (ipmail01.adl2.internode.on.net [203.16.214.140])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l3IELFm2004330
+	for <caml-list@yquem.inria.fr>; Wed, 18 Apr 2007 16:21:17 +0200
+X-IronPort-AV: E=Sophos;i="4.14,422,1170595800"; 
+   d="scan'208";a="116486453"
+Received: from ppp8-148.lns1.syd7.internode.on.net (HELO [192.168.1.201]) ([59.167.8.148])
+  by ipmail01.adl2.internode.on.net with ESMTP; 18 Apr 2007 23:51:13 +0930
+Subject: Re: [Caml-list] using different lexers with one parser?
+From: skaller <skaller@users.sourceforge.net>
+To: Oliver Bandel <oliver@first.in-berlin.de>
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <20070418100142.GD336@first.in-berlin.de>
+References: <20070417203311.GA553@first.in-berlin.de>
+	 <wwuslaygmj7.fsf@tandem.cs.ru.nl> <20070418100142.GD336@first.in-berlin.de>
+Content-Type: text/plain
+Date: Thu, 19 Apr 2007 00:21:10 +1000
+Message-Id: <1176906070.15945.39.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.8.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4626295B.002 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; lexers:01 parser:01 0200,:01 bandel:01 0200,:01 hendrik:01 tews:01 bandel:01 in-berlin:01 lexer:01 parsing:01 parser:01 ocamlyacc:01 lexer:01 lexbuf:01 
+
+On Wed, 2007-04-18 at 12:01 +0200, Oliver Bandel wrote:
+> On Wed, Apr 18, 2007 at 09:38:20AM +0200, Hendrik Tews wrote:
+> > Oliver Bandel <oliver@first.in-berlin.de> writes:
+> > 
+> >    Is it possible (without too much effort) to switch
+> >    the lexer during parsing (from within the parser)?
+> > 
+> > Yes, see
+> > http://caml.inria.fr/pub/ml-archives/caml-list/2003/09/3e7f3495840e2bc851b91c3dba8abab9.en.html
+> > 
+> [...]
+> 
+> OK; I hoped to find a solution without the global-switching-var hacks;
+> something that is built in in ocamlyacc.
+
+There is a solution without global variables.
+
+Referring to Hendrick's example, write:
+
+rule lexer global_var =
+   parse
+     | ""          { match !global_var with
+	                | Xlex -> xlex global_var lexbuf
+                        | Ylex -> ylex global_var lexbuf
+                   }
+
+instead. Now, you must change at least some --
+but I recommend all -- of your tokens to include
+the global_var, for example
+
+%token TOKEN<bool ref * int>
+
+and xlex global var = 
+  parse 
+    | ... { TOKEN (global_var,42) }  
+
+Now in any ocamlyacc action code you can match write this
+
+  | TOKEN ... { let global_var, attrib = $1 in ... }
+
+to get the variable into the action code, and now you
+can change it.
+
+This leaves the problem of the lookahead token, which
+may or may not exist. You can predict whether it exists
+for each reduction. You can do this 'mentally' by asking
+"Does this production have a definite set of terminators,
+(no lookahead) or does it rely on bumping 
+into something unrecognizable (lookahead)"?
+
+[If you can't tell .. you must refactor your grammar
+so you can]
+
+If the lookahead exists, you must 'put it back' into the
+lexbuf. At present you can do this by studying the implementation
+details in Lexing module. The lexeme is certain to be IN the
+buffer, so it is safe to reset the pointers to the lexbuf state
+before it was lexed.
+
+To get at the lexbuf from the parser .. you have to modify
+your tokens AGAIN to include the lexbuf.
+
+I recommend considering using an Ocaml class to encapsulate
+all the state information you need. Passing state from the
+lexer to the parser this way is ugly but it does work
+and is fully re-entrant.
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

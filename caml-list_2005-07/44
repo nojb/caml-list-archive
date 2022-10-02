@@ -1,0 +1,101 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 7A2E6BCAE
+	for <caml-list@yquem.inria.fr>; Fri,  8 Jul 2005 02:57:56 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j680vtQi004558
+	for <caml-list@yquem.inria.fr>; Fri, 8 Jul 2005 02:57:56 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA19793 for <caml-list@pauillac.inria.fr>; Fri, 8 Jul 2005 02:57:55 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j680vrI2001750
+	for <caml-list@inria.fr>; Fri, 8 Jul 2005 02:57:54 +0200
+Received: from localhost (suiren [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.1/8.13.1) with ESMTP id j680vljY007608;
+	Fri, 8 Jul 2005 09:57:47 +0900 (JST)
+Date: Fri, 08 Jul 2005 09:57:44 +0900 (JST)
+Message-Id: <20050708.095744.108119733.garrigue@math.nagoya-u.ac.jp>
+To: colanderman@gmail.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Sparse structure
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <875c7e0705070712273e4231a9@mail.gmail.com>
+References: <875c7e0705070712273e4231a9@mail.gmail.com>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 42CDCF93.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 42CDCF91.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 foo:01 hash:01 foo:01 hashtbl:01 runtime:01 hashtbl:01 variants:01 struct:01 elt:01 elt:01 annotations:01 avoiding:01 variants:01 hash:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+Status: O
+Content-Length: 2344
+Lines: 62
+
+From: Chris King <colanderman@gmail.com>
+
+> I'm trying to create a sparse structure; i.e. a large structure which
+> doesn't allocate storage for "unused" fields.  Given a structure:
+> 
+> type foo = { a: int option; b: float option }
+> 
+> the best solution I can come up with, short of using Obj.magic, is to
+> use a hash table like this:
+> 
+> type foo_key = A_key | B_key
+> type foo_value = A_value of int | B_value of float
+> type sparse = (foo_key, foo_value) Hashtbl.t
+> 
+> which works, but the extra variant type required means more CPU time
+> and more keystrokes.  Is there a better solution than this?
+> 
+> The structure will have hundreds of fields, each with a different
+> type.  Most of the fields will be unused, but usage will be determined
+> at runtime so using objects is not an option.
+
+This is a classical problem, with no good solution that I know.
+
+If you want to avoid Obj.magic, then your solution seems OK, yet
+* if your values are really sparse, Map might be better than Hashtbl
+  (more compact representation)
+* if you have really hundreds of fields, then you have better switch
+  to polymorphic variants, as normal ones only allow about 240 cases.
+
+If you are ready to use a bit of Obj, then there are some other
+solutions.
+For instance, you could do something like this.
+
+module Int = struct type t = int let compare : int -> int -> int = compare end
+module M = Map.Make(Int)
+type +'a elt
+type 'a map = 'a elt M.t
+
+let addA (x : 'a) (m : [> `A of 'a] map) =
+  M.add (Obj.magic `A) (Obj.magic x) m
+
+let addB (x : 'a) (m : [> `B of 'a] map) =
+  M.add (Obj.magic `B) (Obj.magic x) m
+
+let getA (m : [> `A of 'a] map) : 'a =
+  Obj.magic (M.find (Obj.magic `A) m)
+
+let getB (m : [> `B of 'a] map) : 'a =
+  Obj.magic (M.find (Obj.magic `B) m)
+
+Note that the result is completely type safe, and you don't need all
+maps to contain the same potential fields.
+The downside is that you need to define set and get for all fields.
+On the other hand, it should be easy to define camlp4 macros
+enforcing the same type annotations, avoiding such definitions.
+
+(Polymorphic variants here are only used as phantom types. Note
+however that this choice is useful: it ensures that two keys cannot
+conflict, as if `A and `B had the same hash values, this would be
+detected when constructing the type [> `A of 'a | `B of 'b])
+
+Jacques Garrigue
+

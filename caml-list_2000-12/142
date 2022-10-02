@@ -1,0 +1,154 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA10720 for caml-red; Fri, 22 Dec 2000 10:10:40 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA20376 for <caml-list@pauillac.inria.fr>; Fri, 22 Dec 2000 10:07:24 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id eBM977917293;
+	Fri, 22 Dec 2000 10:07:08 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA16920; Fri, 22 Dec 2000 10:07:07 +0100 (MET)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <200012220907.KAA16920@pauillac.inria.fr>
+Subject: Re: Ref syntax
+In-Reply-To: <20001222122938T.garrigue@kurims.kyoto-u.ac.jp> from Jacques Garrigue at "Dec 22, 100 12:29:38 pm"
+To: garrigue@kurims.kyoto-u.ac.jp (Jacques Garrigue)
+Date: Fri, 22 Dec 2000 10:07:07 +0100 (MET)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis@pauillac.inria.fr
+
+> From: Ohad Rodeh <orodeh@cs.huji.ac.il>
+> 
+> >   I have a modest syntax request as we are approaching
+> > the release of OCaml-3.01. Currently, if x is a
+> > reference, one must use the assignment operator (:=) to
+> > update it. Can array assignment (<-) be used also? 
+> 
+> Sorry, but this does not work: this may be confused with record assignment.
+> 
+>        type t = {mutable x : int ref};;
+>        let r = {x = ref 1};;
+>        r.x <- ref 2;;
+>        r.x := 3;;
+
+When I introduced mutable fields in Caml, I considered having the same
+:= operator than for references (the symetric situation of Ohad's
+suggestion). I found this ambiguity problem, and also found that it
+can be easily disambiguated, if you just consider that assignment to a
+mutable field with a reference in it is not a common practice in Caml,
+and accept an extra syntactic burden to handle this case: you must
+add an extra couple of parens.
+
+So, if you want to treat reference assignment with the same construct
+as record assignment, you just have to implement the <- assigment by
+adding to the main expr rule of the Caml parser, those two lines
+
+| simple_expr0 LESSMINUS expr
+    { mkinfix $1 ":=" $3 }
+
+where simple_expr0 is even simpler than the actual simple_expr, since
+it does not include field access.
+
+This modification forces the addition of extra parens to assign any
+reference that is not just a simple name.
+
+Hence, your program would read
+
+r.x <- ref 2;;
+(r.x) <- 3;;
+
+We also considered an even more drastic rule: reference assignment
+must be done to a mere ident
+
+| val_longident LESSMINUS expr
+    { mkinfix $1 ":=" $3 }
+
+Then your program should be written:
+
+let my_ref = r.x in
+my_ref <- 3
+
+This last construct has been considered not ``compositional enough''
+and was rejected.
+
+I consider the ``| simple_expr0 LESSMINUS expr'' rule as perfectly
+acceptable, but I decided to keep this syntactic construct ident <-
+expr for ``variables'' assignment, i.e. for a future reintroduction of
+good old letref lvalues of the original ML (alias your ``references
+certified not to be returned or passed to functions. Easy.'', wish No
+1 of your presonal wish list).
+
+> So here is also my wishlist for Santa Xavier.
+> 
+> * addition of let mutable ... in
+>        let mutable x = 0 in
+>        for i = 1 to do x <- x + i done;
+>        x
+>   The idea is to have references which are certified not to be
+>   returned or passed to functions. Easy.
+>   Makes lots of thing clearer, but it might be a good idea to allow
+>   only the let ... in form, since toplevel let mutable is rather
+>   opposed to functional programming.
+
+You forgot to mentioned that this feature also adds a lot of
+complexity: as a kind of witness of this extra difficulty, we can
+observe that you immediately suggest to restrict the construct to
+local forms. I suppose that this is not for the vague philosophical
+reason you mentioned (``let mutable is rather opposed to functional
+programming''), but more seriously to avoid real difficulties, such as
+complex typechecking problems (with value polymorphism restriction ?),
+or even compilation and semantics problems. For instance, what do we
+do if such a letref variable is assigned to, from within the body of a
+function (that could be exported) ? (This is the original bug in the
+LCF system that justified the introduction of first class references,
+and then triggered the ``typechecking polymorphic imperative
+languages'' quest). Furthermore, this construct would add an entirely
+new notion to Caml: lvalues. This is not so easy to explain and
+justify, when we now have a simple and regular semantics scheme that
+only requires right values in the language (with explicit operators on
+right values to implement mutation: explicit access and mutation
+operation). So, I really do think that the qualification you gave for
+this addition, ``Easy.'', has to be justified with rules and
+proofs. (Remember that Robin Milner admitted that this construct just
+beat him, since the implementation of letref introduced a flaw in the
+LCF theorem prover assistant).
+
+> * addition of let open ... in
+>        module P2d = struct type t = {x:int;y:int} end
+>        module P3d = struct type t = {x:int;y:int;z:int} end
+>        let f2d p1 p2 =
+>          let open P2d in
+>          {x = p1.x + p2.x; y = p1.y + p2.y}
+>   Extremely easy.
+
+I hope it is ``Extremely easy''. Remember that Pascal has been
+criticised for its ``with'' construct that locally introduces new
+names in programs in a completely silent way. Are you sure this is a
+desirable feature ?
+
+> * allow #labels in programs
+>   avoids subtle makefiles when you have both files with and without
+>   labels, also avoid to check the mode before compiling a file.
+>
+> * have a notation to abbreviate the OCAMLLIB directory in include
+>   paths. One could write
+>        ocamlc -c -I +labltk -I +lablGL gears.ml
+>   rather than
+>        ocamlc -c -I `ocamlc -where`/labltk -I `ocamlc -where`/lablgGL gears.ml
+> 
+> I would be already satisfied with only one of these...
+
+So you are already satisfied, since you can write
+
+  ocamlc -c -I +camltk -I +camlimages ocaml_unreal_t.ml
+
+in the current development version!
+
+Cheers,
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+

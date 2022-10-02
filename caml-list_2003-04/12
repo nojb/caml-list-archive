@@ -1,0 +1,99 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA07289; Tue, 1 Apr 2003 20:58:00 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA07307 for <caml-list@pauillac.inria.fr>; Tue, 1 Apr 2003 20:57:58 +0200 (MET DST)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h31Ivv918546
+	for <caml-list@inria.fr>; Tue, 1 Apr 2003 20:57:58 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Tue, 1 Apr 2003 12:58:30 -0600
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Tue, 1 Apr 2003 12:58:30 -0600
+Date: Tue, 1 Apr 2003 12:59:53 -0600 (CST)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Tim Freeman <tim@fungible.com>
+cc: <caml-list@inria.fr>
+Subject: Re: [Caml-list] Bug?  Printf, %X and negative numbers
+In-Reply-To: <20030401181017.245567F4D@lobus.fungible.com>
+Message-ID: <Pine.LNX.4.33.0304011242030.2225-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 01 Apr 2003 18:58:30.0182 (UTC) FILETIME=[AF635460:01C2F880]
+X-Spam: no; 0.00; qlogic:01 caml-list:01 bug:01 printf:01 redesign:01 pointers:01 boxing:01 gcc:01 allocates:01 allocating:01 shifts:01 ors:99 unboxed:01 repetive:01 wordsize:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, 1 Apr 2003, Tim Freeman wrote:
+
+> Somebody I don't know said:
+> > Or, I suppose, we could 
+> > completely redesign Ocaml to use 32-bit ints and do something else to 
+> > differentiate ints from pointers :-).
+> 
+> Then Xavier said:
+> >If you can find a "something else" that is faster than systematically
+> >boxing the 32-bit ints, you'll be hailed as the savior in compiler
+> >circles :-)
+> 
+> I'm guessing that the standard solution to doing full-word ints with a
+> garbage collector is to generate some code for each data structure
+> that plugs into the garbage collector and knows what fields are ints
+> and what fields are pointers.  That's the way the gcc compiler did it
+> as of 3.0.1 or so.  (In that case the code was manually generated.)
+
+I thought they were using Boehm's GC?  Which is conservative, in that if 
+it looks like a pointer, it treats it as a pointer.  Note that this means 
+that you can't do copying, as you don't dare change the pointers (they 
+might be).  This also means that a small percentage of garbage is falsely 
+retained because of bogus pointers (although in practice not enough to 
+worry about- Boehm has some papers on real world applications).
+
+This is more than good enough for C/C++, but Ocaml puts rather more stress 
+on it's GC.  Especially as I remember seeing statistics that your average 
+ML program allocates a word of memory every six instructions- an insane 
+amount of allocation for a C program.
+
+I was thinking of just a bitmask.  You are always allocating into the
+minor heap.  You just define the low 1/32nd of the minor heap a bitmask of
+what is a pointer and what isn't.  This would probably slow down
+allocation- not by much, would be my prediction, but it would slow down
+allocation.  You may gain some of that cost back by not needing to do the
+shifts and ors we currently do to deal with the low bit.  I can't predict
+what the overall performance delta would be- not even if it will be
+positive or negative.
+
+However, I would predict that it will be small enough, even if positive,
+to make it not worth the effort.  
+
+For my bitarray code I'd like unboxed 32-bit ints.  Primarily because it'd
+allow me to turn my current divides and modulos into shifts and ands.  Or 
+rather, have the compiler do it for me.  There is a performance difference 
+x/31 and x/32.
+
+But a bigger problem than that, probably (I haven't actually done any 
+timing, so I can't say for certain) is repetive divides.  I have a lot of 
+code like:
+    let bits_per_word = Sys.wordsize - 1;
+
+    let dosomething idx =
+        let wordidx = idx / bits_per_word
+        and bitidx = idx mod bits_per_word
+        in
+        ...
+
+The code that 3.06 produces for the above uses the idiv instruction twice-
+once for the quotient, once for the remainder.  A little optimization 
+would have it issued only once, and use both operands.  I played a little 
+bit with writting a ldiv function, which let me play with the C interface, 
+but produced enough other inefficiencies to make it not worth the effort.  
+Ah well.  Minor nit.
+
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

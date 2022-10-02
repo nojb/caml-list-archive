@@ -1,0 +1,236 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA08407; Thu, 6 Jun 2002 19:04:50 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA08384 for <caml-list@pauillac.inria.fr>; Thu, 6 Jun 2002 19:04:50 +0200 (MET DST)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g56H4nr04768
+	for <caml-list@inria.fr>; Thu, 6 Jun 2002 19:04:49 +0200 (MET DST)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.10.1/1.01.28121999) with ESMTP id g56H4np90503
+          for <caml-list@inria.fr>; Thu, 6 Jun 2002 19:04:49 +0200 (CEST)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.12.3/jb-1.1)
+	id g56H4m1e013351 for <caml-list@inria.fr>; Thu, 6 Jun 2002 19:04:48 +0200 (MET DST)
+Date: Thu, 6 Jun 2002 19:04:48 +0200 (MET DST)
+From: Alain Frisch <frisch@clipper.ens.fr>
+To: Caml list <caml-list@inria.fr>
+Subject: [Caml-list] Comments on type variables
+Message-ID: <Pine.SOL.4.44.0206061858320.11096-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Virus-Scanned: by amavisd-milter (http://amavis.org/)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello list,
+
+I'd like to make a few comments on the manipulation of type variables
+in OCaml. They range from some points that could be worth mentioning
+somewhere (FAQ, manual) to "features" that may be considered as bugs,
+IMHO.
+
+Feel free to comment, and sorry for this long mail in a random order ...
+
+
+Generalization of explicit variables
+------------------------------------
+
+Explicit variables are generalized only at toplevel let-declarations
+(see bug report 1156:
+http://caml.inria.fr/bin/caml-bugs/open?id=1156;page=3;user=guest):
+
+# let f x =
+    let g (y : 'a) : 'a = y in
+    (g x, g (x,x));;
+This expression has type 'a * 'a but is here used with type 'a
+
+# let f (x : 'a) : 'a * 'a = (x,x) in (f 1, f true);;
+This expression has type bool but is here used with type int
+
+# let a (x : 'a) = x+1 in let b (x : 'a) = x ^ "a" in ();;
+This expression has type int but is here used with type string
+
+Variables do not add polymorphism
+-----------------------------------
+
+Contrary to the intuition one could have, variable never allow
+more polymorphism (exception for polymorphic methods); indeed, they
+_restrict_ the polymorphism.
+
+Variables are generalized only on toplevel let-declarations;
+
+# let f x =
+    let g (y : 'a) : 'a = y in
+    (g x, g (x,x));;
+This expression has type 'a * 'a but is here used with type 'a
+
+# let f (x : 'a) : 'a * 'a = (x,x) in (f 1, f true);;
+This expression has type bool but is here used with type int
+
+
+One could expect polymorphic recursion to be allowed when
+function interfaces are explicitely given; this is not the case:
+
+# let rec f : 'a -> unit = fun x -> f (x,x);;
+This expression has type 'a -> unit but is here used with type
+  'a * 'a -> unit
+This expression has type 'a * 'a but is here used with type 'a
+
+Actually, "function interfaces are explicitely given" does not mean
+anything, as universal quantification can only be infered.
+
+A paragraph in the FAQ is somewhat misleading:
+
+<< Polymorphism appears when we introduce type schemes, that is types
+   with universally quantified type variables.
+...
+   The polymorphism is only introduced by the definition of names during
+   a let construct (either local, or global).
+>>
+
+The last sentence seems to contradict the first; the programmer doesn't
+introduce type schemes.
+
+
+Variables do not guaranty polymorphism
+--------------------------------------
+
+Variables can't be simply used to make the typechecker enforce
+polymorphism:
+
+# let f (x : 'a) : 'a = x + 1;;
+val f : int -> int = <fun>
+
+We have to rely on the module system:
+# module M : sig val f : 'a -> 'a end = struct let f x = x + 1 end;;
+
+
+Would it be possible to declare variables that have to remain polymorphic
+(I don't know how to formalize this; just an idea ...), so as to reject
+the following ?
+
+let 'a. f (x : 'a) : 'a = x + 1;;
+
+
+Variable scoping rules
+----------------------
+
+The scoping rules for type variables do not seem uniform.
+
+In a structure, the scope of a variable in an expression is the toplevel
+element:
+
+# module M = struct let f (x : 'a)  = x   let g (x : 'a) = x + 1 end;;
+module M : sig val f : 'a -> 'a val g : int -> int end
+
+... whereas for objects, the scope is the class definition:
+
+# class o = object method f (x : 'a) = x   method g (x : 'a) = x + 1 end;;
+class o : object method f : int -> int method g : int -> int end
+
+
+Interaction with local modules
+------------------------------
+
+Inside a local module, type variables introduced outside the module are
+invisible:
+
+# let f (x : 'a) =
+    let module M = struct type t = 'a list end in ();;
+Unbound type parameter 'a
+
+# let f (x : 'a) =
+    let module M = Set.Make(struct type t = 'a end) in ();;
+Unbound type parameter 'a
+
+
+# let f (x : 'a) =
+    let module M = struct let g (y : 'a) = y end in M.g 2;;
+val f : 'a -> int = <fun>
+
+
+Type declaration flushes the introduced variables:
+
+# let f (x : 'a) = let module M = struct type t end in (2 : 'a);;
+val f : 'a -> int = <fun>
+
+Too bad, when one need such a variable to restrict polymorphism:
+
+# class ['a] o =
+  object
+    val z = let module M = struct type t end in ()
+    method f (x : 'a) : 'a = x
+  end;;
+Some type variables are unbound in this type:
+  class ['a] o : object val x : unit method f : 'b -> 'b end
+The method f has type 'a -> 'a where 'a is unbound
+
+
+Objects
+-------
+
+At least it is clear for polymorphic methods where type variables
+are introduced.
+
+For class types, the explicit quantification is optional:
+
+# class type o = object method f : 'a -> 'a method g : 'b -> 'b end;;
+class type o = object method f : 'a. 'a -> 'a method g : 'b. 'b -> 'b end
+# class type ['a] o = object method f : 'a -> 'a method g : 'b -> 'b end;;
+class type ['a] o = object method f : 'a -> 'a method g : 'b. 'b -> 'b end
+# type 'a t = { x : 'a; y : 'b };;
+type 'a t = { x : 'a; y : 'b. 'b; }
+
+BTW, I don't understand the following error message:
+
+# class type o = object method f : 'a -> 'a method g : 'a -> 'a end;;
+The method g has type 'a -> 'b but is expected to have type 'c
+
+
+Also, why are class parameters enclosed in brackets ?
+type 'a t = ...
+but:
+class ['a] t = ...
+and not:
+class 'a t = ...
+
+
+
+'_a variables
+-------------
+
+It is not possible to specify "impure" type variables:
+
+# let z = let g y = y in g [];;
+val z : '_a list = []
+# let z : '_a list = [];;
+val z : 'a list = []
+
+Then, how do we specify an interface for the module struct let x = ref [] end ?
+
+#  module M = (struct let x = ref [] end : sig val x : '_a list ref end);;
+Signature mismatch:
+Modules do not match:
+  sig val x : '_a list ref end
+is not included in
+  sig val x : 'a list ref end
+Values do not match:
+  val x : '_a list ref
+is not included in
+
+
+Variable name in error message
+------------------------------
+
+Error messages would be more readable if they retained (when possible)
+variable names:
+
+# let f (a : 'a) (b : 'b list) = b + 1;;
+This expression has type 'a list but is here used with type int
+
+
+-- Alain
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

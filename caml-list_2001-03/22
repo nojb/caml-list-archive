@@ -1,0 +1,71 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA22066; Mon, 5 Mar 2001 21:28:24 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA22135 for <caml-list@pauillac.inria.fr>; Mon, 5 Mar 2001 21:28:23 +0100 (MET)
+Received: from mta5.snfc21.pbi.net (mta5.snfc21.pbi.net [206.13.28.241])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f25KSM925988
+	for <caml-list@inria.fr>; Mon, 5 Mar 2001 21:28:22 +0100 (MET)
+Received: from checkerlap.d6.com ([64.160.53.238])
+ by mta5.snfc21.pbi.net (Sun Internet Mail Server sims.3.5.2000.01.05.12.18.p9)
+ with ESMTP id <0G9Q00L1PRI2C5@mta5.snfc21.pbi.net> for caml-list@inria.fr;
+ Mon,  5 Mar 2001 12:27:38 -0800 (PST)
+Date: Mon, 05 Mar 2001 12:28:26 -0800
+From: Chris Hecker <checker@d6.com>
+Subject: [Caml-list] dynamically loading C functions
+X-Sender: def6@shell16.ba.best.com
+To: caml-list@inria.fr
+Message-id: <4.3.2.7.2.20010304235205.00dea6a0@shell16.ba.best.com>
+MIME-version: 1.0
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Content-type: text/plain; charset="us-ascii"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I'm looking into dynamically linking to C functions "mostly" type safely, and I've run into a couple small snags:  
+
+1.  I need to generate the thunk (or trampoline, it's sometimes called) to convert the caml values to their C values.  Assume I've found some way (see below) to tell the library what function I'm linking to, and what it's type it is supposed to be.  I need to generate a thunk (at runtime) that converts the caml versions of the parameters to the C versions.
+
+For example, say I've got this:
+
+(* int TheFunction( double, double ); ... ignore how I'm typing 
+   get_function for until below *)
+let f = get_function "TheFunction" "float -> float -> int"
+
+So, if I'm going to be able to call f from caml, get_function is going to need to generate a stub that takes two values and returns a value, and converts those to their C types with the mlvalues.h macros before calling TheFunction (and handles its return type).
+
+This piece of magic doesn't have to be very smart, since it's going to be predefined chunks of conversion code, but it will have to be generated on the fly by piecing together these chunks if I'm really going to allow completely dynamic linking.
+
+This is obviously not very cross platform.  There is a library called ffcall which has a thing called avcall in it that looks like it might do what I want with some massaging, and it's cross platform.   
+
+I think I also need to worry about generating the function that gets called directly by the return of get_function, but I think I can use the ffcall vacall library for that.
+
+Does anybody have any experience with avcall, vacall, or ffcall?  Is there a better way to do this?
+
+
+2.  I want to have get_function return a correctly typed function that can just be called with the correct caml types.  So, in the example above, f should be float -> float -> int.  There are two parts to this problem:  I need to have the source code specify the type of the linked function to the link library so it can generate the thunk as above, and I need to specify the type of the return function to the caml compiler.
+
+I think I have a few options:
+
+- I can try to use the printf formatting stuff and try to get this to do the right thing, so you'd pass a format string to the function.  This has problems with return values, since those aren't read from the format string.  I can do
+
+val get_function: ('a,unit,'c) format -> 'c -> 'a
+
+and that will work, but it requires me to pass in a dummy parameter for 'c to get it to parameterize 'a correctly on return type.  Is there a good way to specify types for this sort of thing?  Maybe use the format string for the parms and some kind of explicit specification for the return type?  But get_function needs to return 'a as its return type...
+
+- I can just have val get_function: string -> 'a, and have it parse the string internally to get the type, and then let 'a be type inferred in the caml source from the use of the return value.  Is that a good idea?  It seems like that might make for ambiguities if you ignore return values or curry it.
+
+- I can tell people to "cast" the 'a return type, so you'd do this:
+
+let f = (get_function "TheFunction: float -> float -> int" : float -> float -> int)
+
+but, this requires the error prone double-specification of the type, once to the library, and once to the source code.
+
+It seems to me that the printf format string one is "cleanest" and type-safest, but the return value thing is a hack.  I guess I could also patch the compiler and extend the format string parser to take a special % token to specify a return type, but that would be a hack itself and a lot of work.
+
+Any ideas?  And yes, this all goes away if I have a preprocessing step that generats the caml/c interface, but I'd really like to be able to do this at runtime.
+
+Chris
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

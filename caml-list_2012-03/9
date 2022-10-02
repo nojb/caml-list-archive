@@ -1,0 +1,165 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q21MImRE028144
+	for <caml-list@sympa-roc.inria.fr>; Thu, 1 Mar 2012 23:18:48 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmIBAMj0T0/RVdS2kGdsb2JhbABDtAIIIgEBAQEJCQ0HFAQjgX0BAQEEEgITGQEbDw4BAwwGBQsNLiEBAREBBQEcBhMih2SbXAqLcoJxhQQ/iHQBBQuJEINrFgsKAgoGBAMEAwgECg0OAQIBAguFIAcCAQMXAQgFFQODQgSVO4cZhAKDFz2EBIFTBA
+X-IronPort-AV: E=Sophos;i="4.73,513,1325458800"; 
+   d="scan'208";a="147052147"
+Received: from mail-wi0-f182.google.com ([209.85.212.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 01 Mar 2012 23:18:43 +0100
+Received: by wibhn6 with SMTP id hn6so461657wib.27
+        for <caml-list@inria.fr>; Thu, 01 Mar 2012 14:18:43 -0800 (PST)
+Received-SPF: pass (google.com: domain of gabriel.scherer@gmail.com designates 10.180.107.2 as permitted sender) client-ip=10.180.107.2;
+Authentication-Results: mr.google.com; spf=pass (google.com: domain of gabriel.scherer@gmail.com designates 10.180.107.2 as permitted sender) smtp.mail=gabriel.scherer@gmail.com; dkim=pass header.i=gabriel.scherer@gmail.com
+Received: from mr.google.com ([10.180.107.2])
+        by 10.180.107.2 with SMTP id gy2mr14929878wib.12.1330640323454 (num_hops = 1);
+        Thu, 01 Mar 2012 14:18:43 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20120113;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=LpJd/QexeLtcrSH2yEn5LJqQLI9myqlDwkW/zlAEV/k=;
+        b=sLkZBLzdfNClVLUzhCh3V/NIDeqqtaQLE64x0efpe5TUjNemxZOKEzE7SiVhZCzZ4q
+         BBlICNIYk8ZRsd1KRBN8Y1khbqzRGLZWjchhQu1UuBopNN7NT784Z0pvKcPTvirJWMxA
+         C40upzPFG3cMhU/H72PenxNj9CnrGldcQvO9peSWqj4d0Y+BIK/H4Kje6Hw279h/SngM
+         REybhRP1xaXhisBpnycXJuiLw0BrnK56FQ3t/+23MWSkBP7EmeWIt9AjHpZ+VJHZlAk9
+         oAFOG4ORZZWDj2PhVs8CMNB7c40Pt85N7q8YdxlTm7gT3OnyJidbXHFxWRcldr9C1E7Z
+         O2uA==
+Received: by 10.180.107.2 with SMTP id gy2mr11994486wib.12.1330640323308; Thu,
+ 01 Mar 2012 14:18:43 -0800 (PST)
+MIME-Version: 1.0
+Received: by 10.227.63.13 with HTTP; Thu, 1 Mar 2012 14:18:03 -0800 (PST)
+In-Reply-To: <CAMu2m2LSymhSZ+u78Eiwb-LA2QhiMjHiwb45gOd2TfpS3Y9wHA@mail.gmail.com>
+References: <CAMu2m2LSymhSZ+u78Eiwb-LA2QhiMjHiwb45gOd2TfpS3Y9wHA@mail.gmail.com>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Thu, 1 Mar 2012 23:18:03 +0100
+Message-ID: <CAPFanBHVQ9yqBcg3=k5yA6_gMnaeeW2EEdUPCNp+W9K47YbQ+A@mail.gmail.com>
+To: Ashish Agarwal <agarwal1975@gmail.com>
+Cc: Caml List <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q21MImRE028144
+Subject: Re: [Caml-list] types not equal when I expect them to be
+
+Note that Bar is actually unnecessary. The following code exhibit the
+exact same behavior:
+
+  module Foo = struct
+    module St = struct type t = string let compare = compare end
+    module Map (* : Map.S with type key = St.t *)
+      = Map.Make(St)
+    (* module Map = Map.Make(struct type t = string let compare =
+compare end) *)
+  end
+
+  module Pack = struct
+    module Foo = Foo
+  end
+
+  let x : int Foo.Map.t = Pack.Foo.Map.empty
+
+The important point is the interface of Map.Make when looked through
+the environment (for example when rebound by `module F = Map.Make`,
+then compiled with `ocamlc -i`):
+
+  functor (Ord : Map.OrderedType) ->
+    sig
+      type key = Ord.t
+      type 'a t = 'a Map.Make(Ord).t
+      ...
+    end
+
+Note the `'a t = 'a Map.Make(Ord).t` part: this is the result of
+a so-called "strenghening" operation, where the abstract types `t` in
+the signature of the module `M` are noted to be equal to `M.t`; this
+allows `N` to remain type-compatible with `M` when writing `module N =
+M`.
+
+Now the result of this strenghtening operation in your case is that
+your module Map defined in Foo has in its signature:
+
+  type 'a t = 'a Map.Make(Foo.St).t
+
+The sorrow and non-intuitive point is that, after rebinding in Pack,
+Pack.Foo gets the following signature:
+
+  type 'a t = 'a Map.Make(Pack.Foo.St).t
+
+Those two type are not path-compatible because `Pack.Foo.St` is not
+a path syntactically equal to `Foo.St` -- I'm not sure why the
+type-checker couldn't check path equality upto known module aliasing,
+however.
+
+Now, why your fixes work:
+
+1. by adding the `: Map.S with type key = ...` signature to your
+   Foo.Map module, you seal the module under the Map.S signature which
+   has its type `'a t` *abstract*. This cancels the effects of
+   strenghtening in the definition of `Foo.Map`. Now, in the
+   definition of Pack, aliasing `module Foo = Foo` re-apply
+   strenghtening, and you get a `Pack.Foo` module with `type 'a t =
+   Foo.Map.t`, so those two are compatible.
+
+2. by applying `struct type t = String let compare = compare` directly
+   instead of naming it `Foo.St`, you apply a module that is not
+   itself a path, so the typing rules change and you get `'a
+   Foo.Map.t` abstract as in the first case.
+
+3. You could also define `St` out of `Foo`, so that types in both Foo
+   and Pack.Foo have `type 'a t = Map.Make(St).t`. You are surely
+   aware that could similarly use stdlib's `String` directly which
+   provides a `compare` operation.
+
+I believe this explains the observed behaviour of the type-checker --
+the experts will surely correct if I made technical mistakes. I'm not
+sure however whether this behavior is expected (or could be considered
+slightly buggy), or if it is imposed by theoretical restrictions or
+implementation considerations.
+
+On Thu, Mar 1, 2012 at 5:38 PM, Ashish Agarwal <agarwal1975@gmail.com> wrote:
+> The following code fails to compile:
+>
+> ----- a.ml ----
+> module Foo = struct
+>   module St = struct type t = string let compare = compare end
+>
+>   module Map (* : Map.S with type key = St.t *)
+>     = Map.Make(St)
+>
+>   (* module Map = Map.Make(struct type t = string let compare = compare end)
+> *)
+> end
+>
+> module Bar = struct
+>   type t = int Foo.Map.t
+> end
+>
+> module Pack = struct
+>   module Foo = Foo
+>   module Bar = Bar
+> end
+>
+> open Pack
+> let x : Bar.t = Foo.Map.empty
+> ----
+>
+> $ ocamlc -c foo.ml
+> File "foo.ml", line 20, characters 16-29: (* refers to Foo.Map.empty on last
+> line *)
+> Error: This expression has type
+>          'a Pack.Foo.Map.t = 'a Map.Make(Pack.Foo.St).t
+>        but an expression was expected of type
+>          Pack.Bar.t = int Map.Make(Foo.St).t
+>
+>
+> So Pack.Foo and Foo are not compatible. By trial and error, I found two ways
+> to resolve the problem:
+>
+> 1) Provide an explicit signature for Foo.Map (uncomment the provided
+> signature), or
+> 2) Inline the structure passed to Map.Make (comment out first definition of
+> Foo.Map and uncomment the second one)
+>
+> But I don't understand why. Can anyone explain the main points. Thank you.
+>
+

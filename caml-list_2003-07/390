@@ -1,0 +1,151 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA16173; Tue, 8 Jul 2003 00:31:28 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA20680 for <caml-list@pauillac.inria.fr>; Tue, 8 Jul 2003 00:31:27 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h67MVHf16964;
+	Tue, 8 Jul 2003 00:31:17 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA14343; Tue, 8 Jul 2003 00:31:16 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200307072231.AAA14343@pauillac.inria.fr>
+Subject: Re: [Caml-list] syntax of private constructors in CVS version
+In-Reply-To: <3F04178B.6050107@ozemail.com.au> from John Max Skaller at "Jul 3, 103 09:46:19 pm"
+To: skaller@ozemail.com.au (John Max Skaller)
+Date: Tue, 8 Jul 2003 00:31:16 +0200 (MET DST)
+Cc: pierre.weis@inria.fr, brogoff@speakeasy.net, caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; pierre:01 weis:01 caml-list:01 modelization:01 non-free:01 modelize:01 invariants:01 quotient:01 equivalence:01 abstraction:01 accessor:01 accessors:01 immutable:01 0.0:01 disallowed:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> > As you should already know, usual sum and product types in Caml
+> > correspond to the mathematical notion of free algebraic data
+> > structures. This is fairly useful and allows the modelization of a lot
+> > of common data structures in practical programming
+> > situations. However, besides the free algebra structures,
+> > mathematicians use a lot of non-free algebras (so-called structures
+> > defined via generators and relations). Private types aim at giving a
+> > way to modelize those non-free structures. Equivalenetly, you can
+> > think of private types as providing a way to implement types equipped
+> > with invariants, quotient structures (i.e. sets of equivalence classes
+> > for some equivalence relation on a free algebra), or data types with
+> > canonical normal forms.
+> 
+> 
+> Well said. If I may add: this can already be done using
+> 
+> classes, or abstraction of modules. However these tools
+> are much *too* heavyweight, because they also hide the
+> algebraic structure of the types completely.
+> 
+> The user then must provide all the accessor functions,
+> for example, instead of using record labels or pattern matching.
+
+Absolutely. That's just the idea behind private types: ensure the
+necessary invariants but keep the ease of rpogramming new functions
+via pattern matching (and save the burden to provide all the
+accessors).
+
+> For immutable values, establishing an invariant at construction
+> time is enough to ensure the invariant is preserved: therefore,
+> it is enough to make construction abstract to ensure all values
+> of the type satisfy the invariants.
+
+Exactly.
+
+> Just for interest, this is not the case for mutable objects,
+> for example:
+> 
+> 	type rational = private { mutable x: float; mutable y: float };
+> 	...
+> 	let mess_up_invariant (z:rational) = z.y <- 0.0
+> 
+> Be interested to know the treatment of records with mutable fields.
+> Are they permitted? Or are the mutators disallowed?
+
+Records with mutable fields are permitted. Mutators explicitely exported
+as functions are allowed, other mutations are forbidden.
+
+I once wrote a lot of arithmetics and helped people writing core
+arithmetics libraries for Caml. I always thought we had a major flaw
+in the design of the library, due to type abstraction: we were
+constantly oscillating between two conflicting attitudes; on the one
+hand, using abstract data types all over the place to preserve
+invariants and on the other hand turning to concrete types, not to be
+forced to code everything ourself within the module implementing the
+ADT.
+
+I think private types are also a good answer to the
+problem. Implementation of rational numbers would use a record with
+mutable fields, and define a rational creation and a normalization
+functions, preserving invariants:
+
+type rat = {
+  mutable numerator : int;
+  mutable denominator : int;
+};;
+
+let rec mk_rat n d =
+ if d = 0 then failwith "mk_rat: null denominator" else
+ if d < 0 then mk_rat (- n) (- d) else
+ { numerator = n; denominator = d};;
+
+(* Left as an exercise *)
+let gcd n m = 1;;
+
+let normalize_rat r =
+ let g = gcd r.numerator r.denominator in
+ if g <> 1 then begin
+   r.numerator <- r.numerator / g;
+   r.denominator <- r.denominator / g
+ end;;
+
+Then interface of the module would abstract creation and mutation:
+
+type rat = private {
+  mutable numerator : int;
+  mutable denominator : int;
+};;
+
+val mk_rat : int -> int -> rat;;
+
+val normalize_rat : rat -> unit;;
+
+This way, there is no need to define access to numerator and
+denominator, or even to write printing functions: the user can write
+them easily:
+
+open Rat;;
+
+let print_rat r =
+ normalize_rat r;
+ match r with
+ | { numerator = n; denominator = d} -> Printf.printf "%d/%d" n d;;   
+
+Also, any attempt to mutate a rational is now statically rejected by
+the typechecker:
+
+let r = mk_rat 1 2 in
+r.numerator <- 4;
+
+Cannot assign field numerator of private type Rat.rat.
+
+Hence, in a sense, private types can also serve as a primitive way to
+turn a mutable data type into an immutable one outside its defining
+implementation, provided that no mutating functions are exported.
+
+A small addition for the language, a big step for the programmer :)
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,98 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA13630 for caml-redistribution@pauillac.inria.fr; Wed, 16 Feb 2000 10:37:55 +0100 (MET)
+Resent-Message-Id: <200002160937.KAA13630@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA14495 for <caml-list@pauillac.inria.fr>; Mon, 14 Feb 2000 18:10:10 +0100 (MET)
+Received: from beach.frankfurt.netsurf.de (beach.frankfurt.netsurf.de [194.64.181.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id SAA23032
+	for <caml-list@inria.fr>; Mon, 14 Feb 2000 18:10:05 +0100 (MET)
+Received: from ice.darmstadt.netsurf.de (board-54.darmstadt.netsurf.de [194.163.86.182])
+	by beach.frankfurt.netsurf.de (8.8.5/8.8.5) with ESMTP id SAA01617;
+	Mon, 14 Feb 2000 18:10:00 +0100 (MET)
+Received: from localhost (localhost [[UNIX: localhost]])
+	by ice.darmstadt.netsurf.de (8.9.3/8.9.3) id RAA30070;
+	Mon, 14 Feb 2000 17:03:08 +0100
+From: Gerd Stolpmann <Gerd.Stolpmann@darmstadt.netsurf.de>
+Reply-To: Gerd.Stolpmann@darmstadt.netsurf.de
+Organization: privat
+To: Christophe Raffalli <Christophe.Raffalli@univ-savoie.fr>,
+        caml-list@inria.fr
+Subject: Re: Thread feature missing
+Date: Mon, 14 Feb 2000 16:11:42 +0100
+X-Mailer: KMail [version 1.0.28]
+Content-Type: text/plain
+References: <20000211111749.34427@pauillac.inria.fr> <20000213073403Q.garrigue@kurims.kyoto-u.ac.jp> <38A7B721.172F585C@univ-savoie.fr>
+In-Reply-To: <38A7B721.172F585C@univ-savoie.fr>
+MIME-Version: 1.0
+Message-Id: <00021417030701.30469@ice>
+Content-Transfer-Encoding: 8bit
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Wed, 16 Feb 2000 10:37:55 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+On Mon, 14 Feb 2000, Christophe Raffalli wrote:
+>Have I miss something ? I found that two features (especialy the first)
+>are missing in the thread library:
+>
+>- No way to wait for one thread to finish among many (equivalent of
+>join, but taking a list of threads as argument)
+
+This can be solved by a condition variable, provided that the "sub threads"
+help the main thread.
+
+let m = Mutex.create() in       (* protects c and t *)
+let c = Condition.create() in
+let t = ref None in             (* thread ID of the finished thread *)
+
+Before the sub threads finish, they indicate what is happening:
+
+Mutex.lock m;
+if t = None then (              (* Signal only when the first thread finishes *)
+    t := Some (Thread.self());
+    Condition.signal c;
+);
+Mutex.unlock m;
+Thread.exit();
+
+The main thread waits until the signal comes:
+
+Mutex.lock m;
+Condition.wait c m;
+(* Now it knows that thread t has finished *)
+Mutex.unlock m;
+
+>- No way to send a signal to a thread (it would be useful to make a
+>thread raise an exception from another thread).
+
+If you mean asynchronous signals: The POSIX thread API has the concept of
+"cancellation-safeness". Threads are cancellation-safe if you can safely
+cancel them, without leaving memory uninitialized. It is very hard to get
+a thread cancellation-safe, because you must catch the "cancel" signal
+in almost every function, and CLEAN MEMORY UP. 
+
+I think this is the reason why you do not find a "kill" function in Thread
+that works under the native compiler, too. (Raising exceptions is a similar
+problem.) As far as I understood execution of O'Caml code is done in a 
+relative protected environment; the runtime system sets up artificially that 
+only one thread which currently executes O'Caml code runs at a time. It would
+be simple to test on some signal if the time slice of a thread begins. The
+problem are the pieces of code where this protected environment is left,
+which is always done if a system call is going to be performed. As far as I
+know the system calls return with an EINTR error code if the timer that
+triggers the thread switch times out, and it *might* be possible to
+catch this situation, too.
+
+I would predict that the O'Caml developers refuse such a change, because
+it adds much complexity to the runtime system. Furthermore, it makes it
+harder to get rid of that protected environment in which O'Caml code runs
+and which restricts the advantages of multi-threaded programming on 
+multiprocessor systems.
+
+Gerd
+-- 
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   Gerd.Stolpmann@darmstadt.netsurf.de (privat)
+Germany                     
+----------------------------------------------------------------------------
+
+

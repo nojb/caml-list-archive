@@ -1,0 +1,299 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 97672BC57
+	for <caml-list@yquem.inria.fr>; Wed, 17 Mar 2010 09:27:40 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AowDAKsvoEvZSMDdi2dsb2JhbACbAhUBAQEKCwoHEQUftziEdgQ
+X-IronPort-AV: E=Sophos;i="4.49,656,1262559600"; 
+   d="scan'208";a="59220442"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 17 Mar 2010 09:27:39 +0100
+Received: from smtp06.web.de (fmsmtp06.dlan.cinetic.de [172.20.5.172])
+	by fmmailgate01.web.de (Postfix) with ESMTP id A5AA814E15E4A
+	for <caml-list@inria.fr>; Wed, 17 Mar 2010 09:27:38 +0100 (CET)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp06.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #4)
+	id 1NrobI-00035r-00
+	for caml-list@inria.fr; Wed, 17 Mar 2010 09:27:38 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.71)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1NrobC-0001sa-Hv
+	for caml-list@inria.fr; Wed, 17 Mar 2010 09:27:30 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list <caml-list@inria.fr>
+Subject: Rewriting the Digest module causes linking errors
+Date: Wed, 17 Mar 2010 09:27:30 +0100
+Message-ID: <87wrxb5p59.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1/SutlVMTIEsMEGiFYyK25T6nhHG7ziKZ7BqsS8
+	1HmX4sGcYxgvVZqr6rAP6Ozezva61rWLTTcFrg4AeLQgzEILI1
+	FAEyd8vVk=
+X-Spam: no; 0.00; rewriting:01 bigarrays:01 patched:01 ocaml:01 stdlib:01 ocamlc:01 ocaml:01 ocaml-:01 ocaml-:01 byterun:01 byterun:01 otherlibs:01 bigarray:01 bigarray:01 otherlibs:01 
+
+Hi,
+
+I want to rewrite the Digest module to expose a more lowlevel interface
+to the md5 digest and add support to digest Bigarrays. I've patched the
+respective files involved and it all looks alright but when I try to
+build ocaml I get the following error:
+
+File "_none_", line 1, characters 0-1:
+Error: Error while linking boot/stdlib.cma(Digest):
+The external function `caml_md5_update_string' is not available
+make[2]: *** [ocamlc] Error 2
+make[2]: Leaving directory `/home/mrvn/src/debian/ocaml/ocaml-3.11.2'
+make[1]: *** [world] Error 2
+make[1]: Leaving directory `/home/mrvn/src/debian/ocaml/ocaml-3.11.2'
+make: *** [build-stamp] Error 2
+
+Can anyone explain why the new functions are not available?
+
+MfG
+        Goswin
+
+PS: The patch is based on Debians 3.11.2-1 source and the patch below
+can be added to debian/patches/ as is.
+
+--
+From: Goswin von Brederlow <goswin-v-b@web.de>
+Date: Wed, 17 Mar 2010 05:56:56 +0200
+Subject: [PATCH] Rewrite digest module
+
+---
+ byterun/md5.c                       |   30 ++++++++++++++++++++++++++++++
+ byterun/md5.h                       |    6 +++++-
+ otherlibs/bigarray/bigarray.h       |    2 ++
+ otherlibs/bigarray/bigarray.ml      |   11 +++++++++++
+ otherlibs/bigarray/bigarray.mli     |   10 ++++++++++
+ otherlibs/bigarray/bigarray_stubs.c |   13 +++++++++++++
+ stdlib/digest.ml                    |   13 +++++++++++++
+ stdlib/digest.mli                   |   28 ++++++++++++++++++++++++++++
+ 8 files changed, 112 insertions(+), 1 deletion(-)
+
+Index: ocaml-3.11.2/stdlib/digest.ml
+===================================================================
+--- ocaml-3.11.2.orig/stdlib/digest.ml	2010-03-17 08:17:24.000000000 +0100
++++ ocaml-3.11.2/stdlib/digest.ml	2010-03-17 08:19:46.000000000 +0100
+@@ -16,8 +16,13 @@
+ (* Message digest (MD5) *)
+ 
+ type t = string
++type context
+ 
++external context: unit -> context = "caml_md5_context"
+ external unsafe_string: string -> int -> int -> t = "caml_md5_string"
++external unsafe_update_string: context -> string -> int -> int -> unit
++  = "caml_md5_update_string"
++external final: context -> t = "caml_md5_final"
+ external channel: in_channel -> int -> t = "caml_md5_chan"
+ 
+ let string str =
+@@ -28,6 +33,14 @@
+   then invalid_arg "Digest.substring"
+   else unsafe_string str ofs len
+ 
++let update_string context str =
++  unsafe_update_string context str 0 (String.length str)
++
++let update_substring context str ofs len =
++  if ofs < 0 || len < 0 || ofs > String.length str - len
++  then invalid_arg "Digest.update_substring"
++  else unsafe_update_string context str ofs len
++
+ let file filename =
+   let ic = open_in_bin filename in
+   let d = channel ic (-1) in
+Index: ocaml-3.11.2/stdlib/digest.mli
+===================================================================
+--- ocaml-3.11.2.orig/stdlib/digest.mli	2010-03-17 08:17:24.000000000 +0100
++++ ocaml-3.11.2/stdlib/digest.mli	2010-03-17 08:19:56.000000000 +0100
+@@ -24,6 +24,34 @@
+ type t = string
+ (** The type of digests: 16-character strings. *)
+ 
++type context
++(** The type of a digest context. *)
++
++external context : unit -> context = "caml_md5_context"
++(** Return a fresh digest context. *)
++
++external unsafe_update_string : context -> string -> int -> int -> unit
++  = "caml_md5_update_string"
++(** [Digest.unsafe_update_string ctx s ofs len] updates the context
++    to include the substring of [s] starting at character number [ofs]
++    and containing [len] characters. *)
++
++external unsafe_string: string -> int -> int -> t = "caml_md5_string"
++(** [Digest.unsafe_string s ofs len] returns the digest of the
++    substring of [s] starting at character number [ofs] and containing
++    [len] characters. *)
++
++val update_string : context -> string -> unit
++(** [Digest.update_string ctx s ] updates the context to include [s]. *)
++
++val update_substring : context -> string -> int -> int -> unit
++(** [Digest.update_substring ctx s ofs len] updates the context
++    to include the substring of [s] starting at character number [ofs]
++    and containing [len] characters. *)
++
++external final : context -> t = "caml_md5_final"
++(** [Digest.final ctx] computs the final digest from [ctx]. *)
++
+ val string : string -> t
+ (** Return the digest of the given string. *)
+ 
+Index: ocaml-3.11.2/byterun/md5.c
+===================================================================
+--- ocaml-3.11.2.orig/byterun/md5.c	2010-03-17 08:17:24.000000000 +0100
++++ ocaml-3.11.2/byterun/md5.c	2010-03-17 08:17:43.000000000 +0100
+@@ -24,6 +24,36 @@
+ 
+ /* MD5 message digest */
+ 
++CAMLprim value caml_md5_context(void)
++{
++  value context;
++  struct MD5Context *ctx = malloc(sizeof(struct MD5Context));
++  if (ctx == NULL) {
++    caml_raise_out_of_memory();
++  }
++  caml_MD5Init(ctx);
++  context = caml_alloc_small(1, Abstract_tag);
++  Store_field(context, 0, (value)ctx);
++  return context;
++}
++
++CAMLprim value caml_md5_update_string(value context,
++				      value str, value ofs, value len)
++{
++  struct MD5Context *ctx = (struct MD5Context *)Data_custom_val(context);
++  caml_MD5Update(ctx, &Byte_u(str, Long_val(ofs)), Long_val(len));
++  return Val_unit;
++}
++
++CAMLprim value caml_md5_final(value context)
++{
++  struct MD5Context ctx = *(struct MD5Context *)Data_custom_val(context);
++  value res;
++  res = caml_alloc_string(16);
++  caml_MD5Final(&Byte_u(res, 0), &ctx);
++  return res;
++}
++
+ CAMLprim value caml_md5_string(value str, value ofs, value len)
+ {
+   struct MD5Context ctx;
+Index: ocaml-3.11.2/byterun/md5.h
+===================================================================
+--- ocaml-3.11.2.orig/byterun/md5.h	2010-03-17 08:17:24.000000000 +0100
++++ ocaml-3.11.2/byterun/md5.h	2010-03-17 08:17:43.000000000 +0100
+@@ -22,6 +22,10 @@
+ #include "mlvalues.h"
+ #include "io.h"
+ 
++CAMLextern value caml_md5_context (void);
++CAMLextern value caml_md5_update_string (value context,
++					 value str, value ofs, value len);
++CAMLextern value caml_md5_final (value context);
+ CAMLextern value caml_md5_string (value str, value ofs, value len);
+ CAMLextern value caml_md5_chan (value vchan, value len);
+ 
+@@ -32,7 +36,7 @@
+ };
+ 
+ CAMLextern void caml_MD5Init (struct MD5Context *context);
+-CAMLextern void caml_MD5Update (struct MD5Context *context, unsigned char *buf, 
++CAMLextern void caml_MD5Update (struct MD5Context *context, unsigned char *buf,
+                                 uintnat len);
+ CAMLextern void caml_MD5Final (unsigned char *digest, struct MD5Context *ctx);
+ CAMLextern void caml_MD5Transform (uint32 *buf, uint32 *in);
+Index: ocaml-3.11.2/otherlibs/bigarray/bigarray.h
+===================================================================
+--- ocaml-3.11.2.orig/otherlibs/bigarray/bigarray.h	2010-03-17 08:17:43.000000000 +0100
++++ ocaml-3.11.2/otherlibs/bigarray/bigarray.h	2010-03-17 08:17:43.000000000 +0100
+@@ -93,4 +93,6 @@
+                                  ... /*dimensions, with type intnat */);
+ CAMLBAextern uintnat caml_ba_byte_size(struct caml_ba_array * b);
+ 
++CAMLprim value caml_md5_update_bigarray (value context, value array);
++
+ #endif
+Index: ocaml-3.11.2/otherlibs/bigarray/bigarray.ml
+===================================================================
+--- ocaml-3.11.2.orig/otherlibs/bigarray/bigarray.ml	2010-03-17 08:17:43.000000000 +0100
++++ ocaml-3.11.2/otherlibs/bigarray/bigarray.ml	2010-03-17 08:17:43.000000000 +0100
+@@ -124,6 +124,17 @@
+     ba
+   let map_file fd ?pos kind layout shared dim =
+     Genarray.map_file fd ?pos kind layout shared [|dim|]
++
++  module Digest = struct
++    external update_bigarray: context -> ('a, 'b, 'c) Bigarray.Array1.t -> unit
++      = "caml_md5_update_bigarray" "noalloc"
++
++    let bigarray arr =
++      let context = context () in
++      let () = update_bigarray context arr
++      in
++	final context
++  end
+ end
+ 
+ module Array2 = struct
+Index: ocaml-3.11.2/otherlibs/bigarray/bigarray.mli
+===================================================================
+--- ocaml-3.11.2.orig/otherlibs/bigarray/bigarray.mli	2010-03-17 08:17:43.000000000 +0100
++++ ocaml-3.11.2/otherlibs/bigarray/bigarray.mli	2010-03-17 08:17:43.000000000 +0100
+@@ -507,6 +507,16 @@
+       Use with caution and only when the program logic guarantees that
+       the access is within bounds. *)
+ 
++  module Digest : sig
++    external update_bigarray : context -> ('a, 'b, 'c) t -> unit
++      = "caml_md5_update_bigarray" "noalloc"
++    (** Updates the context to include the bigarray. This function
++	runs concurrent with other threads. *)
++
++    val bigarray : ('a, 'b, 'c) t -> Digest.t
++    (** Return the digest of the given bigarray. This function
++	runs concurrent with other threads. *)
++  end
+ end
+ 
+ 
+Index: ocaml-3.11.2/otherlibs/bigarray/bigarray_stubs.c
+===================================================================
+--- ocaml-3.11.2.orig/otherlibs/bigarray/bigarray_stubs.c	2010-03-17 08:17:43.000000000 +0100
++++ ocaml-3.11.2/otherlibs/bigarray/bigarray_stubs.c	2010-03-17 08:17:43.000000000 +0100
+@@ -23,6 +23,8 @@
+ #include "intext.h"
+ #include "memory.h"
+ #include "mlvalues.h"
++#include "md5.h"
++#include "signals.h"
+ 
+ #define int8 caml_ba_int8
+ #define uint8 caml_ba_uint8
+@@ -1097,3 +1099,14 @@
+   caml_register_custom_operations(&caml_ba_ops);
+   return Val_unit;
+ }
++
++CAMLprim value caml_md5_update_bigarray(value context, value array)
++{
++  struct MD5Context *ctx = (struct MD5Context *)Data_custom_val(context);
++  void* data = Caml_ba_data_val(array);
++  size_t len = Caml_ba_byte_size(Caml_ba_array_val(array));
++  caml_leave_blocking_section();
++  caml_MD5Update(ctx, data, len);
++  caml_enter_blocking_section();
++  return Val_unit;
++}
+

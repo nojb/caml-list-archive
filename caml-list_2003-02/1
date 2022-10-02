@@ -1,0 +1,342 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA06197; Sat, 1 Feb 2003 00:07:46 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA06348 for <caml-list@pauillac.inria.fr>; Sat, 1 Feb 2003 00:07:45 +0100 (MET)
+Received: from pop9.ucdavis.edu (pop9.ucdavis.edu [169.237.105.19])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h0VN7hP01822
+	for <caml-list@inria.fr>; Sat, 1 Feb 2003 00:07:44 +0100 (MET)
+Received: from beech ([128.120.141.217])
+	by pop9.ucdavis.edu (8.11.6/8.11.0/IT4.6.2) with ESMTP id h0VN7fa10964
+	for <caml-list@inria.fr>; Fri, 31 Jan 2003 15:07:41 -0800 (PST)
+Received: from ijtrotts by beech with local (Exim 3.36 #1 (Debian))
+	id 18ekKL-0000ud-00
+	for <caml-list@inria.fr>; Fri, 31 Jan 2003 15:12:05 -0800
+Date: Fri, 31 Jan 2003 15:12:05 -0800
+To: OCaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] @, List.append, and tail recursion
+Message-ID: <20030131231205.GC3037@beech>
+References: <11707E79-34C2-11D7-9ECD-000393BA7EBA@wetware.com> <Pine.LNX.4.33.0301310958420.3577-100000@eagle.ancor.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <Pine.LNX.4.33.0301310958420.3577-100000@eagle.ancor.com>
+User-Agent: Mutt/1.4i
+From: Issac Trotts <ijtrotts@ucdavis.edu>
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, Jan 31, 2003 at 11:13:26AM -0600, Brian Hurt wrote:
+> On Thu, 30 Jan 2003, james woodyatt wrote:
+> 
+> > everyone--
+> > 
+> > Earlier in this thread, I suggested using a queue if you are spending 
+> > too much time in List.append.  Lack of optimized tail recursion is not 
+> > really a factor compared to the waste of cycles involved in 
+> > constructing a whole new list just to append a single element on the 
+> > end.
+> > 
+> > Apparently, nobody seemed to notice what I was talking about.  So I'm 
+> > going to try to make my point again.  Sorry if you got it the first 
+> > time.
+> 
+> I did get it the first time.  I'm just using List.append to illustrate a 
+> problem I'm having.
+> 
+> The problem is *constructing* lists.  If you can construct your list 
+> backwards, fine- but if you can't, you end up either not being tail 
+> recursive (and blowing up for long lists) or allocating the list twice.
+> 
+> Here's an example I have run across.  I'm working with sparse vectors, and 
+> basically storing them as (int * float) lists.  Now, let's write the 
+> vector add function.  The naive implementation would be:
+> 
+> let rec add x y = (* return x + y *)
+>     match (x, y) with
+>         ([], _) -> y
+>         | (_, []) -> x
+>         | (((xidx, xval) as xhead) :: xtail, 
+>            ((yidx, yval) as yhead) :: ytail)
+>         ->
+>             if (xidx == yidx) then
+>                 (xidx, xval +. yval) :: (add xtail ytail)
+>             else if (xidx < yidx) then
+>                 xhead :: (add xtail y)
+>             else
+>                 yhead :: (add x ytail)
+> ;;
+> 
+> It's simple, and obvious in both what it does and how it does it.  Except
+> opps, this isn't tail recursive.  If your sparse vectors might be 65536
+> elements long, this will blow up.  So we rewrite to be tail recursive:
+>  
+> let add x y = (* return x + y *)
+>     let add_int x y accum =
+>         match (x, y) with
+>             ([], _) -> (List.rev_append accum y)
+>             | (_, []) -> (List.rev_append accum x)
+>             | (((xidx, xval) as xhead) :: xtail, 
+>                ((yidx, yval) as yhead) :: ytail)
+>             ->
+>             if (xidx == yidx) then
+>                 add_int xtail ytail ((xidx, xval +. yval) :: accum)
+>             else if (xidx < yidx) then
+>                 add_int xtail y (xhead :: accum)
+>             else
+>                 add_int x ytail (yhead :: accum)
+> ;;
+
+I get your meaning, but it has to be changed to something like this 
+
+  let add x y = (* return x + y *)
+            let rec  add_int x y accum =
+                match (x, y) with
+                    ([], _) -> (List.rev_append accum y)
+                    | (_, []) -> (List.rev_append accum x)
+                    | (((xidx, xval) as xhead) :: xtail, 
+                      ((yidx, yval) as yhead) :: ytail)
+                    ->
+                    if (xidx == yidx) then
+                        add_int xtail ytail ((xidx, xval +. yval) :: accum)
+                    else if (xidx < yidx) then
+                        add_int xtail y (xhead :: accum)
+                    else
+                        add_int x ytail (yhead :: accum)
+          in   
+          add_int x y []
+    ;;
+
+to work on OCaml 3.06.
+
+> This makes the function truely tail recursive, except now it's allocating 
+> most of the returned vector twice (once as accum, and once in 
+> List.rev_append) and it's signifigantly uglier IMHO.  Rewritting the code 
+> to use set_cdr is the best performaner, but the ugliest yet.
+> 
+> And the add function is truely simple.  It can handle minor increases in 
+> ugliness without losing much.  But now consider something rather more 
+> complicated- say matrix transposition or matrix multiplication with
+> matricies defined as:
+> 
+> type vector_t = (int * float) list ;; (* index * value list *)
+> type matrix_t = (int * vector_t) list ;; (* row index * row vector list *)
+> 
+> Now minor uglification becomes major uglification.  It'd be nicer just to 
+> be able to be able to construct lists forwards instead of backwards.
+
+Well, in your first example you are mapping ints to floats.  Why not use
+a map for this?  You are keeping the keys sorted, so using a map should 
+be at least as good asymptotically when you're constructing it.
+
+  module Imap = Map.Make(struct type t=int let compare=compare end);;
+
+  let rec vec_make = function 
+    [] -> Imap.empty 
+    | (a,b) :: tail -> Imap.add a b (vec_make tail);;
+
+  let a = vec_make [(0, 1.0); (3, 3.0)] ;;    
+
+  let b = vec_make [(1, 2.0); (3, 4.5); (4, 5.0)] ;;  
+
+  let vec_add x y =
+    Imap.fold
+      (fun index value acc ->
+        try 
+          let acc_val = Imap.find index acc in
+          let acc = Imap.remove index acc in
+          Imap.add index (value +. acc_val) acc 
+        with 
+            Not_found -> Imap.add index value acc
+      )
+      x
+      y
+  ;;
+
+ let result = vec_add a b;;
+
+ Imap.iter (fun i v -> Printf.printf "%i : %9.6f\n" i v) result;;
+
+0 :  1.000000
+1 :  2.000000
+3 :  7.500000
+4 :  5.000000
+- : unit = ()
+
+For matrices, how about
+
+  let mat_add x y =
+    Imap.fold
+      (fun index value acc ->
+        try
+          let acc_val = Imap.find index acc in
+          let acc = Imap.remove index acc in
+          Imap.add index (vec_add value acc_val) acc
+        with
+            Not_found -> Imap.add index value acc
+      )
+      x
+      y
+  ;;
+
+Issac
+
+> List.append is just an obvious example to be talking about, but the 
+> problem is signifigantly more general.
+> 
+> Brian
+> 
+> 
+> 
+> > 
+> > On Thursday, Jan 30, 2003, at 13:57 US/Pacific, Brian Hurt wrote:
+> > > On Thu, 30 Jan 2003, Olivier Andrieu wrote:
+> > >
+> > >>> list1: 1.462s
+> > >>> list2: 1.757s
+> > >>> list3: 1.824s
+> > >>
+> > >> There's an assert in setcdr : it's important because the first
+> > >> argument mustn't be an empty list. It's never the case here, so you
+> > >> can safely compile with -noassert.
+> > >
+> > > Doh!  OK- now, compiling with -noassert drops the time to 1.457 seconds
+> > > (same machine, same environment)- to slightly better than the recursive
+> > > version.
+> > 
+> > For grins, I wrote an equivalent test program.  It uses a functional 
+> > deque instead of a list.  (I have written one.  It's a component of my 
+> > Cf library, which remains unreleased at the moment.  Markus Mottl has 
+> > translated several of Chris Okasaki's functional queue implementations 
+> > into Ocaml, and you can find them on the Hump.)
+> > 
+> > To get started, I timed the 'benchmarks' by running them on my iBook 
+> > (the 700 MHz G3 model) so I could get a baseline.  My little iBook is 
+> > nowhere near as fast as your cool 1.6GHz P4, but I'm not complaining.
+> > 
+> > The results of my tests were:
+> > 
+> > 	$ time ./list1
+> > 	3.690u 0.070s 0:04.14 90.8%     0+0k 0+0io 0pf+0w
+> > 
+> > 	$ time ./list2
+> > 	4.180u 0.020s 0:05.01 83.8%     0+0k 0+0io 0pf+0w
+> > 	
+> > 	$ time ./list3
+> > 	3.700u 0.000s 0:04.49 82.4%     0+0k 0+0io 0pf+0w
+> > 
+> > Not real fast, but fast enough that I don't mind waiting for results.  
+> > So, what difference does my functional deque implementation make?  Glad 
+> > you asked.
+> > 
+> > My Cf_deque module matches the following signature:
+> > 
+> > 	(* begin cf_deque.mli *)
+> > 	type 'a t
+> > 
+> > 	val nil: 'a t
+> > 
+> > 	module type Direction_T = sig
+> > 	    val pop: 'a t -> ('a * 'a t) option
+> > 	    val push: 'a -> 'a t -> 'a t
+> > 	end
+> > 
+> > 	module A: Direction_T
+> > 	module B: Direction_T
+> > 
+> > 	val cat: 'a t -> 'a t -> 'a t
+> > 	(* end file *)
+> > 
+> > (Actually, this isn't the complete interface.  I've written a variety 
+> > of ancillary functions that make it convenient to work with the objects 
+> > in a deque without having to translate them into lists, e.g. fold, 
+> > iterate, etc.)
+> > 
+> > All the functions above are purely functional, and they perform with 
+> > O(1) average complexity.  (Or at least, that's my untrained analysis.  
+> > I'd like to provide proof of that assertion, and I'm working on getting 
+> > some help in that effort-- but, I'll have more news on that when I have 
+> > it.)
+> > 
+> > Here's a variant of the list1.ml test above, which uses my Cf_deque 
+> > module instead:
+> > 
+> > 	(* begin t-opt.deque.ml *)
+> > 	open Cf_deque
+> > 
+> > 	let rec makelist_aux c accum =
+> > 	  let accum = B.push c accum in
+> > 	  if c > 0 then makelist_aux (pred c) accum else accum
+> > 
+> > 	let makelist c = makelist_aux c nil
+> > 
+> > 	;;
+> > 	let _ = makelist 5000;;
+> > 	(* end file *)
+> > 
+> > Here are the timing results on that same iBook:
+> > 
+> > 	$ time ./t-opt.deque
+> > 	0.010u 0.010s 0:00.02 100.0%    0+0k 0+0io 0pf+0w
+> > 
+> > In other words, it's done before enough time passes even to measure it 
+> > properly.
+> > 
+> > > And for the record, I just tested with appending to a list of 500,000
+> > > elements, and it worked OK.
+> > 
+> > Here is the result of running my version of the test with 500,000 
+> > elements:
+> > 
+> > 	$ time ./t-opt.deque
+> > 	0.450u 0.080s 0:00.75 70.6%     0+0k 0+0io 0pf+0w
+> > 
+> > It took under a second of wall-clock time.  On the other hand, when I 
+> > modified list3.ml for 500,000 elements, it took *forever* in wall-clock 
+> > time.  I gave up after almost an hour and a half.  Ultimately, I killed 
+> > it with SIGINT before it finished.  I have no idea how far it got.
+> > 
+> > Clearly, I need to push a lot more elements into my deque before I will 
+> > get a timing result that I can measure in heartbeats.  Here is the 
+> > result for 5,000,000 elements:
+> > 
+> > 	$ time ./t-opt.deque
+> > 	5.160u 0.510s 0:06.69 84.7%     0+0k 0+0io 0pf+0w
+> > 
+> > At this stage, I noticed my little iBook was just starting to thrash 
+> > when the program finished.    So, I bumped it up to 50,000,000 
+> > elements, because I like punishing my computer from time to time-- just 
+> > to teach it respect.
+> > 
+> > At around 15 seconds into the run, the program turned into the 
+> > psychedelic pizza delivery service: the pager went into fear and 
+> > loathing mode, and the pretty Aqua GUI started acting like it was 
+> > sniffing glue.  If I had let it run to completion, it probably would 
+> > have wedged the machine.  (Mac OS X is pretty stable, but it hates 
+> > resource bombs as much as any other operating system.)
+> > 
+> > None of the listN.ml files were able to bring down the machine like 
+> > that, no matter how long I let them run-- which should make sense, 
+> > right?  The APPEND function is O(N) for lists.  Once N gets beyond a 
+> > few hundred, the program spends almost all its cycles just copying list 
+> > cells inside its innermost loop, only occasionally reaching the end of 
+> > a list and tacking a new cell onto the end before starting over again.
+> > 
+> > The problem is not the language, or the compiler.  The problem is the 
+> > design of the program.  The moral of this story: you really should 
+> > consider using a queue if you find your programs are spending a lot of 
+> > cycles appending things to very long lists.
+> > 
+> > 
+> > 
+> 
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+
+-- 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,149 @@
+Return-Path: <envelope@gim.name>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 327AFBC0A
+	for <caml-list@yquem.inria.fr>; Mon, 14 May 2007 18:56:23 +0200 (CEST)
+Received: from ghost.is-a-geek.org ([84.205.135.191])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l4EGuMiH005647
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Mon, 14 May 2007 18:56:22 +0200
+Received: by ghost.is-a-geek.org (Postfix, from userid 1000)
+	id 243DA27ACA; Mon, 14 May 2007 18:56:20 +0200 (CEST)
+Date: Mon, 14 May 2007 18:56:20 +0200
+From: =?utf-8?B?U3TDqXBoYW5l?= Gimenez <gimenez@pps.jussieu.fr>
+To: caml-list@yquem.inria.fr
+Subject: ocamlbuild, menhir and include directories
+Message-ID: <20070514165620.GA15565@ghost.is-a-geek.org>
+Mail-Followup-To: =?utf-8?B?U3TDqXBoYW5l?= Gimenez <gimenez@pps.jussieu.fr>,
+	caml-list@yquem.inria.fr
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="jRHKVT23PllUwdXP"
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+User-Agent: Mutt/1.5.14 (2007-02-12)
+X-Miltered: at concorde with ID 464894B6.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; gimenez:01 gimenez:01 dirs:01 ocamlc:01 patched:01 patched:01 ocamlc:01 inference:01 dirs:01 printf:01 sprintf:01 mlname:01 printf:01 sprintf:01 mlname:01 
+X-Attachments: cset="utf-8" name="menhir-20070322.incl_dirs.patch" name="ocaml-menhir-incl_dirs.patch" 
+
+
+--jRHKVT23PllUwdXP
+Content-Type: text/plain; charset=utf-8
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+
+Hi Caml list,
+
+I got stuck with calls from ocamlbuild to
+  menhir --infer ...
+failing because include dirs (-I dir) were not given as parameters.
+
+The fact is that menhir currently does not accept such parameters.
+I found a dirty workaround using
+  menhir --ocamlc "ocamlc -I dir" ...
+but this could override an other --ocamlc parameter.
+
+Looking at menhir and ocamlbuild code, I thought a tiny patch to both
+was the best choice:
+   - a patch to learn menhir about -I options
+   - a patch to ocamlbuild to feed menhir --infer calls with -I options
+     (using the same argument generation code as for other commands)
+
+Those patches are attached.
+
+Regards,
+Stéphane.
+
+
+--jRHKVT23PllUwdXP
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="menhir-20070322.incl_dirs.patch"
+
+diff -ru menhir-20070322/infer.ml menhir-20070322.patched/infer.ml
+--- menhir-20070322/infer.ml	2007-03-22 21:12:49.000000000 +0100
++++ menhir-20070322.patched/infer.ml	2007-05-14 18:07:02.000000000 +0200
+@@ -332,9 +332,12 @@
+   (* Invoke ocamlc to do type inference for us. *)
+ 
+   let output =
++    let incl_dirs =
++      String.concat " " (List.map (fun s -> "-I " ^ s) Settings.incl_dirs)
++    in
+     IO.winvoke
+       [ write grammar ]
+-      (Printf.sprintf "%s -c -i %s" Settings.ocamlc (Filename.quote mlname))
++      (Printf.sprintf "%s %s -c -i %s" Settings.ocamlc incl_dirs (Filename.quote mlname))
+       [ remove mlname ]
+   in
+ 
+diff -ru menhir-20070322/settings.ml menhir-20070322.patched/settings.ml
+--- menhir-20070322/settings.ml	2007-03-22 21:12:49.000000000 +0100
++++ menhir-20070322.patched/settings.ml	2007-05-14 18:50:58.000000000 +0200
+@@ -93,6 +93,9 @@
+ let ocamldep =
+   ref "ocamldep"
+ 
++let incl_dirs =
++  ref []
++
+ let logG, logA, logC =
+   ref 0, ref 0, ref 0
+ 
+@@ -131,6 +134,7 @@
+   "--no-stdlib", Arg.Set no_stdlib, " Do not load the standard library";
+   "--ocamlc", Arg.Set_string ocamlc, "<command> Specifies how ocamlc should be invoked";
+   "--ocamldep", Arg.Set_string ocamldep, "<command> Specifies how ocamldep should be invoked";
++  "-I", Arg.String (fun s -> incl_dirs := s :: !incl_dirs), "<dir> Add <dir> to the list of include directories";
+   "--only-preprocess", Arg.Set preprocess_only, " Print a simplified grammar and exit";
+   "--only-tokens", Arg.Unit tokentypeonly, " Generate token type definition only, no code";
+   "--raw-depend", Arg.Unit (fun () -> depend := OMRaw), " Invoke ocamldep and echo its raw output";
+@@ -237,6 +241,9 @@
+ let ocamldep =
+   !ocamldep
+ 
++let incl_dirs =
++  !incl_dirs
++
+ let logG, logA, logC =
+   !logG, !logA, !logC
+ 
+diff -ru menhir-20070322/settings.mli menhir-20070322.patched/settings.mli
+--- menhir-20070322/settings.mli	2007-03-22 21:12:50.000000000 +0100
++++ menhir-20070322.patched/settings.mli	2007-05-14 18:05:47.000000000 +0200
+@@ -97,6 +97,7 @@
+ 
+ val ocamlc: string
+ val ocamldep: string
++val incl_dirs: string list
+ 
+ (* How verbose we should be. *)
+ 
+
+--jRHKVT23PllUwdXP
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="ocaml-menhir-incl_dirs.patch"
+
+Index: ocaml_tools.ml
+===================================================================
+RCS file: /caml/ocaml/ocamlbuild/ocaml_tools.ml,v
+retrieving revision 1.2
+diff -u -r1.2 ocaml_tools.ml
+--- ocaml_tools.ml	8 Feb 2007 16:53:39 -0000	1.2
++++ ocaml_tools.ml	14 May 2007 16:18:24 -0000
+@@ -37,7 +37,8 @@
+ let menhir mly env build =
+   let mly = env mly in
+   Ocaml_compiler.prepare_compile build mly;
+-  Cmd(S[!Options.ocamlyacc; T(tags_of_pathname mly++"ocaml"++"parser"++"menhir");
++  Cmd(S[!Options.ocamlyacc; ocaml_include_flags mly;
++	T(tags_of_pathname mly++"ocaml"++"parser"++"menhir");
+         A"--infer"; flags_of_pathname mly; Px mly])
+ 
+ let ocamldoc_c tags arg odoc =
+
+--jRHKVT23PllUwdXP--
+

@@ -1,0 +1,190 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA11785; Mon, 19 Aug 2002 17:58:42 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA11744 for <caml-list@pauillac.inria.fr>; Mon, 19 Aug 2002 17:58:41 +0200 (MET DST)
+Received: from bastion.artisan.com (bastion.artisan.com [209.144.161.130])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g7JFwcD06541
+	for <caml-list@inria.fr>; Mon, 19 Aug 2002 17:58:39 +0200 (MET DST)
+Received: from ypmaster.artisan.com (ypmaster [172.16.2.1])
+	by bastion.artisan.com (8.9.2/8.9.2) with ESMTP id IAA25100;
+	Mon, 19 Aug 2002 08:58:31 -0700 (PDT)
+Received: from granite.artisan.com (granite [172.16.10.97])
+	by ypmaster.artisan.com (8.9.2/8.9.2-arti) with ESMTP id IAA12093;
+	Mon, 19 Aug 2002 08:58:30 -0700 (PDT)
+Received: (from bpr@localhost)
+	by granite.artisan.com (8.9.2/8.9.2) id IAA15130;
+	Mon, 19 Aug 2002 08:58:30 -0700 (PDT)
+X-Authentication-Warning: granite.artisan.com: bpr set sender to bpr@artisan.com using -f
+From: Brian Rogoff <bpr@artisan.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <15713.5541.413031.271962@granite.artisan.com>
+Date: Mon, 19 Aug 2002 08:58:29 -0700
+To: Diego-Olivier.FERNANDEZ-PONS@cicrp.jussieu.fr
+Cc: caml-list@inria.fr
+Subject: Polymorphic recursion 9Was Re: [Caml-list] Doubly-linked list)
+References: <15706.31385.247539.595347@granite.artisan.com>
+	<Pine.A32.3.95.1020819121715.76782C-100000@ibm1.cicrp.jussieu.fr>
+X-Mailer: VM 7.00 under Emacs 20.7.1
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Diego Olivier Fernandez Pons writes:
+> Brian Rogoff a =E9crit :
+> > With OCaml 3.05 and above, you'll be able to use polymorphic method=
+s to=20
+> > get non-uniform recursion. This issue has come up a lot on the list=
+=20
+> > (see the archives) over the years and several proposals were made f=
+or=20
+> > adding this capability to the language. I don't know if adding this=
+=20
+> > feature is a priority for the developers; it isn't clear that the d=
+ata
+> > structures in Okasaki's book constitute a strong enough argument fo=
+r=20
+> > adding it.=20
+>=20
+> Non-uniform recursion allows you to capture structure invariants in
+> your type, which means that the correction of the algorithms will not=
+
+> be proved by the programmer but by the type-checker.=20
+
+Oh I'm not arguing that point, I totally agree that it's omission is a=20=
+
+bad thing. However, not everyone agrees, since you it becomes a lot tou=
+gher
+to build a monomorphizing compiler if you allow it, though it has been=20=
+
+suggested that the same tricks you use to manually remove polymorphic
+recursion could be used in an SSC (sufficiently smart compiler).=20
+
+Anyways, since OCaml 3.05 allows first class polymorphism on records, y=
+ou
+don't even need to use "polymorphic recots" to get non-uniform recursio=
+n;=20
+simply mapping the OOP to records does the trick. Here's the first exam=
+ple
+from OKasaki which uses polymorphic recursion, done in OCaml with this=20=
+
+direct approach=20
+
+module type RANDOM_ACCESS_LIST =3D
+  sig
+    type 'a ra_list
+
+    val empty   : 'a ra_list
+    val is_empty : 'a ra_list -> bool
+
+    val cons    : 'a -> 'a ra_list -> 'a ra_list
+    val head    : 'a ra_list -> 'a
+    val tail    : 'a ra_list -> 'a ra_list
+    val lookup  : int -> 'a ra_list -> 'a
+    val update  : int -> 'a -> 'a ra_list -> 'a ra_list
+  end
+
+module AltBinaryRandomAccessList : RANDOM_ACCESS_LIST =3D
+  (* assumes polymorphic recursion! *)
+  struct=20
+    type 'a ra_list =3D Nil
+    | Zero of ('a * 'a) ra_list
+    | One of 'a * ('a * 'a) ra_list
+
+    let empty =3D Nil
+    let is_empty =3D function Nil -> true | _ -> false
+
+    (* Use first class polymorphism to get the effect of explicitly typ=
+ing=20
+       the polymorphic recursion=20
+    *)
+    type dictionary =3D=20
+      { cons : 'a. dictionary -> 'a -> 'a ra_list -> 'a ra_list;
+=09uncons : 'a. dictionary -> 'a ra_list -> 'a * 'a ra_list;
+=09lookup : 'a. dictionary -> int -> 'a ra_list -> 'a;
+=09fupdate : 'a. dictionary -> ('a -> 'a) -> int -> 'a ra_list -> 'a=20=
+
+ra_list
+      }
+
+    (* Define the methods, taking care that the recursive calls go thro=
+ugh
+       the dictionary
+    *)
+
+    let cons' dict x l =3D
+      match l with
+=09Nil -> One (x, Nil)
+      | Zero ps -> One (x, ps)
+      | One (y,b) -> Zero (dict.cons dict (x, y) b)
+
+    let uncons' dict l =3D
+      match l with
+=09Nil -> raise Not_found
+      | One (x,Nil) -> (x,Nil)
+      | One (x,ps) -> (x, Zero ps)
+      | Zero ps ->=20
+=09  let ((x,y),ps') =3D dict.uncons dict ps in=20
+=09  (x, One (y, ps'))
+
+    let lookup' dict i l =3D=20
+      match i,l with=20
+=09(i, Nil) -> raise Not_found
+      | (0, One (x, ps)) -> x
+      | (i, One (x, ps)) -> dict.lookup dict (pred i) (Zero ps)
+      | (i, Zero ps) ->=20
+=09  let (x, y) =3D dict.lookup dict (i / 2) ps
+=09  in if i mod 2 =3D 0 then x else y
+
+    let rec fupdate' dict f i l =3D
+      match i,l with=20
+=09(i, Nil) -> raise Not_found
+      | (0, One (x, ps)) -> One (f x, ps)
+      | (i, One (x, ps)) -> dict.cons dict x (dict.fupdate dict f (i-1)=
+ (Zero=20
+ps))
+      | (i, Zero ps) ->
+=09  let f' (x, y) =3D if i mod 2 =3D 0 then (f x, y) else (x, f y) in=20=
+
+=09  Zero (dict.fupdate dict f' (i / 2) ps)
+
+
+    (* Make the sole dictionary which will be called *)
+
+    let methods =3D=20
+      { cons =3D cons'; uncons =3D uncons'; lookup =3D lookup'; fupdate=
+ =3D fupdate' }
+
+    (* Make the actual functions *)
+    let cons x l =3D cons' methods x l=20
+    let uncons l =3D uncons' methods l=20
+    let head xs =3D let (x, _) =3D uncons xs in x
+    let tail xs =3D let (_, xs') =3D uncons xs in xs'
+    let lookup i xs =3D lookup' methods i xs
+    let update i y xs =3D fupdate' methods (fun x -> y) i xs
+  end
+
+> I think it is a big improvment. Chris Okasaki's data structure may no=
+t
+> be a strong enough argument, but more complicated data structures are=
+
+> being studied.
+
+I agree, and I hope that in the future we won't have to use hacks like =
+the=20
+above to get polymorphic recursion, but that it will be supported more
+directly. The style above, besides being indirect, is also a little ugl=
+ier
+still when you're using the tail recursive accumulator passing style
+because your recursive functions have funny names and signatures. In an=
+y
+case, this kind of hack will allow you to translate these structures an=
+d
+won't require much rework when polymorphic recursion is finally added=20=
+
+"for real"
+
+-- Brian
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

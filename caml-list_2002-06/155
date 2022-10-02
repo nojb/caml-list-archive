@@ -1,0 +1,115 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA20934; Thu, 13 Jun 2002 09:06:59 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA21209 for <caml-list@pauillac.inria.fr>; Thu, 13 Jun 2002 09:06:58 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g5D76v903512
+	for <caml-list@inria.fr>; Thu, 13 Jun 2002 09:06:57 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3/3.7W) with ESMTP id MAA28203;
+	Thu, 13 Jun 2002 12:33:11 +0900 (JST)
+To: bwv211mail@yahoo.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] double-functors for types and values
+In-Reply-To: <20020612213108.88273.qmail@web13407.mail.yahoo.com>
+References: <20020612213108.88273.qmail@web13407.mail.yahoo.com>
+X-Mailer: Mew version 1.94.2 on Emacs 20.7 / Mule 4.0 (HANANOEN)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020613123311H.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 13 Jun 2002 12:33:11 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 84
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Brian Naylor <bwv211mail@yahoo.com>
+
+> It frequently happens that I have a module/functor A parameterized by
+> module B, but B depends on types that are part of A.  Those types of A in
+> turn depend on the types of B.  Wow, I've confused myself already.  Let me
+> try to make this clearer:
+> 
+>     let A.avalue = ... B.bvalue ...
+>     val B.bvalue : ... A.atype ...
+>     type A.atype = ... B.btype ...
+> 
+> This results in the following kind of double-functor, one functor for the
+> types and the second internal functor for the values:
+[..] 
+> module B = struct
+> 
+>   type btype = ...
+> 
+>   module A_types = A.Types (struct type btype = B.btype end)
+> 
+>   let bvalue = ...
+> 
+>   module A_values = A_types.Values (struct let bvalue = B.bvalue end)
+> 
+>   let _ = ... A_values.avalue ...
+> 
+> end
+
+There 's something fishy in struct type btype = B.btype end:
+if you're still inside B, you cannot refer to yourself as B.
+The compiler might let you do that if you've already got a B.cmi
+around, but you won't be able to compile from scratch.
+
+So this should actually be even more nested:
+
+module B = struct
+  module Types = struct type btype = ... end
+
+  module A_types = A.Types (Types)
+
+  module Values = struct let bvalue = ... end
+
+  module A_values = A_types.Values (Values)
+
+  let _ = ... A_values.avalue ...
+
+end
+
+> So, my questions are:
+> 
+> (1) is this a normal way of structuring this kind of thing?  I know I could
+>     use polymorphic types instead of trying to make it work in the module
+>     system, but I like the idea that all my types are made explicit.
+
+I wouldn't call it normal, but this looks sound.
+If you like things to be complicated.
+
+> (2) do I pay a run-time cost for functor applications that only contain
+>     types?  In other words, does A_values.avalue suffer a double
+>     indirection since it is buried two functors deep?  Or do you only pay
+>     the indirection cost for values that are passed across functorial
+>     boundaries?
+
+No. Type information is extracted at compile time.
+For indirections, a module is just a big record, so if you have a
+direct handle on it, its original nesting should not matter.
+Am I correct?
+
+Functors should incur three costs:
+* type abstraction cost: if you depend on abstract types, some data
+  structure accesses cannot be optimized.
+* function abstraction cost: all imported functions and (some?)
+  exported functions cannot be called directly. Expensive.
+* structure access cost: you have to dereference to get to your
+  closures. I believe it's cheap compared to the function abstraction
+  cost. Xavier Leroy had recently some figures showing that a method
+  call (double indirection) was not that much more expensive than an
+  abstract function call.
+
+Efficiency is a relative problem. As long as you're not calling an
+abstract function doing a single addition inside you super-optimized
+for-loop, this should be ok...
+
+Jacques Garrigue
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

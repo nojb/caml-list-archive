@@ -1,0 +1,188 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA09225; Sat, 20 Dec 2003 12:30:08 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA10196 for <caml-list@pauillac.inria.fr>; Sat, 20 Dec 2003 12:30:07 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hBKBU5X25056;
+	Sat, 20 Dec 2003 12:30:05 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA10045; Sat, 20 Dec 2003 12:30:04 +0100 (MET)
+Date: Sat, 20 Dec 2003 12:30:04 +0100
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: nogin@cs.caltech.edu
+Cc: caml-list@inria.fr
+Subject: [Caml-list] Re: Marshalling tests fail on AMD x86_64 (Opteron). (PR#1979)
+Message-ID: <20031220123004.A9913@pauillac.inria.fr>
+References: <200312160316.EAA00843@pauillac.inria.fr>
+Mime-Version: 1.0
+Content-Type: multipart/mixed; boundary="a8Wt8u1KmwUX3Y2C"
+X-Mailer: Mutt 1.0i
+In-Reply-To: <200312160316.EAA00843@pauillac.inria.fr>; from nogin@cs.caltech.edu on Tue, Dec 16, 2003 at 04:16:58AM +0100
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; marshalling:01 1979:99 segfault:01 3.07:01 intext:01 intext:01 bug:01 bug:01 misbehave:01 ocamlopt:01 ocamlc:01 gcc:01 unspecified:01 int':01 int':01 
+X-Attachments: name="patch" name="bug.c" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+--a8Wt8u1KmwUX3Y2C
+Content-Type: text/plain; charset=us-ascii
+
+> I am having problems with the marshaller (I am getting a segfault in the 
+> marshaller) on the AMD x86_64 (Opteron) running Fedora Core development 
+> version (AKA Red Hat Raw Hide) and OCaml 3.07+2.
+> To figure out what is going on, I tried running some tests.
+> When I run test/Moretest/intext.byt, I get:
+> 
+> ...
+> Test 223 passed.
+> Test 300 passed.
+> Uncaught exception: Failure("input_value_from_block: bad object")
+> Exit 2
+> 
+> When I run test/Moretest/intext.out, I get:
+> 
+> ...
+> Test 223 passed.
+> Test 300 passed.
+> Test 401 FAILED.
+> 
+> Do these indicate a bug? Or is this expected and I should look for the 
+> source of my problems elsewhere?
+
+The second test failure is actually a nasty bug in the AMD64 port of
+OCaml, causing exceptions raised from C code to misbehave with ocamlopt.
+(ocamlc isn't affected.)
+
+The first test failure is either a bug in gcc or an unspecified
+behavior of C that I wasn't aware of.  Basically, some stuff is
+computed with type 'unsigned int', stored in an 'unsigned long'
+variable, and compared against an 'unsigned int' constant.  The
+gcc-generated code performs a sign extension 32 -> 64 bits on the
+unsigned int, causing the test to fail.  This behavior also occurs
+with older versions of gcc on the Alpha.  Digital Unix's Alpha cc
+compiler (the only other 64-bit C compiler I have at hand) doesn't do
+sign extension.  A small example that reproduces the behavior is
+attached.  I'll let the C language lawyers argue what the correct
+behavior is.
+
+At any rate, plase find attached a patch against 3.07pl2 that fixes the
+ocamlopt exception bug, and works around the undesired sign extension.
+With this patch, the "intext" regression test passes on your AMD64 machine.
+Let me know if that improves the situation with your other crashes.
+
+- Xavier Leroy
+
+--a8Wt8u1KmwUX3Y2C
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename=patch
+
+Index: csl/byterun/intern.c
+diff -c csl/byterun/intern.c:1.50 csl/byterun/intern.c:1.52
+*** csl/byterun/intern.c:1.50	Thu Dec 12 19:59:11 2002
+--- csl/byterun/intern.c	Sat Dec 20 11:57:38 2003
+***************
+*** 15,20 ****
+--- 15,22 ----
+  
+  /* Structured input, compact format */
+  
++ /* The interface of this file is "intext.h" */
++ 
+  #include <string.h>
+  #include "alloc.h"
+  #include "custom.h"
+***************
+*** 496,502 ****
+  
+  CAMLexport value input_value_from_malloc(char * data, long ofs)
+  {
+!   mlsize_t magic, block_len;
+    value obj;
+  
+    intern_input = (unsigned char *) data;
+--- 498,505 ----
+  
+  CAMLexport value input_value_from_malloc(char * data, long ofs)
+  {
+!   uint32 magic;
+!   mlsize_t block_len;
+    value obj;
+  
+    intern_input = (unsigned char *) data;
+***************
+*** 514,520 ****
+  
+  CAMLexport value input_value_from_block(char * data, long len)
+  {
+!   mlsize_t magic, block_len;
+    value obj;
+  
+    intern_input = (unsigned char *) data;
+--- 517,524 ----
+  
+  CAMLexport value input_value_from_block(char * data, long len)
+  {
+!   uint32 magic;
+!   mlsize_t block_len;
+    value obj;
+  
+    intern_input = (unsigned char *) data;
+Index: csl/asmrun/amd64.S
+diff -c csl/asmrun/amd64.S:1.1 csl/asmrun/amd64.S:1.3
+*** csl/asmrun/amd64.S:1.1	Mon Jun 30 10:28:45 2003
+--- csl/asmrun/amd64.S	Sat Dec 20 12:05:51 2003
+***************
+*** 252,258 ****
+  FUNCTION(raise_caml_exception)
+          movq    %rdi, %rax
+          movq    caml_exception_pointer(%rip), %rsp
+!         popq    caml_exception_pointer(%rip)
+          ret
+  
+  /* Callback from C to Caml */
+--- 252,259 ----
+  FUNCTION(raise_caml_exception)
+          movq    %rdi, %rax
+          movq    caml_exception_pointer(%rip), %rsp
+!         popq    %r14                  /* Recover previous exception handler */
+!         movq    young_ptr(%rip), %r15 /* Reload alloc ptr */
+          ret
+  
+  /* Callback from C to Caml */
+
+--a8Wt8u1KmwUX3Y2C
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: attachment; filename="bug.c"
+
+#include <stdio.h>
+
+static unsigned char * src;
+
+#define read32u() \
+  (src += 4, \
+   (src[-4] << 24) + (src[-3] << 16) + (src[-2] << 8) + src[-1])
+
+#define Intext_magic_number 0x8495A6BEU
+
+int check_magic()
+{
+  unsigned long magic;
+  magic = read32u();
+  return (magic == Intext_magic_number);
+}
+
+static unsigned char testdata[4] = { 0x84, 0x95, 0xA6, 0xBE };
+
+int main()
+{
+  src = testdata;
+  if (check_magic()) printf("OK\n"); else printf("Bug\n");
+  return 0;
+}
+
+--a8Wt8u1KmwUX3Y2C--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

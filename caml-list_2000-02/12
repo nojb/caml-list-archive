@@ -1,0 +1,125 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA02315 for caml-redistribution@pauillac.inria.fr; Fri, 4 Feb 2000 08:48:13 +0100 (MET)
+Resent-Message-Id: <200002040748.IAA02315@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA08953 for <caml-list@pauillac.inria.fr>; Thu, 3 Feb 2000 15:06:16 +0100 (MET)
+Received: from ruby (kenny46.zip.com.au [61.8.18.174])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id PAA18656
+	for <caml-list@inria.fr>; Thu, 3 Feb 2000 15:05:58 +0100 (MET)
+Received: from maxtal.com.au (IDENT:root@localhost [127.0.0.1])
+	by ruby (8.9.3/8.9.3) with ESMTP id BAA03284
+	for <caml-list@inria.fr>; Fri, 4 Feb 2000 01:06:05 +1100
+Sender: root@ruby
+Message-ID: <38998B4C.2A9E8F19@maxtal.com.au>
+Date: Fri, 04 Feb 2000 01:06:04 +1100
+From: skaller <skaller@maxtal.com.au>
+Organization: Maxtal
+X-Mailer: Mozilla 4.51 [en] (X11; I; Linux 2.2.12 i586)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: caml list <caml-list@inria.fr>
+Subject: finalisation
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Fri, 4 Feb 2000 08:48:13 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+I'm not sure if my previous email got through to this list,
+so I'll address this issue again.
+
+I've installed David's ocaml 2.999, which supports ocaml finalisation
+functions.
+
+The semantics provided offer a number of significant advances over other
+finalisation technology, particularly the allowance of multiple
+finalisers,
+and the fact that finalisers can cause an object to become reachable --
+without any problems. Contrast this to the mess Java made of
+finalisation.
+
+However, the code I have has a serious deficiency: there is no way
+to control the _order_ in which finalisers are invoked, and in
+particular,
+the order implemented is 'first in, first finalised', which is usually
+the _wrong_ order for me.
+
+In Vyper, my ocaml based Python interpreter, I have now enabled
+python __del__ methods, which are finalisers for python class instances.
+CPython uses reference counting, and so it finalises an acyclic graph
+of objects top down: first the finaliser (__del__ method) of the root
+object is invoked, possibly causing some child object's ref counts
+to go to zero, in which case they're finalised recursively, then the
+attributes of the object are detached, causing all remaining child
+reference count to be decremented, possibly going to zero (and invoking
+finalisers).
+
+This scheme has two advantages: finalisers are invoked as early as
+possible, and always in the correct order, and it has a disadvantage,
+that circular references leave garbage.
+
+Using the new finalisation feature, synchronous finalisation
+is lost, which is not really a problem, whereas garbage is correctly
+collected, which is a distinct advantage.
+
+However, the problem is that the finalisers are invoked
+in an 'arbitrary' order, which happens to be the order of
+object construction. This is no good at all. In a typical
+scenario, child objects are created first, and passed as
+arguments to the parent constructor. Finalising the child
+objects first, before the parent, makes it impossible to
+correctly execute the parent finaliser, since it assumes
+the parent object maintains invariants, including the ability
+to access fully constructed children.
+
+When there is an acyclic graph of references, the parent MUST be
+finalised before any children. If the order of finalisers
+was first in, last finalised, then more code would work correctly
+(almost nothing works correctly at the moment). However, this isn't
+really an adequate solution either.
+
+An algorithm which finds a garbage object on which no other garbage
+objects depend (if any) can proceed to safely finalise that object.
+By applying this algorithm repeatedly to all garbage objects, a correct
+order
+of finalisation is found for acyclic graphs of objects.
+
+In principle, the garbage collector must already know how to do this,
+although I do not know the details enough to know if there is a
+convenient
+way to reuse existing code to sequence finalisers correctly in this
+case.
+
+This leaves the problem of cyclic references. In Python, this will
+rarely
+be a problem because where finalisation is important, the client must
+already break any cycles manually: the only potential issue would be
+if the code depended on a finaliser of an object in a cycle which is not
+broken NOT being executed -- and ocaml actually invoked it.
+
+However, to extend the available functionality, it would be useful
+to be able to break cycles. Clearly, in a cycle, if there is only
+one object with a finaliser, it can be invoked without a problem.
+[Note it is important never to _collect_ any objects which a finaliser
+_might_ refer to!]
+
+This leaves the problem of a cycle with more than one finaliser.
+In this case, for Python, there is no way to control the order
+of finalisation (because it is never done). So it would probably
+be reasonable to invoke the finalisers in an arbitrary order.
+However, in the case of _other_ software, a different strategy might
+be required (weak pointers? explicit declaration of a finalisation
+order?)
+
+I'd be very interested to see if it is possible to produce a
+finalisation
+strategy which at least handles acyclic graphs, since this is necessary
+for
+my interpreter to operate correctly. I'd be even more interested
+in any comments on how to handle cycles (I have no idea, really).
+
+-- 
+John (Max) Skaller, mailto:skaller@maxtal.com.au
+10/1 Toxteth Rd Glebe NSW 2037 Australia voice: 61-2-9660-0850
+homepage: http://www.maxtal.com.au/~skaller
+download: ftp://ftp.cs.usyd.edu/au/jskaller
+
+

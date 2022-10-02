@@ -1,0 +1,135 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 3F0BEBCAE
+	for <caml-list@yquem.inria.fr>; Tue, 28 Jun 2005 02:53:35 +0200 (CEST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5S0rXUo031726
+	for <caml-list@yquem.inria.fr>; Tue, 28 Jun 2005 02:53:34 +0200
+Received: from localhost (suiren [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.1/8.13.1) with ESMTP id j5S0rQX4014065;
+	Tue, 28 Jun 2005 09:53:26 +0900 (JST)
+Date: Tue, 28 Jun 2005 09:54:06 +0900 (JST)
+Message-Id: <20050628.095406.112629429.garrigue@math.nagoya-u.ac.jp>
+To: micha-1@fantasymail.de
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] state pattern...
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <200506280123.55251.micha-1@fantasymail.de>
+References: <200506262157.02201.micha-1@fantasymail.de>
+	<3fce1487ee8fd9f28edbe70276980346@wetware.com>
+	<200506280123.55251.micha-1@fantasymail.de>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 42C09F8D.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 annotations:01 subtyping:01 recursive:01 'self:01 val:01 val:01 endline:01 endline:01 ocaml:01 ...:98 ...:98 clearer:01 simpler:01 simpler:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+From: Michael Wohlwend <micha-1@fantasymail.de>
+
+> I have modified the code, so that some method(s) of the state
+> classes get the context class as parameter; I think it took me 3
+> hour to get the type definitions working :-)
+> 
+> Can this be done simpler? It works, although I don't completly
+> understand all of it :-) 
+
+There is a variety of things you could do to simplify your code.
+If you want to keep the polymorphic-method based approach, you can
+avoid type annotations in stat1#show an state2#show by writing
+(this : #state).
+
+But another way to simplify things is to switch to subtyping.
+That is, just have
+  method show : param -> unit
+in class state, and change context to
+  method show = state_#show (this :> param)
+
+Note also that your definition of state as a recursive type will cause
+problems later, if you try to finalize it in a class.
+
+Here is a possibly simpler version of your code.
+
+class type param =
+ object 
+ method name : string
+ end
+
+class type ['next] state =
+ object
+  method show: param -> unit
+  method next: 'next
+ end
+
+class ['state] context s =
+ object (this:'self)
+ val name = "context"
+ val state : _ #state = s 
+ method state : 'state = state
+ method name = name
+ method show = state#show (this :> param)
+ method run = {< state = state#next >}
+ end
+
+class state1 = object (this : _ #state)
+ method show c = print_endline ("state1 of " ^ c#name)
+ method next = new state2 
+end
+and state2 = object (this : _ #state)
+ method show c = print_endline ("state2 of " ^ c#name) 
+ method next = new state1
+end;;
+
+let c = new context (new state1) ;;
+c#show;;
+let c = c#run;;
+c#show;;
+
+Note that there is an intrinsic weakness to the object-oriented
+approach in ocaml: state1 and state2 must actually be the same type,
+since a method of context cannot return context with a different
+parameter.
+
+On the other hand, if you exactly know what a state should be from the
+beginning, you can eliminate all type parameters.
+
+class type param =
+ object 
+ method name : string
+ end
+
+class type state =
+ object
+  method show: param -> unit
+  method next: state
+ end
+
+class context s =
+ object (this)
+ val name = "context"
+ val state : state = s 
+ method state = state
+ method name = name
+ method show = state#show (this :> param)
+ method run = {< state = state#next >}
+ end
+
+class state1 = object (this : #state)
+ method show c = print_endline ("state1 of " ^ c#name)
+ method next = new state2
+end
+and state2 = object (this : #state)
+ method show c = print_endline ("state2 of " ^ c#name) 
+ method next = new state1
+end;;
+
+But then there is little point in using classes... records and
+functions would do the job in a clearer way.
+
+Jacques Garrigue
+

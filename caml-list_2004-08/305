@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA16988; Wed, 18 Aug 2004 03:01:24 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA15269 for <caml-list@pauillac.inria.fr>; Wed, 18 Aug 2004 03:01:22 +0200 (MET DST)
+Received: from ptb-relay03.plus.net (ptb-relay03.plus.net [212.159.14.214])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i7I11LmL029290
+	for <caml-list@inria.fr>; Wed, 18 Aug 2004 03:01:21 +0200
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay03.plus.net with esmtp (Exim) id 1BxEpN-000IKP-2r
+	for caml-list@inria.fr; Wed, 18 Aug 2004 01:01:21 +0000
+From: Jon Harrop <jon@jdh30.plus.com>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Are map and iter guaranteed to be called in forwards order?
+Date: Wed, 18 Aug 2004 01:57:58 +0100
+User-Agent: KMail/1.6.2
+References: <20040817120053.GA9749@annexia.org> <d849ad2a040817072662fa8908@mail.gmail.com>
+In-Reply-To: <d849ad2a040817072662fa8908@mail.gmail.com>
+MIME-Version: 1.0
+Content-Disposition: inline
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Message-Id: <200408180157.58200.jon@jdh30.plus.com>
+X-Miltered: at nez-perce with ID 4122AA61.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 2004:99 prevost:01 sensibly:01 2004:99 val:01 cluttering:01 jean-marie:99 preferable:01 -tuple:01 prevost:01 tweak:01 -tuple:01 grrr:01 inserting:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tuesday 17 August 2004 15:26, John Prevost wrote:
+> You should also note that both map and iter can sensibly be provided
+> for data structures that don't have any strong guarantee of order at
+> all.  For example, a set...
+
+That is so nineties. Someone at INRIA kindly changed this of late (3.08) - The 
+set and map data structures do now guarantee element order.
+
+On Tuesday 17 August 2004 16:13, Anil Madhavapeddy wrote:
+> # let rec numlist n a = match n with |0 -> a |x -> numlist (n-1) (x::a);;
+> val numlist : int -> int list -> int list = <fun>
+> ...
+
+This would work but I think we can do better. Deforesting is a good start - we 
+don't want lots of big data structures cluttering up the place...
+
+On Tuesday 17 August 2004 16:17, Jean-Marie Gaillourdert wrote:
+> List.rev
+>   (List.fold_left (fun xs x ->
+>     match xs with
+>       [] -> [(0,x)]
+>     | (i,_)::_ -> (i+1,x)::xs) [] items);;
+
+That's good, but it's no hot potato. Using fold is a great idea, IMHO. The 
+List.fold_left function is preferable to List.fold_right because the former 
+is tail-recursive and, therefore, will be much faster for big lists. But we 
+can do more to get rid of the pattern matching - we can fold over a 2-tuple 
+which accumulates the current index and the current list (in reverse order):
+
+On Tuesday 17 August 2004 16:19, John Prevost wrote:
+> let number l =
+>   let _, l = List.fold_left (fun (n, l) i -> (n+1, (n, i)::l)) (0, []) l in
+>   List.rev l
+> ...
+
+Almost there, me thinks. You can tweak this one by using the "snd" function to 
+rip out the second half of the 2-tuple, rather than using pattern matching, 
+squeezing the whole function into a slender pair of lines:
+
+let index l =
+  List.rev (snd (List.fold_left (fun (i, l) e -> i+1, (i, e)::l) (0, []) l));;
+
+If you're feeling really adventurous, you can factor the algorithm agressively 
+(grrr!), producing many useful functions at intermediate stages. Essentially, 
+we've been folding over one data structure, handling the index and the 
+element, and inserting into another data structure given a value representing 
+the empty data structure. We could productively generalise this to a function 
+with an outrageous type:
+
+# let generic_mapi fold insert empty t =
+    snd (fold (fun (i, l) e -> i+1, insert (i, e) l) (0, empty) t);;
+val generic_mapi :
+  ((int * 'a -> 'b -> int * 'c) -> int * 'd -> 'e -> 'f * 'g) ->
+  (int * 'b -> 'a -> 'c) -> 'd -> 'e -> 'g = <fun>
+
+First, let us use the generic_mapi function to create a HOF list_rev_mapi 
+which does a List.rev_map of a given function applied to the index as well as 
+the value of each element in the given list:
+
+# let list_rev_mapi f l =
+    (generic_mapi List.fold_left (fun (i, e) t -> f i e :: t) [] l);;
+val list_rev_mapi : (int -> 'a -> 'b) -> 'a list -> 'b list = <fun>
+
+This function can then be used to create your function to convert a list into 
+an indexed list by passing a function which creates an index-value 2-tuple to 
+our list_rev_mapi HOF and reversing its result:
+
+# let ilist_of_list l = List.rev (list_rev_mapi (fun i e -> i, e) l);;
+val ilist_of_list : 'a list -> (int * 'a) list = <fun>
+# ilist_of_list ['a'; 'c'; 'e'; 'g'; 'i'];;
+- : (int * char) list = [(0, 'a'); (1, 'c'); (2, 'e'); (3, 'g'); (4, 'i')]
+
+The following, nifty HOF converts left fold types into right fold types and 
+vice versa:
+
+# let rev_fold fold f a b = fold (fun a b -> f b a) b a;;
+val rev_fold :
+  (('a -> 'b -> 'c) -> 'd -> 'e -> 'f) -> ('b -> 'a -> 'c) -> 'e -> 'd -> 'f =
+  <fun>
+
+This rev_fold function can be used with our (stupendously generic) 
+generic_mapi function to index the elements of a set of chars, placing the 
+result in a hash table mapping chars to indices:
+
+# module CharKey = struct type t=char let compare = compare end;;
+module CharKey : sig type t = char val compare : 'a -> 'a -> int end
+# module CharSet = Set.Make(CharKey);;
+...
+# let piece_of_cake s =
+  let h = Hashtbl.create (CharSet.cardinal s) in
+  let fold = rev_fold CharSet.fold in
+  generic_mapi fold (fun (i, e) () -> Hashtbl.add h e i) () s;
+  h;;
+val piece_of_cake : CharSet.t -> (CharSet.elt, int) Hashtbl.t = <fun>
+
+For example:
+
+# let set_of s =
+    let set = ref CharSet.empty in
+    String.iter (fun c -> set := CharSet.add c !set) s;
+    !set;;
+val set_of : string -> CharSet.t = <fun>
+# let test_set = set_of "The wagged wascle wan wound the wugged wock";;
+val test_set : CharSet.t = <abstr>
+# let test_table = piece_of_cake test_set;;
+val test_table : (CharSet.elt, int) Hashtbl.t = <abstr>
+# Hashtbl.find test_table 'g';;
+- : int = 9
+
+So thirteen characters in the ASCII alphabet came after 'a' in our string.
+
+Ha! Try writing that in Felix (in another mailing-list, of course ;-).
+
+Cheers,
+Jon.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

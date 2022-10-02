@@ -1,0 +1,205 @@
+Return-Path: <c703350@smc.uibk.ac.at>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id EC84EBC6B
+	for <caml-list@yquem.inria.fr>; Tue, 22 Jan 2008 17:43:24 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAFuslUeK6AGOn2dsb2JhbACQFwEBAQEBBgQGCQgYnBQ
+X-IronPort-AV: E=Sophos;i="4.25,234,1199660400"; 
+   d="scan'208";a="6412865"
+Received: from lmr1.uibk.ac.at (HELO smtp.uibk.ac.at) ([138.232.1.142])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 22 Jan 2008 17:43:24 +0100
+Received: from smc.uibk.ac.at (smc.uibk.ac.at [138.232.1.226] c703350@smc.uibk.ac.at)
+        by smtp.uibk.ac.at (8.13.8/8.13.8/F1) with ESMTP id m0MGhLQZ031588
+        for <caml-list@yquem.inria.fr>; Tue, 22 Jan 2008 17:43:21 +0100
+Received: from smc.uibk.ac.at (localhost [127.0.0.1] c703350@smc.uibk.ac.at)
+  by smc.uibk.ac.at (8.13.8+Sun/uibk) with ESMTP id m0MGhL2u003715 for <caml-list@yquem.inria.fr>;
+  Tue, 22 Jan 2008 17:43:21 +0100 (MET)
+Received: (from c703350@localhost)
+	by smc.uibk.ac.at (8.13.8+Sun/8.13.8/Submit) id m0MGhK0T003713
+	for caml-list@yquem.inria.fr; Tue, 22 Jan 2008 17:43:20 +0100 (MET)
+Date: Tue, 22 Jan 2008 17:43:20 +0100
+From: Christian Sternagel <christian.sternagel@uibk.ac.at>
+To: caml-list <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] camlp4
+Message-ID: <20080122164320.GJ3862@pc6197-c703.uibk.ac.at>
+Mail-Followup-To: caml-list <caml-list@yquem.inria.fr>
+References: <1200676132.4790dd24bfca9@web-mail2.uibk.ac.at> <95513600801181130u2f6584b8w505cd10e848bcc65@mail.gmail.com> <1200685853-sup-3987@ausone.local> <1200755341.4792128d5dad6@web-mail2.uibk.ac.at> <1200842484-sup-3237@ausone.local> <20080122133355.GI3862@pc6197-c703.uibk.ac.at> <1201009268-sup-196@port-ext18.ensta.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <1201009268-sup-196@port-ext18.ensta.fr>
+User-Agent: Mutt/1.4.2.3i
+X-Scanned-By: MIMEDefang 2.61 at uibk.ac.at on 138.232.1.140
+X-Spam: no; 0.00; camlp:01 admittedly:01 camlp:01 cheers:01 struct:01 syntax:01 sig:01 syntax:01 struct:01 sig:01 npeek:01 parser:01 lident:01 kwd:01 kwd:01 
+
+I tried to implement the optimizations for list comprehensions
+as stated in the book by simon peyton jones (1987). The problem
+of using fresh variables I circumvented in an admittedly `ugly' way,
+however (which is not fool proof since there could be programmers
+that use variable names like __h__0, __h__1, ...).
+
+The Starting point was the file Camlp4ListComprehension.ml from
+camlp4.
+
+Any comments are wellcome.
+
+cheers
+
+christian
+
+Here is the code
+-------------------------------------------------------------------------
+open Camlp4;;
+
+module Id = struct
+ let name =    "ListComprehension";;
+ let version = "$Id: ListComprehension";;
+end
+
+module Make (Syntax : Sig.Camlp4Syntax) = struct
+
+open Sig;;
+include Syntax;;
+
+let rec safe_nth n = function
+ | [] -> None
+ | [(x,_)] -> if n = 1 then Some x else None
+ | _ :: l -> safe_nth (n - 1) l
+;;
+
+let stream_peek_nth n s = safe_nth n (Stream.npeek n s);;
+
+let lc_generator = Gram.Entry.of_parser "lc_generator" (fun s ->
+ let rec skip_patt n = match stream_peek_nth n s with
+  | Some (KEYWORD "<-") -> n
+  | Some (KEYWORD ("[" | "[<")) -> skip_patt (ignore_upto "]" (n + 1) + 1)
+  | Some (KEYWORD "(") -> skip_patt (ignore_upto ")" (n + 1) + 1)
+  | Some (KEYWORD "{") -> skip_patt (ignore_upto "}" (n + 1) + 1)
+  | Some (KEYWORD ("as" | "::" | ";" | "," | "_"))
+  | Some (LIDENT _ | UIDENT _) -> skip_patt (n + 1)
+  | Some _ | None -> raise Stream.Failure
+ and ignore_upto end_kwd n = match stream_peek_nth n s with
+  | Some (KEYWORD prm) when prm = end_kwd -> n 
+  | Some (KEYWORD ("[" | "[<")) -> ignore_upto end_kwd (ignore_upto "]" (n + 1) + 1)
+  | Some (KEYWORD "(") -> ignore_upto end_kwd (ignore_upto ")" (n + 1) + 1)
+  | Some (KEYWORD "{") -> ignore_upto end_kwd (ignore_upto "}" (n + 1) + 1)
+  | Some _ -> ignore_upto end_kwd (n + 1)
+  | None -> raise Stream.Failure
+ in skip_patt 1
+);;
+
+let var = ref 0;;
+let fresh () = incr var; !var;;
+
+let rec compr _loc e acc = function
+ | [] -> <:expr< $e$::$acc$ >>
+ | `filter b :: qs -> <:expr< if $b$ then $compr _loc e acc qs$ else $acc$ >>
+ | `gen (p, l1) :: qs ->
+ let h  = Format.sprintf "__h__%i" (fresh ()) in
+ let u  = Format.sprintf "__u__%i" (fresh ()) in
+ let us = Format.sprintf "__us__%i" (fresh ()) in
+ <:expr<
+  let rec $lid:h$ = function
+   | [] -> $acc$
+   | $lid:u$ :: $lid:us$ -> $if Ast.is_irrefut_patt p then
+    <:expr< (fun $p$ -> $compr _loc e <:expr< ($lid:h$ $lid:us$) >> qs$) $lid:u$ >>
+   else
+    <:expr<
+     (function $p$ ->
+      $compr _loc e <:expr< ($lid:h$ $lid:us$) >> qs$ | _ -> $lid:h$ $lid:us$) $lid:u$
+    >>
+   $
+  in $lid:h$ $l1$
+ >>
+ | _ -> <:expr< [] >>
+;;
+
+let list_comprehension = Gram.Entry.mk "list_comprehension";;
+
+DELETE_RULE Gram expr: "["; sem_expr_for_list; "]" END;;
+
+EXTEND Gram
+ GLOBAL: expr list_comprehension;
+ expr: LEVEL "simple" [
+  [ "["; e = list_comprehension; "]" -> e]
+ ];
+ list_comprehension: [
+  [ e = expr LEVEL "top"; ";"; mk = sem_expr_for_list ->
+   <:expr< $e$::$mk <:expr< [] >>$ >>
+  | e = expr LEVEL "top"; ";" -> <:expr< [$e$] >>
+  | e = expr LEVEL "top"; "|"; l = LIST1 quantifier SEP ";" ->
+   compr _loc e <:expr< [] >> l
+  | e = expr LEVEL "top" -> <:expr< [$e$] >> ]
+ ];
+ quantifier: [
+  [ lc_generator; p = patt; "<-"; e = expr LEVEL "top" -> `gen (p, e)
+  | e = expr LEVEL "top" -> `filter e ]
+ ];
+END;;
+
+end
+
+let module M = Register.OCamlSyntaxExtension Id Make in ();;
+-------------------------------------------------------------------------
+On Tue, Jan 22, 2008 at 02:42:00PM +0100, Nicolas Pouillard wrote:
+> Excerpts from christian.sternagel's message of Tue Jan 22 14:33:55 +0100 2008:
+> > > > How about the transformation from Chapter 7 of [1] (by Philip Wadler)?
+> > > > It should be similar to the `pseudo code':
+> > > > 
+> > > > type expr = ...;;
+> > > > type patt = ...;;
+> > > > type qualifier = Gen of patt * expr | Filt of expr;;
+> > > > type compr = (expr * qualifier list);;
+> > > > let rec expr = function
+> > > >  | ...
+> > > >  | (e, qs) -> transform [] (e, qs)
+> > > >  | ...
+> > > > and transform l = function
+> > > >  | (e, []) -> expr e :: expr l
+> > > >  | (e, Filt f :: qs) -> if expr f then transform l (e, qs) else expr l
+> > > >  | (e, Gen (p, l1) :: qs) ->
+> > > >   let rec h = function
+> > > >    | [] -> expr l
+> > > >    | u :: us -> (function p -> transform (h us) (e, qs) | _ -> h us) u
+> > > >   in h (expr l1)
+> > > > ;;
+> > > > 
+> > > > (* where h, u, us are fresh variables not occurring in e, l1, l, or qs *)
+> > > > 
+> > > > Sorry I'm not yet familiar with camlp4 grammar extensions, but of course
+> > > > above code would make use of them otherwise.
+> > > 
+> > > Yes this approach can be integrated with a camlp4 extension.
+> > > 
+> > > > It is stated in [1] that the resulting code is optimal in that it
+> > > > performs the minimum number of cons operations.
+> > > 
+> > > Nice.
+> > > 
+> > > > And I did ignore the hint that fresh variables make things
+> > > > complicated :).
+> > > 
+> > > Yes it can...
+> > > 
+> > > Best regards,
+> > > 
+> > > -- 
+> > > Nicolas Pouillard aka Ertai
+> > > 
+> > I deduce that there is no standard way of introducing
+> > `fresh' (w.r.t. the abstract syntax tree) variables
+> > within a camlp4 syntax extension? Wouldn't that be nice? =)
+> > 
+> 
+> That  would be nice, but doing it cleanly would require a large amount of work
+> and user visible changes.
+> 
+> -- 
+> Nicolas Pouillard aka Ertai
+

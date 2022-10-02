@@ -1,0 +1,125 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 26989BC69
+	for <caml-list@yquem.inria.fr>; Thu, 18 Oct 2007 23:49:30 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ah4FADJxF0fUnw6Flmdsb2JhbACCOYwVAgEBBwQGEREHgSc
+X-IronPort-AV: E=Sophos;i="4.21,297,1188770400"; 
+   d="scan'208";a="3268977"
+Received: from pih-relay06.plus.net ([212.159.14.133])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 18 Oct 2007 23:49:30 +0200
+Received: from [80.229.56.224] (helo=beast.local)
+	 by pih-relay06.plus.net with esmtp (Exim) id 1IidFA-0002fu-Rw
+	for caml-list@yquem.inria.fr; Thu, 18 Oct 2007 22:49:29 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Help me find this pdf
+Date: Thu, 18 Oct 2007 18:18:31 +0100
+User-Agent: KMail/1.9.7
+References: <c1490a380710180252u37034212l9d9ee28a22dca9cc@mail.gmail.com> <200710181457.58077.jon@ffconsultancy.com> <47176C28.1090509@janestcapital.com>
+In-Reply-To: <47176C28.1090509@janestcapital.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-15"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200710181818.31430.jon@ffconsultancy.com>
+X-Spam: no; 0.00; haskell:01 val:01 val:01 buys:98 frog:98 wrote:01 rec:01 rec:01 caml-list:01 int:01 int:01 primitives:01 lazy:02 lazy:02 explicitly:02 
+
+On Thursday 18 October 2007 15:22:32 Brian Hurt wrote:
+> You have to explicitly force the lazy value first-
+
+If you force all lazy values before the pattern match then you are doing eager 
+evaluation, not lazy. Moreover, you must also generate an auxiliary data 
+structure to store the forced values in order to pattern match over them.
+
+> but other than it being explicit,
+
+And not lazy.
+
+> this is no different from other languages that implicitly force the value
+> for you. 
+
+On the contrary, it fails to achieve laziness.
+
+> Well, Haskell has an option where a pattern match can always succeed that
+> doesn't necessarily force the lazy value
+
+Exactly. Not "necessarily forcing" the lazy value is the essence of lazy 
+evaluation and the only point to my suggestion.
+
+> (I forget what it's called at the moment), but baring that... 
+
+You can't ignore that: its the whole point! :-)
+
+Consider a function that concatenates adjacent "Some _" values in a list:
+
+# let rec f = function
+    | [] -> []
+    | Some x :: Some y :: t -> f(Some(x @ y) :: t)
+    | h :: t -> h :: f t;;
+val f : 'a list option list -> 'a list option list = <fun>
+# f [Some [1]; Some [2;3]; None; Some [4;5]];;
+- : int list option list = [Some [1; 2; 3]; None; Some [4; 5]]
+
+Thanks to pattern matching, this solution is almost as beautiful as my wife.
+
+An equivalent with lazy lists might be:
+
+# type 'a llist = Nil | Cons of 'a * 'a llist lazy_t;;
+
+# let rec f = function
+    | Nil -> Nil
+    | Cons(None, t) -> Cons(None, lazy(f(Lazy.force t)))
+    | Cons(Some x as h, t) ->
+        match Lazy.force t with
+        | Nil -> Cons(h, lazy Nil)
+        | Cons(None, t) -> Cons(h, lazy(Cons(None, lazy(f(Lazy.force t)))))
+        | Cons(Some y, t) -> Cons(Some(x @ y), lazy(f(Lazy.force t)));;
+val f : 'a list option llist -> 'a list option llist = <fun>
+
+# let rec forces = function
+    | Nil -> []
+    | Cons(h, t) -> h :: forces(Lazy.force t);;
+val forces : 'a llist -> 'a list = <fun>
+
+# forces(f(Cons(Some [1], lazy(Cons(Some [2;3], lazy(Cons(None, lazy(Cons(Some 
+[4;5], lazy Nil)))))))));;
+- : int list option list = [Some [1; 2; 3]; None; Some [4; 5]]
+
+Because you can't pattern match over lazy values, this solution is about as 
+beautiful as my first girlfriend.
+
+This is no freakishly theoretical problem either, it crops up whenever I want 
+to destructure a collection as a sequence. You can use an unfold but that 
+only buys you 1 element look ahead whereas the power of pattern matching 
+stems from its ability to dispatch based upon destructuring to arbitrary 
+depths.
+
+If it were possible to pattern match over lazy values, you would simply write 
+a to_lazylist function in the module of each container and pattern match over 
+its result to dissect any container with minimal copying.
+
+In this case, you would write:
+
+# let rec f = function
+    | Nil -> []
+    | Cons(Some x, lazy(Cons(Some y, lazy t))) -> f(Some(x @ y) :: t)
+    | Cons(h, lazy t) -> h :: f t;;
+val f : 'a list option llist -> 'a list option llist = <fun>
+
+You could even define the primitives in terms of pattern matching:
+
+  let force (lazy x) = x
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/products/?e
+

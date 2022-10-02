@@ -1,0 +1,91 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA32591; Mon, 19 Jul 2004 17:12:45 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA32717 for <caml-list@pauillac.inria.fr>; Mon, 19 Jul 2004 17:12:44 +0200 (MET DST)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i6JFChSH010118
+	for <caml-list@inria.fr>; Mon, 19 Jul 2004 17:12:43 +0200
+Received: from localhost (akasha.ijm.jussieu.fr [134.157.173.57])
+          by shiva.jussieu.fr (8.12.11/jtpda-5.4) with ESMTP id i6JFCeqJ093429
+          ; Mon, 19 Jul 2004 17:12:40 +0200 (CEST)
+X-Ids: 165
+Date: Mon, 19 Jul 2004 17:12:41 +0200 (CEST)
+Message-Id: <20040719.171241.71101703.andrieu@ijm.jussieu.fr>
+To: christophe.raffalli@univ-savoie.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] GC and caml_oldify_local_roots taking too much time
+From: Olivier Andrieu <andrieu@ijm.jussieu.fr>
+In-Reply-To: <40FC2C48.3030402@univ-savoie.fr>
+References: <40FC0BEF.4080909@univ-savoie.fr>
+	<3B84CC2A-D97E-11D8-A7B0-00039310CAE8@inria.fr>
+	<40FC2C48.3030402@univ-savoie.fr>
+X-Mailer: Mew version 4.0.64 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 40FBE4EB.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at shiva.jussieu.fr with ID 40FBE4E8.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Antivirus: scanned by sophie at shiva.jussieu.fr
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 oldify:01 andrieu:01 andrieu:01 raffalli:01 2004:99 callback:01 callback:01 unregister:01 unset:01 val:01 camlprim:01 val:01 christophe:01 caml:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+ Christophe Raffalli [Mon, 19 Jul 2004]:
+ > 
+ > I identified the problem:
+ > 
+ > Glut.timerFunc does register the callback to each call and therefore 
+ > allocate one glocal C root.
+ > 
+ > However, the callback in never unregistred (I do not know how to do 
+ > that) and moreover, I register always the same function and therefore, 
+ > it is always the same Global C root which is registered !
+ > 
+ > Is there a function to unregister a callback ?
+
+No, but you needn't register the callback itself, you can register a
+reference to it.
+
+,----
+| let callback = ref None
+| external setup_c_callback : string -> unit = "setup_c_callback"
+| let _ = 
+|   let id = "my_caml_callback" in
+|   Callback.register id callback ;
+|   setup_c_callback id
+| 
+| let set_callback f = callback := Some f
+| let unset_callback () = callback := None
+`----
+
+,----
+| static value *my_caml_callback;
+| 
+| static void my_c_callback()
+| {
+|   if (my_caml_callback != NULL) {
+|     value contents = Field(*my_caml_callback, 0);
+|     if (Is_block(contents)) {
+|       value closure = Field(contents, 0);
+|       callback_exn(closure, Val_unit);
+|     }
+|   }
+| }
+| 
+| CAMLprim value setup_c_callback(value id)
+| {
+|   my_caml_callback = caml_named_value(String_val(id));
+|   setup_callback(&my_c_callback);
+| }
+`----
+
+That way, Callback.register is only called once.
+
+-- 
+   Olivier
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

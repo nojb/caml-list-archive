@@ -1,0 +1,357 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA32416; Tue, 10 Jun 2003 22:05:55 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA00157 for <caml-list@pauillac.inria.fr>; Tue, 10 Jun 2003 22:05:54 +0200 (MET DST)
+Received: from abel.swapping.umh.ac.be (nat.umh.ac.be [193.190.193.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h5AK5pT09036
+	for <caml-list@inria.fr>; Tue, 10 Jun 2003 22:05:53 +0200 (MET DST)
+Received: from abel.swapping.umh.ac.be
+	([127.0.0.1] helo=localhost ident=trch)
+	by abel.swapping.umh.ac.be with esmtp (Exim 3.36 #1 (Debian))
+	id 19PpS6-0005El-00; Tue, 10 Jun 2003 22:10:42 +0200
+Date: Tue, 10 Jun 2003 22:10:41 +0200 (CEST)
+Message-Id: <20030610.221041.13383166.debian00@tiscali.be>
+To: caml-list@inria.fr
+Subject: [Caml-list] Dbi: proposal #1
+From: Christophe TROESTLER <debian00@tiscali.be>
+Organization: None
+X-Spook: government Telex security EuroFed Treasury Medco spy Bletchley
+ Park beanpole MP5K-SD 
+X-Mailer-URL: http://www.mew.org/
+X-Operating-System: GNU/Linux (http://www.linux.org/)
+X-Blessing: Om Ah Hum Vajra Guru Pema Siddhi Hum
+X-Mailer: Mew version 3.3rc1 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Multipart/Mixed;
+ boundary="--Next_Part(Tue_Jun_10_22:10:41_2003_095)--"
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; troestler:01 tiscali:99 dbi:99 mli:01 dbh:99 salary:01 decoding:01 implemented:01 scanf:01 camlp:01 stateful:01 breath:01 1,...,:01 val:01 concatenates:01 
+X-Attachments: name="dbi.mli" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+----Next_Part(Tue_Jun_10_22:10:41_2003_095)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+Hi all,
+
+Here is the first proposal for a database independent interface (Dbi)
+for Ocaml.  The file "dbi.mli" is attached below.  The code and some
+experiments with Mysql can be downloaded from
+
+   http://www.umh.ac.be/math/an/software.php#x4-60005
+
+Some sample code:
+
+  module DB = Dbi_mysql  (* select db module *)
+  let t = new DB.row_conversion
+  let ( ++ ) = Dbi.(^^)
+
+  let dbh = DB.connect ~host ~pwd "my database" in
+  let q = dbh#prepare "SELECT Salary, Name from employees" in
+  let res = dbh#raw_exec q [||] in
+  let s = res#fold (t#int ++ t#string) (fun sum s _ -> sum + s) 0 in
+  dbh#disconnect;
+  s
+
+This release is to foster discussions, it is not to be considered as
+clean/ready-to-use code.  In particular, some points I'd like feedback
+on:
+
+* I think the scheme for "parameter binding" (for encoding and
+  decoding) is quite convenient (and prevents the often forgotten
+  escaping for encoding).  Does it also fit the needs of your
+  applications?
+
+* The way "parameter binding" is implemented (a la scanf) has some
+  performance penalty.  Is it possible to come up with a better
+  implementation or better ideas?  Is it possible to use Camlp4 to
+  reduce the cost while providing the same convenience?
+
+* Are you happy with the methods provided by Dbi.result and the
+  interaction between "step by step" and "iteration/folding" schemes
+  (stateful object)?
+
+* What basic SQL conversion functions should be provided by all DBs
+  (class type Dbi.conversion)?
+
+* What exceptions should be defined in order not to have too many of
+  them yet to offer flexibility?  The exceptions defined so far are a
+  bit basic, they need to be refined.
+
+I am available for questions if things are unclear (but don't hold
+your breath, I am pretty busy).
+
+Cheers,
+ChriS
+
+----Next_Part(Tue_Jun_10_22:10:41_2003_095)--
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline; filename="dbi.mli"
+
+(* 	$Id: dbi.mli,v 1.4 2003/05/28 13:22:07 trch Exp $	 *)
+
+(** {6 Data types and exceptions} *)
+
+type date = int * int * int (* (year, month, day) *)
+type time = int * int * int (* (hour, min, sec) *)
+
+type row = string option array
+
+type ('a2b, 'b, 'param, 'row) sql_type
+  (** SQL type conversions.  'param, 'row stand for an internal type
+    used for storage by the database (which also implies that the
+    sql_types cannot be used with other db, for which conversion
+    functions may be different anyway).  One has to think 'a2b as 'a1
+    -> ... -> 'an -> 'b where 'a1,...,'an are the Caml types
+    corresponding to the SQL types. *)
+
+exception Connection_error of string
+  (** Raised if one tries to perform an operation that requires the
+    connection to be established while it is not (because it
+    died,...). *)
+
+exception No_row_found
+  (** Exception used to report that there are no more rows to be fetched. *)
+
+exception Conversion_error
+  (** Raised when an error occurs during a conversion between SQL
+    types and Caml types. *)
+
+exception SQL_error of string
+
+(* More exceptions for reporting errors to be defined *)
+
+
+(** {6 SQL types and conversion functions} *)
+
+val ( ^^ ) : ('a2b2c, 'b2c, 'param, 'row) sql_type ->
+  ('b2c, 'c, 'param, 'row) sql_type -> ('a2b2c, 'c, 'param, 'row) sql_type
+  (** [t1 ^^ t2] concatenates the sql_types conversions [t1] and [t2]
+    to accept first the arguments of [t1] then those of [t2]. *)
+
+class type ['param, 'row] conversion =
+object
+  method unit : (unit -> 'a, 'a, 'param, 'row) sql_type
+  method char : (char -> 'a, 'a, 'param, 'row) sql_type
+  method charO : (char option -> 'a, 'a, 'param, 'row) sql_type
+  method string : (string -> 'a, 'a, 'param, 'row) sql_type
+  method stringO : (string option -> 'a, 'a, 'param, 'row) sql_type
+  method int : (int -> 'a, 'a, 'param, 'row) sql_type
+  method intO : (int option -> 'a, 'a, 'param, 'row) sql_type
+  method float : (float -> 'a, 'a, 'param, 'row) sql_type
+  method floatO : (float option -> 'a, 'a, 'param, 'row) sql_type
+  method date : (date -> 'a, 'a, 'param, 'row) sql_type
+  method dateO : (date option -> 'a, 'a, 'param, 'row) sql_type
+  method datetime : (date * time -> 'a, 'a, 'param, 'row) sql_type
+  method datetimeO : ((date * time) option -> 'a, 'a, 'param, 'row) sql_type
+  method blob : (string -> 'a, 'a, 'param, 'row) sql_type
+  method blobO : (string option -> 'a, 'a, 'param, 'row) sql_type
+
+  (* timestamp, int64, decimal, year *)
+
+  method encode : ('a2b, unit, 'param, 'row) sql_type -> 'param -> 'a2b
+  method decode : ('a2b, 'b, 'param, 'row) sql_type -> 'row -> 'a2b -> 'b
+end
+
+val row_conversion : (row, row) conversion
+
+
+(** {6 Results of SQL queries} *)
+
+(** This is a stateful object encapsulating the result of a query to
+  the database. *)
+class virtual ['param, 'row] result :
+object
+  method virtual raw_fetch : row
+    (** [raw_next t f] fetches the next row. *)
+  method virtual fetch : ?on_failure:(row -> 'b) ->
+    ('a2b, 'b, 'param, 'row) sql_type -> 'a2b -> 'b
+    (** [next t f] fetches the next row and apply the function [f] to it.
+
+      If [Failure _] or [Conversion_error] is raised during the
+      conversion or by [f], [next] @raise Conversion_error unless the
+      parameter [on_failure] is specified in which case the function
+      [on_failure] is applied to the current row.
+
+      @raise No_row_found if there are no more rows. *)
+  method virtual rewind : unit
+    (** [rewind] replace the cursor at the beginning of the results so
+      one can use [next] to list them again. *)
+
+(* DISCUSS: would people prefer [next : unit] and [current_row : row]
+   methods ? *)
+
+  method raw_fold : ('b -> row -> 'b) -> 'b -> 'b
+  method raw_iter : (row -> unit) -> unit
+
+  method fold : ?on_failure:('b -> row -> 'b) ->
+    ('a2b, 'b, 'param, 'row) sql_type -> ('b -> 'a2b) -> 'b -> 'b
+    (** [fold ?on_failure t f b] folds the function [f : 'b -> 'a1 ->
+      ... -> 'an -> 'b] on the remaining rows of the result where the
+      conversions of the data returned from the database is specified
+      by [t].  More precisely, if r(1),...,r(k) are the rows of the
+      result and one has already fetched r(1),...,r(j), [fold f b]
+      computes [f (... (f (f b r(j+1)) r(j+2)) ...)  r(k)].
+
+      @raise Conversion_error if the conversion functions of [f] raise
+      [Failure _] or [Conversion_error] unless the parameter
+      [on_failure] is specified. *)
+
+  method iter : ?on_failure:(row -> unit) ->
+    ('a2b, unit, 'param, 'row) sql_type -> 'a2b -> unit
+    (** [iter f] apply the function [f : 'a1 -> ... -> 'an -> unit] in
+      turn to all the remaining rows of the result.
+
+      @raise Conversion_error if the conversion functions of [f] raise
+      Failure unless the parameter [on_failure] is specified. *)
+
+  method virtual nrows : int
+    (** Number of rows in the result.  This method returns the number
+      of affected rows if the query was not a SELECT. *)
+(* DISCUSS: nrows : int64 *)
+
+  method virtual ncols : int
+    (** Number of columns in the result; 0 if the query is not a
+      SELECT. *)
+  method virtual names : string array
+    (** Names of the colums -- hold in an array of length [ncols]. *)
+  method virtual types : string array
+    (** Types of the columns of the result. *)
+  method check : ('a2b, 'b, 'param, 'row) sql_type -> bool
+    (** [check t] checks that the conversion [t] is *compatible* with
+      the data contained in the result. *)
+end
+
+
+
+(** {6 Database handle & operations} *)
+
+class type ['param, 'row, 'query] connection =
+object
+  method database : string
+    (** The name of the database one is connected to. *)
+
+  method create_db : string -> unit
+    (** [create_db name] creates a new database named [name].
+      @raise Failure if it fails. *)
+
+  method select_db : string -> unit
+    (** [select_db name] selects the database named [name] as the current one.
+      @raise Failure if it fails. *)
+
+  method drop_db : string -> unit
+    (** [drop_db name] delete the database named [name].
+      @raise Failure if it fails. *)
+
+  method tables : string list
+    (** [tables] returns a list of the names of the tables of the
+      current database. *)
+
+  method prepare : string -> 'query
+    (** [prepare stm] prepares the query [stm] to be executed.  All
+      the unescaped '?' are placeholders to be replaced by an argument
+      when the query is executed.
+
+      Examples:
+      prepare "SELECT * FROM table WHERE field = ?"
+      prepare "INSERT INTO table(field1, field2) VALUES (?,?)"
+    *)
+
+  method raw_exec : 'query -> row -> ('param, 'row) result
+    (** [raw_exec q r] executes the query [q] with the '?' replaced by
+      the values taken from [r].  The values in [r] must not be
+      escaped -- it is the role of this function to do the proper
+      escape. *)
+
+  method exec : 'query ->
+    ('a, ('param, 'row) result, 'param, 'row) sql_type -> 'a
+    (** [exec q in_types] returns a function, lets us call it [f : 'a1
+      -> ... -> 'an -> ('param, 'row) result], that will execute the
+      prepared query [q] with the '?' interpreted as values of type
+      given by [in_types].
+
+      Example: On a table 'people' with a column 'age', one can do
+
+      [let t = new ...conversion
+      let q = dbh#prepare "SELECT * FROM people WHERE age = ?"
+      let with_age i = dbh#exec q t#int i]
+    *)
+
+  method commit : unit
+    (** [commit()] commit the changes to the database. *)
+  method rollback : unit
+    (** [rollback()] roll back the changes made since last commit. *)
+  method disconnect : unit
+    (** [disconnect()] disconnects from the database.  Trying to use
+      this object after will raise [Failure]. *)
+end
+
+
+
+(** We recommend that the implemetations of Dbi for a particular
+  database possesses a function [connect] (so it is enough to replace
+  XXX by the database module in a declaration like "module DB = XXX"
+  to switch to a particular database engine) of the following type:
+*)
+type ('param, 'row, 'query) connect
+  = ?user:string -> ?pwd:string -> ?host:string -> ?port:int ->
+  string -> ('param, 'row, 'query) connection
+(** [connect ?user ?pwd ?host ?port db] returns a new connection
+  object to database [db].  If [db = ""], no database is selected.
+
+  @param user the unser name under which to connect (default: current user).
+  @param pwd  the password for the connection (default: None).
+  @param host the hostname of the SGDB server (default: localhost/sockets).
+  @param port the port to connect to (default: database dependent)
+*)
+
+
+
+(**/**)
+
+(* Low level -- for implementors of Dbi interfaces to databases. *)
+
+val register_sql_type :
+  string -> ('row -> int -> 'a) -> ('param -> int -> 'a -> unit)
+  -> ('a -> 'b, 'b, 'param, 'row) sql_type
+  (* [register_sql_type name decode encode] creates a new sql
+     conversion function where [name] is the database name for the
+     type, [decode r i] converts the content of the [i]th column in
+     the database row [r] to a Caml type and [encode r i x] encodes
+     [x] into the [i]th column of the row [r].  If the [decode]
+     function raise a [Failure _] or a [Conversion_error] exception,
+     it is interpreted as an error in the decoding.  The [encode]
+     function should not raise any exception. *)
+
+val unsafe_decode : ('a2b, 'b, 'param, 'row) sql_type -> 'row -> 'a2b -> 'b
+  (* [unsafe_decode t r f] returns the result of [f a1 ... an] where
+     [a1],..., [an] are the values in the row [r] decoded according to
+     [t].  It is not checked that the row is as large as [t] expects;
+     if it is not, the program can crash. *)
+
+val unsafe_encode : (unit -> 'b) -> ('a2b, 'b, 'param, 'row) sql_type ->
+  'param -> 'a2b
+  (* [unsafe_encode cont t r a1 ... an] encodes in [r] the values
+     [a1],...,[an] according to [t] and then evaluate the continuation
+     [cont].  The result of [unsafe_encode] is the result of [cont].
+     It is not checked that the row is large enough to contains all
+     these values; if it is not, the program can crash. *)
+
+val arity : ('a2b, 'b, 'param, 'row) sql_type -> int
+  (* [arity t] gives the number of arguments/colums expected by [t];
+     i.e., if [t : ('a1 -> ... -> 'an -> 'b, 'b, 'param, 'row)
+     sql_type], then [arity t] is n. *)
+
+val sql_type_to_string : ('a2b, 'b, 'param, 'row) sql_type -> string array
+  (* [sql_type_to_string t] returns an array of the SQL types names
+     expected by [t]. *)
+
+----Next_Part(Tue_Jun_10_22:10:41_2003_095)----
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

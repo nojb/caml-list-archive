@@ -1,0 +1,103 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8H6d0Aq001419
+	for <caml-list@sympa-roc.inria.fr>; Sat, 17 Sep 2011 08:39:00 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AigBADs/dE7RVdK2mGdsb2JhbABBhFWjBAgUAQEBAQEICQ0HFCWBUwEBAQECARICDwQZARseAwwGBQsPAiYCAiIBEQEFARwGNYdVl0kKin9CglqEZjuIbQIDBoEmhDuBEQSHaYtfjQE9g3E
+X-IronPort-AV: E=Sophos;i="4.68,397,1312149600"; 
+   d="scan'208";a="109407938"
+Received: from mail-iy0-f182.google.com ([209.85.210.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 17 Sep 2011 08:38:54 +0200
+Received: by iadk27 with SMTP id k27so6555242iad.27
+        for <caml-list@inria.fr>; Fri, 16 Sep 2011 23:38:52 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :content-type;
+        bh=ee28pjULh2mfPb+ux3epf7IdqzbeXOEOEsPQWbPOPQU=;
+        b=qqnHpAZ+qEe+vgwHiNBJTHAgD22AkmUC1yAKezbuns890ZyfCDh2TI7XCez/x3/eS2
+         Ro8EZ9UNs1n6yEBLdgVlny/Zb22qsrsByX8P9sCEF68PafhPxNUFOPioVf+T33ACll+o
+         bDpqUXjG6pKFgXkeY5zsigNzZ3PfJb6OzVZ2Y=
+MIME-Version: 1.0
+Received: by 10.42.163.3 with SMTP id a3mr480813icy.144.1316241532693; Fri, 16
+ Sep 2011 23:38:52 -0700 (PDT)
+Received: by 10.43.50.6 with HTTP; Fri, 16 Sep 2011 23:38:52 -0700 (PDT)
+In-Reply-To: <1316092241.28210.14.camel@aurora>
+References: <20110913183714.GA15241@yeeloong.happyleptic.org>
+	<4E71CDB8.5020704@dogguy.org>
+	<CAPi0vKW3cKvqfWUegOmZXPr8cXQdO2Z9tDhw6z40J2Mp6UWwfQ@mail.gmail.com>
+	<1316092241.28210.14.camel@aurora>
+Date: Sat, 17 Sep 2011 09:38:52 +0300
+Message-ID: <CAPi0vKUhnNuLDyduCs3yBq_O2_3LpzV5=47Y7jfv8FN0kRPc2Q@mail.gmail.com>
+From: Dmitry Grebeniuk <gdsfh1@gmail.com>
+To: =?UTF-8?B?SsOpcsOpbWllIERpbWlubw==?= <caml-list@inria.fr>
+Content-Type: text/plain; charset=UTF-8
+Subject: Re: [Caml-list] Lwt and exceptions
+
+Hello.
+
+>> It uses "bind" and "return", but I'm very unsure
+>> whether the code can be called "monadic IO",
+>> since lwt itself does not respect the monad laws.
+>
+> What monadic laws lwt does not respect ?
+
+  Lwt sees values of type Lwt.t not as IO actions,
+but sometimes as the values of these actions.
+
+  It does not respect the monad associativity:
+
+    (m >>= f) >>= g   ==   m >>= (fun x -> f x >>= g)
+
+  Look at the source, see the left and the right
+parts of this law as the "res" values, uncomment
+either block, run the program, enter two lines
+of text to program's stdin and see the output.
+The output should be the same in both cases
+if the law is respected.
+
+==============
+open Lwt;
+
+value () = Printf.printf "case 1, enter two lines:\n%!";
+value m = Lwt_io.read_line Lwt_io.stdin;
+value f_v = Lwt_io.read_line Lwt_io.stdin;
+value f = fun _ -> f_v;
+value g = Lwt.return;
+value res = (m >>= f) >>= g;
+
+(*
+value () = Printf.printf "case 2, enter two lines:\n%!";
+value f_v = Lwt_io.read_line Lwt_io.stdin;
+value m = Lwt_io.read_line Lwt_io.stdin;
+value f = fun _ -> f_v;
+value g = Lwt.return;
+value res = m >>= (fun x -> f x >>= g);
+*)
+
+value () = Lwt_main.run (res >>= fun s ->
+  Lwt_io.write_line Lwt_io.stdout ("res = " ^ s));
+==============
+
+  In the first case it's:
+
+case 1, enter two lines:
+a
+b
+res = b
+
+  In the second case it's:
+
+case 2, enter two lines:
+a
+b
+res = a
+
+  When I began to use Lwt, I was badly surprised
+by the fact that Lwt.t values are not real I/O actions.
+So I had to get a new habit: if the top-level module
+value has type Lwt.t 'a, I have to defer its
+computation by wrapping it under "fun () -> <expr>".
+And I have to remember which of my functions return
+Lwt.t values, which of my abstract types really have
+type Lwt.t 'a or contain the Lwt.t 'a values, to defer
+their computations/sideeffects too.

@@ -1,0 +1,150 @@
+Return-Path: <Maurice.Bremond@inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id B9165BBAF
+	for <caml-list@yquem.inria.fr>; Thu,  5 Feb 2009 15:49:14 +0100 (CET)
+X-IronPort-AV: E=Sophos;i="4.37,385,1231110000"; 
+   d="scan'208";a="23629982"
+Received: from coqhardi.inrialpes.fr (HELO coqhardi.inria.fr) ([194.199.21.105])
+  by mail1-relais-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 05 Feb 2009 15:49:14 +0100
+To: Jan Kybic <kybic@fel.cvut.cz>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Ocaml <-> Matlab interface
+Reply-To: Maurice Bremond <Maurice.Bremond@inria.fr>
+References: <87myd2nzlm.fsf@fel.cvut.cz>
+From: Maurice.Bremond@inria.fr (Maurice Bremond)
+Date: Thu, 05 Feb 2009 15:48:32 +0100
+In-Reply-To: <87myd2nzlm.fsf@fel.cvut.cz> (Jan Kybic's message of "Wed\, 04 Feb 2009 13\:41\:41 +0100")
+Message-ID: <rxsiqnpey7z.fsf@inria.fr>
+User-Agent: Gnus/5.11 (Gnus v5.11) Emacs/22.1 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Spam: no; 0.00; ocaml:01 bremond:01 bremond:01 segfault:01 camlp:01 callbacks:01 callbacks:01 segv:01 segv:01 ocaml:01 bigarray:01 genarray:01 dims:01 dims:01 failwith:01 
+
+
+
+Hello,
+
+
+>I am posting below the relevant excerpts
+>from my code in case somebody can spot the problem.
+Unfortunately, if I try one of the two tests (*1*) and (*2*) below, I
+cannot reproduce your segfault (ocamlmex 2.1.0 and my Matlab version
+is 7.7.0.471 (R2008b))
+
+What you can do is :
+
+ - run these two tests 
+   (simply replace example/camlp5o/hello.ml by each of them)
+   for (*1*) at the Matlab prompt : 
+   >> for i = 1:10000; hello(hello(hello(hello(single([1:1000,1:1000])))));end
+   (the goal is to trigger the caml gc several times without calling
+   it explicitly)
+
+   (*2*) :
+   >> for i = 1:1000; hello; end
+
+ - if you have not already ran the test suite : 
+   make test 
+   and at Matlab prompt :
+   >> cd <ocamlmexdir>/test
+   >> api('check')
+   Everything should be ok.
+
+ - put some Gc.full_major() in your MEX-files to see if a crash occurs
+   (it should not!).
+
+Other hints :
+
+ - if you use Matlab callbacks (Mex.mexCallMATLAB) you can have some
+   segmentation violations if you call Matlab function with a wrong
+   number of arguments (I think this is a Matlab problem that cannot
+   be prevented) see (*3*)
+
+ - any interruption during Mex.mexCallMATLAB may be fatal to the
+   Matlab session.
+
+ - if you do not use specific Matlab callbacks, maybe have a try with
+   Octave (>=3.0) (./configure BASE=OCTAVE; make ; make install)
+  
+ - I had segv problems with an old version of Matlab (<= ~R2006x).
+ 
+
+Please, mail me directly about this (there is no ocamlmex user list)
+and if you can, send me a full segv example. 
+
+
+>Matlab and Ocaml run as separate processes and communicate using Unix
+>named pipes (created using mkfifo)
+This sounds like the Matlab engine api :
+http://www.mathworks.com/access/helpdesk/help/techdoc/index.html?/access/helpdesk/help/techdoc/matlab_external/f29148.html
+
+A limited binding to the Matlab engine api is in ocamlmex, under
+src/eng. It has not really been tested and maybe it can be improved.
+
+
+Maurice Bremond
+
+
+
+Examples:
+
+(*1*)
+open Bigarray
+
+let _ = 
+  Mex.mexRegister (function
+  |  a when Array.length(a) > 1 || Array.length(a) = 0 -> [| |]
+  |  a -> let speedm = a.(0) in
+    match Mex.mxGetData speedm with
+    | Mex.FLOAT32 s -> 
+        (try
+          let x = array2_of_genarray s in
+          let dims = Mex.mxGetDimensions speedm in 
+          let r = Mex.mxCreateNumericArray [| dims.(0) ; dims.(1) |] 
+              Mex.SINGLE_CLASS Mex.REAL in
+          Mex.mxSetData r (Mex.FLOAT32 s);
+          [| r |]
+        with Invalid_argument _ ->
+          failwith "Input is not a 2D array.")
+    | _ ->  failwith "Input is not float32 (class single).")
+  
+
+(*2*)
+open Bigarray
+
+let _ = 
+  Mex.mexRegister (function
+    |  [| |]  -> 
+        let n,m = 1000,1000 in
+        let r = Mex.mxCreateNumericArray [| n ; m |] Mex.DOUBLE_CLASS Mex.REAL in
+        let a = Array2.create float64 fortran_layout n m in
+        for j = 1 to m do
+          for i = 1 to n do
+            a.{i,j} <- float_of_int (i+j) ;
+          done ;
+        done ;
+        Mex.mxSetData r (Mex.FLOAT64 (genarray_of_array2 a)) ;
+        [| r |]
+    | _ -> failwith "bad args")
+
+
+(*3*)
+  (* segmentation violation *)
+   let _ =
+     mexRegister
+      (function
+        [| a; b; c |] ->
+          mexCallMATLAB 3 [| (mexCallMATLAB 4 [| a; |] "plus").(0); c |]
+            "mtimes"
+        | _ -> raise (Failure "bad args"))
+
+
+
+
+

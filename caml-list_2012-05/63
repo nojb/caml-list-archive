@@ -1,0 +1,215 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q47KcB9x020699
+	for <caml-list@sympa-roc.inria.fr>; Mon, 7 May 2012 22:38:11 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AiEBANUxqE/RVdW2imdsb2JhbABEoH2SGggiAQEBCgkNBxIGI4IMAQEBAwESAhMZARsSCwEDAQsGBQsNDSEiAREBBQEKEhkICgkHh10BAwYFC5w9CQOMJIJzhQsKGScDCleIdgEFC4p0hgkElX6BEY1RPYQO
+X-IronPort-AV: E=Sophos;i="4.75,545,1330902000"; 
+   d="scan'208";a="142875396"
+Received: from mail-yx0-f182.google.com ([209.85.213.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 07 May 2012 22:38:06 +0200
+Received: by yenl9 with SMTP id l9so7063780yen.27
+        for <caml-list@inria.fr>; Mon, 07 May 2012 13:38:05 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=20120113;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :cc:content-type:content-transfer-encoding;
+        bh=CzWq70T6cjDscoQjUNVvr3LaVJF9g4cuZo5TVBsupmI=;
+        b=RdHz+dBwLrK1klFXpxveWGmIwRyZoKKiBZwI3l2NYL3p/ubrn1V1wMupJjGfhO8jTz
+         AbKgTFQGEIhokwNUwox2N3Rh9XUFYICTPjZnj4ZmuY2N9OzjmM/wArRtU0GXhQ2G6QWP
+         irJqADDhQ0eu3/IqNeA3YwrnsYWhiaoccXoAYeCdDsShEQsjY0ETZ43wGXXP0xs6uqnt
+         Hkdp2sSWfgvfeSasAkTLJB8tiSuONRxotU60Pp6N+jSalJRS9cOorQRioAUdSanHbz0V
+         FOzUhbBlh97s3dxep4DbeXmfuT/MKiO1VC4aGcOUOV2qAD+8TJzlwxwiYzdS64I76pES
+         1KQQ==
+Received: by 10.50.185.161 with SMTP id fd1mr9105412igc.70.1336423084600; Mon,
+ 07 May 2012 13:38:04 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.50.140.100 with HTTP; Mon, 7 May 2012 13:37:24 -0700 (PDT)
+In-Reply-To: <sympa.1336411128.30880.441@inria.fr>
+References: <sympa.1336411128.30880.441@inria.fr>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Mon, 7 May 2012 22:37:24 +0200
+Message-ID: <CAPFanBFpOJrPYj8ja5WpqjbkG56BFQ_v4TAyta9gbjZs7jeA5Q@mail.gmail.com>
+To: coste@irit.fr
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-MIME-Autoconverted: from quoted-printable to 8bit by walapai.inria.fr id q47KcB9x020699
+Subject: Re: [Caml-list] reuse of abstract types
+
+> Now I want to design a module Q, with operations using type t. To refer to t in
+> the signature of Q, I am obliged to declare a module Mt : MT inside the
+> signature
+>
+> module type QT = sig
+>  module Mt : MT
+>  val g : Mt.t -> ....
+> end
+
+I don't believe this is the way to go. You could either:
+
+1. not mention MT in this signature, only have an abstract type t, and
+enforce this sharing in the module implementation only
+
+  module type MT = sig
+    type t
+    val f : t -> int
+  end;;
+
+  module type QT = sig
+    type t
+    val g : t -> int
+   end;;
+
+  module M : MT = struct
+    type t = int
+    let f x = 0
+  end;;
+
+  module Q : (QT with type t = M.t) = struct
+    type t = M.t
+    let g x = M.f x
+  end;;
+
+2. Define QT as a signature component of a functor depending on
+a (M : MT); if you're going to define functors anyway, why not.
+
+  module type MT = sig
+    type t
+    val f : t -> int
+  end;;
+
+  module QT_Fun (M : MT) = struct
+    module type QT = sig
+      val g : M.t -> int
+    end
+  end;;
+
+  module Q_Fun (M : MT) : QT_Fun(M).QT = struct
+    let g x = M.f x
+  end;;
+
+Of course, if you only use QT once, you could even define the
+signature and the functor at the same time, or not give a name to the
+signature at all:
+
+  module Q_SameTime (M : MT) = struct
+    module type QT = sig
+      val g : M.t -> int
+    end
+    module Q : QT = struct
+      let g x = M.f x
+    end
+  end;;
+
+  module Q_NoName (M : MT) : sig
+    val g : M.t -> int
+  end = struct
+    let g x = M.f x
+  end;;
+
+Or not give a name to the signature at all:
+
+
+>
+> Now the module M itself, before Q, because of sharing constraint in Q:
+>
+> module M : MT = struct
+>  type t = int
+>  let f x =  ....
+> end
+>
+> And finally the module Q, which must contain a module Mt to respect its
+> signature:
+>
+> module Q  : (QT with type Mt.t = M.t) = struct
+>  module Mt = M
+>  let g x = ....
+> end
+>
+> As generally my modules are functors I will probably rather write the module
+> QF:
+>
+> module QF (Mx:MT) :  (QT with type Mt.t = Mx.t) = struct
+>  module Mt = Mx
+>  let g x = ...
+> end
+>
+> And finally instanciate QF:
+>
+> module Q2 = QF (M)
+>
+> The declaration of Mt in QT and QF is here only to reference the type t. It
+> seems natural that QF be parameterized by Mx:MT as it will certainly use
+> operations of M, but what seems artificial is the declaration of Mt in the
+> signature QT (and hence in the functor QF). Intuitively, I would say that  the
+> signature QT refers to the type t declared in the signature MT, not in the
+> structure M.
+> Is there a simpler way to do this ? I suspect my solution is too complicate,
+> but I couldn't find better...
+
+
+On Mon, May 7, 2012 at 8:15 PM,  <coste@irit.fr> wrote:
+> Hello,
+> While using the module system to abstract types, I often encounter the problem
+> to reuse in a signature an abstract type declared in another signature. Let's
+> take an example.
+> I have a module M, which declares an abstract type t, with operations using
+> this type.
+>
+> module type MT = sig
+>  type t
+>  val f : t ->  ....
+> end
+>
+> Now I want to design a module Q, with operations using type t. To refer to t in
+> the signature of Q, I am obliged to declare a module Mt : MT inside the
+> signature
+>
+> module type QT = sig
+>  module Mt : MT
+>  val g : Mt.t -> ....
+> end
+>
+> Now the module M itself, before Q, because of sharing constraint in Q:
+>
+> module M : MT = struct
+>  type t = int
+>  let f x =  ....
+> end
+>
+> And finally the module Q, which must contain a module Mt to respect its
+> signature:
+>
+> module Q  : (QT with type Mt.t = M.t) = struct
+>  module Mt = M
+>  let g x = ....
+> end
+>
+> As generally my modules are functors I will probably rather write the module
+> QF:
+>
+> module QF (Mx:MT) :  (QT with type Mt.t = Mx.t) = struct
+>  module Mt = Mx
+>  let g x = ...
+> end
+>
+> And finally instanciate QF:
+>
+> module Q2 = QF (M)
+>
+> The declaration of Mt in QT and QF is here only to reference the type t. It
+> seems natural that QF be parameterized by Mx:MT as it will certainly use
+> operations of M, but what seems artificial is the declaration of Mt in the
+> signature QT (and hence in the functor QF). Intuitively, I would say that  the
+> signature QT refers to the type t declared in the signature MT, not in the
+> structure M.
+> Is there a simpler way to do this ? I suspect my solution is too complicate,
+> but I couldn't find better...
+>
+> --
+> Caml-list mailing list.  Subscription management and archives:
+> https://sympa-roc.inria.fr/wws/info/caml-list
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+

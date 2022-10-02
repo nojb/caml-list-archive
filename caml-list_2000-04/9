@@ -1,0 +1,158 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA00395 for caml-redistribution@pauillac.inria.fr; Sun, 2 Apr 2000 23:34:01 +0200 (MET DST)
+Resent-Message-Id: <200004022134.XAA00395@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA02838 for <caml-list@pauillac.inria.fr>; Thu, 30 Mar 2000 22:12:35 +0200 (MET DST)
+Received: from enst.enst.fr (enst.enst.fr [137.194.2.16])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id WAA03680
+	for <caml-list@inria.fr>; Thu, 30 Mar 2000 22:12:35 +0200 (MET DST)
+Received: from email.enst.fr (muse.enst.fr [137.194.2.33])
+	by enst.enst.fr (8.9.1a/8.9.1) with ESMTP id WAA17110
+	for <caml-list@inria.fr>; Thu, 30 Mar 2000 22:12:34 +0200 (MET DST)
+Received: from young.enst.fr (young.enst.fr [137.194.34.13])
+	by email.enst.fr (8.9.3/8.9.3) with ESMTP id WAA25012
+	for <caml-list@inria.fr>; Thu, 30 Mar 2000 22:12:34 +0200 (MET DST)
+Received: from localhost (debourse@localhost)
+	by young.enst.fr (8.8.8+Sun/8.8.8) with SMTP id WAA09947
+	for <caml-list@inria.fr>; Thu, 30 Mar 2000 22:12:33 +0200 (MET DST)
+X-Authentication-Warning: young.enst.fr: debourse owned process doing -bs
+Date: Thu, 30 Mar 2000 22:12:33 +0200 (MET DST)
+From: Benoit Deboursetty <debourse@pascal.enst.fr>
+X-Sender: debourse@young.enst.fr
+To: caml-list@inria.fr
+Subject: cyclic value construction ("let rec")
+Message-ID: <Pine.GSO.4.02.10003282041400.6520-100000@pascal.enst.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=iso-8859-1
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Content-Transfer-Encoding: QUOTED-PRINTABLE
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Sun, 2 Apr 2000 23:34:01 +0200
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+Following the "let rec" thread, let me sum up a few of the problems which
+occur frequently during value creation, as this list showed it.
+
+ * Currently, O'CaML does not allow the creation of arbitrarily big cycles
+in a non-mutable value. For instance, you cannot write a program that
+computes a cyclic list ln of size n
+   l_n =3D 1 :: 2 :: 3 :: ... :: n :: l_n
+using only the built-in list type.
+
+ * This is annoying because O'CaML handles immutable lists and trees so
+well sometimes you wish it could do the same with anything else.
+
+ * I have seen three basic classes of solutions when you want to deal
+with values possibly showing cycles. Here I will assume that the values
+you're working on is an arbitrary graph and its nodes carry data .
+
+    1) index each node of the value in an array and instead of pointing at
+a data, point at its index.
+
+type 'a graph =3D ('a * int list) array
+
+let circle n =3D
+  Array.init n (fun i -> (i, [(i+1) mod n]))
+
+circle : int -> int graph
+
+  Pros: by externally describing links, you are able to "see what you're
+doing". In particular, when you traverse the value, you can know in
+constant time whether you are on a data node that you have already seen.
+(you can mark where you have been in an array with the same indices). You
+need this whenever you want to implement something like "map" on the data
+carried by nodes of your graph. The majority of graph algorithms also
+require this "outsight" of the value.
+
+  Cons: joining two such graphs is complex, thus this construction is only
+good for graphs you want to build at once. Arrays are mutable (with all
+the problems possibly induced by passing around mutable arguments);
+invalid values exist (for instance when they refer out-of-bound indices);
+access to neighbours is indirect (you first go to the index in the table).
+You don't have access to neighbours in patterns.
+
+    2) use mutable fields, then build the data incrementally.
+
+type 'a node =3D { data: 'a; mutable next: 'a node list }
+let circle n =3D
+  let temp =3D Array.init n (fun i -> { data =3D i; next =3D [] }) in
+  for i =3D 0 to n - 1 do
+    temp.(i).next <- [temp.((i+1) mod n)];
+  done;
+  temp.(0)
+
+circle : int -> int node
+
+  Pros: resembles C and its "do-what-I'm-telling-you" coding style.
+Sometimes it's good. Sometimes you don't have the extra indirection caused
+by the index. Values are always valid. You have access to neighbours in
+patterns.
+
+  Cons: resembles C and its "do-what-I'm-telling-you" coding style.
+Program-wide mutability is a design problem when you only need it at value
+building time. Also, sometimes, you are obliged to use an option for the
+type of your mutable field. In the end, you find yourself with a complex
+data structure with 'Some _'s everywhere and not a single 'None'. In those
+cases when after build you expect every option of a given field to be a
+Some, this represents another extra indirection (*) and the source of
+invalid values.
+
+   3) use lazy evaluation for the successors of each node.
+
+type 'a node =3D { data: 'a ; next: 'a node list Lazy.t }
+
+let circle n =3D
+  let links =3D Array.make n [] in
+  let nodes =3D Array.init n
+    (fun i -> { data =3D i; next =3D lazy links.(i) })
+  in
+  for i =3D 0 to n - 1 do
+    links.(i) <- [nodes.((i+1) mod n)]
+  done;
+  (* just to show the resulting structure is finite *)
+  Array.iter (fun x -> ignore (Lazy.force x.next)) nodes;
+  nodes.(0)
+
+  Pros: gives the same power as mutable fields and more, with a less
+imperative style. The only way of handling infinite structures. Depending
+on the situation, you may have access to neighbours in patterns, but not
+surely.
+
+  Cons: correct graph building with lazy evaluation is not easy. Infinite
+recursion is a common pitfall; building an infinite value when you wanted
+it finite is another one. Also, with current O'CaML version, Lazy.t is not
+abstract, and is implemented as a reference, hence it is mutable. Finally,
+even if your were so careful as to keep your graph finite, you still have
+to use Lazy.force each time you want to access a node's neighbour even
+when you could have force'd everything in advance. You have no means of
+assessing that a value is finite, you cannot tell whether marshalling
+such a value will work.
+
+
+
+I must have omitted many other solutions which I don't know. From this
+build difficulty come many frustrations like "if only I could freeze all
+mutable fields of this value at once" or things like that. I am in no way
+criticizing O'CaML for being unable to handle things C, C++ and Java do
+with "null pointers"! Just trying to figure out what is at the basis of
+all these questions.
+
+I have this little hack that will allow you to freeze mutable fields, but
+it relies on a current exposed unsafeness with Marshalling. You can freeze
+a value with mutable fields by marshalling it into a string, then
+un-marshalling it back into a value of the same type with nonmutable
+fields... This makes basically a copy of a value and changes the type on
+the way.
+
+It would be interesting to know whether people have other workarounds.
+Also, a generic graph module which would implement "map", "iter" etc. in a=
+=20
+cycle-safe way (like Marshal) would perhaps be interesting in the
+'user-contributed stdlib extension'...
+
+What do you think?
+
+Beno=EEt de Boursetty.
+
+(*) I don't know how options are implemented, but at least at
+language-level this adds an indirection
+
+

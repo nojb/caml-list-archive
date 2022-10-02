@@ -1,0 +1,89 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA13454; Tue, 6 Mar 2001 18:01:32 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA13718 for <caml-list@pauillac.inria.fr>; Tue, 6 Mar 2001 18:01:31 +0100 (MET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f26H1Tb00636;
+	Tue, 6 Mar 2001 18:01:29 +0100 (MET)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA13707; Tue, 6 Mar 2001 18:01:28 +0100 (MET)
+Date: Tue, 6 Mar 2001 18:01:28 +0100
+From: Xavier Leroy <Xavier.Leroy@inria.fr>
+To: Chris Hecker <checker@d6.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] create a closure in external C function?
+Message-ID: <20010306180128.B12522@pauillac.inria.fr>
+References: <4.3.2.7.2.20010306011427.03669de0@shell16.ba.best.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <4.3.2.7.2.20010306011427.03669de0@shell16.ba.best.com>; from checker@d6.com on Tue, Mar 06, 2001 at 01:29:57AM -0800
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> I want to create a function and return it from an external C function:
+> 
+> type ii = int -> int
+> val f : int -> ii = "c_function"
+> 
+> where c_function looks something like this:
+> 
+> value c_function( value i )
+> {
+>     return Val_closure(&some_c_int_int_function);
+> }
+> 
+> Is this possible?
+
+Not directly, at least.  Building closures from C isn't impossible,
+just very delicate and highly processor-dependent (in the case of the
+native-code compiler).
+
+> So, if you wanted to make this work you'd have to return a pointer
+> to a caml function that calls _caml_c_call, which isn't really
+> documented either (and looks platform specific, although it seems to
+> just be jumping to the address of the passed C function after
+> setting things up).
+
+Right. caml_c_call does part of the job, but is indeed very
+platform-specific.
+
+If the C functions you're interested in all have the same type,
+say "int" to "int", there is an easy solution: instead of returning
+them to Caml as Caml functions, return them as values of an abstract
+type, and provide a separate "invoke" primitive:
+
+(* Caml code *)
+
+type ii
+external ii_invoke: ii -> int -> int = "ii_invoke"
+external c_function: ... -> ii = "c_function"
+
+(* C code *)
+
+value c_function(...)
+{
+  return (value) &some_c_int_int_function;
+}
+
+value ii_invoke(value c_function, value arg)
+{
+  return Val_int(((int (*)(int)) c_function)(Int_val(arg)));
+}
+
+Then, on the Caml side, you can always partially apply ii_invoke to a
+value of type ii to get back the int->int Caml function you're looking
+for.
+
+This solution easily extends to the case of a finite number of C
+function types, known in advance.  As Fabrice noted, the hard part is
+to deal with arbitrary many C function types, determined dynamically.
+There, you'd need some kind of dynamic invocation interface for C
+functions, and I don't know of any C library that provides this in a
+portable or semi-portable fashion.  (The closest thing that comes to
+my mind is run-time code generators such as `C or Dyn-C.)
+
+Hope this helps,
+
+- Xavier Leroy
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

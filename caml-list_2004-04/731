@@ -1,0 +1,134 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA22661; Wed, 28 Apr 2004 01:35:56 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA22647 for <caml-list@pauillac.inria.fr>; Wed, 28 Apr 2004 01:35:55 +0200 (MET DST)
+Received: from rabelais.socialtools.net (rabelais.socialtools.net [81.2.94.243])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i3RNZsjq016702
+	for <caml-list@inria.fr>; Wed, 28 Apr 2004 01:35:54 +0200
+Received: by rabelais.socialtools.net (Postfix, from userid 108)
+	id A56BD232DB; Wed, 28 Apr 2004 00:35:53 +0100 (BST)
+Received: from socialtools.net (chaucer.socialtools.net [81.2.94.242])
+	by rabelais.socialtools.net (Postfix) with ESMTP
+	id C8DA4232DA; Wed, 28 Apr 2004 00:35:51 +0100 (BST)
+Message-ID: <408EEE3E.7050008@socialtools.net>
+Date: Wed, 28 Apr 2004 00:35:26 +0100
+From: Benjamin Geer <ben@socialtools.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.6) Gecko/20040113
+X-Accept-Language: en-gb, en, fr, it
+MIME-Version: 1.0
+To: Yamagata Yoriyuki <yoriyuki@mbg.ocn.ne.jp>
+Cc: warplayer@free.fr, caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Common IO structure
+References: <016401c42bc4$b6438840$19b0e152@warp>	<20040428.004358.45522587.yoriyuki@mbg.ocn.ne.jp>	<016501c42c73$24e64b30$ef01a8c0@warp> <20040428.015800.126758722.yoriyuki@mbg.ocn.ne.jp>
+In-Reply-To: <20040428.015800.126758722.yoriyuki@mbg.ocn.ne.jp>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam-Checker-Version: SpamAssassin 2.63 (2004-01-11) on 
+	rabelais.socialtools.net
+X-Spam-Status: No, hits=-4.9 required=5.0 tests=BAYES_00 autolearn=ham 
+	version=2.63
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 yamagata:01 yoriyuki:01 atoms:01 buffering:01 char:01 buffering:01 python:01 nio:99 unix-like:01 api:01 wrappers:01 api:01 nio:99 minimise:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Yamagata Yoriyuki wrote:
+> I doubt the benefit of
+> bufferd IO, as I stated in the previous mail.  Unless operation is
+> very simple, and atoms are very small, (that is, character IO) extra
+> cost of element-wise IO is not important.
+
+But there are times when you want to read one byte or character at a 
+time, and in those cases, buffering saves the overhead of a function or 
+method call per byte/char.
+
+Buffering is also useful w you have to process a very large amount of 
+data, and cannot keep it all in memory at once.
+
+> I'm interested in (potential) users of IO libraries.  Could someone
+> comment on IO system of Jave, Perl, Python, for example?
+
+In Java there are two I/O libraries, the original one (java.io)[1] and 
+the new one (java.nio)[2].  The old one has the virtue of being easy to 
+understand and use, and flexible enough for many situations.  The basic 
+InputStream and OutputStream classes deal only with bytes, have 
+Unix-like 'read' and 'write' methods, and do no buffering.  There are 
+derived classes such as FileInputStream and SocketInputStream.  The API 
+allows you to add functionality to a stream by using wrappers.  For 
+example, to add buffering to any InputStream, you wrap it in a 
+BufferedInputStream (which is a class derived from InputStream).  To 
+marshal Java objects to a byte stream, you wrap an OutputStream in an 
+ObjectOutputStream, and pass objects to the ObjectOutputStream.
+
+Classes derived from Reader and Writer deal with characters, and can be 
+wrapped around streams to perform conversions between bytes and 
+characters.  For example, to read bytes and convert them to characters, 
+you wrap an InputStream in an InputStreamReader, which has a constructor 
+that says which encoding to read, and 'read' methods that return 
+(Unicode) characters.  Another example of a Reader is LineNumberReader, 
+which counts lines in its input.
+
+This is all fine as far as it goes, but it turns out to be cumbersome, 
+and in some cases impossible, to implement certain things efficiently 
+using this API.  The java.nio API solves these problems, but it is much 
+more complicated to use.
+
+For example, suppose you have to read a large amount of text from a 
+network connection, convert it to another encoding, and save it in a 
+file.  There's too much text to store all of it in memory at once, and 
+you're dealing with a lot of network requests at the same time, so in 
+any case you want to minimise the amount of memory used by each request. 
+  You'd like to be able to read about 4K at a time, convert the bytes to 
+the target encoding, and write them to the file.  You could make a 4K 
+byte array and use it as a buffer, but what if the input encoding is 
+UTF-8?  You might get an incomplete character at the end of the buffer; 
+if the UTF-8 decoder is expecting a complete string, it will choke.
+
+The solution in java.nio is to have two different kinds of buffer 
+classes: ByteBuffer and CharBuffer.  You can fill up a ByteBuffer, and 
+use a Decoder to convert the bytes to Unicode characters; the Decoder 
+will read as many complete characters as it can, and put them in a 
+CharBuffer.  You then 'compact' the ByteBuffer, which moves any 
+remaining bytes to the beginning of the buffer, and start again. 
+(Similarly, you can use an Encoder to convert the characters to bytes in 
+the target encoding, filling up a ByteBuffer which you can then write to 
+an output channel.)
+
+Some of other useful things java.nio provides are:
+
+* 'Direct' byte buffers.  'Given a direct byte buffer, the Java virtual 
+machine will make a best effort to perform native I/O operations 
+directly upon it. That is, it will attempt to avoid copying the buffer's 
+content to (or from) an intermediate buffer before (or after) each 
+invocation of one of the underlying operating system's native I/O 
+operations.'
+
+* Buffers that correspond to a memory-mapped region of a file.  This can 
+be useful for dealing with huge files; it takes advantage of the 
+operating system's support for memory-mapped files, where available.
+
+* 'Scattering' channels.  'A scattering read operation reads, in a 
+single invocation, a sequence of bytes into one or more of a given 
+sequence of buffers. Scattering reads are often useful when implementing 
+network protocols or file formats that, for example, group data into 
+segments consisting of one or more fixed-length headers followed by a 
+variable-length body.  Similar gathering write operations are defined in 
+the GatheringByteChannel interface.'
+
+My own view is that the flexibility and efficiency permitted by java.nio 
+are valuable, but that its complexity is a problem.  The behaviour of 
+the buffer classes[3] is tricky to understand and therefore error-prone.
+
+Ben
+
+[1] http://java.sun.com/j2se/1.4.2/docs/api/java/io/package-summary.html
+
+[2] http://java.sun.com/j2se/1.4.2/docs/api/java/nio/package-summary.html
+
+[3] http://java.sun.com/j2se/1.4.2/docs/api/java/nio/Buffer.html
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

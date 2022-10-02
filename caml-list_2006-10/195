@@ -1,0 +1,119 @@
+Return-Path: <dbueno@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.9 required=5.0 tests=DNS_FROM_RFC_ABUSE,
+	SPF_NEUTRAL autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id B7F7BBC69
+	for <caml-list@yquem.inria.fr>; Wed, 25 Oct 2006 03:46:53 +0200 (CEST)
+Received: from ug-out-1314.google.com (ug-out-1314.google.com [66.249.92.170])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id k9P1kr2l020104
+	for <caml-list@inria.fr>; Wed, 25 Oct 2006 03:46:53 +0200
+Received: by ug-out-1314.google.com with SMTP id g33so722ugd
+        for <caml-list@inria.fr>; Tue, 24 Oct 2006 18:46:53 -0700 (PDT)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:to:subject:mime-version:content-type:content-transfer-encoding:content-disposition;
+        b=WZHI6WJ52allRszcwAYywiRbhzj4tg15FmpYyqbDUYkQRlX4qSSacJ/mG2Jf80qr+Aep84NFAkfh4ovJVtpey+nuoI6um+KHdJsg3pnj5MiZcnJn9Gfpf3DXV3CNYA/hdRPvd8JTSjR66Kso3NHxmTsYn4gXsmQHqO4q0lHKUK8=
+Received: by 10.78.148.8 with SMTP id v8mr10274825hud;
+        Tue, 24 Oct 2006 18:46:52 -0700 (PDT)
+Received: by 10.78.100.6 with HTTP; Tue, 24 Oct 2006 18:46:52 -0700 (PDT)
+Message-ID: <6dbd4d000610241846g5a19a56u4630c7b10e5fbffb@mail.gmail.com>
+Date: Tue, 24 Oct 2006 21:46:52 -0400
+From: "Denis Bueno" <dbueno@gmail.com>
+To: "OCaml Mailing List" <caml-list@inria.fr>
+Subject: Trouble with doubly-linked, circular list using lazy evaluation
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+X-j-chkmail-Score: MSGID : 453EC20D.000 on discorde : j-chkmail score : X : 0/20 1
+X-Miltered: at discorde with ID 453EC20D.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; pointers:01 uname:01 powerpc:01 ocaml:01 ocamlc:01 ocamlc:01 cmo:01 bool:01 node:01 node:01 node':01 node':01 2.5:98 ford:98 rec:01 
+
+I get a "Bus error" when running a unit test on a doubly-linked
+circular list (of length 2). A self-contained test case is included
+[1]. I have 8 fields in a record which includes two left & right
+pointers (not ref types).
+
+I am running a PowerMac G5 2.5GHz (uname -a: Darwin ford.local 8.8.0
+Darwin Kernel Version 8.8.0: Fri Sep  8 17:18:57 PDT 2006;
+root:xnu-792.12.6.obj~1/RELEASE_PPC Power Macintosh powerpc) and
+ocaml 3.09.3.
+
+Interestingly, if I remove a field (such as the mark field), the test
+case succeeds.
+
+Anyone have any idea why I have a problem, or how to solve it?
+
+-Denis
+
+[1]
+Compile with:
+ocamlc.opt -w FUE -I .		 -g	 -c ll_test.ml
+ocamlc.opt -o ll_test -w FUE -I .		 -g	  ll_test.cmo
+
+
+Source:
+(* Self-contained test case for doubly-linked list troubles. *)
+type 'a dllnode = {key : int;
+                   right : 'a dllnode Lazy.t;
+                   left : 'a dllnode Lazy.t;
+                   parent : 'a dllnode option;
+                   child : 'a dllnode option;
+                   mark : bool;
+                   degree : int;
+                   data : 'a;
+};;
+
+let rec empty = {key = 0; left = lazy empty; right = lazy empty;
+parent = None; child = None; mark = false; degree = 0; data = 0};;
+
+let make_proper_node data =
+  let rec l = {empty with left = lazy l; right = lazy l; data = data} in
+    l
+
+and node_ll_add llnode new_node =
+  (* ... <-> llnode <-> former_right <-> ...
+
+     =>
+
+     ... <-> llnode <-> new_node <-> former_right <-> ...
+  *)
+  if Lazy.force llnode.right == llnode
+    (* there is only 1 node in this linked list. *)
+  then
+    let rec new_node' = {new_node with right = lazy other; left = lazy other}
+    and other = {llnode with right = lazy new_node'; left = lazy new_node'} in
+      new_node'
+
+  else
+    let former_right = Lazy.force llnode.right in
+    let rec new_node' =
+      {new_node with
+        right = lazy {former_right with left = lazy new_node'};
+        left = lazy {llnode with right = lazy new_node'}} in
+      new_node'
+;;
+
+
+let test () =
+  let node = make_proper_node 0 in
+  let _ = assert (Lazy.force node.left == Lazy.force node.right) in
+  let _ = assert (Lazy.force node.left == node) in
+  let _ = assert (node.data = 0) in
+  let node = node_ll_add node (make_proper_node 1) in
+  let _ = assert ((Lazy.force node.left).data = 0) in
+  let _ = assert (Lazy.force node.left == Lazy.force node.right) in
+  let _ = assert (not (Lazy.force node.left == node)) in
+  let _ = assert (Lazy.force (Lazy.force node.left).right == node) in
+  let _ = assert (Lazy.force (Lazy.force node.right).left == node) in
+  let _ = assert (Lazy.force (Lazy.force node.right).right == node) in
+  let _ = assert (Lazy.force (Lazy.force node.left).left == node) in
+    ()
+;;
+
+test ();;
+

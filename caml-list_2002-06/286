@@ -1,0 +1,144 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id EAA05183; Wed, 26 Jun 2002 04:37:06 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id EAA04777 for <caml-list@pauillac.inria.fr>; Wed, 26 Jun 2002 04:37:05 +0200 (MET DST)
+Received: from laurelin.dementia.org ([208.167.88.73])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g5Q2b3X23987
+	for <caml-list@inria.fr>; Wed, 26 Jun 2002 04:37:04 +0200 (MET DST)
+Received: by laurelin.dementia.org (Postfix, from userid 1001)
+	id EED1870BF; Tue, 25 Jun 2002 22:43:04 -0400 (EDT)
+To: Alessandro Baretta <alex@baretta.com>
+Cc: Gerd Stolpmann <info@gerd-stolpmann.de>, Ocaml <caml-list@inria.fr>
+Subject: Re: [Caml-list] Recursive classes are impossible?
+References: <3D1725D9.7060409@baretta.com>
+	<20020624233419.C760@ice.gerd-stolpmann.de>
+	<3D19015B.6030105@baretta.com>
+From: John Prevost <j.prevost@cs.cmu.edu>
+Date: 25 Jun 2002 22:43:04 -0400 (11.324 UMT)
+In-Reply-To: <3D19015B.6030105@baretta.com>
+Message-ID: <86fzzaiwuf.fsf@laurelin.dementia.org>
+Lines: 114
+User-Agent: Gnus/5.09 (Gnus v5.9.0) Emacs/21.2
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+>>>>> "ab" == Alessandro Baretta <alex@baretta.com> writes:
+
+    ab> Why is it that an explicit upcast is needed?
+
+In this case, the explicit cast is needed to "remove" the color method
+and make it into a real tree.
+
+Something to note in this case is that you may not get what you
+intended with the classes you defined.  You said:
+
+class tree =
+  object (s)
+    val mutable ch = ( [] : tree list )
+    method get = ch
+    method set x = ch <- x
+  end
+
+class broccoli =
+   object (s)
+     inherit tree
+     method color = "green"
+   end
+
+In this case, you'll notice that the children of broccoli are a tree
+list, not a broccoli list.  So while broccoli can hold broccolis, you
+can't call the color method on its children.  And, you can put normal
+trees into broccolis as well.
+
+As for the broader view, contravariance begins to show up whenever you
+have a set method.  One way to get around it in the case of broccoli
+and trees might be this:
+
+class type ['a] read_tree =
+  object ('s)
+    method children : 's list
+    method contents : 'a
+  end
+
+class type ['a] read_broccoli =
+  object ('s)
+    method children : 's list
+    method contents : 'a
+    method color : string
+  end
+
+class ['a] tree x =
+  object (_ : 's)
+    val mutable ch = ([] : 's list)
+    val mutable co = (x : 'a)
+    method children = ch
+    method set_children ch' = ch <- ch'
+    method contents = x
+    method set_contents co' = co <- co'
+  end
+
+class ['a] broccoli x =
+  object
+    inherit ['a] tree x
+    method color = "green"
+  end
+
+
+Now there are several ways to work with variance issues.  First, while
+you can't cast a broccoli to a tree, you *can* cast it to a read_tree:
+
+
+# let a = new broccoli 10;;
+val a : int broccoli = <obj>
+# (a :> 'a read_tree);;
+- : int read_tree = <obj>
+
+
+This is because a read_tree has no way to set the value, so we've
+excluded the contravariant case.  The other good thing about this is
+that we've removed two contravariant cases.  One case is the
+set_children call, the other is the set_contents call.  This allows us
+to go a step further--'a read_tree is covariant now in 'a, so we can
+take a function that expects a "'c read_tree" and hand it a "'d
+read_tree", assuming that 'c :> 'd.  (Or coerce it.)
+
+Finally, there's a certain distinction between methods and functions
+when it comes to these things.  When you define a function, you'll see
+polymorphism work better.  For example:
+
+let rec count_nodes x =
+  List.fold_left (+) 1 (List.map count_nodes (x #children))
+
+With this function, you can do:
+
+# let a = new broccoli 10;;
+val a : int broccoli = <obj>
+# let b = new tree 10;;
+val b : int tree = <obj>
+# count_nodes a;;
+- : int = 1
+# count_nodes b;;
+- : int = 1
+
+You still need explicit coercions if you want to make a list
+containing both broccolis and trees:
+
+# List.map count_nodes [(a :> 'a read_tree); (b :> 'a read_tree)];;
+- : int list = [1; 1]
+
+but noticing this feature of row-polymorphism goes a long way towards
+making good use of the object features of O'Caml.  O'Caml's more
+powerful type discipline means we can step on our own feet with these
+co- vs. contravariance issues, but it also means we can do more
+powerful interesting things: since subtyping isn't bound to
+inheritance, polymorphic functions can be very very powerful.
+
+John.
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

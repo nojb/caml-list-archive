@@ -1,0 +1,156 @@
+Received: by margaux.inria.fr, Fri, 19 Mar 93 14:36:06 +0100
+Received: from concorde.inria.fr by margaux.inria.fr, Thu, 18 Mar 93 22:32:48 +0100
+Received: from Tamuz.Stanford.EDU by concorde.inria.fr; Thu, 18 Mar 1993 22:32:44 +0100
+Received:  by Tamuz.Stanford.EDU (5.61/25-theory-eef) id AA22196; Thu, 18 Mar 93 13:32:26 -0800
+From: Xavier Leroy <xavier@Theory.Stanford.EDU>
+Message-Id: <9303182132.AA22196@Tamuz.Stanford.EDU>
+Subject: Re: streams
+To: cr@dcs.ed.ac.uk
+Date: Thu, 18 Mar 1993 13:32:25 -0800 (PST)
+Cc: caml-list@margaux
+In-Reply-To: <6263.9303171810@campay.dcs.ed.ac.uk> from "cr@dcs.ed.ac.uk" at Mar 17, 93 06:10:54 pm
+Content-Type: text
+Content-Length: 6890      
+Sender: weis@margaux
+Status: O
+
+Chic, on commence a faire de l'ideologie! J'en profite pour vous
+chanter mon "Credo", avec lequel un certain nombre de gens de
+l'equipe Caml seront d'accord, je pense:
+
+1- Les effets de bord et le style imperatif de programmation sont
+essentiels non pas tant pour des raisons d'efficacite, mais pour des
+raisons de clarte et de bonne structuration du code qu'on ecrit.
+Contrairement a la propagande, du code imperatif ecrit avec soin, gout
+et discernement est bien souvent plus clair que du code fonctionnel,
+car il laisse implicite un certain nombre de choses (valeurs courantes
+des variables, etats des I/O) qui doivent etre rendues explicites en
+fonctionnel pur, alors que le bon programmeur les a tres clairement en
+tete. Le code imperatif est egalement plus sur car il
+permet de tenir a jour localement un etat local, et garantir ainsi
+facilement des invariants sur cet etat local. Meme si le style
+imperatif allait deux fois moins vite que le style applicatif, je
+continuerai a utiliser le style imperatif a chaque fois que j'en
+ressens le besoin.
+
+2- Les entrees/sorties sont infiniment plus claires en imperatif qu'en
+applicatif. Expliciter l'enchainement des I/O par des constructions de
+listes, des bidules a continuations facon Haskell, voire des monades,
+me semble nuire extremement a la clarte et a la modularite des
+programmes.
+
+3- Les streams de Caml sont concus comme un dispositif
+d'entree-sortie. Ce n'est pas a priori une structure de donnee "liste
+paresseuse" d'emploi general, meme si l'implementation actuelle des
+streams peut en fait etre utilisee ainsi, comme Christophe le
+souligne, mais une structure specialisee aux problemes
+d'entree-sortie. (Dans cette optique, fournir stream_get est sans
+doute une erreur; peut-etre aurions-nous du fournir a la place des
+operations de plus haut niveau, comme par exemple une primitive qui
+fait une copie d'un stream, au lieu de dire ``boarf, c'est
+definissable avec stream_get''.)
+
+4- Les operations de lecture sur les streams sont donc tout
+naturellement en place; et je continue a me demander si les operations
+d'ecriture ne devraient pas elles aussi etre en place.
+
+5- On a parfois besoin de vraies listes paresseuses. On devrait alors
+se les definir, ou les avoir dans la bibliotheque standard, mais
+distinctes des streams. On doit meme pouvoir fournir des fonctions de
+conversion stream <-> liste paresseuse raisonnablement efficaces, pour
+faciliter l'interaction entre les deux.
+
+Voila. Et maintenant, parlons d'efficacite:
+
+1- Le GC.
+
+Chet: C'est aussi vrai qu'un jour, le GC pourrait recuperer les donne'es
+      utilise'es efficacement. Ce jour-la, ce n'est pas aujourd'hui. 
+
+Christophe: Le GC actuel doit bien recuperer le debut des streams quand
+      il ne sont plus utilises ! ou du moins je l'espere, sinon les
+      programmes que j'ecris vont s'ecrouler.
+
+Le GC de Caml Light n'est pas si inefficace que Chet le dit, surtout
+compare au reste de l'implementation, puisqu'il ne depasse jamais 10%
+du temps total d'execution. Des programmes qui sont de vrais memory
+pigs (au hasard: les Constructions) tournent sans surcharger le GC, ce
+qui n'est le cas ni en Caml V3.1, ni sans doute en SML-NJ.
+
+Pour les streams, faire "stream_next s", ou bien "stream_get s" puis
+abandonner s produit a peu pres la meme quantite de travail pour le
+GC. Le probleme avec stream_get et les listes paresseuses, c'est que
+les fuites de memoire sont beaucoup plus faciles a provoquer. Exemple:
+
+        let s = stream_of_channel(open_in "/tmp/foo");;
+        my_parser (my_lexer s);;
+
+Dans le cas des flux fonctionnels, le global s pointe au debut du flux
+pendant toute la suite du programme. my_lexer va parcourir le flux,
+amenant en memoire tous les caracteres du fichier. A la fin, s pointe
+vers la liste de tous les caracteres du fichier. Cette liste n'est pas
+recuperable, puisque les variables globales sont des racines du GC. Et
+en effet l'utilisateur peut tres bien acceder a s plus tard. Avec des
+flux mutables, on n'a pas ce probleme: les cellules de liste sont
+jetees au fur et a mesure qu'elles sont produites, c'est bien meilleur
+pour le GC.
+
+Ca n'est pas specifique au toplevel, d'ailleurs:
+
+        let compile_program filename =
+          let s = stream_of_channel(open_in filename) in
+          let tokens = my_lexer s in
+          let ast = my_parser tokens in
+          ...
+
+La aussi, "s" pointe sur la tete de la liste de tous les caracteres
+lus pendant toute la duree d'execution de compile_program. Ce qui
+signifie que cette liste ne peut pas etre recuperee par le GC pendant
+l'evaluation des ... alors que vraisemblablement on n'en a plus
+besoin. La liste ne peut etre recuperee qu'a la fin de
+"compile_program", c'est-a-dire trop tard. Ou alors, il faut faire
+tres attention au GC et ecrire autrement:
+
+        let compile_program filename =
+          let ast = my_parser(my_lexer(stream_of_channel(open_in filename))) in
+          ...
+
+La, y'a pas de fuite. Subtil, hein? Alors, bien sur, il y a des
+techniques de compilation qui evitent les fuites, par une analyse de
+duree de vie des variables bien sentie. Sauf que Caml Light 0.5 ne la
+fait pas (et meme SML-NJ, pas directement en tout cas, quoique le CPS
+donne un peu le meme resultat, oui mais leur mecanisme de closure
+hoisting reintroduit des fuites, et je me demande si...). Je sais
+faire, mais il faudra attendre Caml Light 1.0 (release prevue le 25
+mars 2004).
+
+> 	- L'utilisation des streams avec "stream_get" au lieu de "stream_next"
+> fait-elle notablement baisser les performances ?
+
+Mis a part les pb de fuites de memoire, je ne sais pas trop.
+stream_get est plus compliquee que stream_next, y'a qu'a regarder le
+source pour s'en rendre compte, mais bon, il faut bien reconnaitre que
+stream_next lui-meme n'est pas aussi rapide qu'on pourrait le souhaiter...
+
+> 	- Pour moi dans un langage fonctionnelle il doit y avoir des
+> manipulations physiques, etc ..... Mais les fonctions de bases tel que le
+> patterne matching devrait rester purement fonctionnelles.
+
+Mhoui, belle profession de foi (sauf que "pattern" s'ecrit sans "e"
+final, contrairement a "poterne"). J'en ai entendu pas mal, des comme
+ca. "Le pattern-matching devrait rester purement fonctionnel". "Le
+pattern-matching devrait etre en temps constant".  "Le if-then-else
+devrait etre equivalent a un pattern-matching". Etc, etc. A chaque
+fois, ca sonne bien, mais ces beaux preceptes partent d'a-priori
+toujours discutables. Pour "le pattern-matching devrait rester
+purement fonctionnel", l'a-priori est que le purement fonctionnel est
+plus simple, plus elementaire, plus ``de base'' que l'imperatif.
+Desole, mais c'est pas vrai. Pour "Le pattern-matching devrait etre en
+temps constant", ca suppose que le programmeur n'a pas en tete le
+modele operationnel du langage. Ca non plus, c'est pas vrai. Y'a plein
+de ``principes'' de ce genre qu'on peut remettre en cause.
+
+- Xavier
+
+
+

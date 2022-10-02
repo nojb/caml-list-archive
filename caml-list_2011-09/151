@@ -1,0 +1,87 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8I7R07h003729
+	for <caml-list@sympa-roc.inria.fr>; Sun, 18 Sep 2011 09:27:00 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlECAMGbdU7RVdQximdsb2JhbABCp1sIFAEBAQoJDQcSBiGBUwEBAQEDEgITGQEGFR4DDAYFCw0uIgERAQUBHAYTGwehEgqLQYJcK4M5O4htAgMGhnIEk0mNAj2DcA
+X-IronPort-AV: E=Sophos;i="4.68,400,1312149600"; 
+   d="scan'208";a="120267066"
+Received: from mail-vw0-f49.google.com ([209.85.212.49])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 18 Sep 2011 09:26:55 +0200
+Received: by vws8 with SMTP id 8so9114187vws.36
+        for <caml-list@inria.fr>; Sun, 18 Sep 2011 00:26:54 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:from:date:message-id:subject:to
+         :content-type;
+        bh=cDCMvxRvh30OzxVaGOAkuyXv8Lq9Z1ORWAXDD8DZukM=;
+        b=tFIzANwyLL15OE6asKxStxWtsjxUSbcwmYpKtk1KXilQp3U+RINfcpvj8xPVIHucKV
+         B+lNvnc5cMtSIx6ixzUrwiciodyfa7QmGYqaOgtAcHnHNpu9sPlcXe+YssWrD9BpBEKN
+         +njB1Qp3B2dPe0A34HycGPhV1UFQdPaT2x0fU=
+Received: by 10.52.96.169 with SMTP id dt9mr941869vdb.481.1316330814338; Sun,
+ 18 Sep 2011 00:26:54 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.52.165.10 with HTTP; Sun, 18 Sep 2011 00:26:32 -0700 (PDT)
+In-Reply-To: <87bouj2wxv.fsf@frosties.localnet>
+References: <87ty8uc5ph.fsf@frosties.localnet> <20110903103653.GX15100@localhost>
+ <CAOOOohT0v8zrEE6TbzL9RXn5_-A3KHBsZUT3aL+gZHCGsYuWEQ@mail.gmail.com>
+ <20110903114625.GA15100@localhost> <CAPFanBFbX-D_hb0SqXS7-g3cG9RVe6-W3MzEs_FvfwqRhX54aA@mail.gmail.com>
+ <87bouj2wxv.fsf@frosties.localnet>
+From: Gabriel Scherer <gabriel.scherer@gmail.com>
+Date: Sun, 18 Sep 2011 09:26:32 +0200
+Message-ID: <CAPFanBF2Vpb9=4UNOX4Y-vpb4imW5VvKDGuwZmbvxU0Yk9X3cQ@mail.gmail.com>
+To: caml users <caml-list@inria.fr>
+Content-Type: text/plain; charset=ISO-8859-1
+Subject: Re: [Caml-list] Odd failure to infer types
+
+On Sat, Sep 17, 2011 at 2:08 PM, Goswin von Brederlow <goswin-v-b@web.de> wrote:
+> I think you are missing the point.
+>
+> I totaly get why it must be '_a instead if 'a. My question is why it
+> doesn't infer the full type from the call to the print function.
+
+You're correct, I was missing your point. You have the following situation:
+
+ let num_states =
+  List.fold_left
+    (fun num (sol, board) ->
+      let d = D.get_all sol in
+      let state = ([], sol, board)
+      in
+      Hashtbl.add cache board ();
+      states.(d) <- state::states.(d);
+      print state;
+      num + 1)
+    0
+    G.solutions
+
+with the following inferred types:
+ states: ('_a list * (char * int * int) array * string) list array
+ print: (int * int * dir) list * (char * int * int) array * string -> unit
+
+(Remark: the types given above are the result of calling
+"caml-types-show-type" in an Emacs buffer, after compiling the fail
+with -annot; we get partial type information even when the compilation
+fail)
+
+Why doesn't the type of "states" get inferred from the call to `print state`?
+The reason why is that `state`, contrarily to `states`, is
+polymorphic. It has type (caml-types...) 'b list * (char * int * int)
+array * string, because the empty list [] has polymorphic type.
+Therefore, it can be used in two different contexts with *different*
+types (instantiations) that don't get unified with each other
+ states.(d) <- state::states.(d);
+ print state;
+on the first line, the type 'b list of [] is instantiated to a fresh
+type then unified with the '_a list of states, and on the second line
+it is instantiated again, independently, and the resulting fresh type
+is unified with (int * int * dir) list.
+
+You can see that this is the problem by forcing the list to have a
+monomorphic type:
+ let mono_list = ref [] in
+ let state = (!mono_list, sol, board)
+With this (indeed unreadable) version, your whole code compiles fine.
+Another technique to do that would be:
+ print (List.hd states.(d));
+
+(I would still rather use a type annotation on the 'states' variable)

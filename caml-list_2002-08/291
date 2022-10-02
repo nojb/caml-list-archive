@@ -1,0 +1,110 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA26692; Fri, 16 Aug 2002 19:47:45 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA26691 for <caml-list@pauillac.inria.fr>; Fri, 16 Aug 2002 19:47:44 +0200 (MET DST)
+Received: from bastion.artisan.com (bastion.artisan.com [209.144.161.130])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g7GHlgj24613
+	for <caml-list@inria.fr>; Fri, 16 Aug 2002 19:47:42 +0200 (MET DST)
+Received: from ypmaster.artisan.com (ypmaster [172.16.2.1])
+	by bastion.artisan.com (8.9.2/8.9.2) with ESMTP id KAA07523;
+	Fri, 16 Aug 2002 10:47:38 -0700 (PDT)
+Received: from granite.artisan.com (granite [172.16.10.97])
+	by ypmaster.artisan.com (8.9.2/8.9.2-arti) with ESMTP id KAA10791;
+	Fri, 16 Aug 2002 10:47:38 -0700 (PDT)
+Received: (from bpr@localhost)
+	by granite.artisan.com (8.9.2/8.9.2) id KAA10319;
+	Fri, 16 Aug 2002 10:47:37 -0700 (PDT)
+X-Authentication-Warning: granite.artisan.com: bpr set sender to bpr@artisan.com using -f
+From: Brian Rogoff <bpr@artisan.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15709.15033.712541.461260@granite.artisan.com>
+Date: Fri, 16 Aug 2002 10:47:37 -0700
+To: caml-list@inria.fr
+Cc: skaller@ozemail.com.au
+Subject: Re: [Caml-list] sorting Hashtbl.t
+X-Mailer: VM 7.00 under Emacs 20.7.1
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Brian Rogoff writes:
+> John Max Skaller writes:
+> > > 	From an algorithmic point of view, there is no way to sort an
+> > > hash table since there is no order attached to items. 
+> [...snip extended Hashtbl interface ...]
+> > Of course I can write this
+> > function myself, it's just inconvenient to have to
+> > keep doing so.
+
+Sorry to follow up on my own message, but there is a way to do this kind of 
+extension exactly once with only a tiny bit of clunkiness that I had missed
+when I wrote the original flawed approach yesterday. So, I still disagree
+that we need to provide module interfaces for things like hash tables,
+though it's probably no harm to do so if lots of people agree that such
+functions do belong in a basic interface. Thanks for making me think about
+this! 
+
+First, we create an extra signature in either the .ml and .mli files or in 
+a third (.mli) file, like so 
+
+(* hashtbl_sig.mli *) 
+module type S = 
+  sig
+    type ('a, 'b) t = ('a, 'b) Hashtbl.t
+    val create : int -> ('a, 'b) t
+    val clear : ('a, 'b) t -> unit
+    val add : ('a, 'b) t -> 'a -> 'b -> unit
+    val copy : ('a, 'b) t -> ('a, 'b) t
+    val find : ('a, 'b) t -> 'a -> 'b
+    val find_all : ('a, 'b) t -> 'a -> 'b list
+    val mem : ('a, 'b) t -> 'a -> bool
+    val remove : ('a, 'b) t -> 'a -> unit
+    val replace : ('a, 'b) t -> 'a -> 'b -> unit
+    val iter : ('a -> 'b -> unit) -> ('a, 'b) t -> unit
+    val fold : ('a -> 'b -> 'c -> 'c) -> ('a, 'b) t -> 'c -> 'c
+  end
+
+this signature exists just to remove the offending Make from the include,
+and to create the type equality. The rest is easy 
+
+(* exthash.mli *)
+include Hashtbl_sig.S (* Remove the functorial interface *)
+    
+(* Module extension part *)
+val elements : ('a, 'b) t -> 'b list
+
+module type S = 
+  sig 
+    include Hashtbl.S 
+    val elements : 'a t -> 'a list
+  end
+
+module Make (H : Hashtbl.HashedType) : S with type key = H.t
+
+(* exthash.ml *)
+include (Hashtbl : Hashtbl_sig.S)
+
+let elements ht = 
+  let r = ref [] in 
+  (Hashtbl.iter (fun _ y -> r := y::(!r)) ht; !r)  
+
+module type S = 
+  sig 
+    include Hashtbl.S 
+    val elements : 'a t -> 'a list
+  end
+
+module Make (H : Hashtbl.HashedType) : S with type key = H.t = 
+  struct 
+    module Hashtbl =  Hashtbl.Make(H)
+    include Hashtbl
+    let elements ht = 
+      let r = ref [] in 
+      (Hashtbl.iter (fun _ y -> r := y::(!r)) ht; !r)  
+  end
+
+-- Brian
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

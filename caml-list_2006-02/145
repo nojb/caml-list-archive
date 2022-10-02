@@ -1,0 +1,158 @@
+Return-Path: <basile@starynkevitch.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id CB08ABB81
+	for <caml-list@yquem.inria.fr>; Thu, 16 Feb 2006 20:23:30 +0100 (CET)
+Received: from kraid.nerim.net (smtp-104-thursday.nerim.net [62.4.16.104])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k1GJNUIQ012306
+	for <caml-list@yquem.inria.fr>; Thu, 16 Feb 2006 20:23:30 +0100
+Received: from hector.lesours (bstarynk.net8.nerim.net [213.41.176.170])
+	by kraid.nerim.net (Postfix) with ESMTP id EAFC440E4D
+	for <caml-list@yquem.inria.fr>; Thu, 16 Feb 2006 20:23:28 +0100 (CET)
+Received: from basile by hector.lesours with local (Exim 4.60)
+	(envelope-from <basile@starynkevitch.net>)
+	id 1F9oiv-0001GI-QV
+	for caml-list@yquem.inria.fr; Thu, 16 Feb 2006 20:23:29 +0100
+Date: Thu, 16 Feb 2006 20:23:29 +0100
+To: caml-list@yquem.inria.fr
+Subject: lexing from a sub-string with an explicit position
+Message-ID: <20060216192329.GA4467@ours.starynkevitch.net>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-15
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+User-Agent: Mutt/1.5.11+cvs20060126
+From: Basile STARYNKEVITCH <basile@starynkevitch.net>
+X-Miltered: at nez-perce with ID 43F4D132.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; lexing:01 sub-string:01 basile:01 basile:01 syntax:01 chunks:01 chunks:01 foo:01 foo:01 syntax:01 semantics:01 letrec:01 grammar:01 parser:01 recursive:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+
+Dear All,
+
+
+I'm painfully coding a scriptable wiki (ie web users can interactively
+edit scripts running within the wiki in their browser; the edited wiki
+data may contain a mixture of document & script code) - the code (and
+the design) is already messy... 
+
+
+For example, the login web window is scripted as follow
+
+  let 
+
+    myloginfun(user,password) =
+      let loginstatus= login_user_failed(user,password) in
+        if loginstatus then
+  	   block [{
+  	     [para.big Failed login: [$loginstatus]]
+             }]
+        else
+  	   block [{ [para.big Welcome]  }]
+        end
+      end
+
+  in
+     
+
+  block [{
+
+     [para.huge Welcome [i here]]
+     [form
+        [title Please log in.]
+        [fitem your name or account] [formtext userv]
+        [fitem your password] [formpassword passwordv]
+        [formaction ["login"] [( myloginfun(user,password) )] ]
+     ]
+
+  }]
+
+  end
+
+In the above syntax, let, block, if, ... are scripting keywords.
+document chunks are strings bracketed by [{ }] following the block
+keyword. square brackets like [i here] (similar to html <i>here</i>)
+are wiki markup.  document chunks also contain expressions bracketed
+in [( )] for describing the actions executed in forms. [$foo] is the
+variable foo expanded as a displayed string (actually a marked-up wiki
+document subchunk).
+
+
+Given that wiki syntax should be rather contextual and flexible, and
+that the scripting language (basically with a Scheme like semantics
+-dynamic typing, 1st order functions, letrec, ... and a Pascalian
+syntax) is more rigid, I made the choice (probably a bad design...) to
+parse the Wiki syntax by handcrafted code and to parse the embedded
+script code using Menhir (BTW, thanks to Francois Pottier & Yan for
+their help). I was not able to code a menhir grammar with 2 modes, one
+for Wiki (flexible) and one for scripting.
+
+
+So my wiki parser (handcrafted recursive descent parser) calls the
+expression parser (menhir coded LR) which itself calls the wiki
+parser, etc... So I am copying substring quite often and maybe even
+backtracking (but parsing performance is not that important).
+
+For example, the menhir & ocamllex parser of scripting language copy
+the bracketed string [{ [para.big Welcome] }] and call the wiki
+descending parser (which, for expressions bracketed like [(
+myloginfun(user,password) )] will call the LR parser, etc...
+
+
+So I am copying a substring and calling a Lexing parser with a lexbuf
+etc. The problem is to keep positions accurately. Just using
+Lexing.from_string and then setting the lex_curr_p and lex_start_p
+fields manually do not work.
+
+
+the following do not work as I want. I want the string to be parsed
+and I want to give a position for it (remember, the string is
+extracted from some bigger stuff).
+
+let lexbuf_from_positioned_string lpos str =
+  let posr = ref 0 
+  and strlen = String.length str 
+  and strcopy = String.copy str in
+  let stread tostr tocnt = 
+    let oldposr = !posr in
+      if oldposr >= strlen then 0
+      else 
+	let rcnt = min tocnt (strlen - oldposr) in
+	  String.blit strcopy oldposr tostr 0 rcnt;
+	  posr := oldposr+rcnt;
+	  rcnt
+  in
+  let lxbu = Lexing.from_function stread in
+    lxbu.Lexing.lex_start_p <- lpos;
+    lxbu.Lexing.lex_curr_p <- lpos;
+    lxbu
+;;
+
+(* then called with *)
+
+let common_expression_string_parser?(startpos: Lexing.position option)  s =
+  let slen = String.length s in
+      let lexbuf = match startpos with None -> Lexing.from_string s 
+	| Some po -> lexbuf_from_positioned_string po s in
+	    Parser.main_expression  
+	      (Lexer.exprtoken) lexbuf 
+;;
+
+Any clues?
+
+
+Don't tell me I should not do that.... (I'm becomiong ashamed of doing it).
+
+
+Regards, and thanks for reading...
+
+-- 
+Basile STARYNKEVITCH         http://starynkevitch.net/Basile/ 
+email: basile<at>starynkevitch<dot>net 
+aliases: basile<at>tunes<dot>org = bstarynk<at>nerim<dot>net
+8, rue de la Faïencerie, 92340 Bourg La Reine, France
+

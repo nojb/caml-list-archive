@@ -1,0 +1,211 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id UAA16144 for caml-redistribution; Mon, 3 Jun 1996 20:40:28 +0200
+Received: (from remy@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id TAA15619; Mon, 3 Jun 1996 19:52:31 +0200
+Message-Id: <199606031752.TAA15619@pauillac.inria.fr>
+Subject: Re: ocaml, inheritance vs. subtyping?
+To: itz@rahul.net (Ian T Zimmerman)
+Date: Mon, 3 Jun 1996 19:52:31 +0200 (MET DST)
+Cc: caml-list@pauillac.inria.fr
+In-Reply-To: <199606012319.QAA00493@kronstadt.rahul.net> from "Ian T Zimmerman" at Jun 1, 96 04:19:02 pm
+From: Didier.Remy@inria.fr (Didier Remy)
+Reply-to: Didier.Remy@inria.fr
+Organization: INRIA, BP 105, F-78153 Le Chesnay Cedex
+Phone: (33) 1 3963 5317 -- Sec: (33) 1 3963 5684 -- Fax: (33) 1 3963 5330
+Web: http://pauillac.inria.fr/~remy
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Content-Length: 7287      
+Sender: weis
+Status: O
+
+
+> I am somewhat perplexed by the passage in the manual on virtual
+> methods (pp. 29-30).  Let's start with the first paragraph on p.30: it
+> says that int_comparable2 is not a subtype of int_comparable, even
+> though the former inherits from the latter!  Now for a person with an
+> experience in a non-functional OO language (C++ or Eiffel or Sather)
+
+> it seems _very strange_ that the subtype and inheritance (derivation)
+> relations aren't the same.  
+
+No, the two relations are not the same.  This is one of the main
+problem with object orientation: subtyping and subclassing should not
+be identified.  The are different notions.
+
+Inheritance is the ability to build a class from some older ones, and in
+particular to share its source and compiled code. The subclassing relation
+is defined between classes, and is purely syntactic. 
+
+On the opposite, the subtyping relation is defined between types, and the
+coercions are defined between values, usually objects.  The subtyping
+relation tells wether an object of some type can safely be considered as an
+object of another type.  This is a more semantic concept. 
+
+There is *no* relation between sub-classing and sub-typing as illustrated by
+the two following examples (You may read [1] for a longer discussion of
+this problem):
+
+Let first see an example of subclassing were subtyping fails:           ;;
+
+    class point x as self : 'mytype = 
+      val x = (x:int)
+      method getx = x
+      method equal (q:'mytype) = (self#getx = q#getx)
+    end;;
+
+    class color_point x c as self = 
+      inherit point x as super
+      val c = (c : string)
+      method getc = c
+      method equal q = super#equal q &&  (self#getc = q#getc)
+    end;;
+
+    let p = new point 1;;
+    let cp = new color_point 1 "color";;
+
+But,                                                                    ;;
+
+    (cp : color_point :> point);;
+
+complains with the error message:                                       
+
+    color_point is not a subtype of point
+
+Indeed, point is not a subtype of point_color. Otherwise, you could send the
+message equal to cp seen as a point and then pass it a point as argument, as
+in the following program:
+                                                                         ;;
+    (cp : color_point :> point)#equal p;;
+
+where the execution of method equal of cp would attempt to access the c
+field of the point p.
+
+Conversely, you can easily define two classes that are not in a subclass
+relation, while the types of objets of those classes are always
+in a subtype relation: For example, define
+                                                                        ;;
+    class very_efficient_point x as self : 'mytype = 
+      val x = string_of_int x
+      method getx = int_of_string x
+      method equal (q:'mytype) = (self#getx = q#getx)
+    end;;
+
+    let q = new very_efficient_point 1;;
+
+Then the two classes point and very_efficient_point are unrelated. 
+However, objects of those classes always have the very same type, and 
+a fortiori have types in a subtype relation! Indeed, you can safely test
+them for equality:
+
+     p # equal q;;
+
+> It even seems that not having such an
+> overlap defeats the purpose of having OO features in the first place.
+
+I would rather say that identifying the two notions fools the user.  In the
+past, the identification of the two notions resulted in big holes in some
+type systems of languages that were widely used (in the industry), generally by
+accepting the above incorrect example.
+
+More recently, other languages choose to weaken their type system, thus
+forcing the user touse dynamic type cases (i.e. allowing a runtime failure)
+on examples that can be statically typed in O'caml.
+
+> How is the programmer to predict where a subtype relation actually
+> exists?
+
+The subtyping relation in ocaml is quite standard [2]. 
+A simple and efficient algorithm can be found in [3]. 
+
+> Now the manual goes on to say that this occurs because `the self type
+> appears in contravariant position in the type of method leq'.  First,
+> am I right in decoding this as `the types of the argument of
+> int_comparable#leq and int_comparable2#leq are in covariant relation,
+> but they would have to be in contravariant relation for a subtyping
+> relation to exist between int_comparable and int_comparable2'?
+
+You should rather read:
+
+In order for the type of int_comparable2 to be a subtype of int_comparable,
+
+    1/ int_comparable2#leq must be a subtype of int_comparable#leq, i.e. 
+    (int_comparable2 -> bool) must be a subtype of (int_comparable -> bool)
+
+    2/ by contra-variant propagation on the left side of the arrow, 
+    int_comparable must be a subtype of int_comparable2
+
+    3/ since set_x is a method of int_comparable2, 
+    set_x must be a method of int_comparable
+
+    4/ which is not the case.
+    
+Therefore, int_comparable2 is not a subtype of int_comparable. 
+
+
+> Second, and this may be the heart of the issue, _WHY_ is type 'a ->
+> bool inferred for leq, and not < x: unit -> int; .. > -> bool , as
+> it surely would for a global function?
+
+the type 'a -> bool was not inferred. It was a constraint put in the source
+code:
+
+        #class virtual comparable () : 'a =
+        #  virtual leq : 'a -> bool
+        #end;;
+        class virtual comparable (unit) : 'a =
+          virtual leq : 'a -> bool
+        end
+
+In this particular case, if you define, as you suggest:
+                                                                        ;;
+    class virtual 'a comparable () =
+      constraint 'a = < x : int; .. > 
+      virtual leq : 'a -> bool
+    end;;
+
+and leave int_comparable and int_comprable2 classes unchanged, then 
+int_comparable2 would be a subtype of int_comparable. 
+
+> that the OO features need more explanation in the manual, though.
+
+Presently, the chapter on objects in the "Introduction in Objective Caml"
+part of the manual is more a safety kit than an extended course on
+objects. Still, it will probably be extended in a future release.
+
+    -Didier.
+
+[1] @incollection  (
+  author       =   "William R. Cook and Walter L. Hill and Peter S. Canning",
+  title        =   "Inheritance is not Subtyping",
+  booktitle =    "Theoretical Aspects Of Object-Oriented Programming. 
+                  Types, Semantics and Language Design",
+  publisher =    "MIT Press",
+  year =         1993,
+  editor =    "Carl A. Gunter and John C. Mitchell")
+
+
+[2] @inproceedings   (
+author       =   "Roberto M. Amadio and Luca Cardelli",
+title        =   "Subtyping Recursive Types",
+booktitle    =   "Proceedings of the Eighteenth ACM Symposium on
+                  Principles of Programming Languages", 
+address      =   "Orlando, FL",
+month        =   "January",
+year         =   "1991",
+pages        =   "104--118",
+note         =   "Also available as DEC Systems Research Center
+                  Research Report number 62, August 1990.  
+                  To appear in TOPLAS")
+
+[3] 
+@inproceedings{Kozen-Palsberg/efficient-recursive-subtyping,
+        author =        "Dexter Kozen and Jens Palsberg",
+        title =         "Efficient Recursive Subtyping",
+        booktitle =     "Proc. 20th symp. Principles of Programming Languages",
+        year =          "1993",
+        pages =         "419--428",
+        publisher =     "ACM press"}
+
+
+
+

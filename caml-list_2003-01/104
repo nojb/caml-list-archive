@@ -1,0 +1,86 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA19400; Tue, 14 Jan 2003 12:17:38 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA19418 for <caml-list@pauillac.inria.fr>; Tue, 14 Jan 2003 12:17:37 +0100 (MET)
+Received: from grisu.bik-gmbh.de (grisu.bik-gmbh.de [217.110.154.194])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h0EBHa506868
+	for <caml-list@inria.fr>; Tue, 14 Jan 2003 12:17:36 +0100 (MET)
+Received: from bik-gmbh.de (prony.bik-gmbh.de [194.233.237.133])
+	by grisu.bik-gmbh.de (8.12.3/8.12.3) with ESMTP id h0EBHUU8076307;
+	Tue, 14 Jan 2003 12:17:34 +0100 (CET)
+	(envelope-from hars@bik-gmbh.de)
+Message-ID: <3E23F1C0.2000604@bik-gmbh.de>
+Date: Tue, 14 Jan 2003 12:17:20 +0100
+From: Florian Hars <hars@bik-gmbh.de>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; de-AT; rv:1.1) Gecko/20020826
+X-Accept-Language: de-de, en-us, en
+MIME-Version: 1.0
+To: Nicolas Cannasse <warplayer@free.fr>
+CC: Hal Daume III <hdaume@ISI.EDU>, Caml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] unboxing of unary datatypes
+References: <Pine.GSO.4.21.0301131605250.27265-100000@moussor.isi.edu> <001301c2bb7e$5e119840$41da0e50@warp>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Nicolas Cannasse wrote:
+>>Can someone explain this to me?  Why doesn't the compiler optimize out the
+>>constructor?
+> Because they don't have the same C raw representation.
+> There is one more indirection when you use a constructor.
+
+No, I think he sees something different here: The compiler does in fact 
+optimize out the constructor and then operates directly on the value (which, in 
+this case, is a boxed float). But it does not perform the special float 
+optimizations it does on values of the types float, float array and
+records like { x: float; y: float; ... (* All fields are floats *)} (but not on 
+tupels and sum types containing floats).
+
+(Maybe something like the last part of 
+http://caml.inria.fr/archives/200105/msg00174.html should be added to the 
+efficiency part of the expert FAQ).
+
+You can see the difference if you compile
+
+type foo = Foo of float
+
+let addpair x y = match x, y with
+   (a,_), (b, _) -> a +. b
+
+let addfoo  x y = match x, y with
+   Foo x', Foo y' -> x' +. y'
+
+let add x y = match x, y with
+   x', y' -> x' +. y'
+
+with ocamlc -dinstr -c foo.ml: The code for addfoo is exactly the same as the 
+code for addpair and does not check any contructors, but accesses the values 
+with getfield without checking their types or any constructors again (the 
+compiler knows they are floats):
+
+L2:     grab 1
+         acc 1
+         getfield 0
+         push
+         acc 1
+         getfield 0
+         ccall add_float, 2
+         return 2
+
+add, on the other hand, is treated specially by the float optimizer and gets 
+away without the unboxig getfield calls:
+
+L1:     grab 1
+         acc 1
+         push
+         acc 1
+         ccall add_float, 2
+         return 2
+
+Yours, Florian Hars.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,122 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id C71A5FD87
+	for <caml-list@yquem.inria.fr>; Thu, 31 Aug 2006 03:12:13 +0200 (CEST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k7V1CBpa018103
+	for <caml-list@inria.fr>; Thu, 31 Aug 2006 03:12:13 +0200
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.7/8.13.7) with ESMTP id k7V1BqIR027853;
+	Thu, 31 Aug 2006 10:11:52 +0900 (JST)
+Date: Thu, 31 Aug 2006 10:11:46 +0900 (JST)
+Message-Id: <20060831.101146.29126305.garrigue@math.nagoya-u.ac.jp>
+To: kremenek@cs.stanford.edu
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Class/prototype-based OO
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <E1E927D0-2415-4F81-9F1E-18DAC01A1BC1@cs.stanford.edu>
+References: <53c655920608250051x48d81cbagabf8039f0269beee@mail.gmail.com>
+	<1156505490.20759.354.camel@rosella.wigram>
+	<E1E927D0-2415-4F81-9F1E-18DAC01A1BC1@cs.stanford.edu>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 44F6376B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 ocaml:01 lacks:01 downcasts:01 run-time:01 rtti:01 run-time:01 downcasts:01 rtti:01 superclass:01 downcasting:01 structurally:01 abstraction:01 subtyping:01 abstraction:01 
+
+From: Ted Kremenek <kremenek@cs.stanford.edu>
+
+> While the structural typing in Ocaml is wonderful (I really love it),  
+> there are missing features of the OO system in OCaml that can be  
+> particularly bothersome, and are worth considering when comparing the  
+> OO features of Ocaml with other languages (including those that use  
+> nominal typing).
+> 
+> For example, from what I can tell it appears that Ocaml lacks real  
+> support for "downcasts" in the language, which require run-time type  
+> information (RTTI) and run-time checks.  In the context of structural  
+> typing, I am talking about "casting" an object with a type with a  
+> given set of method signatures to another type with an extended set  
+> of method signatures.  Whether or not you agree downcasts are a good  
+> thing, it is one thing to take into account when comparing the OO  
+> features of different languages (and this is a feature that both C++  
+> and Java have that OCaml does not).  In general, I don't believe the  
+> OO system in Ocaml supports any kind of RTTI, which enables features  
+> such as downcasts and reflection.  All of the type checking of  
+> objects in OCaml is static, which is very nice but often insufficient.
+
+The question of downcasts in ocaml is a recurring one.
+There is indeed no way to downcast an object to an arbitrary
+superclass of its dynamic class.
+But a major question here is whether we want to be able to do that or
+not, particularly in a structural type system.
+"Universal" downcasting would mean that you would be able to revert
+any ocaml object to its original object type, as long as you know
+this type (structurally). This clearly breaks almost any form of
+abstraction. So this means that programs that currently guarantee,
+through the use of subtyping or private row types, that some methods
+of an object are not visible, could be easily broken.
+This is a rather philosophical problem. Do we really need abstraction
+to be unbreakable? From a theoretical point of view yes, while
+practicians do not always agree.
+Another problem with "universal" downcast is that it would be
+extremely costly. Checking subtyping with structural types is a rather
+heavy weight algorithm, which can takes several seconds in some
+cases. It looks a bit like trying to break encryption while running a
+program...
+
+For the above reasons I think that "universal" downcast in ocaml is
+not a good idea. 
+
+Now, one might want some weaker, explicit form of allowing downcasts.
+Actually some proposal was done already in the last century:
+http://groups.google.com/group/fa.caml/browse_thread/thread/48fc2b87effc1097/e3ef9dab723b7c52
+Basically, it allowed to declare a posteriori a downcasting
+hierarchy, giving subtyping relations between classes, that was
+checked by the type-checker. One could then downcast objects of a
+certain class (each object already contains a pointer to its class, so
+this can be checked at untime) to any type declared as supertype.
+The idea was not bad, and it does not completely break abstraction: if
+you do not have a class declaration in your scope, you cannot add it
+to the downcasting hierarchy. But there are hard to overcome
+limitations:
+* only monormophic classes can be added to the hierarchy
+  (not polymorphic ones or immediate objects)
+* it is easy to forget to add a subclass to the hierarchy, and then
+  there is no way to downcast it, even to one of its superclasses
+  appearing in the hierarchy
+
+One could think of other approaches, but I'm not sure there is a
+canonical one to add to the language, that would make everybody
+happy.
+
+On the other hand, there are various ways to simulate downcasting.
+My favorite one is already described in the above thread: keep objects
+you may want to downcast in an hash table.
+
+  let memorize o table = Hashtbl.add table (o :> < >) o
+  val memorize : (< .. > as 'a) -> (<  >, 'a) Hashtbl.t -> unit = <fun>
+
+Now, you just need to keep one hash table for each target supertype,
+and can then downcast any object in this hash table to this supertype.
+Using object identity is a bit less efficient than using the class
+pointer, but it partially solves the problem of polymorphic classes
+and immediate objects: any subtype of a given type can be added to the
+table, even if it is not from a monomorphic class.
+Note that using a normal approach causes a memory leak, but using a
+weak hash table solves that problem. See Remy Vanicat's Weak_memo for
+that:
+http://remi.vanicat.free.fr/ocaml/hweak/
+
+Since this approach does not modify the compiler, or use any unsafe
+feature, it does not break abstraction in any way.
+
+Independently of downcasting, RTTI would also be needed for providing
+more information in the debugger. But there seems not to be much
+demand for that.
+
+Jacques Garrigue
+

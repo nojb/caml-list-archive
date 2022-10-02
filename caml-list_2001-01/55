@@ -1,0 +1,204 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA03474 for caml-red; Sun, 7 Jan 2001 21:16:11 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA23229 for <caml-list@pauillac.inria.fr>; Sun, 7 Jan 2001 01:20:49 +0100 (MET)
+Received: from nef.ens.fr (nef.ens.fr [129.199.96.32])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f070KhP21429
+	for <caml-list@inria.fr>; Sun, 7 Jan 2001 01:20:44 +0100 (MET)
+Received: from clipper.ens.fr (clipper-gw.ens.fr [129.199.1.22])
+          by nef.ens.fr (8.10.1/1.01.28121999) with ESMTP id f070KhM29915
+          for <caml-list@inria.fr>; Sun, 7 Jan 2001 01:20:43 +0100 (CET)
+Received: from localhost (frisch@localhost) by clipper.ens.fr (8.9.2/jb-1.1)
+	id BAA23136 for <caml-list@inria.fr>; Sun, 7 Jan 2001 01:20:42 +0100 (MET)
+Date: Sun, 7 Jan 2001 01:20:42 +0100 (MET)
+From: Alain Frisch <frisch@clipper.ens.fr>
+To: Caml list <caml-list@inria.fr>
+Subject: first class modules (was: alternative module systems)
+Message-ID: <Pine.GSO.4.04.10101070012560.18239-100000@clipper.ens.fr>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=ISO-8859-1
+Content-Transfer-Encoding: 8BIT
+Sender: weis@pauillac.inria.fr
+
+Hello,
+
+a few month ago, Markus Mottl pointed to this mailing list the work by
+Claudio Russo on first class modules. There were no answer about plans to
+implement such a system for OCaml.
+
+I also have the feeling that there should be no problem to implement first
+class "packaged" modules à la Russo for OCaml. The idea is to keep the
+core and module langages distinct but provide bridges between them.
+The type algebra is enriched with the syntax  < S >  where S is a module
+type.
+
+(pack (m:S))  is a core expression of core type < S > when m is a module
+of module type S.
+
+(open a1 as X : S in a2)  has the natural meaning; a1 must have type 
+< S >, X is bound in a2 to the module packaged by a1.
+
+
+As I see it, the main issue is the unification problem < S > = < T >. I
+implemented as a quick and dirty hack such a system, where < S > and < T
+> unify if and only if S and T represent syntactically the same path. It
+is the simpliest solution, but it is general enough (by defining named
+module types and putting some explicit coercions). It should be possible
+to check that S and T are structurally compatible.
+
+
+Here is the classical example of arrays of size 2^n:
+========================================================================
+module type ARRAY = sig
+  type 'a array
+  val init: 'a -> 'a array
+  val sub: 'a array -> int -> 'a
+  val update : 'a array -> int -> 'a -> 'a array
+end
+
+module ArrayZero = struct
+  type 'a array = 'a
+  let init x = x
+  let sub a i = a
+  let update a i x = x
+end
+
+module ArraySucc (A:ARRAY) = struct
+  type 'a array = 'a A.array * 'a A.array
+  let init x = 
+    (A.init x, A.init x)
+  let sub (l,r) i = 
+    if i mod 2 = 0 then A.sub l (i/2) else A.sub r (i/2)
+  let update (l,r) i x = 
+    if i mod 2 = 0 then (A.update l (i/2) x, r) else (l, A.update r (i/2)
+x)
+end
+
+let rec array = function
+  | 0 -> pack (ArrayZero:ARRAY)
+  | n -> open array (n-1) as A : ARRAY in pack (ArraySucc(A):ARRAY)
+========================================================================
+
+The last definition yields as expected:
+val array : int ->  < ARRAY > 
+
+It couldn't be expressed without the extension.
+
+Now:
+======
+let _ =
+  open (array 2) as A:ARRAY in
+  let a = A.init "hello" in
+  let a = A.update a 1 " " in
+  let a = A.update a 2 "world" in
+  let a = A.update a 3 " !\n" in
+  for i = 0 to 3 do print_string (A.sub a i) done
+======
+builds a module of "array of size 4=2^2" and use it.
+
+Naturally, a type that makes reference to a module value can't escape
+the scope where this module is visible:
+======
+# open (array 3) as A:ARRAY in A.init 5;;
+This `let module' expression has type int A.array
+In this type, the locally bound module name A escapes its scope
+======
+(in the first line of the error message, `let module' should read `open...')
+
+
+Everything seems to work as expected for higher order modules:
+=====================================
+module type S = sig type t  val x:t  val y:t  val print:t->unit end
+module type T = sig type u  val a:u end
+module type F = functor (X:S) -> T with type u = X.t
+
+module TAKE_x(X:S): T with type u = X.t = struct type u = X.t let a = X.x end
+module TAKE_y(X:S): T with type u = X.t = struct type u = X.t let a = X.y end
+
+module A = struct type t = int let x = 1 and y = 2 and print = print_int  end
+module B = struct type t = string let x= "A" and y = "B" and print = print_string end
+
+let take_x = pack (TAKE_x : F)
+let take_y = pack (TAKE_y : F)
+
+let apply f m =
+  open f as TAKE : F in
+  open m as X : S in
+  let module Y = TAKE(X) in
+  X.print Y.a
+
+let _ =
+  apply take_x (pack (A:S));
+  apply take_y (pack (A:S)); print_newline ();
+  apply take_x (pack (B:S));
+  apply take_y (pack (B:S)); print_newline ();
+=====================================
+
+Interesting types are:
+val take_x :  < F > 
+val take_y :  < F > 
+val apply :  < F >  ->  < S >  -> unit
+
+
+and the execution gives of course:
+12
+AB
+
+(as a side effect, we get the local "open ... in ...")
+
+
+Almost everything is already there in OCaml to implement easily this
+system. Basically, with trivial extensions of ast, typed ast and type
+expressions, for the typing, this gives something like:
+(typing/typecore.ml, function type_exp):
+....
+  | Pexp_pack m ->
+      let modl = !type_module env m in
+      let ty = newty (Tpackage modl.mod_type) in
+      { exp_desc = Texp_pack(modl);
+        exp_loc = sexp.pexp_loc;
+        exp_type = ty;
+        exp_env = env }
+
+  | Pexp_unpack (e1, name, mty, sbody) ->
+      let ty = newvar() in
+      Ident.set_current_time ty.level;
+      let mty = !transl_modtype env mty in
+      let arg  = type_expect env e1 (newty (Tpackage mty)) in
+      let (id, new_env) = Env.enter_module name mty env in
+      Ctype.init_def(Ident.current_time());
+      let body = type_exp new_env sbody in
+      begin try
+        Ctype.unify new_env body.exp_type ty
+      with Unify _ ->
+        raise(Error(sexp.pexp_loc, Scoping_let_module(name, body.exp_type)))
+      end;
+      { exp_desc = Texp_unpack(arg, id, mty, body);
+        exp_loc = sexp.pexp_loc;
+        exp_type = ty;
+        exp_env = env }
+
+
+for the conversion to lambda-code:
+(bytecomp/translcore.ml, function transl_exp)
+...
+  | Texp_pack modl ->
+      !transl_module Tcoerce_none None modl
+  | Texp_unpack  (arg,id,mty,body) ->
+      Llet(Strict, id, transl_exp arg, transl_exp body)
+
+and something very stupid in typing/ctype.ml for the unification:
+    | (Tpackage  (Tmty_ident p1), Tpackage (Tmty_ident p2)) when Path.same
+p1 p2 ->
+        update_level env t1.level t2;
+        t1.desc <- Tlink t2
+
+I may have overlooked some important consequences on the type safety
+properties.
+
+Is there any theoretical work about the integration of such a system to
+the OCaml module system ?  Any plan to include it in a future release ?
+
+
+-- 
+  Alain Frisch
+
+

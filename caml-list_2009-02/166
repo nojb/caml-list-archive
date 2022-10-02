@@ -1,0 +1,154 @@
+Return-Path: <ematsen@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: **
+X-Spam-Status: No, score=2.1 required=5.0 tests=AWL,DNS_FROM_RFC_POST,
+	SPF_NEUTRAL autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id B60A9BBC4;
+	Fri, 20 Feb 2009 20:53:47 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArMBALGYnklA6ba6kGdsb2JhbACUGT8BAQEBCQkMBxEDr3MxhluIRQEDAQOEDAaESQ
+X-IronPort-AV: E=Sophos;i="4.38,242,1233529200"; 
+   d="scan'208";a="24453247"
+Received: from nf-out-0910.google.com ([64.233.182.186])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 20 Feb 2009 20:53:47 +0100
+Received: by nf-out-0910.google.com with SMTP id e27so179664nfd.7
+        for <multiple recipients>; Fri, 20 Feb 2009 11:53:46 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:sender:received:in-reply-to
+         :references:date:x-google-sender-auth:message-id:subject:from:to:cc
+         :content-type:content-transfer-encoding;
+        bh=hrzb20vjpq7iHsMgyl0uJ21CzurYsIxsrtwtHxMoN7A=;
+        b=Vw5ixog7irvJSsChH5D8huMSceLbuFT2JanKJcmKHYhqPk3SJx4x3GzdFo1GUPysKJ
+         f64rr4V7KZ/I7KJlfRUhvRr63s+pcTqHzTwzwwbTCpFgetIdsO5CRZmHFOzisdcUVA4i
+         LpwJ0v9tgHQInHbnBd4PDxJwnMFVWiw/RVbLs=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:sender:in-reply-to:references:date
+         :x-google-sender-auth:message-id:subject:from:to:cc:content-type
+         :content-transfer-encoding;
+        b=m762+E57u1smPp7O8qp+Y6CFJsZtyvqcJXhMz0BgdtOG/kUOAJVXi7LE5Kgfp3FN4U
+         Efimdm0L8M4FLtd0VGMw/YbBI0QZ1HTCIVwiqS1ayjZ3+5gmOBAoXXlIM9eUuc+oZ53g
+         Jy8/vValOZT88d1xHfsMQmyHCxkgOx7cof+ds=
+MIME-Version: 1.0
+Sender: ematsen@gmail.com
+Received: by 10.210.119.16 with SMTP id r16mr894964ebc.118.1235159626701; Fri, 
+	20 Feb 2009 11:53:46 -0800 (PST)
+In-Reply-To: <499EFA7E.7010400@inria.fr>
+References: <243054520902200740j1d1874adib27645f6e090b073@mail.gmail.com>
+	 <499EFA7E.7010400@inria.fr>
+Date: Fri, 20 Feb 2009 11:53:46 -0800
+X-Google-Sender-Auth: 625abd8ca753559e
+Message-ID: <243054520902201153q4efbe1f0j686bd7212b515c03@mail.gmail.com>
+Subject: Re: [Caml-list] speeding up matrix multiplication (newbie question)
+From: Erick Matsen <matsen@berkeley.edu>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; model:01 matrices:01 model:01 multiplying:01 vectors:01 matrices:01 node:01 vectors:01 nodes:01 failwith:01 multiplying:01 genericity:01 ocaml:01 ocaml:01 arrays:01 
+
+Wow, once again I am amazed by the vitality of this list. Thank you
+for your suggestions.
+
+Here is the context: we are interested in calculating the likelihood
+of taxonomic placement of short "metagenomics" sequence fragments from
+unknown organisms in the ocean. We start by assuming a model of
+sequence evolution, which is a reversible Markov chain. The taxonomy
+is represented as a tree, and the sequence information is a collection
+of likelihoods of sequence identities. As we move up the tree, these
+sequences "evolve" by getting multiplied by the exponentiated
+instantaneous Markov matrix.
+
+The matrices are of the size of the sequence model: 4x4 when looking
+at nucleotides, and 20x20 when looking at proteins.
+
+The bottleneck is (I mis-spoke before) that we are multiplying many
+length-4 or length-20 vectors by a collection of matrices which
+represent the time evolution of those sequences as follows.
+
+Outer loop:
+  modify the amount of time each markov process runs
+  exponentiate the rate matrices to get transition matrices
+
+  Recur over the tree, starting at the leaves:
+    at a node, multiply all of the daughter likelihood vectors together
+    return the multiplication of that product by the trasition matrix
+(bottleneck!)
+
+The trees are on the order of 50 leaves, and there are about 500
+likelihood vectors done at once.
+
+All of this gets run on a big cluster of Xeons. It's not worth
+parallelizing because we are running many instances of this process
+already, which fills up the cluster nodes.
+
+So far I have been doing the simplest thing possible, which is just to
+multiply the matrices out like \sum_j a_ij v_j. Um, this is a bit
+embarassing.
+
+let mul_vec m v =
+    if Array.length v <> n_cols m then
+      failwith "mul_vec: matrix size and vector size don't match!";
+    let result = Array.create (n_rows m) N.zero in
+    for i=0 to (n_rows m)-1 do
+      for j=0 to (n_cols m)-1 do
+	result.(i) <- N.add result.(i) (N.mul (get m i j) v.(j))
+      done;
+    done;
+    result
+
+I have implemented it in a functorial way for flexibility. N is the
+number class. How much improvement might I hope for if I make a
+dedicated float vector multiplication function? I'm sorry, I know
+nothing about "boxing." Where can I read about that?
+
+
+Thank you again,
+
+Erick
+
+
+
+On Fri, Feb 20, 2009 at 10:46 AM, Xavier Leroy <Xavier.Leroy@inria.fr> wrote:
+>> I'm working on speeding up some code, and I wanted to check with
+>> someone before implementation.
+>>
+>> As you can see below, the code primarily spends its time multiplying
+>> relatively small matrices. Precision is of course important but not
+>> an incredibly crucial issue, as the most important thing is relative
+>> comparison between things which *should* be pretty different.
+>
+> You need to post your matrix multiplication code so that the regulars
+> on this list can tear it to pieces :-)
+>
+> From the profile you gave, it looks like you parameterized your matrix
+> multiplication code over the + and * operations over matrix elements.
+> This is good for genericity but not so good for performance, as it
+> will result in more boxing (heap allocation) of floating-point values.
+> The first thing you should try is write a version of matrix
+> multiplication that is specialized for type "float".
+>
+> Then, there are several ways to write the textbook matrix
+> multiplication algorithm, some of which perform less boxing than
+> others.  Again, post your code and we'll let you know.
+>
+>> Currently I'm just using native (double-precision) ocaml floats and
+>> the native ocaml arrays for a first pass on the problem.  Now I'm
+>> thinking about moving to using float32 bigarrays, and I'm hoping
+>> that the code will double in speed. I'd like to know: is that
+>> realistic? Any other suggestions?
+>
+> It won't double in speed: arithmetic operations will take exactly the
+> same time in single or double precision.  What single-precision
+> bigarrays buy you is halving the memory footprint of your matrices.
+> That could result in better cache behavior and therefore slightly
+> better speed, but it depends very much on the sizes and number of your
+> matrices.
+>
+> - Xavier Leroy
+>
+

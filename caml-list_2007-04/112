@@ -1,0 +1,149 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 7BEC4BC0A
+	for <caml-list@yquem.inria.fr>; Fri,  6 Apr 2007 07:52:47 +0200 (CEST)
+Received: from ipmail02.adl2.internode.on.net (ipmail02.adl2.internode.on.net [203.16.214.141])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l365qjV8028035
+	for <caml-list@inria.fr>; Fri, 6 Apr 2007 07:52:46 +0200
+X-IronPort-AV: E=Sophos;i="4.14,381,1170595800"; 
+   d="scan'208";a="107018836"
+Received: from ppp36-111.lns2.syd6.internode.on.net (HELO [192.168.1.201]) ([59.167.36.111])
+  by ipmail02.adl2.internode.on.net with ESMTP; 06 Apr 2007 15:22:40 +0930
+Subject: Re: [Caml-list] Matching start of input in lexer created with
+	ocamllex
+From: skaller <skaller@users.sourceforge.net>
+To: Janne Hellsten <jjhellst@gmail.com>
+Cc: caml-list@inria.fr
+In-Reply-To: <700d600f0704051358g294d540ey96a546f7f57a08e7@mail.gmail.com>
+References: <700d600f0704050737r3ea45a16gb318ac7acf8e3178@mail.gmail.com>
+	 <1175802901.5274.14.camel@rosella.wigram>
+	 <700d600f0704051358g294d540ey96a546f7f57a08e7@mail.gmail.com>
+Content-Type: text/plain
+Date: Fri, 06 Apr 2007 15:52:35 +1000
+Message-Id: <1175838755.6045.90.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.8.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4615E02D.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; lexer:01 ocamllex:01 lexer:01 lexbuf:01 lexbuf:01 lexing:01 parser:01 tokens:01 ocamlyacc:01 rewriting:01 eol:01 fixup:01 tokens:01 fixup:01 eol:01 
+
+On Thu, 2007-04-05 at 23:58 +0300, Janne Hellsten wrote:
+
+> I do have the latter construct in my lexer.  How does the above help
+> me match the beginning of line in the rule
+
+Ok, sorry .. lets try this:
+
+rule headlex = 
+| "!for" nonalpha { Some FOR }
+| { None }
+
+rule taillex = ...
+
+and now use 
+
+let make_lexer () =
+  let atstart  = ref true in
+  fun lexer ->
+    if !atstart then begin
+      atstart := false
+      match headlex lexbuf with
+      | None -> 
+         lexbuf.curr_pos <- lexbuf.curr_pos -1;
+         taillex lexbuf
+      | Some FOR -> FOR
+    end else taillex lexbuf
+
+let lexer = make_lexer () in
+
+This is an animal, because you have to 'pushback' an
+unwanted character following the "for" keyword.
+This will cease working if the implementation of lexbuf
+changes, in particular if the record is made private.
+
+I may also have got the details on this wrong .. it's
+an undocumented feature, you'll need to read lexing.ml
+to figure out if it works.
+
+The problem I'm trying to solve here is that you want 
+
+	rulename lexbuf
+
+to return a single correct token. This is a requirement
+of the parser.
+
+In Felix I don't bother with that. Instead, I just return
+a pre-token, I gather the whole input as a list, and then
+I write filters that translate the list of pre-tokens into
+tokens. Then I make a 'lexer' function that just returns
+the next token in the list already prepared, and uses
+a dummy lexbuf to satisfy the broken ocamlyacc interface.
+
+In other words, I control invert by returning a list and then
+actively rewriting it. For example I would do this,
+assuming you have multiple lines that can start with "for":
+
+let strip_white toks = filter (fun tok -> tok = WHITE) toks
+
+let append_eol toks = NEWLINE :: toks 
+
+let fixup_for toks =
+  let aux out inp = match inp with
+  | NEWLINE :: BANG :: IDENT "for" :: tail -> aux (FOR :: out) tail
+  | NEWLINE :: tail -> aux out tail
+  | head :: tail -> aux (head::out) tail
+  | [] -> rev out
+  in aux [] toks
+
+let tokens = fixup_for (append_eol (strip_white toks)) 
+
+The point is this process has arbitrary lookahead.
+
+The downside is you have to hold the whole input in memory.
+This is not going to be a problem unless it's the encoding
+of an exported database.
+
+The tagged automata underlying the lexer can probably be modified
+to allow forward context checks, eg to match stuff like:
+
+	"!for" / nonalpha
+
+where / denotes lookahead (but I'm not sure). I know TRE can
+do this, however ocamllex is using a prebuilt tagged 
+deterministic automaton, whereas TRE uses a lazily 
+constructed one.
+
+The technique basically matches
+
+ 	"!for" (TAG) nonalpha
+
+first, but sets the end location to the TAG position. I believe this
+might be possible because the automata ALREADY looks ahead and
+backtracks to the last success .. so we need to keep two 'success'
+points to do this, the real one and the lookahead one. Normally
+they're the same, but in this case they're not. The lexer engine
+uses the lookahead one until it is finished, but then fudges
+its result to the real one.
+
+The two pointers are needed because in general in
+
+	regexp1 / regexp2
+
+we have regexp2 'success' point to track. If you allow
+
+	regexp1 / (regexp2 / regexp3)
+
+you might need more pointers (not sure), so this would probably 
+have to be banned (not sure).
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

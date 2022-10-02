@@ -1,0 +1,176 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id IAA21972; Tue, 9 Sep 2003 08:45:40 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA04986 for <caml-list@pauillac.inria.fr>; Tue, 9 Sep 2003 08:45:38 +0200 (MET DST)
+Received: from postfix3-2.free.fr (postfix3-2.free.fr [213.228.0.169])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h896jcT22488
+	for <caml-list@inria.fr>; Tue, 9 Sep 2003 08:45:38 +0200 (MET DST)
+Received: from univ-savoie.fr (grenoble-1-62-147-73-192.dial.proxad.net [62.147.73.192])
+	by postfix3-2.free.fr (Postfix) with ESMTP id 66904C237
+	for <caml-list@inria.fr>; Tue,  9 Sep 2003 08:45:36 +0200 (CEST)
+Message-ID: <3F5D7629.7060901@univ-savoie.fr>
+Date: Tue, 09 Sep 2003 08:41:45 +0200
+From: Christophe Raffalli <christophe.raffalli@univ-savoie.fr>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:1.3.1) Gecko/20030428
+X-Accept-Language: en-us, en
+MIME-Version: 1.0
+Cc: caml-list@inria.fr
+Subject: [Caml-list] Bug ? + Mutable list in OCaml 3.07beta2... using type inference to
+ infer mutability
+References: <07510479.20030904212106@mail.ru>
+In-Reply-To: <07510479.20030904212106@mail.ru>
+X-Enigmail-Version: 0.73.1.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: multipart/signed; micalg=pgp-sha1;
+ protocol="application/pgp-signature";
+ boundary="------------enig6E78A2D4D12050320A73BAFF"
+Content-Transfer-Encoding: 8bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; raffalli:01 raffalli:01 univ-savoie:01 bug:01 3.07:01 inference:01 infer:01 mutability:01 openpgp:01 2440:01 3156:01 infer:01 inference:01 bug:01 3.07:01 
+X-Attachments: type="application/pgp-signature" 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This is an OpenPGP/MIME signed message (RFC 2440 and 3156)
+--------------enig6E78A2D4D12050320A73BAFF
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+
+
+Here is an implementation of mutable list where we use the typing of
+polymorphic variant (but no polymorphic variant) to infer if a program
+can mute a list !
+
+And even better, you can program the tail_rec version of map using
+set_cdr and have the type inference telling you that it does not mute
+its argument ... but I think this is a bug ? (if it is not, how to get 
+the same type for append ?)
+
+All that using existing ocaml-3.07beta2 (fails with 3.06)
+
+-- interface file mutable_list.mli --
+
+type ('a, 'b) mlist = Nil | Cons of 'a * ('a, 'b) mlist
+
+(*
+   The first argument is the type of the element in the list
+   The second argument contains information about mutability:
+
+   A function of type ('a, [> `MuteCdr] as 'b) mlist -> ...
+   may mute the cdr of its argument
+
+   A function of type ('a, [> `MuteCar] as 'b) mlist -> ...
+   may mute the car of its argument
+*)
+
+val set_cdr : ('a, [> `MuteCdr] as 'b) mlist -> ('a, 'b) mlist -> unit
+
+val set_car : ('a, [> `MuteCar]) mlist -> 'a -> unit
+
+val map : ('a -> 'b) -> ('a, 'c) mlist -> ('b, 'd) mlist
+(* very fun: map is tail recursive, using set_cdr in its implementation
+but still the type checking detects that it does not mute its arguments 
+and it also detects (but this is easier) that the second argument shares 
+cells with the result but not the first *)
+
+val mapq : ('a -> 'a) -> ('a, [> `MuteCar]) mlist -> unit
+
+(* Not the expected type ! why does it works for map and not append ? *)
+val append :
+   ('a, 'b) mlist -> ('a, [> `MuteCdr ] as 'c) mlist -> ('a, 'c) mlist
+
+val appendq :
+   ('a, [> `MuteCdr] as 'b) mlist -> ('a, 'b) mlist -> ('a, 'b) mlist
+
+
+-- implementation : mutable_list.ml --
+
+type ('a,'mute) mlist =
+     Nil
+   | Cons of 'a * ('a,'mute) mlist
+
+let set_cdr (l : ('a,[>`MuteCdr] as 'b) mlist) (x : ('a,'b) mlist) =
+   match l with
+     Nil -> raise (Invalid_argument "set_cdr")
+   | Cons(_,_) as l -> Obj.set_field (Obj.repr l) 1 (Obj.repr x)
+	
+let set_car (l : ('a,[>`MuteCar] as 'b) mlist) (x : 'a) =
+   match l with
+     Nil -> raise (Invalid_argument "set_car")
+   | Cons(_,_) as l -> Obj.set_field (Obj.repr l) 0 (Obj.repr x)
+
+
+let map f l = match l with
+   Nil -> Nil
+| Cons(x,l) ->
+     let acc0 = Cons(f x,Nil) in
+     let rec fn acc = function
+	Nil -> acc0
+       | Cons(x,l) ->
+	  let acc' = Cons(f x,Nil) in
+	  set_cdr acc acc';
+	  fn acc' l
+     in fn acc0 l
+
+let rec mapq f l = match l with
+   Nil -> ()
+| Cons(x,l') -> set_car l' (f x); mapq f l
+
+let append l l' = match l with
+   Nil -> l'
+| Cons(x,l) ->
+     let acc0 = Cons(x,Nil) in
+     let rec fn acc = function
+	Nil -> set_cdr acc l'
+       | Cons(x,l) ->
+	  let acc' = Cons(x,Nil) in
+	  set_cdr acc acc';
+	  fn acc' l
+     in fn acc0 l; acc0
+
+let rec appendq l l' = match l' with
+   Nil -> l'
+| Cons(_,_) ->
+     let rec fn = function
+	Nil -> assert false
+       | Cons(x,Nil) as l ->
+	  set_cdr l l'
+       | Cons(x,l) ->
+	  fn l
+     in fn l; l
+
+-- 
+Christophe Raffalli
+Université de Savoie
+Batiment Le Chablais, bureau 21
+73376 Le Bourget-du-Lac Cedex
+
+tél: (33) 4 79 75 81 03
+fax: (33) 4 79 75 87 42
+mail: Christophe.Raffalli@univ-savoie.fr
+www: http://www.lama.univ-savoie.fr/~RAFFALLI
+---------------------------------------------
+IMPORTANT: this mail is signed using PGP/MIME
+At least Enigmail/Mozilla, mutt or evolution
+can check this signature
+---------------------------------------------
+
+
+--------------enig6E78A2D4D12050320A73BAFF
+Content-Type: application/pgp-signature
+
+-----BEGIN PGP SIGNATURE-----
+Version: GnuPG v1.2.2 (GNU/Linux)
+Comment: Using GnuPG with Mozilla - http://enigmail.mozdev.org
+
+iD8DBQE/XXYuSQDyWB/+xBwRAjwEAKCVTXU7PLLrwDzUTxJn8B2bZT6dAgCgo9E+
+zfluOkPGgMP9h4Q3DMrW8xA=
+=v+ds
+-----END PGP SIGNATURE-----
+
+--------------enig6E78A2D4D12050320A73BAFF--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

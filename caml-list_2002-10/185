@@ -1,0 +1,127 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA27965; Tue, 8 Oct 2002 22:07:05 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA27763 for <caml-list@pauillac.inria.fr>; Tue, 8 Oct 2002 22:07:05 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g98K72514996;
+	Tue, 8 Oct 2002 22:07:02 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA27767; Tue, 8 Oct 2002 22:07:01 +0200 (MET DST)
+From: Pierre Weis <pierre.weis@inria.fr>
+Message-Id: <200210082007.WAA27767@pauillac.inria.fr>
+Subject: Re: [Caml-list] Bug somewhere...
+In-Reply-To: <3DA0C1F3.5010308@baretta.com> from Alessandro Baretta at "Oct 7, 102 01:06:27 am"
+To: alex@baretta.com (Alessandro Baretta)
+Date: Tue, 8 Oct 2002 22:07:01 +0200 (MET DST)
+Cc: caml-list@inria.fr
+X-Mailer: ELM [version 2.4ME+ PL28 (25)]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Alessandro Baretta wrote:
+> > It's either on my brain or in the Scanf module, the former possibility 
+> > being definitely more likely.
+> > 
+> > I have written a very simple program to compute md5 checksums of a codes 
+> > taken from a text file. Here it is:
+> > 
+> > let scan_line () = Scanf.scanf "%[^\n\r]\n" (fun a -> a)
+> > let digest s = String.uppercase
+> >   (Digest.to_hex(Digest.string s))
+> > let digest_line s = print_endline (s ^ "#" ^ (digest s))
+> > let _ = try while true do digest_line (scan_line ()) done
+> >   with End_of_file -> ()
+> 
+> I have rewritten my program in ocamllex. This one works. 
+> Here it is.
+> 
+> {
+> 
+> }
+> 
+> rule scanline = parse
+> | [^'\n''\r']*  {Lexing.lexeme lexbuf}
+> | ['\n''\r']*   {scanline lexbuf    }
+> | eof           {raise End_of_file}
+> 
+> {
+> let lexbuf = Lexing.from_channel stdin in
+> let digest s = String.uppercase
+>    (Digest.to_hex (Digest.string s)) in
+> let digest_line s = print_endline (s ^ "#" ^ (digest s)) in
+>    try while true do digest_line (scanline lexbuf) done
+>    with End_of_file -> ()
+> 
+> }
+> 
+> > Seems very reasonable...
+[...]
+> 
+> What's wrong with the Scanf version?
+> 
+> Alex
+
+A lot of problems in here: some are due to the semantics of the Scanf
+module some are due to the implementation, some are even deeper than
+those two!
+
+Indeed the two programs are not equivalent (and their behaviour are
+indeed different!).
+
+The first reason is that you cannot match eof (as you did with your
+lexer) using Scanf. This could be considered as a missing feature and
+we may add a convention to match end of file (either ``@.'', ``@$'',
+or ``$'' ?).
+
+Second, your lexer uses an explicitely allocated buffer lexbuf, while
+the scanf corresponding call allocates a new input buffer for each
+invocation; but the semantics of Scanf imposes a look ahead of 1
+character to check that no other \n follows the \n that ends your
+pattern (the semantics of \n being to match 0 or more \n, space, tab,
+or return). For each line Scanf reads an extra character after the end
+of line; it stores this character (wihch is a '(' by the way) in the
+input buffer; but note that the character has been read from the
+in_channel; now the next scanf invocation will allocate a new input
+buffer that reads from stdin starting after the last character read by
+the preceding invocation (the '(' looahead character). Hence you
+see that a '(' is missing at the beginning of each line after the
+first one!
+
+To solve this problem, you should use bscanf and an explicitely
+allocated input buffer that would survive from one call to scanf to
+the next one. Considering that this phenomenon is general concerning
+stdin and scanf, I rewrote the scanf code such that it allocates a
+buffer once and for all. Hence this problem is solved in the working
+sources.
+
+In the mean time explicitely allocating an input buffer would solve
+this problem for you:
+
+let lexbuf = Scanf.Scanning.from_channel stdin
+let scan_line () = Scanf.bscanf lexbuf "%[^\n\r]\n" (fun a -> a)
+let digest s = String.uppercase
+  (Digest.to_hex(Digest.string s))
+let digest_line s = print_endline (s ^ "#" ^ (digest s))
+let _ = try while true do digest_line (scan_line ()) done
+   with End_of_file -> ()
+
+Another semantical question is: should the call
+
+sscanf "" "%[^\n\r]\n" (fun x -> x)
+
+be successful or not ? If yes, what happens to your problem ?
+
+An interesting example indeed that helps precising the semantics of
+Scanf patterns and functions, thank you very much!
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://pauillac.inria.fr/~weis/
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

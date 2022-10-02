@@ -1,0 +1,116 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA08721; Sun, 25 Apr 2004 18:40:00 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA08930 for <caml-list@pauillac.inria.fr>; Sun, 25 Apr 2004 18:39:59 +0200 (MET DST)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i3PGdvjq002967
+	for <caml-list@inria.fr>; Sun, 25 Apr 2004 18:39:58 +0200
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id i3PGdGR18030;
+	Sun, 25 Apr 2004 11:39:16 -0500 (CDT)
+Date: Sun, 25 Apr 2004 11:44:11 -0500 (CDT)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: mohammad siddiqui <writetosafi@hotmail.com>
+cc: zilles@1969.ws, <skaller@users.sourceforge.net>, <rich@annexia.org>,
+        <caml-list@inria.fr>
+Subject: [Caml-list] Re: help
+In-Reply-To: <BAY7-F32fKQu1bCdUg00000a4a8@hotmail.com>
+Message-ID: <Pine.LNX.4.44.0404251123480.9460-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; struct:01 foo:01 struct:01 foo:01 unbox:01 pointers:01 inlined:01 typedef:01 typedef:01 ocaml:01 ocaml:01 mutable:01 mutable:01 int:01 int:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 25 Apr 2004, mohammad siddiqui wrote:
+
+> Hello,
+> 
+> I am having problem dealing with data structures in OCAML, I am translating 
+> code from C to OCAML. As shown below one structure contains array of other 
+> structures as its field. One of the guys here told me that we cant inline 
+> structures into other structures in OCAML.
+
+That was me.
+
+Let's consider the C code:
+
+typedef struct {
+    int a;
+    int b;
+} foo_t;
+
+typedef struct {
+    int c;
+    foo_t * arr;
+} bar_t;
+
+void f(bar_t * ptr) {
+    /* Change a foo_t */
+    ptr->arr[ptr->c].a += 1;
+    ptr->arr[ptr->c].b -= 1;
+}
+
+Fairly simply, and basically what you want to do, right?  Now, Ocaml can't 
+"inline" (unbox is what I should have said) the foo_t's into the array.  
+So you can't do the above code.  What you *can* implement code like (C 
+again):
+
+typedef struct {
+    int c;
+    foo_t ** arr;
+} bar_t;
+
+void f(bar_t ptr) {
+    ptr->arr[ptr->c]->a += 1;
+    ptr->arr[ptr->c]->b -= 1;
+}
+
+Notice the extra level of indirection- arr is no longer a pointer to an 
+array of foo_t's, but instead a pointer to an array of pointers to 
+foo_t's.
+
+Now, the precise translation of this, second version of the code, is this:
+
+type foo_t = { mutable a: int; mutable b: int };;
+type bar_t = { c: int; arr: foo_t array };;
+
+let f ptr = 
+    ptr.arr.(ptr.c).a <- ptr.arr.(ptr.c).a + 1;
+    ptr.arr.(ptr.c).b <- ptr.arr.(ptr.c).b - 1
+;;
+
+But we can do better than this, by converting the structures to tuples, 
+giving us:
+
+type foo_t = int * int;;
+type bar_t = int * (foo_t array);;
+
+let f ((c, arr) : bar_t) =
+    arr.(c) <-
+        begin
+            match (arr.(c)) with
+                | (a, b) -> (a+1, b-1)
+       end
+;;
+
+Here we're taking advantage of the fact that the foo_t's are boxed (not 
+inlined), by simply throwing the old tuple out and replacing it with a new 
+tuple with the correct new values.
+
+Does this help?
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

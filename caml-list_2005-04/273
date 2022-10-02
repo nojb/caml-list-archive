@@ -1,0 +1,115 @@
+Return-Path: <sejourne_kevin@yahoo.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 47CAABC48
+	for <caml-list@yquem.inria.fr>; Sat, 23 Apr 2005 00:16:53 +0200 (CEST)
+Received: from smtp003.mail.ukl.yahoo.com (smtp003.mail.ukl.yahoo.com [217.12.11.34])
+	by concorde.inria.fr (8.13.0/8.13.0) with SMTP id j3MMGqsS020611
+	for <caml-list@yquem.inria.fr>; Sat, 23 Apr 2005 00:16:53 +0200
+Received: from unknown (HELO ?83.114.104.148?) (sejourne?kevin@83.114.104.148 with plain)
+  by smtp003.mail.ukl.yahoo.com with SMTP; 22 Apr 2005 22:16:52 -0000
+Message-ID: <42699651.6020200@yahoo.fr>
+Date: Sat, 23 Apr 2005 00:26:57 +0000
+From: sejourne_kevin <sejourne_kevin@yahoo.fr>
+User-Agent: Mozilla Thunderbird 1.0.2 (X11/20050331)
+X-Accept-Language: fr, en
+MIME-Version: 1.0
+To: padiolea@irisa.fr
+Cc: Erik de Castro Lopo <ocaml-erikd@mega-nerd.com>,
+	caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Hashtbl.create 401
+References: <42686ADE.1040406@havenrock.com>    <20050422132131.6ff2fbee.ocaml-erikd@mega-nerd.com> <40833.131.254.50.45.1114171604.squirrel@mail.irisa.fr>
+In-Reply-To: <40833.131.254.50.45.1114171604.squirrel@mail.irisa.fr>
+X-Enigmail-Version: 0.90.2.0
+X-Enigmail-Supports: pgp-inline, pgp-mime
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+X-Miltered: at concorde with ID 426977D4.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 hashtbl:01 irisa:01 labltk:01 hashtbl:01 hash:01 hash:01 hashing:01 resize:01 stdlib:01 mutable:01 mutable:01 resize:01 rec:01 ...:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+padiolea@irisa.fr a écrit :
+>>On Thu, 21 Apr 2005 21:09:18 -0600
+>>Matt Gushee <mgushee@havenrock.com> wrote:
+>>
+>>
+>>>Hello, all--
+>>>
+>>>While browsing through the Labltk source code (and perhaps in some other
+>>>places), I noticed several instances of:
+>>>
+>>>   Hashtbl.create 401
+>>>
+>>>Why 401?
+>>
+>>Hash tables distribute data across a set of hash buckets. If
+>>the number of hash buckets is prime (401 is prime) then their
+>>is a better chance of the data being evenly distributed across
+>>the buckets.
+> 
+> 
+> but it seems that this number is not that much important since,
+> as said in the ml source:
+> (* We do dynamic hashing, and resize the table and rehash the elements
+>    when buckets become too long. *)
+If you want to have a HashTbl with only a prime number of hash buckets,
+you can do things like that (with code stolen from the stdlib):
+
+let table = (* list of (next_primes 2n+1) of root 3 *)
+[| 3; 11; 29; 61; 127; 257; 521; 1049; 2111; 4229; 8461; 16927; 33857;
+67723; 135449; 270913; 541831; 1083689; 2167393;(*max 32 bits*) 4334791;
+8669593; 17339197; 34678421; 69356857; 138713717; 277427441; 554854889
+|]
+;;
+type ('a, 'b) t =
+  {
+    mutable size: int;                        (* number of elements *)
+    mutable index: int;                       (* index of the next array
+size*)
+    mutable data: ('a, 'b) bucketlist array   (* the buckets *)
+  }
+
+and ...
+let create initial_size =
+  let i_m, _ =
+      fold_lefti (fun i ((_,v_m) as u) x ->
+		    let v = abs (x - initial_size) in
+		      if v < v_m  then (i,v)  else u
+		 ) (0,max_int) table
+  in
+  let s = min (max 1 table.(i_m)) Sys.max_array_length
+  in { size = 0; index = i_m; data = Array.make s Empty }
+
+
+let resize hashfun tbl =
+  let _ = tbl.index <- succ tbl.index in
+  let osize = Array.length tbl.data in
+  let nsize = try min (table.(tbl.index)) Sys.max_array_length with |_->
+osize
+  in
+    if nsize <> osize then
+      begin
+	let ndata = Array.create nsize Empty in
+	let rec insert_bucket = function
+            Empty -> ()
+	  | Cons(key, data, rest) ->
+              insert_bucket rest; (* preserve original order of elements *)
+              let nidx = (hashfun key) mod nsize in
+		ndata.(nidx) <- Cons(key, data, ndata.(nidx)) in
+	  for i = 0 to osize - 1 do
+	    insert_bucket tbl.data.(i)
+	  done;
+	  tbl.data <- ndata
+      end
+
+let copy h =
+  { size = h.size;
+    index = h.index;
+    data = Array.copy h.data }
+
+....
+
+

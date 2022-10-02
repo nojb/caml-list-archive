@@ -1,0 +1,87 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA08964; Tue, 1 Apr 2003 21:54:17 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA08338 for <caml-list@pauillac.inria.fr>; Tue, 1 Apr 2003 21:54:16 +0200 (MET DST)
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h31JsF501627
+	for <caml-list@inria.fr>; Tue, 1 Apr 2003 21:54:15 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.5329);
+	 Tue, 1 Apr 2003 13:54:47 -0600
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Tue, 1 Apr 2003 13:54:47 -0600
+Date: Tue, 1 Apr 2003 13:56:11 -0600 (CST)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Ville-Pertti Keinonen <will@exomi.com>
+cc: Brian Hurt <brian.hurt@qlogic.com>, <caml-list@inria.fr>
+Subject: Re: [Caml-list] Bug?  Printf, %X and negative numbers
+In-Reply-To: <6A2DCA04-6476-11D7-848D-000393863F70@exomi.com>
+Message-ID: <Pine.LNX.4.33.0304011328530.2225-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 01 Apr 2003 19:54:47.0299 (UTC) FILETIME=[8C4E7D30:01C2F888]
+X-Spam: no; 0.00; qlogic:01 caml-list:01 bug:01 printf:01 allocating:01 shifts:01 ors:99 alignment:01 movl:01 ints:01 equation:01 comparison:02 pointer:03 overhead:03 heap:03 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, 1 Apr 2003, Ville-Pertti Keinonen wrote:
+
+> 
+> > I was thinking of just a bitmask.  You are always allocating into the
+> > minor heap.  You just define the low 1/32nd of the minor heap a 
+> > bitmask of
+> > what is a pointer and what isn't.  This would probably slow down
+> > allocation- not by much, would be my prediction, but it would slow down
+> > allocation.  You may gain some of that cost back by not needing to do 
+> > the
+> > shifts and ors we currently do to deal with the low bit.  I can't 
+> > predict
+> > what the overall performance delta would be- not even if it will be
+> > positive or negative.
+> 
+> I suspect that would be quite slow, since you have to do one bit 
+> operation for each word of each allocation (optimizing them is 
+> difficult because you don't know the alignment).
+
+For structures 32 words or less, you can do it like (using x86 assembly 
+language here):
+	movl	heap_top, %eax
+	movl	%eax, %ecx
+	andl	$31, %ecx
+	movl	%eax, %ebx
+	shrw	$5, %bx	; /* partial register stall- oh well */
+	movl	$bit_pattern, %esi
+	xorl	%edi, %edi
+	shldl	%cl, %esi, %edi
+	shll	%cl, %esi
+	orl	%esi, (%ebx)
+	orl	%edi, 4(%ebx)
+
+10 instructions, no branchs, only one partial register stall (which can
+probably be removed at the cost of four more instructions), only one
+'complex' instruction (the shld) which might take more than a clock cycle.  
+Some rearrangement could probably give us 2, maybe 3 instructions issued
+per clock.  We're probably looking at single digit clock cycles here.  
+Note that I'm assuming the minor heap is 64K (removing the partial stall 
+would also solve this).
+
+On the other side of this equation, we have the overhead of dealing with 
+the low bit being set.  This does have a performance cost.  How much of 
+one depends upon what you're doing with the ints.  But we're not talking 
+about more than an instruction or two per access.  With few accesses per 
+allocation it's probably a loss- with more access per allocation, it's 
+probably a win.  But either way, we're talking about single digit clock 
+cycles.
+
+By way of comparison, on the P4 a branch mispredict costs 20-28 clock 
+cycles, a cache miss costs 100-300 clock cycles, and a page fault millions 
+of clock cycles.
+
+Brian
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

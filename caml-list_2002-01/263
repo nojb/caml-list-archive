@@ -1,0 +1,93 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA27840; Sat, 26 Jan 2002 00:00:36 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA26420 for <caml-list@pauillac.inria.fr>; Sat, 26 Jan 2002 00:00:34 +0100 (MET)
+Received: from mini.pair.com (mini.pair.com [209.68.1.138])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with SMTP id g0PN0Xv18397
+	for <caml-list@inria.fr>; Sat, 26 Jan 2002 00:00:33 +0100 (MET)
+Received: (qmail 44366 invoked by uid 3309); 25 Jan 2002 23:00:30 -0000
+Received: from localhost (sendmail-bs@127.0.0.1)
+  by localhost with SMTP; 25 Jan 2002 23:00:30 -0000
+Date: Fri, 25 Jan 2002 18:00:30 -0500 (EST)
+From: Thatcher Ulrich <tu@tulrich.com>
+X-Sender:  <tulrich@mini.pair.com>
+To: Chris Hecker <checker@d6.com>
+cc: Daniel Phillips <dan@dgph.net>, <caml-list@inria.fr>
+Subject: Re: [Caml-list] Ocaml and games
+In-Reply-To: <4.3.2.7.2.20020125141112.030791f0@arda.pair.com>
+Message-ID: <Pine.BSF.4.30.0201251736490.41444-100000@mini.pair.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, 25 Jan 2002, Chris Hecker wrote:
+
+> > The GC performance predicability and smoothness is a huge looming
+> > shadow on the horizon that may or may not materialize, I have no
+> > idea.  Do you have any specific thoughts on this that you can
+> > share yet?  Have you done any tests?
+>
+> Nope.  It's just that the "conventional wisdom" is that GC will hurt
+> performance, so I'm worried just on principle. :) I haven't seen any
+> indication that it will yet, however.
+>
+> As the other poster said, doing full collections between levels
+> seems like a reasonable thing to try.
+>
+> I'm also slightly worried about the "write barrier" thing, which
+> I've seen posted about but don't fully understand yet.  To avoid GC
+> activity I may want to keep some arrays around and reuse them, but
+> apparently as they migrate into the old heap then you get the write
+> barrier thing going on.  Hopefully this won't be a problem either,
+> but I don't know yet (I don't know if I understand it correctly yet,
+> either).
+
+I have no real-world experience to share concerning OCaml's garbage
+collector, but there's an informal description of how it works here:
+
+http://para.inria.fr/~doligez/caml-guts/Sestoft94.txt
+
+It's linked off the "Papers" section of the OCaml web site:
+
+http://caml.inria.fr/ocaml/papers.html
+
+Anyway, I'll speculate, because I've long pondered using GC in games:
+based on that description, OCaml's GC is *exactly* the ideal type of
+collector for interactive games.  It's generational, which is good for
+overall efficiency, and the old generation is collected incrementally,
+which means it processes a single "chunk" at a time, rather than the
+full heap.  I haven't even looked at the API, but in theory the ideal
+way to run a collector like this in a double-buffered game program
+(like many console games) is to:
+
+1) make sure the worst-case time to process a chunk is under say 2ms.
+Do this by sizing the chunks appropriately or whatever.  Disclaimer: I
+have no idea what Ocaml GC's real-world latency is for processing a
+chunk.
+
+2) at the end of rendering, before displaying the back buffer, look at
+the timer and decide whether you have 2ms to spare before the next
+vsync.  If so, then run the GC for one chunk -- it's practically free.
+If not, then don't; hopefully you'll catch up in subsequent frames.
+
+Basically, if your average allocation rate is below some threshold
+(and you have some extra room on the heap to amortize any peaks), and
+you run the GC enough, you'll *never* see a GC pause.
+
+If you're triple-buffered, or you don't wait for vsync, then this
+trick doesn't work, but in those cases you probably care much less
+about an extra 2ms GC latency now and then.
+
+The deal with a write barrier is that any time you write to a pointer
+variable that's stored in the old generation of the heap, the GC must
+know about it (so it can keep its incremental state synchronized).  If
+you're reading, or just writing data variables, the write barrier
+should be irrelevant (although I don't know how it's implemented in
+practice, so I'll shut up now).
+
+-Thatcher
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

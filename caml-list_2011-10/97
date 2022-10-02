@@ -1,0 +1,252 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p9ILekJp003304
+	for <caml-list@sympa-roc.inria.fr>; Tue, 18 Oct 2011 23:40:46 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AusBAJPxnU5CbwQdkWdsb2JhbAA7CZlLjyUiAQEBAQkLCwcUBCGBbgEBBScZLgoBAQ8LGAkEEg8JAwIBAgEzEgYNAQUCAQEOCYdtoz6SYgeDMIE9gy6IBpEljEw
+X-IronPort-AV: E=Sophos;i="4.69,367,1315173600"; 
+   d="scan'208";a="113385866"
+Received: from out5.smtp.messagingengine.com ([66.111.4.29])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/ADH-AES256-SHA; 18 Oct 2011 23:40:40 +0200
+Received: from compute3.internal (compute3.nyi.mail.srv.osa [10.202.2.43])
+	by gateway1.nyi.mail.srv.osa (Postfix) with ESMTP id D5EA6207D2;
+	Tue, 18 Oct 2011 17:40:38 -0400 (EDT)
+Received: from frontend2.nyi.mail.srv.osa ([10.202.2.161])
+  by compute3.internal (MEProxy); Tue, 18 Oct 2011 17:40:38 -0400
+DKIM-Signature: v=1; a=rsa-sha1; c=relaxed/relaxed; d=
+	messagingengine.com; h=message-id:date:from:mime-version:to:cc
+	:subject:references:in-reply-to:content-type
+	:content-transfer-encoding; s=smtpout; bh=nx0TZJGDGbLqvUZr5ABh+b
+	cxTb0=; b=n2/JGJN4ftxRF7TQu/wHItg52gYIlbbYriqRhDcnbwjgpVhnGtHtkm
+	p1ytgka+gzKCVX82t3adKjfuwXEqKqydwNstULj85rjAQ0y+0wu87vFXm7NoTKNf
+	qQVwAmBCZBOZNhlpKOgUtNnKTAJM5uq9g3AEAwrL5fhs798L/x944=
+X-Sasl-enc: gN5l7X5gczXdEe2oUc8EQ/IyZp+mL03r4W5rjYKNovHm 1318974038
+Received: from [192.168.1.206] (64-71-1-165.static.wiline.com [64.71.1.165])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id 3E051483470;
+	Tue, 18 Oct 2011 17:40:38 -0400 (EDT)
+Message-ID: <4E9DF378.6010502@ens-lyon.org>
+Date: Tue, 18 Oct 2011 14:45:28 -0700
+From: Martin Jambon <martin.jambon@ens-lyon.org>
+User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en-US; rv:1.9.2.9) Gecko/20101023 Lightning/1.0b3pre Thunderbird/3.1.3
+MIME-Version: 1.0
+To: Gabriel Scherer <gabriel.scherer@gmail.com>
+CC: OCaml Mailing List <caml-list@inria.fr>,
+        Nicolas Pouillard <nicolas.pouillard@gmail.com>,
+        Jeremy Yallop <yallop@gmail.com>
+References: <4E993FE5.7080409@ens-lyon.org> <CAPFanBGX3NAprKaqzxgsYpQmPiAU_1xyr_zMZohUYaH9AoKLiQ@mail.gmail.com>
+In-Reply-To: <CAPFanBGX3NAprKaqzxgsYpQmPiAU_1xyr_zMZohUYaH9AoKLiQ@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] How to mutate immutable record fields?
+
+So here is a summary of the solution I picked:
+
+1. Application of an identity function to the record once all the fields
+are set.
+2. A light runtime test at module evaluation time, just in case.
+
+Identity is defined as follows in order to prevent its inlining:
+
+  type identity_t = { mutable _identity : 'a. 'a -> 'a }
+  let identity_ref = { _identity = (fun x -> x) }
+  let identity x = identity_ref._identity x
+
+identity_ref is made public such that any module could potentially
+mutate the _identity field. This way the compiler would need to do a
+whole program analysis to replace identity_ref._identity by its value
+and inline the call to identity.
+
+
+The generated code now looks like this:
+
+let read_t ... =
+  (* create the record with default field values *)
+  let x = { { foo = None; ... } with foo = None } in
+  ...
+  (* loop over the input and set fields *)
+  Obj.set_field (Obj.repr x) i (Obj.repr v);
+  ...
+  (* return x after passing it through our identity function *)
+  identity x
+
+Some user code would then do something like this:
+
+  let x = read_t ... (* this call could be inlined *) in
+  (* x.foo should now refer to the field value
+     obtained after "identity x", not earlier. *)
+  ... x.foo ...
+
+
+
+Martin
+
+
+On 10/15/11 02:15, Gabriel Scherer wrote:
+> I reached the same conclusions as Nicolas by looking at the lambda and
+> cmm output. I report my findings below, it case it could interest
+> other members of the list.
+> 
+> Here is the relevant part of the code provided by martin, hereafter 'test1':
+> 
+>  let t = create () in
+>  let f = Some 17 in
+>  Obj.set_field (Obj.repr t) 0 (Obj.repr f);
+> 
+>  let f1 = t.foo in
+>  let f2 = Obj.obj (Obj.field (Obj.repr t) 0) in
+> 
+>  if f1 = f then
+>    print_endline "OK     t.foo"
+>  else ...
+> 
+> Here is how you can "fix" it to make the test pass, hereafter 'test2':
+> 
+>  let t = create () in
+>  let f = Some 17 in
+>  Obj.set_field (Obj.repr t) 0 (Obj.repr f);
+> 
+>  let f1 = (fun t -> t.foo) t in
+>  let f2 = Obj.obj (Obj.field (Obj.repr t) 0) in
+> 
+>  if f1 = f then
+>    print_endline "OK     t.foo"
+>  else ...
+> 
+> Test1 and test2 -dlambda output both look sane:
+> 
+>   (let (t/1036 (apply (field 0 (global Test2!)) 0a) f/1037 [0: 17])
+>     (seq (array.unsafe_set (id t/1036) 0 (id f/1037))
+>       (let
+>         (f1/1038 (field 0 t/1036)   <= FIELD ACCESS
+>          f2/1039 (id (array.unsafe_get (id t/1036) 0)))
+>         (seq
+>           (if (caml_equal f1/1038 f/1037)  <= COMPARISON HERE
+>             (apply (field 29 (global Pervasives!)) "OK     t.foo")
+>             ....)))))
+>             (if (== f1/1038 0a)
+>               (apply (field 29 (global Pervasives!))
+>                 "ERROR  t.foo is None")
+>               (apply (field 29 (global Pervasives!))
+>                 "ERROR  t.foo is something strange")))
+> 
+>   (let (t/1036 (apply (field 0 (global Test!)) 0a) f/1037 [0: 17])
+>     (seq (array.unsafe_set (id t/1036) 0 (id f/1037))
+>       (let
+>         (f1/1038 (apply (function t/1039 (field 0 t/1039)) t/1036)
+>                   ^= FUNCTION CALL HERE
+>          f2/1040 (id (array.unsafe_get (id t/1036) 0)))
+>         (seq
+>           (if (caml_equal f1/1038 f/1037) <= SAME COMPARISON HERE
+>             (apply (field 29 (global Pervasives!)) "OK     t.foo")
+>             ...)))))
+> 
+> But the -dcmm change
+> 
+>   (let
+>     (t/1036 (app "camlTest2__create_1035" 1a addr)
+>      f/1037 "camlTest2__7")
+>     (if (!= (load unsigned int8 (+a t/1036 -4)) 254)
+>       (extcall "caml_modify" t/1036 f/1037 unit)
+>       (store float64u t/1036 (load float64u f/1037)))
+>     (let
+>         <= NOTHING HERE
+>       f2/1039
+>         (if (!= (load unsigned int8 (+a t/1036 -4)) 254) (load t/1036)
+>           (alloc 2301 (load float64u t/1036)))
+>       (if (!= (extcall "caml_equal" 1a f/1037 addr) 1)
+>                                     ^= 1a "CONSTANT" OPTIMIZED
+>         (app "camlPervasives__print_endline_1274" "camlTest2__6" unit)
+>         ...)))
+> 
+>   (let
+>     (t/1036 (app "camlTest__create_1035" 1a addr) f/1037 "camlTest__8")
+>     (if (!= (load unsigned int8 (+a t/1036 -4)) 254)
+>       (extcall "caml_modify" t/1036 f/1037 unit)
+>       (store float64u t/1036 (load float64u f/1037)))
+>     (let
+>       (f1/1038 (seq "camlTest__7" [] (load t/1036)) <= FUNCTION CALL HERE
+>        f2/1040
+>          (if (!= (load unsigned int8 (+a t/1036 -4)) 254) (load t/1036)
+>            (alloc 2301 (load float64u t/1036))))
+>       (if (!= (extcall "caml_equal" f1/1038 f/1037 addr) 1) <= COMPARISON
+>         (app "camlPervasives__print_endline_1274" "camlTest__6" unit)
+>         ....)))
+> 
+> 
+> On Sat, Oct 15, 2011 at 10:10 AM, Martin Jambon
+> <martin.jambon@ens-lyon.org> wrote:
+>> Dear fellow OCamlers,
+>>
+>>
+>> Hints on how to solve this, using any means necessary, will be greatly
+>> appreciated.
+>>
+>>
+>> Purpose: deserializing a record efficiently, i.e. creating a record
+>> whose field values are available one after another in an unpredictable
+>> order.
+>>
+>> Problem: Obj.set_field does the job in most cases but not in the example
+>> below. How to make it work?
+>>
+>> (we don't want to use pure OCaml option refs to store field values
+>> before putting them into the record because that's too slow)
+>>
+>> Requirements:
+>> - performance is critical
+>> - code will be machine-generated
+>> - immutable record fields must be supported
+>>
+>>
+>> The example below shows a record type for which a straight Obj.set_field
+>> produces a field that cannot be read correctly with the usual dot
+>> notation (ocamlopt only, tested on Linux/amd64 with OCaml 3.12.1 and
+>> 3.11.2).
+>>
+>>
+>> $ ocamlopt -o foo.opt foo.ml; ./foo.opt
+>> ERROR  t.foo is None
+>> OK     field0
+>>
+>> $ cat foo.ml
+>> (* ocamlopt -o foo.opt foo.ml; ./foo.opt *)
+>>
+>> type t = {
+>>  foo : int option;
+>>  bar : int;
+>> }
+>>
+>> let create () =
+>>  { { foo = None; bar = 42 } with foo = None }
+>>
+>> let () =
+>>  assert (create () != create ());
+>>  let t = create () in
+>>  let f = Some 17 in
+>>  Obj.set_field (Obj.repr t) 0 (Obj.repr f);
+>>
+>>  let f1 = t.foo in
+>>  let f2 = Obj.obj (Obj.field (Obj.repr t) 0) in
+>>
+>>  if f1 = f then
+>>    print_endline "OK     t.foo"
+>>  else if f1 = None then
+>>    print_endline "ERROR  t.foo is None"
+>>  else
+>>    print_endline "ERROR  t.foo is something strange";
+>>
+>>  if f2 = f then
+>>    print_endline "OK     field0"
+>>  else if f2 = None then
+>>    print_endline "ERROR  field0 is None"
+>>  else
+>>    print_endline "ERROR  field0 is something strange"
+>>
+>> --
+>> Caml-list mailing list.  Subscription management and archives:
+>> https://sympa-roc.inria.fr/wws/info/caml-list
+>> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>>
+>>
+> 
+

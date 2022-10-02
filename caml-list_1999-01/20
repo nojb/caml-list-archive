@@ -1,0 +1,60 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA20489 for caml-redistribution; Wed, 13 Jan 1999 12:23:47 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA28493 for <caml-list@pauillac.inria.fr>; Tue, 12 Jan 1999 21:12:38 +0100 (MET)
+Received: from linc.cis.upenn.edu (LINC.CIS.UPENN.EDU [158.130.12.3])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id VAA27257
+	for <caml-list@inria.fr>; Tue, 12 Jan 1999 21:12:35 +0100 (MET)
+Received: from codex.cis.upenn.edu (CODEX.CIS.UPENN.EDU [158.130.6.15])
+	by linc.cis.upenn.edu (8.8.5/8.8.5) with ESMTP id PAA08333
+	for <caml-list@inria.fr>; Tue, 12 Jan 1999 15:12:33 -0500 (EST)
+Received: (from mwh@localhost)
+	by codex.cis.upenn.edu (8.8.5/8.8.5) id PAA16699
+	for caml-list@inria.fr; Tue, 12 Jan 1999 15:12:33 -0500 (EST)
+From: Michael Hicks <mwh@dsl.cis.upenn.edu>
+Message-Id: <199901122012.PAA16699@codex.cis.upenn.edu>
+Subject: thread i/o
+To: caml-list@inria.fr
+Date: Tue, 12 Jan 1999 15:12:32 -0500 (EST)
+X-Mailer: ELM [version 2.4 PL23-upenn3.1]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+One of the adverisements of OCaml 2.01 was that user-level (not POSIX)
+thread I/O is made faster.  The trick used in the implementation is to make
+sockets non-blocking, and then only perform a select() when the I/O would
+have blocked (by signalling EINTR or EWOULDBLOCK).  However, looking at the
+implementation, it looks like in many cases the select() is performed
+anyway.  Here is an excerpt from threadUnix.ml:
+
+let rec read fd buff ofs len =
+  Thread.wait_read fd;
+  try Unix.read fd buff ofs len
+  with Unix_error((EAGAIN | EWOULDBLOCK), _, _) -> read fd buff ofs len
+
+The implementation of Thread.wait_read and Thread.wait_write will perform
+either a select() or go through the scheduler which will perform the
+select().  It seems to me that the implementation should be:
+
+let rec read fd buff ofs len =
+  try Unix.read fd buff ofs len
+  with Unix_error((EAGAIN | EWOULDBLOCK), _, _) -> 
+    begin
+      Thread.wait_read fd;
+      read fd buff ofs len
+    end
+
+This way, if I/O is already available, there is no need to do the extra
+select().  Am I missing something?
+Mike
+
+-- 
+Michael Hicks
+Ph.D. Candidate, the University of Pennsylvania
+http://www.cis.upenn.edu/~mwh            mailto://mwh@dsl.cis.upenn.edu
+"I worked with an individual who plugged his power strip back into itself
+and for the life of him could not understand why his computer would not
+turn on."
+
+
+

@@ -1,0 +1,125 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id QAA06139 for caml-redistribution; Fri, 15 Mar 1996 16:49:00 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id MAA00636 for <caml-list@pauillac.inria.fr>; Fri, 15 Mar 1996 12:30:43 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.1/8.7.1) with ESMTP id MAA19856 for <caml-list@pauillac.inria.fr>; Fri, 15 Mar 1996 12:30:38 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.6.10/8.6.6) with ESMTP id MAA00172 for <caml-list@margaux.inria.fr>; Fri, 15 Mar 1996 12:30:43 +0100
+Received: from enpc.enpc.fr (enpc.enpc.fr [192.54.211.31]) by concorde.inria.fr (8.7.1/8.7.1) with SMTP id MAA19852 for <caml-list@margaux.inria.fr>; Fri, 15 Mar 1996 12:30:36 +0100 (MET)
+Received: from styx.enpc.fr (styx.enpc.fr [192.54.211.129]) by enpc.enpc.fr (8.6.10/8.6.10) with SMTP id MAA02770 for <caml-list@margaux.inria.fr>; Fri, 15 Mar 1996 12:35:04 +0100
+Received: from lynx.enpc.fr by styx.enpc.fr (4.1/SMI-4.1)
+	id AA09844; Fri, 15 Mar 96 12:35:19 +0100
+Date: Fri, 15 Mar 96 12:35:19 +0100
+From: ts@styx.enpc.fr (Thierry SALSET)
+Message-Id: <9603151135.AA09844@styx.enpc.fr>
+To: caml-list@margaux.inria.fr
+Subject: IO in CSL threads
+Sender: weis
+Status: O
+
+
+J'avais écrit dans un précédent message à propos des E/S dans un
+programme CSL utiliant des threads :
+
+> [English]
+> This mail is about the Caml Special Light Thread module.
+> 
+> Standard IO functions don't seem to work when used within CSL thread
+> bodies.
+> 
+> CML (Concurrent ML) offers a specific module for concurrent IO. Will CSL
+> provide such a library ?
+> 
+> [Français]
+> Mes questions concernent l'utilisation du module Thread de Caml Special
+> Light.
+> 
+> Si je mets des opérations d'entrées/sorties dans le corps d'un thread,
+> elles sont apparemment ineffectives. Est-ce que je me trompe ?
+> 
+> J'avais l'habitude d'utiliser CML (Concurrent ML) qui fournit un
+> module d'E/S spécifique. Est-il prévu d'inclure une telle bibliothèque
+> dans CSL ?
+
+Alors 
+
+1) Il existe en CSL un module ThreadIO
+
+2) Mon programme (un petit exemple de la distribution de CML porté
+   "rapidement" en CSL) était le suivant :
+
+let simple_comm () = let
+      ch = Event.new_channel()
+      and pr = print_string
+      in
+        pr "hi-0\n";
+
+        Thread.new (function () -> 
+          begin
+            pr "hi-1\n";
+            Event.sync(Event.send ch 17);
+            pr "bye-1\n"
+          end) () ;
+
+        Thread.new (function () ->
+          begin
+            pr "hi-2\n";
+            Event.sync(Event.receive ch);
+            pr "bye-2\n"
+          end) () ;
+        
+        pr "bye-0\n"
+
+À l'exécution, il imprimait :
+
+hi-0
+bye-0
+
+ce qui n'est pas ce à quoi on s'attend ! L'erreur provenait (merci à
+Xavier Leroy pour son assistance éclairée) du fait que le programme
+principal, après avoir créé les 2 threads, termine sans leur laisser le
+temps de s'exécuter. Pour obtenir le résultat prévu il faut écrire :
+
+let simple_comm () = let
+      ch = Event.new_channel()
+      and pr = print_string
+      in
+	pr "hi-0\n";
+
+	let t1 = Thread.new (function () -> 
+      	  begin
+      	    pr "hi-1\n";
+      	    Event.sync(Event.send ch 17);
+      	    pr "bye-1\n"
+          end) () in
+
+	let t2 = Thread.new (function () ->
+          begin
+	    pr "hi-2\n";
+	    Event.sync(Event.receive ch);
+	    pr "bye-2\n"
+	  end) () in
+
+      	Thread.join t1;
+	Thread.join t2;
+	pr "bye-0\n"
+
+let _ =  simple_comm ()
+
+la fonction Thread.join permet d'attendre que les threads t1 et t2
+terminent.
+
+Donc Mea Culpa.
+
+Je voudrais quand même signaler que, ayant l'habitude d'utiliser CML,
+mon erreur provient du fait que le runtime CML fournit des services (par
+exemple attendre que tous les threads soient terminés ou bloqués
+définitivement avant de terminer la fonction principale) que n'offrent
+pas CSL linké avec la bibliothèque de threads.
+
+Bien sûr, cela ne dévalorise en rien la bibliothèque de threads de CSL.
+
+	Thierry Salset
+	CERMICS / ENPC
+	ts@cermics.enpc.fr
+
+
+
+

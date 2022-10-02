@@ -1,0 +1,160 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id SAA00846; Wed, 17 Mar 2004 18:46:35 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA01489 for <caml-list@pauillac.inria.fr>; Wed, 17 Mar 2004 18:46:34 +0100 (MET)
+Received: from fichte.ai.univie.ac.at (fichte.ai.univie.ac.at [131.130.174.156])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i2HHl0KW013190
+	for <caml-list@inria.fr>; Wed, 17 Mar 2004 18:47:01 +0100
+Received: from fichte.ai.univie.ac.at (markus@localhost [127.0.0.1])
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) with ESMTP id i2HHkWHn024637;
+	Wed, 17 Mar 2004 18:46:32 +0100
+Received: (from markus@localhost)
+	by fichte.ai.univie.ac.at (8.12.3/8.12.3/Debian-6.6) id i2HHkWA1024636;
+	Wed, 17 Mar 2004 18:46:32 +0100
+Date: Wed, 17 Mar 2004 18:46:32 +0100
+From: Markus Mottl <markus@oefai.at>
+To: Agustin Valverde Ramos <a_valverde@mac.com>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Better option to read a file
+Message-ID: <20040317174632.GD18178@fichte.ai.univie.ac.at>
+Mail-Followup-To: Agustin Valverde Ramos <a_valverde@mac.com>,
+	caml-list@inria.fr
+References: <E2DFEE92-7790-11D8-938F-000393B21E00@ctima.uma.es> <m34qso53qy.fsf@diebuntekuh.de> <0AEE851F-7832-11D8-910D-000A95CED312@mac.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <0AEE851F-7832-11D8-910D-000A95CED312@mac.com>
+User-Agent: Mutt/1.4.1i
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 expr:01 expr:01 fprintf:01 fprintf:01 lparen:01 rparen:01 lparen:01 rparen:01 stdin:01 printf:01 stdin:01 pretty-print:01 bin:01 bin:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+Status: O
+X-Status: 
+X-Keywords:                  
+X-UID: 156
+
+On Wed, 17 Mar 2004, Agustin Valverde Ramos wrote:
+> No, my parser works over all the file content. I want to read formulas 
+> like the following:
+[snip]
+> I think that the Markus suggestion is better for me, because I have 
+> never worked with ocamllex. By the way, can I obtain benefits in 
+> efficiency using ocamllex? because in this case I'll learn to use it.
+
+Please do yourself a favor, save a lot of work and use ocamllex and
+ocamlyacc.  These tools are the Right Thing (tm) for the job.  Since I had
+a very similar project handy, here are the files you need to get going:
+
+file: ast.ml
+Contains abstract syntax tree and pretty printer for logical expressions
+---------------------------------------------------------------------------
+open Format
+
+type expr =
+  | Id of string
+  | Not of expr
+  | And of expr * expr
+  | Or of expr * expr
+  | Imp of expr * expr
+
+let rec pp_expr ppf = function
+  | Id id -> pp_print_string ppf id
+  | Not e -> fprintf ppf "-%a" pp_expr e
+  | And (e1, e2) -> fprintf ppf "(@[%a &@ %a@])" pp_expr e1 pp_expr e2
+  | Or (e1, e2) -> fprintf ppf "(@[%a |@ %a@])" pp_expr e1 pp_expr e2
+  | Imp (e1, e2) -> fprintf ppf "(@[%a ->@ %a@])" pp_expr e1 pp_expr e2
+---------------------------------------------------------------------------
+
+file: parser.mly
+Contains the translator: tokens -> abstract syntax tree
+---------------------------------------------------------------------------
+%token <string> ID
+%token NOT AND OR IMP LPAREN RPAREN EOF
+
+%start main
+%type <Ast.expr> main
+
+%%
+
+main : expr EOF { $1 }
+
+expr
+  : ID { Ast.Id $1 }
+  | LPAREN expr bin_op expr RPAREN { $3 $2 $4 }
+  | NOT expr { Ast.Not $2 }
+
+bin_op
+  : AND { fun arg1 arg2 -> Ast.And (arg1, arg2) }
+  | OR  { fun arg1 arg2 -> Ast.Or (arg1, arg2) }
+  | IMP { fun arg1 arg2 -> Ast.Imp (arg1, arg2) }
+---------------------------------------------------------------------------
+
+file: lexer.mll
+Contains the translator: string -> tokens
+---------------------------------------------------------------------------
+{ open Parser }
+
+rule token = parse
+  | [' ' '\t' '\n']     { token lexbuf }
+  | ['a' - 'z']+ as id  { ID id }
+  | '&'                 { AND }
+  | '|'                 { OR }
+  | "->"                { IMP }
+  | "-"                 { NOT }
+  | '('                 { LPAREN }
+  | ')'                 { RPAREN }
+  | eof                 { EOF }
+
+{
+  let lexbuf = Lexing.from_channel stdin in
+  let ast = Parser.main token lexbuf in
+  Format.printf "%a@." Ast.pp_expr ast
+}
+---------------------------------------------------------------------------
+
+file: Makefile
+Requires OCamlMakefile
+---------------------------------------------------------------------------
+SOURCES = ast.ml parser.mly lexer.mll
+RESULT  = parse
+
+include OCamlMakefile
+---------------------------------------------------------------------------
+
+Just type "make" and the resulting "parse"-program will read in your
+logical expressions from stdin until EOF and pretty-print them (note:
+the topmost expression also needs parenthesis!). E.g.:
+
+file: test.dat
+---------------------------------------------------------------------------
+(
+  (
+    (p | (r -> t)) &
+    (q | (t -> s))
+  ) ->
+  (
+    (p & -(q -> -t)) |
+    (r -> ((q -> (s | r)) & s))
+  )
+)
+---------------------------------------------------------------------------
+
+Running "parse < test.dat" should yield:
+
+(((p | (r -> t)) & (q | (t -> s))) ->
+ ((p & -(q -> -t)) | (r -> ((q -> (s | r)) & s))))
+
+Have fun!
+
+Regards,
+Markus
+
+-- 
+Markus Mottl          http://www.oefai.at/~markus          markus@oefai.at
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

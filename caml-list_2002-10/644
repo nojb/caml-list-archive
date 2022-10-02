@@ -1,0 +1,131 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA20667; Wed, 23 Oct 2002 12:13:07 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id MAA18345 for <caml-list@pauillac.inria.fr>; Wed, 23 Oct 2002 12:13:06 +0200 (MET DST)
+Received: from abel (nat.umh.ac.be [193.190.193.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g9NAD5502449
+	for <caml-list@inria.fr>; Wed, 23 Oct 2002 12:13:05 +0200 (MET DST)
+Received: from abel
+	([127.0.0.1] helo=localhost ident=trch)
+	by abel with esmtp (Exim 3.36 #1 (Debian))
+	id 184IYs-0005bh-00; Wed, 23 Oct 2002 12:16:26 +0200
+Date: Wed, 23 Oct 2002 12:16:26 +0200 (CEST)
+Message-Id: <20021023.121626.64579491.debian00@tiscalinet.be>
+To: caml-list@inria.fr
+Subject: [Caml-list] Re: float boxing (was: matrix-matrix multiply)
+From: Christophe TROESTLER <debian00@tiscalinet.be>
+In-Reply-To: <20021020215847.GA8750@beech>
+References: <20021020114251.A7642@pauillac.inria.fr>
+	<r99of9pgf2t.fsf@quimby-xp.cs.cornell.edu>
+	<20021020215847.GA8750@beech>
+Organization: Universite de Mons-Hainaut
+X-Spook: mailbomb Ortega HAMASMOIS chameleon man Comirex ASIO Vickie Weaver
+ FSF radar LABLINK 
+X-Mailer-URL: http://www.mew.org/
+X-Operating-System: GNU/Linux (http://www.linux.org/)
+X-Blessing: Om Ah Hum Vajra Guru Pema Siddhi Hum
+X-Mailer: Mew version 3.0.69 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sun, 20 Oct 2002, Issac Trotts <ijtrotts@ucdavis.edu> wrote:
+> 
+> You might try converting your references to mutable fields.
+>
+> let x = ref 1.0 in
+> let n = int_of_string Sys.argv.(1) in
+> for i = 1 to n do x := !x +. 1.0 done
+> 
+> ./ref 100000000  2.51s user 0.00s system 99% cpu 2.515 total
+> 
+> type t = { mutable f:float };;
+> let x = { f = 1.0 } in
+> let n = int_of_string Sys.argv.(1) in
+> for i = 1 to n do x.f <- x.f +. 1.0 done
+>
+> ./ref2 100000000  1.54s user 0.01s system 100% cpu 1.542 total
+
+A few questions in view of this.  First, on my machine (AMD Athlon
+1GHz running GNU/Linux), the timings give a preference to ref.ml
+
+time ./ref 100000000
+real    0m1.279s user    0m1.280s sys     0m0.000s
+time ./ref2 100000000
+real    0m1.411s user    0m1.380s sys     0m0.000s
+
+What could be a reason for that?
+
+Second, ain't references be optimized when their type is statically
+known to be a float ref (I thought so, please confirm or correct)?
+
+It seems to me there are three main issues concerning floats:
+* storing       (avoid unnecessary indirections but take care of GC)
+* comparisons   (= is not reflexive in IEEE 754 arithmetic)
+* conversions
+
+About "conversions", float : int -> float seems to be slow (compared
+to a cast in C at least).  Is there any way to optimize it when it
+intervene in an algebraic expression?  (Frequently on has to write
+things like: for i=0 to n do let x = float i / float n in ... done)
+
+I understand that float values need to be boxed to "dialog" with
+polymorphic functions.  Let me picture it as
+
+    +--------+  f : float -> float   +--------+
+    |        | --------------------> |        |
+    +--------+                       +--------+
+        |                                |
+        V                                V
+    +--------+                       +--------+
+    | double |                       | double |
+    +--------+                       +--------+
+
+However, couldn't we imagine that functions with float arguments or
+return value have "two interfaces": the standard one (where one knows
+the pointer) and another one (which gives the value) :
+
+    +--------+  f : float -> float   +--------+
+    |        | --------------------> |        |
+    +--------+                       +--------+
+        |                                |
+        V                                V
+    +--------+  f': float -> float   +--------+
+    | double | --------------------> | double |
+    +--------+                       +--------+
+
+The _idea_, in C parlance, is to declare f(x) as &(f'(*x)).  Now, the
+boxing should allow the GC to take care of these values.  But, if a
+function returning a float feeds another function expecting a float,
+the compiler could connect the "bottom lines" instead of passing
+through the pointers:
+
+     f : 'a -> float   +--------+      +--------+  g : float -> 'b
+    -----------------> |        |      |        | -----------------> 
+                       +--------+      +--------+                   
+                           |               |                        
+                           V               V                        
+     f': 'a -> float   +--------+      +--------+  g': float -> 'b   
+    -----------------> | double |----->| double | -----------------> 
+                       +--------+      +--------+ 
+
+This kind of idea could also apply to recursive functions passing
+float values along the recursion...
+
+My question is: is this type of idea workable?  Is it difficult to
+implement?  (In a way it just generalize the special treatment of
+arithmetic expressions.)  Maybe this can be generalized further to put
+float references & equalities under the same umbrella?
+
+Bear in mind I am not a compiler expert (and people even giving
+compiling courses here are not very helpful), so my questions are also
+a way for me to learn a little something...
+
+Cheers,
+ChriS
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

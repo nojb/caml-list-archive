@@ -1,0 +1,146 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id LAA19020 for caml-redistribution; Tue, 21 Nov 1995 11:52:40 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id LAA18938 for <caml-list@pauillac.inria.fr>; Tue, 21 Nov 1995 11:48:54 +0100
+Received: from margaux.inria.fr (margaux.inria.fr [128.93.8.2]) by concorde.inria.fr (8.7.1/8.6.9) with ESMTP id LAA26540 for <caml-list@pauillac.inria.fr>; Tue, 21 Nov 1995 11:48:52 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by margaux.inria.fr (8.6.10/8.6.6) with ESMTP id LAA15677 for <caml-list@margaux.inria.fr>; Tue, 21 Nov 1995 11:48:53 +0100
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35]) by concorde.inria.fr (8.7.1/8.6.9) with ESMTP id LAA26536; Tue, 21 Nov 1995 11:48:50 +0100 (MET)
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id LAA18933; Tue, 21 Nov 1995 11:48:50 +0100
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199511211048.LAA18933@pauillac.inria.fr>
+Subject: Re: curried fns
+To: jharriso@ra.abo.fi (John Harrison)
+Date: Tue, 21 Nov 1995 11:48:50 +0100 (MET)
+Cc: Jocelyn.Serot@lasmea.univ-bpclermont.fr, caml-list@margaux.inria.fr,
+        jharriso@ra.abo.fi
+In-Reply-To: <199511201806.UAA21038@tanichka.abo.fi> from "John Harrison" at Nov 20, 95 08:06:42 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+Status: O
+
+
+> Something I sometimes wonder about is which of the following is more
+> efficient. Perhaps a CAML Light expert can comment.
+> 
+>   let map f =
+>     let rec mapf l =
+>       match l with
+>         [] -> []
+>       | (x::t) -> let y = f x in y::(mapf t) in
+>     mapf;;
+> 
+> or
+> 
+>   let rec map f l =
+>     match l with
+>       [] -> []
+>     | (x::t) -> let y = f x in y::(map f t);;
+
+The answer is clearly: this is compiler dependent!
+
+The first definition is a strange view of map as a (non-recursive)
+function that compute a looping function. The second definition is
+more natural and properly exposes that map gets two arguments. If there
+are no efficiency reasons to prefer the first form I definitively
+prefer the second ``natural'' definition.
+
+The problem is more generally ``how to define functions with 2
+arguments'': there is no syntactic way to define functions with
+multiple arguments in Caml. Thus the user has to encode it, either via
+curryfication or via tuples (let f x y = ... or let f (x,y) = ...).
+Naive compilation of these two encodings is not efficient, let's
+explain why.
+
+Suppose f defined as
+
+   let f x y = body
+or equivalently
+   let f = function x -> function y -> body.
+
+As is explicit on this expanded form, f can be partially applied: if
+e1 evaluates to v1, then the expression f e1 evaluates to a closure
+with code part (function y -> body) and environment part (x, v1).
+Thus the naive compilation of ``f e1 e2'' (or equivalently (f e1) e2)
+starts by calling f with argument v1, then f builds and returns the
+intermediate closure, and this closure is then  applied to (the value
+of) e2. This is inefficient, since we perform 2 function calls and
+vaste memory to build this intermediate closure which is immediately
+applied and becomes garbage.
+
+Now suppose f be defined as
+
+  let f (x, y) = body
+
+the naive evaluation of f (e1, e2) is now:
+1) evaluate e1 and e2 leading to v1 and v2
+2) build the tuple (e1, e2)
+3) call f with this tuple.
+
+Here we perform only one function call, but once again we build an
+intermediate data structure to call the function, and this data
+structure becomes garbage as soon as entering the function.
+
+A clever way of compiling one of this two forms is necessary since
+functions with multiple arguments are mandatory and heavily used. This
+is a bit difficult but the idea is mainly the following:
+ - for curried functions directly call their body when they are
+applied with all their arguments (complete applications).
+ - for functions with tuples directly call their body without
+constructing the tuple (these functions are always completely applied).
+
+Since curried functions are a bit more powerful, since they can be
+partially applied, we may suppose that users will adopt this way of
+encoding multiple arguments. Thus, generally speaking Caml compilers
+optimize the curried form of encoding. These optimizations are not
+always as efficient as the scheme described above, but compilation of
+currification is definitively better than tupling for Caml Light,
+Caml Special Light, Bigloo and Camlot. Caml compilers generally do not
+optimize tupling.
+
+We may now discuss the efficiency of your example.
+The naive form:
+   let rec map f l =
+     match l with
+       [] -> []
+     | (x::t) -> let y = f x in y::(map f t);;
+exposes that map has two arguments. Thus a compiler that optimizes
+complete application of curried functions will efficiently compile the
+recursive call. On the other hand a naive compiler will build the
+partial intermediate closure for each recursive call.
+
+On the other hand, with the first encoding:
+   let map f =
+     let rec mapf l =
+       match l with
+         [] -> []
+       | (x::t) -> let y = f x in y::(mapf t) in
+     mapf;;
+the optimizing compiler may fail to recognize that map may be
+optimized as a curried functions with two arguments: it will instead
+compute a closure for mapf, and generally speaking a closure is less
+efficiently applied.
+An interesting case: the Bigloo compiler performs a so-called
+$\eta$-optimization that automatically rewrite this code to (an
+equivalent of) the first natural one!
+
+The naive compiler will compile naively as usual, but now your code
+effectively require to compute the intermediate closure only once,
+when partially applying map to f. Hence recursive calls to mapf will
+save this extra closure construction, and the second form will be a
+bit more efficient.
+
+In conclusion: prefer the natural encoding, it is clearer and
+compilers are designed to optimize natural code.
+
+Pierre Weis
+----------------------------------------------------------------------------
+WWW Home Page: http://pauillac.inria.fr/~weis
+Projet Cristal
+INRIA, BP 105, F-78153 Le Chesnay Cedex (France)
+E-mail: Pierre.Weis@inria.fr
+Telephone: +33 1 39 63 55 98
+Fax: +33 1 39 63 53 30
+----------------------------------------------------------------------------
+
+
+

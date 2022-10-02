@@ -1,0 +1,92 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA26412 for caml-redistribution; Thu, 28 Oct 1999 19:09:31 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA30704 for <caml-list@pauillac.inria.fr>; Wed, 27 Oct 1999 00:06:32 +0200 (MET DST)
+Received: from math.mit.edu (MATH.MIT.EDU [18.87.0.8])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id AAA27704
+	for <caml-list@inria.fr>; Wed, 27 Oct 1999 00:06:31 +0200 (MET DST)
+Received: from schauder (SCHAUDER.MIT.EDU [18.87.0.69])
+	by math.mit.edu (8.9.3/8.9.3) with ESMTP id SAA07346
+	for <caml-list@inria.fr>; Tue, 26 Oct 1999 18:06:28 -0400 (EDT)
+Date: Tue, 26 Oct 1999 18:06:28 -0400 (EDT)
+From: Christopher Jeris <cjeris@math.mit.edu>
+X-Sender: cjeris@schauder.mit.edu
+To: caml-list@inria.fr
+Subject: [caml] Closures and efficiency
+Message-ID: <Pine.SUN.4.20.9910261748340.6977-100000@schauder.mit.edu>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: weis
+
+I have a sort of naive question regarding the efficiency of higher-order
+functions in data structures, and how well the Ocaml compiler does common
+subexpression elimination on these.
+
+The problem is the following.  I wish to write a universal voice editor
+for music synthesizers.  Now a voice of a synth is characterized by a
+large set of parameters, and this set (the names, ranges, meanings of each
+parameter) is different for each synth.  The first thing it occurred to me
+to do was to write a type:
+
+type yamaha_AN1x_patch = { name: string; (* lots of parameters *) }
+type yamaha_FS1R_patch = (* ... continue ad nauseam *)
+
+But types are not first class; there is no way to write a general piece of
+code which will look at a record type, see what its fields are and do
+something (like display an edit window) which depends on the types of the
+fields.  So instead I write types for meta-data:
+
+type parameter = { name: string; doc: string; values: param_value_set; ... }
+and param_value_set =
+  Enumeration of enum_value list
+| Int_subrange of int * int
+| Strings
+| ...
+and enum_value = { name: string; encoded_value: int }
+
+Now the description of a synth's voice architecture looks like
+
+val yamaha_AN1x_patch =
+  [ {name = "Patch name"; values = Strings};
+    {name = "Filter cutoff frequency"; values = Int_subrange (0, 127)};
+    ... ]
+
+Okay.  Now synths can dump information about their voices via the MIDI
+port, and the protocol for decoding this "sysex dump" into an intelligible
+voice description is different for each synth.  So I need to have a way,
+for each parameter appearing in each synth architecture, to specify its
+translation to and from the raw byte-strings which appear on the MIDI
+port.  If this were a C program, there would be one big translation
+function that would do something like
+
+- to encode an enumerated value, use its index in the list of enumerated
+values for this parameter
+- to encode a string value, use its ASCII representation
+- to encode a member of an integer subrange, use its value minus the
+bottom value of this subrange
+...
+
+But this is too monolithic, and in Ocaml we can put functional values in
+data structures ... so I would rather have, along with each parameter, a
+little function "encoder: param_value -> bytestring" and
+"decoder: bytestring -> param_value" which know how to do the translation
+for _this_ parameter.
+
+Here's the nub of my question.  In a typical synth architecture there are
+very many parameters which take values 0..127.  If I had a function
+
+  int_subrange_encoder: int -> int -> param_value -> bytestring
+
+which took the bounds of a subrange and generated an encoder function for
+values of that subrange, and then in a voice-architecture description I
+had a list of very many records each of which contained an entry
+
+  int_subrange_encoder 0 127
+
+would I suddenly have six million little closures, or would the compiler
+do common-subexpression elimination on them ?  Or am I just taking a
+totally wrongheaded approach ?
+
+thanks,
+Chris Jeris
+
+
+

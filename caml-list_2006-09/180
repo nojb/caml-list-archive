@@ -1,0 +1,80 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.5 required=5.0 tests=AWL,NO_REAL_NAME,SPF_FAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 68A1EBC68
+	for <caml-list@yquem.inria.fr>; Thu, 28 Sep 2006 06:19:13 +0200 (CEST)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k8S4JAEs024082
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Thu, 28 Sep 2006 06:19:12 +0200
+Received: (qmail 11919 invoked by uid 107); 28 Sep 2006 04:19:07 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.102)
+  by selenite.metnet.navy.mil with SMTP; 28 Sep 2006 04:19:07 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id CBC0EAC04; Wed, 27 Sep 2006 21:15:22 -0700 (PDT)
+To: Xavier.Leroy@inria.fr
+Cc: caml-list@inria.fr
+Subject: out-of-heap data structures
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20060928041522.CBC0EAC04@Adric.metnet.fnmoc.navy.mil>
+Date: Wed, 27 Sep 2006 21:15:22 -0700 (PDT)
+X-Miltered: at concorde with ID 451B4D3E.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; oleg:01 ad-hoc:01 marshaling:01 hashing:01 heap:01 pointers:01 pointers:01 metaocaml:01 ocaml:01 recompile:01 ocamlopt:01 flags:01 metaocaml:01 struct:01 ocaml:01 
+
+
+Xavier Leroy wrote:
+> There is one caveat: ad-hoc polymorphic primitives (structural
+> equality and comparisons, marshaling, hashing) will not work on data
+> structures that reside outside of the Caml heap.  The reason is that
+> these primitives treat out-of-heap pointers as opaque data.  There is
+> a special case (the "Is_atom" test) for pointers that correspond to
+> ocamlopt-generated static data, but extending this special case is
+> nonobvious.
+
+Actually, MetaOCaml has done such an extension. The extension is
+general purpose and backward compatible. Furthermore, no base OCaml
+sources were harmed in the process: there is no need to recompile
+ocamlopt or the standard library. The linking of the final executable
+does require a few extra flags.
+
+
+The Is_atom test in the ocamlopt-produced executables checks if the
+address of the tested value falls within the data segment of the
+executable. Alas, if we permit dynamic loading of ocaml-opt compiled
+code, static data no longer reside in one segment (within one
+continuous range of virtual addresses). Therefore, modifications are
+necessary.
+
+Native MetaOCaml (or, to be precise, the dynamic linking part of it)
+has carried out such modifications. The Is_atom test now reads
+
+CAMLextern struct DYNlimits caml_static_data_limits; /* in new ndl.c */
+#define Is_atom(v) \
+  ((((char *)(v) >= caml_static_data_start \
+     && (char *)(v) < caml_static_data_end) \
+    || ((v) >= Atom(0) && (v) <= Atom(255))\
+    || (caml_static_data_limits.used != 0 && \
+	within_DYNlimitsP((void *)v,&caml_static_data_limits))))
+
+The change is fully backward-compatible: if no dynamic linking is used
+(or if the data segment is indeed contiguous), the field
+caml_static_data_limits.used has the value 0 and Is_atom works exactly
+as before. The additional cost then is dereferencing of a static
+address -- which could be as few as two instructions (test and branch)
+on some architectures.
+
+It seems the extension can be used for maintaining `out-of-heap' OCaml
+structures. One can have as many such heaps as needed. One merely need
+to register the range of these extra-heap addresses.
+
+The code can be found in the directory natdyn of the current MetaOCaml
+distribution, specifically files mlvalues.h and ndl.c. The Makefile
+contains the necessary voodoo to get the changes take effect.
+

@@ -1,0 +1,144 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 67FA3BB9A
+	for <caml-list@yquem.inria.fr>; Sat, 22 Oct 2005 03:59:25 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j9M1xOqa007641
+	for <caml-list@yquem.inria.fr>; Sat, 22 Oct 2005 03:59:24 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA05100 for <caml-list@pauillac.inria.fr>; Sat, 22 Oct 2005 03:59:24 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j9M1xMaE030588
+	for <caml-list@inria.fr>; Sat, 22 Oct 2005 03:59:23 +0200
+Received: from localhost (suiren [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.1/8.13.1) with ESMTP id j9M1xIPe009664;
+	Sat, 22 Oct 2005 10:59:19 +0900 (JST)
+Date: Sat, 22 Oct 2005 10:59:17 +0900 (JST)
+Message-Id: <20051022.105917.85812016.garrigue@math.nagoya-u.ac.jp>
+To: matt@gushee.net
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Polymorphic class types?
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <4359534A.7080706@gushee.net>
+References: <4359534A.7080706@gushee.net>
+X-Mailer: Mew version 4.2 on Emacs 21.3 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce with ID 43599CFC.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 43599CFA.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 programmer's:01 bool:01 handler:01 lablgtk:01 inference:01 lablgtk:01 bool:01 widget:01 widget:01 subtypes:01 positioning:98 ...:98 ...:98 collapse:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+From: Matt Gushee <matt@gushee.net>
+
+> So you are probably starting to get a sense of the problem: I need a
+> basic framework of display logic that is independent of the application
+> data, for positioning cards on the canvas, handling events, etc. But I
+> also need to be able to get and set the content of cards in response to
+> GUI events--the content being some arbitrary data structure, as
+> mentioned above.
+
+The trouble with your approach (that I leave below) is that you do not
+distinguish between the programmer's view of the card and the canvas
+view of the card. Clearly the canvas does not need to know what is in
+the card, just how to show it.
+
+So you have a type
+
+class type card = object
+  method id : string
+  method place : int -> int -> unit
+  method show : ?expanded:bool -> unit -> unit
+  method hide : unit -> unit
+  method expand : unit -> unit
+  method collapse : int -> int -> unit
+  method title : string
+end
+
+(everything but contents)
+
+and another type
+
+class type ['a] data_card = object
+  inherit card
+  method content : (string * 'a) list
+end
+
+which real cards will implement.
+
+Then you canvas does not need a type parameter:
+
+class type cp_canvas = object
+  ...
+  method cards : card list
+  method get_card : string -> card
+  method add_card : card -> unit
+  ...
+end
+
+Now you will say: but when I use get_card I won't be able to get to
+the real card anymore.
+Sure, but that's not really a problem. Actually, in my experience I
+would never use get_card anyway. If I have a way to connect events to
+card, then I will define one handler for each card (or card family),
+that will internally know the type of the exact card, so everything
+works ok.
+
+Lablgtk basically works that way: you add widgets to the GUI
+structure, but you never try to extract information about them
+afterwards.
+One exception if for widgets the toolkit created for you internally,
+for which you don't have enough information. But if you're designing
+the toolkit this should not happen...
+
+A smaller technical point: you are going to have to coerce your cards
+to the type card. This can be done through (mycard :> card), but in
+practice type inference is slow for that, and you don't want to see
+the error message when it fails.
+The approach in Lablgtk is to define a concrete class card, which
+would include a coercing method
+class virtual card = object (self)
+   ...
+   method as_card = (self :> card)
+end
+This way you just have to call the method to coerce any subclass to
+the required type.
+
+Jacques Garrigue
+
+> So I have been trying to work with parameterized class type like this:
+> 
+>   class type ['a] card = object
+>     method id : string
+>     method place : int -> int -> unit
+>     method show : ?expanded:bool -> unit -> unit
+>     method hide : unit -> unit
+>     method expand : unit -> unit
+>     method collapse : int -> int -> unit
+>     method content : (string * 'a) list
+>     method title : string
+>   end
+> 
+>   class type ['a] cp_canvas = object
+>     method base : Widget.canvas Widget.widget
+>     method cards : 'a card list
+>     method get_card : string -> 'a card
+>     method add_card : 'a card -> unit
+>     method show : selection -> unit
+>     method hide : selection -> unit
+>     method expand : selection -> unit
+>     method collapse : selection -> unit
+>   end
+> 
+> But I don't think it's going to work. The sticking point is that there
+> need to be various subtypes of cards, each with appropriate display
+> logic for its content type, yet the canvas needs to be able to manage
+> cards in a generic manner--i.e. it needs to work with the 'card'
+> type--but of course that type doesn't exist, because 'card' takes a
+> parameter, right?
+

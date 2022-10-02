@@ -1,0 +1,252 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA30588 for caml-redistribution; Mon, 18 Oct 1999 16:19:59 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA22651 for <caml-list@pauillac.inria.fr>; Sun, 17 Oct 1999 21:06:50 +0200 (MET DST)
+Received: from isil.maya.com (HOPKINS.PC.CS.CMU.EDU [128.2.215.35])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id VAA14407
+	for <caml-list@inria.fr>; Sun, 17 Oct 1999 21:06:46 +0200 (MET DST)
+Received: (from prevost@localhost)
+	by isil.maya.com (8.9.3/8.9.3) id PAA14722;
+	Sun, 17 Oct 1999 15:13:35 -0400
+Sender: weis
+To: skaller <skaller@maxtal.com.au>
+Cc: caml-list@inria.fr
+Subject: Re: Thoughts on O'Labl O'Caml merge.
+References: <m3u2nt334c.fsf@isil.maya.com> <3809AC91.4E85FB85@maxtal.com.au>
+From: John Prevost <prevost@maya.com>
+Date: 17 Oct 1999 15:13:35 -0400
+In-Reply-To: skaller's message of "Sun, 17 Oct 1999 21:01:37 +1000"
+Message-ID: <m367054x7k.fsf@isil.maya.com>
+Lines: 227
+User-Agent: Gnus/5.070096 (Pterodactyl Gnus v0.96) Emacs/20.4
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+
+skaller <skaller@maxtal.com.au> writes:
+
+> When a function requires a struct with certain labels,
+> we can use a product with 'enough' labels of the right type 
+> PROVIDED the fields are immuable.
+> 
+> HOWEVER, these rules break down in the presence
+> of mutable fields. The rule then is the dual,
+  ... covariant, contravariant, invariant ...
+
+Ahh.  Yeah, I'd forgotten this since I'm usually thinking in terms of
+immutable values.  This gives, I think, greater understanding of why
+O'Caml's object system is made more powerful by not allowing object
+fields to be accessed outside the object they're part of.  (As opposed
+to more traditional languages, which allow it within the entire
+class.)
+
+Guess that row-polymorphic structs aren't such a good idea, then.  :)
+
+
+An aside about object design and O'Caml:
+
+Something I noted when explaining the O'Caml object system to some
+friends was a couple of places where choice of interface can be rather
+more subtle than, say, in Java.  Specifically in the
+point/colored_point, circle/colored_circle examples from the manual
+(which I changed a little in my examples).
+
+class point =
+  object
+    val mutable x = 0
+    method get_x = x
+    method move d = x <- x + d
+  end
+
+type color =
+  | Red
+  | Green
+  | Blue
+
+class colored_point =
+  object
+    val mutable c = Red
+    method get_color = c
+    method set_color nc = c <- nc
+  end
+
+class ['a] circle (center : 'a) =
+  object
+    constraint 'a = #point
+    val mutable center = center
+    method get_center = center
+    method set_center x = center <- x
+    method move = center #move
+  end
+
+This was my first quick pass (you can tell I wasn't referring to the
+manual too much.)  To my chagrin, even without the colored_circle
+class, this doesn't perform the way you want it to:
+
+# let p = new point
+# let cp = new colored_point;;
+
+> val p : point = <obj>
+> val cp : colored_point = <obj>
+
+# let c = new circle p
+# let cc = new circle cp;;
+
+> val c : point circle = <obj>
+> val cc : colored_point circle = <obj>
+
+# (cc :> point circle);;
+
+> Characters 1-3:
+> This expression cannot be coerced to type
+>   point circle =
+>     < get_center : point; move : int -> unit; set_center : point -> unit >;
+> it has type
+>   colored_point circle =
+>     < get_center : colored_point; move : int -> unit;
+>       set_center : colored_point -> unit >
+> ... removed
+
+Without even thinking, I chose a poor interface for my circle class.
+In fact, the type of colored_point is unfortunate, too.  But since I
+can't have subtypes of sum types in O'Caml, it's not really a problem.
+If I were to use a class for this, or an O'Labl polymorphic variant,
+then it becomes an issue.
+
+The real problem in both of these cases is that in a powerfully typed
+OO world like O'Caml, it's dangerous to treat a class as a container
+when it isn't really.  First, it constrains the type overmuch, making
+types you'd think to be subtypes not.  Second, a major part of what
+this constraint is doing in the above case is revealing the
+implementation details of the class.  I repeat the poor definition of
+'a circle with notes and its class type:
+
+# class ['a] circle (center : 'a) =
+#   object
+#     constraint 'a = #point
+#     val mutable center = center
+#     method get_center = center
+#     method set_center x = center <- x
+#     method move = center #move
+#   end;;
+
+> class ['a] circle :                    (* invariant 'a *)
+>   'a ->
+>   object
+>     constraint 'a = #point
+>     val mutable center : 'a
+>     method get_center : 'a             (* covariant 'a *)
+>     method set_center : 'a -> unit     (* contravariant 'a *)
+>     method move : int -> unit
+>   end
+
+Okay, so the obvious symptom of the disease is that 'a appears
+covariantly in get_center, and contravariantly in set_center.  But
+what's the root cause of these symptoms?
+
+Quite simply, I was clever and decided that if there were a get_blah
+method, and blah is mutable, there ought to be a set_blah method.  Of
+course, I was wrong.  Or was I?
+
+The other aspect of this definition is that it reveals the type of the
+center.  This is useful in one respect--we can use it to define
+colored_circle:
+
+# class ['a] colored_circle (p : 'a) =
+#   object
+#     inherit ['a] circle p
+#     method get_color = p #get_color
+#     method set_color = p #set_color
+#   end
+
+But here's a question: why do we want to expose the fact that the
+implementation uses a colored_circle to contain its center??  This may
+be a perfectly fine representation, but it's not really reasonable to
+expose it in this way.
+
+The model used by the documentation to get around this (though there
+was no discussion of what was going on) was to delegate to the point
+rather than allow it to be set.  But getting the center was still
+allowed.  I don't think it should have been.  Here's are reasonable
+class types for circle and colored_circle, assuming that the rest of
+things (like how color works) are reasonable:
+
+class type circle :
+  object
+    method set_center : point -> unit
+    method get_center : point
+    method move : int -> unit
+  end
+
+class type colored_circle :
+  object
+    inherit circle
+    method set_color : color -> unit
+    method get_color : color
+  end
+
+Now.  Why are these types appropriate?  Don't they restrict the
+implementations to use only points?  Not in the least!  But what they
+do do is hide the implementation from the user of the above interface.
+
+The new semantics is that set_center means "move to the same position
+as the passed-in point" and get_center means "return a point
+representing the position of the center of the circle".  Of course,
+one must also define whether or not changes in these points will
+affect the circle.
+
+Notice that colored_circle does not demand colored_points here.  We
+can now write:
+
+class colored_circle2 =
+  object
+    val mutable p = new point
+    val mutable c = Red
+    method set_center p' =
+      let cx = p #get_x in
+      let dx = p' #get_x - cx
+      in p #move dx (* Whoops.  Point has no "set" method. *)
+    method get_center = Oo.clone p
+    method set_color c' = c <- c'
+    method get_color = c
+  end
+
+This shows how something can satisfy the colored_circle interface more
+easily now.
+
+Finally, what we really want to say about the circle class type is (in
+the latest O'Labl notation):
+
+class type circle :
+  object
+    method set_center : 'a . #point as 'a -> unit
+    method get_center : point
+    method move : int -> unit
+  end
+
+This definition shows that anything implementing the same interface as
+point may be used.  I'm still not entirely sure about this feature of
+O'Labl.  Having the ability to make polymorphic methods is nice, but
+the greater need to specify types of values in O'Labl is rather
+upsetting.
+
+
+So, I think the result of this experience is as follows:
+
+  * Treating classes as containers when they're really only delegating
+    work to another class is dangerous--you expose the nature of the
+    class you're delegating to, and make it difficult for subtypes of
+    your class to delegate to different types of objects.
+
+  * Sometimes it is appropriate to use a specific type instead of an
+    object-scope type variable.  Especially when you're setting up an
+    API.  This allows you to further hide the implementation details
+    from API users.
+
+  * Finally, method-scope polymorphism makes life simpler since you
+    can pass subtypes more freely, as you can do with function
+    polymorphism.  (i.e. no more "circ #set_center (cp :> point)", or
+    at least not as much.)
+
+
+John.
+
+
+

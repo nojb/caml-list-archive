@@ -1,0 +1,113 @@
+Return-Path: <michael@elehack.net>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 9F38CBBAF
+	for <caml-list@yquem.inria.fr>; Thu, 11 Nov 2010 15:15:22 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvsEAKuJ20yty1O7/2dsb2JhbACiQnHAQoVKBIRaiQka
+X-IronPort-AV: E=Sophos;i="4.59,183,1288566000"; 
+   d="scan'208";a="65481128"
+Received: from elehack.net ([173.203.83.187])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 11 Nov 2010 15:14:47 +0100
+Received: from [192.168.42.103] (unknown [68.168.162.166])
+	by elehack.net (Postfix) with ESMTPSA id E4326C8956
+	for <caml-list@yquem.inria.fr>; Thu, 11 Nov 2010 08:17:22 -0600 (CST)
+Message-ID: <4CDBFA53.5020009@elehack.net>
+Date: Thu, 11 Nov 2010 08:14:43 -0600
+From: Michael Ekstrand <michael@elehack.net>
+User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en-US; rv:1.9.2.12) Gecko/20101027 Lightning/1.0b2 Thunderbird/3.1.6
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Average cost of the OCaml GC
+References: <AANLkTinaSS+QOCJ8AA9LMMM9OHZMKZ2NVQr9KY48XkK_@mail.gmail.com>	<87bp5w1b47.fsf@frosties.localnet> <AANLkTinfyffP8CMj0R2B1qtH_PxE-MdUC-q5Ny_pDdgL@mail.gmail.com>
+In-Reply-To: <AANLkTinfyffP8CMj0R2B1qtH_PxE-MdUC-q5Ny_pDdgL@mail.gmail.com>
+X-Enigmail-Version: 1.1.2
+Content-Type: text/plain; charset=windows-1252
+Content-Transfer-Encoding: 8bit
+X-Spam: no; 0.00; ocaml:01 ocaml:01 'self:01 'self:01 alloc:01 alloc:01 pointers:01 'as:01 chunks:01 patched:01 bigarray:01 bigarray:01 allocating:01 bigarrays:01 allocations:01 
+
+On 11/11/2010 07:52 AM, Jianzhou Zhao wrote:
+> On Thu, Nov 11, 2010 at 4:08 AM, Goswin von Brederlow <goswin-v-b@web.de> wrote:
+>> Jianzhou Zhao <jianzhou@seas.upenn.edu> writes:
+>>
+>>> Hi,
+>>>
+>>> What is the average cost of the OCaml GC? I have a program that calls
+>>> 'mark_slice' in 57% of the total execution time, and calls
+>>> 'sweep_slice' in 21% of the total time, reported by Callgrind, which
+>>> is a profiling tool in Valgrind. 57% and 21% are the 'self cost' ---
+>>> the cost of the function itself ('Self Cost'), rather than the cost
+>>> including all called functions ('Inclusive Cost'). I guess
+>>> 'mark_slice'  and  'sweep_slice'  are functions from OCaml GC. Are
+>>> these numbers normal?
+>>
+>> Those numbers sound rather high to me.
+
+They sound high to me as well, but not unheard of - I sometimes measure
+a lot of time in the GC.
+
+>>> My program calls both OCaml and C, which passes around C data types in
+>>> between. I also doubt if I defined the interface in an 'unefficient'
+>>> way that slows down the GC. Are there any rules in mind to make GC
+>>> work more efficiently?
+>>
+>> You can tune some of the GC parameters to suit your use case.
+>>
+>> Do you allocate custom types from C? In caml_alloc_custom(ops, size,
+>> used, max) the used and max do influence the GC how often to run.
+> 
+> Yes. The code uses caml_alloc_custom to create a lot of small objects
+> (less then 8 bytes) frequently. The used and max are set to be
+> default, 0 and 1. The manual says
+>   http://caml.inria.fr/pub/docs/manual-ocaml/manual032.html#toc140
+> 
+> /////////////////////
+> If your finalized blocks contain no pointers to out-of-heap resources,
+> or if the previous discussion made little sense to you, just take used
+> = 0 and max = 1. But if you later find that the finalization functions
+> are not called “often enough”, consider increasing the used / max
+> ratio.
+> //////////////////////
+> 
+> Does this mean the default used and max let GC do finalization 'as
+> slow as possible'? This does not seem to be the case if the costs 57%
+> and 20% are too high.
+
+Yes, with respect to GC cycles triggered by "too much" custom data
+allocation.
+
+There are a variety of things that can cause GC thrashing.  One of them
+is the GC "space overhead" parameter, which controls how aggressive the
+GC is at reclaiming memory.  Another is your minor heap size - if your
+minor heap is too small, it can cause excess GC activity.  I documented
+the parameter tuning I have done to reduce GC cost on my blog[1], but
+here's a short summary:
+
+ * Increase minor heap size.  I usually use 1M or 4M words; my general
+rule of thumb is that I want one "work unit" with its temporary storage
+requirements to fit in a minor heap.  This decreases the frequency both
+of minor collections and major slices.
+ * Increase space_overhead; I increase this to 100 or 200 (the default
+is 80), as I typically run my large codes on machines with lots of spare
+RAM and can accept a space-speed tradeoff.
+ * Increase the heap increment.  If your process will require lots of
+RAM, this lets it allocate that memory in bigger chunks further
+decreasing the memory overhead.
+
+I also use a patched Bigarray that allows me to set the "max" parameter
+it uses in its invocations of caml_alloc_custom, but if you are not
+using bigarray that shouldn't be impacting your program's performance.
+It's quite critical when allocating large bigarrays, though!  Having
+custom blocks allocated near or above the "max" param is a sure-fire
+recipe for GC thrashing.  It sounds like you're avoiding that pitfall,
+though.
+
+So, the short short story: you're doing many of the right things
+(measuring, not letting custom allocations thrash the GC).  Some more
+parameter tuning will hopefully help you decrease your GC overhead.
+
+1. http://elehack.net/michael/blog/2010/06/ocaml-memory-tuning
+
+- Michael
+

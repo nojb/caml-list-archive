@@ -1,0 +1,129 @@
+Return-Path: <jianzhou.zh@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 2F04BBBAF
+	for <caml-list@yquem.inria.fr>; Mon, 25 Oct 2010 18:20:14 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Am4BAJZLxUzRVaE0kGdsb2JhbACTao1sCBYBAQEJCQwHEQMfogCLb4YoI4hiAQEDBYVDBIpNiRg
+X-IronPort-AV: E=Sophos;i="4.58,236,1286143200"; 
+   d="scan'208";a="84557476"
+Received: from mail-fx0-f52.google.com ([209.85.161.52])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 25 Oct 2010 18:19:57 +0200
+Received: by fxm12 with SMTP id 12so2376343fxm.39
+        for <caml-list@yquem.inria.fr>; Mon, 25 Oct 2010 09:19:56 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:sender:received:date
+         :x-google-sender-auth:message-id:subject:from:to:content-type;
+        bh=BU+6F/r9d9/2nMuiM7bZRgU8VkirL7/kqnzDnGES96k=;
+        b=PRETf99DAivc+Hm/+kuH/5ODISqTi22I6mSPQxMCPIqic3Rlw6Wh4zwpLVAp5kvz3T
+         p7DQBM6GvhCd5zUfP3X0YtJuWifRgwL8gC4r5LCK1OkiAHw/RakQolKThV6jo7A61NGb
+         mirjcQSHFGud/Ulh8jMzvi9xwHdgYfwdrOufg=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:sender:date:x-google-sender-auth:message-id:subject
+         :from:to:content-type;
+        b=DhodOOC8Nkp0k84ecXXVA4GIzT8TEFyLOMdYqrd/CLNG+hJi1IXGNNZo7kuJgHoxcx
+         BVwrCZEMxKldbOoaJIZIP8SwHBr+GJHYgaBrYI4T7R/l0RkxkWlMml5gVAVqCh1luScV
+         SZNSxM5ICLjJwBkNxQZ6KM0juPglwC6MF78hQ=
+MIME-Version: 1.0
+Received: by 10.216.6.195 with SMTP id 45mr544474wen.86.1288023596496; Mon, 25
+ Oct 2010 09:19:56 -0700 (PDT)
+Sender: jianzhou.zh@gmail.com
+Received: by 10.217.0.80 with HTTP; Mon, 25 Oct 2010 09:19:56 -0700 (PDT)
+Date: Mon, 25 Oct 2010 12:19:56 -0400
+X-Google-Sender-Auth: SpokkST6Qja0hsyGicRA8-_E-jY
+Message-ID: <AANLkTimJyz6t66K0OPW7xHsr5og22HkSws46vZhv-P93@mail.gmail.com>
+Subject: When can we ignore CAMLparam and CAMLreturn?
+From: Jianzhou Zhao <jianzhou@seas.upenn.edu>
+To: caml-list@yquem.inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; camlparam:01 camlreturn:01 bindings:01 camlprim:01 wosize:01 val:01 malloc:01 sizeof:01 val:01 alloc:01 ocaml:01 hashing:01 struct:01 hash:01 serialize:01 
+
+Hi All,
+
+Here is the code from LLVM-OCaml bindings.
+
+/////////////////
+/* llvalue -> GenericValue.t array -> ExecutionEngine.t -> GenericValue.t */
+CAMLprim value llvm_ee_run_function(LLVMValueRef F, value Args,
+                                   LLVMExecutionEngineRef EE) {
+ unsigned NumArgs;
+ LLVMGenericValueRef Result, *GVArgs;
+ unsigned I;
+
+ NumArgs = Wosize_val(Args);
+ GVArgs = (LLVMGenericValueRef*) malloc(NumArgs * sizeof(LLVMGenericValueRef));
+ for (I = 0; I != NumArgs; ++I)
+   GVArgs[I] = Genericvalue_val(Field(Args, I));
+
+ Result = LLVMRunFunction(EE, F, NumArgs, GVArgs);
+
+ free(GVArgs);
+ return alloc_generic_value(Result);
+}
+////////////////////////
+
+In this code,  GenericValue.t is an Ocaml value with custom_operations
+(say finalizing, hashing, serializing or deserializing a C type) as
+shown in the below.
+
+////////////////////////////
+ #define Genericvalue_val(v)  (*(LLVMGenericValueRef *)(Data_custom_val(v)))
+
+ static void llvm_finalize_generic_value(value GenVal) {
+   LLVMDisposeGenericValue(Genericvalue_val(GenVal));
+ }
+
+ static struct custom_operations generic_value_ops = {
+   (char *) "LLVMGenericValue",
+   llvm_finalize_generic_value,
+   custom_compare_default,
+   custom_hash_default,
+   custom_serialize_default,
+   custom_deserialize_default
+ };
+
+ static value alloc_generic_value(LLVMGenericValueRef Ref) {
+   value Val = alloc_custom(&generic_value_ops,
+sizeof(LLVMGenericValueRef), 0, 1);
+   Genericvalue_val(Val) = Ref;
+   return Val;
+ }
+ ////////////////////////////////////
+
+The 'llvm_ee_run_function' does not protect the Args parameter by
+CAMLparam with CAMLreturn. Is this safe in this case, because we
+allocated a GVArgs? The Ocaml manual suggests to use CAMLparam for any
+value parameters
+(http://caml.inria.fr/pub/docs/manual-ocaml/manual032.html#toc140). In
+the other LLVM bindings files, the code sometimes also ignores
+CAMLparam and CAMLreturn if Caml "value" refers to unit or string. Is
+it also safe? for example.
+
+/* string -> lltype -> llmodule -> llvalue */
+CAMLprim LLVMValueRef llvm_define_function(value Name, LLVMTypeRef Ty,
+LLVMModuleRef M) {
+   LLVMValueRef Fn = LLVMAddFunction(M, String_val(Name), Ty);
+   LLVMAppendBasicBlockInContext(LLVMGetTypeContext(Ty), Fn, "entry");
+   return Fn;
+}
+
+I have been working on extending this Ocaml bindings, but got some
+inconsistent results at runtime. I used Valgrind to check my program,
+it reports some invalid writes or reads in C overlapping with some
+memory space managed by Ocaml, but the report is not detailed enough.
+so I doubt if the binding code does any thing wrong. Is there any tool
+to help analyzing if the code manages memory between C and OCaml
+bindings correctly?
+
+Thanks
+-- 
+Jianzhou
+
+
+
+-- 
+Jianzhou
+

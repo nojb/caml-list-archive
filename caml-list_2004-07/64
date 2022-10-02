@@ -1,0 +1,120 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA25269; Wed, 7 Jul 2004 11:13:40 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA25345 for <caml-list@pauillac.inria.fr>; Wed, 7 Jul 2004 11:13:40 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i679DdSH016290
+	for <caml-list@inria.fr>; Wed, 7 Jul 2004 11:13:39 +0200
+Received: from bourg.inria.fr (bourg.inria.fr [128.93.11.100]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA25107 for <caml-list@inria.fr>; Wed, 7 Jul 2004 11:13:39 +0200 (MET DST)
+Received: from basile by bourg.inria.fr with local (Exim 4.34)
+	id 1Bi8UG-0006uM-Tb
+	for caml-list@inria.fr; Wed, 07 Jul 2004 11:13:08 +0200
+Date: Wed, 7 Jul 2004 11:13:08 +0200
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Does Caml have slow arithmetics ?
+Message-ID: <20040707091308.GA26172@bourg.inria.fr>
+References: <Pine.A41.4.44.0407070835130.958588-100000@ibm1>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+In-Reply-To: <Pine.A41.4.44.0407070835130.958588-100000@ibm1>
+User-Agent: Mutt/1.5.6+20040523i
+From: "Basile Starynkevitch [local]" <basile.starynkevitch@inria.fr>
+X-Miltered: at concorde with ID 40EBBEC3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 arithmetics:01 basile:01 basile:01 2004:99 pons:01 arithmetics:01 slower:01 'pure':01 ocamlopt:01 avoiding:01 tagging:01 alu:99 non-trivial:01 ocamlopt:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Wed, Jul 07, 2004 at 08:45:51AM +0200, Diego Olivier Fernandez Pons wrote:
+
+> Does the Caml integer/pointer bit trick make arithmetics slower (with
+> respect to 'pure' 32 bit arithmetics) because of some mask/shift
+> intermediate operations or is it just the same ?
+
+In principle yes, because int values are represented as tagged
+(31bits) ints (with the LSB set to 1). So conversion is a shift
+followed by an addition (or viceversa).
+
+However, ocamlopt does do many optimisations (eg avoiding tagging &
+untagging the same value, etc...). Also, on modern processors, simple
+ALU operations are extremly fast, faster than most accesses to memory.
+
+
+> Actually I haven't seen any significative performance difference with
+> respect to a similar C++ code I have done, what I wasn't expecting.
+> That is why I am asking.
+
+In practice, real code do memory allocation, pattern matching,
+etc.. On this, Ocaml excels (and perform probably better than C or
+C++); more generally, Ocaml is good for real non-trivial programs.
+
+But for toy programs, arithmetic is a bit faster with C than with
+Ocamlopt. On my slow PentiumIII 1GHz, I've tested (the running time is
+in comments at end of each example, the Ocaml compiler[s] are the
+latest CVS, ie almost future 3.08)
+
+################################################################
+(* file eml.ml *)
+let slowmul x y = 
+  let rec muloop x y p =
+    if (y>0) then muloop x (y-1) (p+x) else p
+  in 
+  if y<0 then muloop (-x) (-y) 0
+  else muloop x y 0
+;;
+
+let main () = 
+  let s = ref 0 in
+  for i = 0 to 2000 do
+    if (i mod 64 = 0) then Printf.printf "i=%d\n%!" i;
+    for j = 0 to 3000 do 
+      s := !s  + slowmul i j
+    done
+  done;
+  Printf.printf "s=%d\n%!" !s
+in main ();;
+(* time ./eml (compiled with ocamlopt -inline 9) is 25.360 total *)
+################################################################
+// file em.c
+#include <stdio.h>
+int slowmul(int x, int y) {
+  int p=0;
+  if (y<0) { x= -x; y= -y; };
+  while (y>0) {p+=x; y--;};
+  return p;
+}
+
+int main() {
+  int s=0, i, j;
+  for (i=0; i<=2000; i++) {
+    if (i%64 == 0) printf("i=%d\n", i);
+    for (j=0; j<=3000; j++) 
+      s += slowmul(i,j);
+  };
+  printf("s=%d\n", s);
+  return 0;
+}
+// time ./em (compiled with gcc-3.3 -O3) is 19.095 sec
+################################################################
+
+As you can see on this simple test, Ocamlopt produce a program 1.32
+times slower than gcc, and if you have a glance at the generated
+assembly, you see some tagging stuff appearing.
+
+For completeness, the above eml.ml program bytecompiled by ocamlc to
+eml.byte is run in 381.5 seconds -more than 6 minutes- by my
+ocamljitrun (see http://cristal.inria.fr/~starynke/ocamljit.html) and
+in 1780 seconds (yes, more than 29 minutes, almost half an hour!) by
+the standard ocamlrun interpreter.
+
+Regards.
+-- 
+Basile STARYNKEVITCH -- basile dot starynkevitch at inria dot fr
+Project cristal.inria.fr - phone +33 1 3963 5197 - mobile 6 8501 2359
+http://cristal.inria.fr/~starynke --- all opinions are only mine 
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,133 @@
+Return-Path: <j.prevost@gmail.com>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id EC447BC40
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 18:26:36 +0100 (CET)
+Received: from rproxy.gmail.com (rproxy.gmail.com [64.233.170.206])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id i9VHQaF4019865
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 18:26:36 +0100
+Received: by rproxy.gmail.com with SMTP id 77so69282rnl
+        for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 09:26:35 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:in-reply-to:mime-version:content-type:content-transfer-encoding:references;
+        b=oMoYqt1Su4q9qLT23k7Dx1+/b8R4+4s0pnW5cl5ELGcpKgxgyOqYp+faYm1qiqwtiOXPX9r0PbvUp5Odp9Mbksz29Q4lot7siZ1rx64IklIw/5zd42v4TxCfhlboVkBUUzA6ItW7Y9iXf41EKB8XJsrKDafx7DSBRAo3QSccFVA=
+Received: by 10.38.66.58 with SMTP id o58mr254051rna;
+        Sun, 31 Oct 2004 09:26:34 -0800 (PST)
+Received: by 10.38.14.54 with HTTP; Sun, 31 Oct 2004 09:26:34 -0800 (PST)
+Message-ID: <d849ad2a0410310926466aae40@mail.gmail.com>
+Date: Sun, 31 Oct 2004 12:26:34 -0500
+From: John Prevost <j.prevost@gmail.com>
+Reply-To: John Prevost <j.prevost@gmail.com>
+To: caml-list@yquem.inria.fr, Hal Daume III <hdaume@isi.edu>
+Subject: Re: [Caml-list] bigarrays much lower than normal ones
+In-Reply-To: <Pine.LNX.4.44.0410310750180.22156-100000@albini.isi.edu>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <Pine.LNX.4.44.0410310750180.22156-100000@albini.isi.edu>
+X-Miltered: at nez-perce with ID 4185204C.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 bigarrays:01 wrote:01 arrays:01 bigarray:01 unacceptable:01 bigarrays:01 bigarray:01 val:01 val:01 defines:01 compiler:01 arrays:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=RCVD_BY_IP autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+On Sun, 31 Oct 2004 08:05:46 -0800 (PST), Hal Daume III <hdaume@isi.edu> wrote:
+> I've been hitting the limiting size of normal float arrays and was having
+> a look at the Bigarray module.  Unfortunately, it seems roughly 3-4 times
+> *slower* than the standard array, which is pretty much unacceptable for
+> me.  Am I doing something naively wrong, or are the Bigarrays truly this
+> slow?
+
+It is indeed possible to speed things up by quite a lot.  There are a
+few factors at play that make your code slower than it has to be, but
+the dominant factor is that your Bigarray version of normalize is much
+more polymorphic than it needs to be:
+
+val normalize : (float, 'a, 'b) Bigarray.Array1.t -> unit = <fun>
+
+Compared to this for the normal array version:
+
+val normalize : float array -> unit = <fun>
+
+In the Array version, there's only one type parameter to worry about
+at compile time--what goes into the array.  That defines everything
+you need to know.  This is important because the compiler makes
+optimizations for arrays of floating point numbers when it has the
+ability to.  When a function is polymorphic, on the other hand, it has
+to generate more generic code.
+
+You noted that float32 was slower than float64: That's because
+O'Caml's native float representation is always a 64-bit value.  In the
+polymorphic version of normalize, the code has to figure out whether
+it's working with a float32 or a float64 representation when it pulls
+the values out.  The other type variable, which defines the array
+layout (C or Fortran) also needs to be cut down to avoid over-generic
+code.
+
+I tried some other modifications, trying to remove overhead from
+bounds checking--but it turns out that those modifications actually
+slowed things down.  :)  In any case, the version with restricted
+polymorphism on normalize sped things up a *lot*.
+
+Unmodified Array:
+real    1m30.292s
+user    1m30.190s
+sys     0m0.110s
+
+Unmodified Bigarray:
+real    3m31.446s
+user    3m31.310s
+sys     0m0.130s
+
+Modified Bigarray (restricted polymorphism):
+real    1m37.916s
+user    1m37.810s
+sys     0m0.120s
+
+------------
+open Bigarray
+
+let normalize
+ (a : (float, Bigarray.float64_elt, Bigarray.c_layout) Bigarray.Array1.t) =
+ let _N = Array1.dim a in
+ let rec sum n acc =
+   if n >= _N then acc
+   else sum (n+1) (acc +. Array1.get a n) in
+ let s = sum 0 0. in
+   for i = 0 to _N - 1 do
+     Array1.set a i (Array1.get a i /. s);
+   done;
+   ()
+
+let _ =
+ let a = Array1.create float64 c_layout 1000000 in
+   for iter = 1 to 100 do
+     for i = 0 to 999999 do
+       let i' = float_of_int i in
+         Array1.set a i (log (0.01 *. i' *. i' +. 3. *. i' +. 4.));
+     done;
+     normalize a;
+   done;
+   ()
+------------
+
+You see that the one thing I changed here was to add the type
+constraint in the definition of normalize, and it became almost as
+fast as the normal array version.
+
+The other thing I'll point out is that you can write:
+
+Array1.set a i x; Array1.get a i
+
+as
+
+a.{i} <- x; a.{i}
+
+Which can be quite a bit easier to read.  If I recall right, this
+works for arrays of more than one dimension, as well.  I can't seem to
+find the documentation for this feature, however.
+
+John.
+

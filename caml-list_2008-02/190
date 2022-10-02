@@ -1,0 +1,96 @@
+Return-Path: <jstanley@galois.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id E7934BC6C
+	for <caml-list@yquem.inria.fr>; Fri,  8 Feb 2008 22:53:50 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao8CAJNdrEdFHnvD/2dsb2JhbACsWg
+X-IronPort-AV: E=Sophos;i="4.25,323,1199660400"; 
+   d="scan'208";a="7839527"
+Received: from galois.com (HELO mail.galois.com) ([69.30.123.195])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 08 Feb 2008 22:53:49 +0100
+Received: from localhost (dyn-50-52.galois.com [192.168.50.52])
+	(authenticated bits=0)
+	by mail.galois.com (8.13.8/8.13.8) with ESMTP id m18LrYfb006909
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO);
+	Fri, 8 Feb 2008 13:53:46 -0800
+Date: Fri, 08 Feb 2008 13:53:34 -0800 (PST)
+Message-Id: <20080208.135334.126881887.jstanley@galois.com>
+To: damien.doligez@inria.fr
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Using the C FFI to wrap an OCaml library
+From: Joel Stanley <jstanley@galois.com>
+In-Reply-To: <24097E85-C08E-4547-986B-4EF91B7692C3@inria.fr>
+References: <85FB0157-5721-45F1-9440-A3021913BA1F@galois.com>
+	<24097E85-C08E-4547-986B-4EF91B7692C3@inria.fr>
+X-Mailer: Mew version 5.2.52 on Emacs 22.0.97 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Virus-Scanned: ClamAV 0.92/5744/Fri Feb  8 05:32:41 2008 on liouville.galois.com
+X-Virus-Status: Clean
+X-Spam: no; 0.00; ffi:01 ocaml:01 damien:01 expansions:01 ocaml:01 runtime:01 pointer:01 ffi:01 alloc:01 malloc:01 sizeof:01 pointers:01 marshaled:01 hash:01 deallocation:01 
+
+>>>>> Damien Doligez writes:
+
+>> Looking at the macro expansions, I'm suspicious about the safety between
+>> C functions,
+
+> Could you elaborate on what makes you say that?  The macros carefully
+> implement a stack discipline designed for nested calls.
+
+Well, much of my curiosity stems from the fact that I know little about
+the OCaml runtime or how the OCaml GC is invoked.  If the GC can ever be
+invoked in its own thread, it seems like while the values (of type
+'value') are being passed back on the stack (but *after* the
+caml__local_roots pointer has been reverted) there could be problems?
+
+If this can't ever happen, great! Why not?
+
+>> 2. As a follow-up question to #1, the OCaml values may need to be
+>> carried across yet another FFI, in this case, C <-> Poly/ML .  Even if
+>> using the macros was a safe way to carry values between C functions, I"m
+>> not sure I can easily replicate the macros on the other side of the FFI,
+>> so am wondering if an explicit memory management approach using
+>> caml_register_global_root will work.  E.g.,
+>> 
+>> value* alloc_value() {
+>> value* p = malloc(sizeof(value));
+>> caml_register_global_root(p);
+>> return p;
+>> }
+
+> In order to make this work, you have to explain to Poly/ML that every
+> access to the value must be done through the value*...I think it's
+> more reasonable to just copy the data between worlds instead of trying
+> to share pointers between OCaml and Poly/ML.
+
+So let's talk about a concrete example here.  Let's say that I have some
+dynamically-allocated object on the OCaml heap (for discussion purposes,
+say it's an instance of some simple 'stack' class) and that I've
+returned a reference to that object to a C function.  Are you saying
+that the stack contents (e.g., a deep copy of my object) themselves are
+marshaled across this boundary every time?
+
+What about, perhaps, having an object registration mechanism on the
+OCaml so that a newly-allocated object's reference goes into a (global)
+hash table, and an opaque handle (e.g., some fresh, unique integer
+value) is yielded back to C land?  This would require an explicit
+deallocation (just passing the handle back) to come from the C side, but
+should keep the heap object around until such a deallocation call is
+made.  Right?
+
+Basically, the problem is that I have a large OCaml library that
+constructs a variety of different types of objects and I would like a
+1-1 correspondence between those objects and Poly/ML values that wrap
+corresponding C volatiles.  I'd like to do this in the most
+straightforward and safe way possible.
+
+Thanks for your help,
+Joel
+

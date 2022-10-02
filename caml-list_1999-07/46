@@ -1,0 +1,97 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA17529 for caml-redistribution; Fri, 23 Jul 1999 19:00:26 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id SAA17441 for <caml-list@pauillac.inria.fr>; Fri, 23 Jul 1999 18:40:08 +0200 (MET DST)
+Received: from mail4.microsoft.com (mail4.microsoft.com [131.107.3.122])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with SMTP id SAA09919
+	for <caml-list@inria.fr>; Fri, 23 Jul 1999 18:40:06 +0200 (MET DST)
+Received: from 157.54.9.103 by mail4.microsoft.com (InterScan E-Mail VirusWall NT); Fri, 23 Jul 1999 08:48:35 -0700 (Pacific Daylight Time)
+Received: by INET-IMC-04 with Internet Mail Service (5.5.2524.0)
+	id <PP4KVMTV>; Fri, 23 Jul 1999 08:48:38 -0700
+Message-ID: <7CD674FF54FBD21181D800805F57CD5488B073@RED-MSG-44>
+From: Andrew Kennedy <akenn@microsoft.com>
+To: "'Markus Mottl'" <mottl@miss.wu-wien.ac.at>, caml-list@inria.fr
+Subject: RE: optimization and purity
+Date: Fri, 23 Jul 1999 08:48:26 -0700
+X-Mailer: Internet Mail Service (5.5.2524.0)
+Sender: weis
+
+> -----Original Message-----
+> From: Markus Mottl [mailto:mottl@miss.wu-wien.ac.at]
+> Sent: Sunday, July 18, 1999 7:58 PM
+> To: caml-list@inria.fr
+> Subject: optimization and purity
+> 
+> 
+> I would like to know whether anyone has already thought about means of
+> indicating or inferring purity of functions.
+> 
+> 
+
+You are indeed correct that knowing the purity of functions would permit a
+number of optimisations such as the loop-hoisting example you present. There
+was quite a bit of work on "effect inference" a few years back, though much
+of it had a different motivation, namely to permit more expressions to be
+given polymorphic types in the let construct (e.g. in the current revision
+of Standard ML -- sorry I don't know the situation for CAML -- the
+expression let val x = rev [] in (1::x, true::x) end is ill-typed even
+though it would be sound to assign it the obvious type). I believe that the
+MLj compiler, of which I am a developer, is the only ML compiler that
+currently performs type-based effect inference and uses the results to
+optimise code (I'd be happy to be contradicted here!). At present we have a
+fairly crude set of effects:
+
+  reads, writes, allocates, throws, loops
+
+and the effect inference is also crude even though the *system* is quite
+sophisticated (involving true subtyping induced by inclusion on sets of
+effects). Expressions are divided into values (which syntactically are
+effect-free) and computations (which might have side-effects). Computations
+are given types that are annotated with their possible effects. Then we can
+perform optimisations that depend on effect information (sorry about the SML
+syntax):
+
+
+(dead-code)
+let val x = e1 in e2 end   -->   e2    
+      if x not free in e2 
+      and e1 has effect E for E \subseteq {reads,allocs}
+
+(hoisting out of a function)
+fn x => let val y = e1 in e2 end  -->   let val y = e1 in fn x => e2 end
+      if e1 has the empty effect
+
+
+(commuting computations)
+let val x = e1 val y = e2 in e3 end --> let val y = e2 val x = e1 in e3 end
+       if x,y not free in e1,e2
+       and e1,e2 have effects E1,E2 
+       such that E1,E2 \subseteq {reads,allocs,loops}
+         OR E1 \subseteq {allocs,loops} and E2 \subseteq
+{allocs,loops,writes}
+
+
+Nick Benton and I have a paper submitted to HOOTS'99 on the theory of this
+effect system in which we prove (e.g.) the equivalences listed above. If it
+gets accepted I'll post a pointer to the final version. The bones of the
+system can be seen in our ICFP'98 paper on MLj. I'll soon post a pointer to
+that too if you like. Also in ICFP'98 you'll find Phil Wadler's paper on the
+"marriage of effects and monads".
+
+Note that the problem with many effect analyses of the past is that they
+didn't consider termination. This is unfortunate, for you need to know
+whether or not something might loop to use (for example) the first two of
+the rewrites above. However, it's very hard to do a good job of inferring
+termination behaviour -- in MLj, we basically assume that any recursive
+function might loop. Notice also that recursion (and hence looping) can get
+in by the back door -- two well-known routes are via recursive types and via
+ref cells. Here's an example of the former:
+
+datatype T = C of T->T;
+val f = fn (y as C x) => x y;
+val ouch = f (C f);
+
+Hope this (partly) answers your question.
+
+- Andrew.
+
+
+

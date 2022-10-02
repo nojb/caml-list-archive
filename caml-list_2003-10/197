@@ -1,0 +1,126 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA28460; Thu, 16 Oct 2003 23:40:46 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA11267 for <caml-list@pauillac.inria.fr>; Thu, 16 Oct 2003 23:40:45 +0200 (MET DST)
+Received: from hall.mail.mindspring.net (hall.mail.mindspring.net [207.69.200.60])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h9GLei106664;
+	Thu, 16 Oct 2003 23:40:44 +0200 (MET DST)
+Received: from user-0ccekej.cable.mindspring.com ([24.199.81.211] helo=minsky-primus.homeip.net)
+	by hall.mail.mindspring.net with smtp (Exim 3.33 #1)
+	id 1AAFrP-0005y2-00; Thu, 16 Oct 2003 17:40:43 -0400
+Received: from 141.155.88.179
+        (SquirrelMail authenticated user yminsky)
+        by minsky-primus.homeip.net with HTTP;
+        Thu, 16 Oct 2003 17:40:43 -0400 (EDT)
+Message-ID: <15352.141.155.88.179.1066340443.squirrel@minsky-primus.homeip.net>
+In-Reply-To: <20031016151658.A5633@pauillac.inria.fr>
+References: 
+    <51792.141.155.88.179.1066142234.squirrel@minsky-primus.homeip.net>
+    <20031016151658.A5633@pauillac.inria.fr>
+Date: Thu, 16 Oct 2003 17:40:43 -0400 (EDT)
+Subject: Re: [Caml-list] Weird behavior with nan's and min/max
+From: "Yaron Minsky" <yminsky@cs.cornell.edu>
+To: "Xavier Leroy" <xavier.leroy@inria.fr>
+Cc: caml-list@inria.fr
+User-Agent: SquirrelMail/1.4.2-1
+MIME-Version: 1.0
+Content-Type: text/plain;charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Priority: 3
+Importance: Normal
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 yaron:01 minsky:01 yminsky:01 cornell:01 pervasives:01 pervasives:01 segfault:01 segfault:01 bug:01 floats:01 floats:01 val:01 bug:01 faq:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I tried a solution based on Xavier's suggestion, and it now looks to me
+like Xavier's suggsetion (or my implementation) is unsafe.  Here's the
+code I tried:
+
+let is_obj_nan x =
+  Obj.tag (Obj.repr x) = Obj.double_tag &&
+  (let f = (Obj.magic x : float) in not (f = f))
+
+let min x y =
+  if is_obj_nan x then x
+  else if is_obj_nan y then y
+  else Pervasives.min x y
+
+let max x y =
+  if is_obj_nan x then x
+  else if is_obj_nan y then y
+  else Pervasives.max x y;;
+
+The resulting code segfaulted on me, and the segfault went away when I
+went back to the ordinary min and max.  Does anyone have a thought on
+this?  Is this use of Obj safe or not?
+
+I'm still trying to debug the actual location of the segfault, but the
+lack of stacktraces makes it a bit harder....
+
+y
+
+>> Now here's the weird bit.  I decided I wanted a polymorphic comparison
+>> that wouldn't have this problem.  But this is a little harder than it
+>> seems, since it turns out that specialized float version of equality is
+>> different from the polymorphic version.
+>
+> Yes, it's a long-standing bug for which we haven't yet a good
+> solution.  More exactly, there are two problematic solutions:
+>
+> 1- Fix polymorphic equality so that it behaves like IEEE equality on
+> floats,
+> i.e. it always returns false when one of its arguments is NaN.
+> The problem is that this breaks the implication
+>         x == y  imply  x = y
+> and thus the current implementation of polymorphic equality needs to
+> be made less efficient.  Currently, x = y starts by testing x == y
+> and returns true if the pointer equality holds.  But this could be the
+> wrong result according to the new specification, since x can contain
+> an NaN somewhere.  Hence, polymorphic equality would have to traverse
+> its two arguments even when they are physically the same.  The
+> performance impact of this change on real programs is unknown.
+>
+> 2- As J M Skaller proposed, change the behavior of polymorphic
+> equality and its version specialized to floats so that nan = nan
+> and nan <> x if x <> nan.  Similar changes need to be done on the
+> <>, <= and >= tests for consistency.  IEEE comparisons would then have to
+> be
+> provided as separate primitives.  This preserves the implication
+> x == y ==> x = y.  But the machine code generated for =, <>, <= and >=
+> over floats will have to be a lot less efficient than it is now, since
+> all processors implement float comparisons as per IEEE.
+>
+> Coming back to your proposed workaround:
+>
+>> # let raw_min = min
+>> val raw_min : 'a -> 'a -> 'a = <fun>
+>> # let min x y =
+>>   if not (y = y) then y
+>>   else if not (x = x) then x
+>>   else raw_min x y
+>> ;;
+>
+> A way to make this work would be to replace the "not (x = x)" tests
+> by calls to the following function (of type 'a -> bool):
+>
+> let is_obj_nan x =
+>   Obj.tag (Obj.repr x) = Obj.double_tag &&
+>   (let f = (Obj.magic x : float) in not (f = f))
+>
+> Not pretty, I agree.
+>
+> - Xavier Leroy
+>
+> -------------------
+> To unsubscribe, mail caml-list-request@inria.fr Archives:
+> http://caml.inria.fr
+> Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ:
+> http://caml.inria.fr/FAQ/
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

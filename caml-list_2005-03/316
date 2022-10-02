@@ -1,0 +1,137 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 228E2BC48
+	for <caml-list@yquem.inria.fr>; Wed, 23 Mar 2005 19:58:20 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j2NIwJFF019701
+	for <caml-list@yquem.inria.fr>; Wed, 23 Mar 2005 19:58:19 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA09425 for <caml-list@pauillac.inria.fr>; Wed, 23 Mar 2005 19:58:19 +0100 (MET)
+Received: from wproxy.gmail.com (wproxy.gmail.com [64.233.184.200])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j2NIwIac024376
+	for <caml-list@inria.fr>; Wed, 23 Mar 2005 19:58:19 +0100
+Received: by wproxy.gmail.com with SMTP id 71so409543wra
+        for <caml-list@inria.fr>; Wed, 23 Mar 2005 10:58:18 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+        s=beta; d=gmail.com;
+        h=received:message-id:date:from:reply-to:to:subject:mime-version:content-type:content-transfer-encoding;
+        b=TKqIGasawwlMh/HYOj16PMxsiHhszRZj9IpM8/wCUc+XFl//MqkAqmjsZgBUdhJFNm9OIpkNsD0QLoIUmLFL7OS8rLJJRXkEX2mxYGW/XJ3YUWED0ttW9Fh09jP/0cyX7fAJsfPYLg0YEXNA58u4tvyVMcdos8stv9ZLwlGEaoI=
+Received: by 10.54.100.18 with SMTP id x18mr553744wrb;
+        Wed, 23 Mar 2005 10:58:18 -0800 (PST)
+Received: by 10.54.22.11 with HTTP; Wed, 23 Mar 2005 10:58:18 -0800 (PST)
+Message-ID: <f8560b80503231058229e505e@mail.gmail.com>
+Date: Wed, 23 Mar 2005 13:58:18 -0500
+From: Markus Mottl <markus.mottl@gmail.com>
+Reply-To: Markus Mottl <markus.mottl@gmail.com>
+To: OCaml <caml-list@inria.fr>
+Subject: Installing pretty-printers automagically
+Mime-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 4241BC4B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 4241BC4A.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; markus:01 mottl:01 markus:01 mottl:01 gerd:01 stolpmann's:01 findlib:01 datatypes:01 toplevel:01 matrices:01 vectors:01 toplevel:01 val:01 lexbuf:01 lexing:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.5 required=5.0 tests=INFO_TLD,RCVD_BY_IP 
+	autolearn=disabled version=3.0.2
+X-Spam-Level: 
+
+Hi,
+
+though the idea is not new, more precisely, I have shamelessly stolen
+it from Gerd Stolpmann's findlib sources, it still seems not widespread
+and is such a useful thing to have that it should be mentioned here on
+the list.
+
+You will quite often want to have custom pretty-printers for your
+datatypes in the toplevel.  Preferably, they should be installed as
+soon as the library implementing them has been loaded.
+
+The solution for this is quite simple, and I have just implemented it
+in the LACAML-library so that matrices and vectors can be printed in
+the toplevel.
+
+Assuming you have already implemented a pretty-printer with the correct
+signature in module "My_module":
+
+  val pp_my_type : Format.formatter -> my_type -> unit
+
+Then just create another module in your library:                                
+---------------------------------------------------------------------------
+let printers =
+  [
+    "My_module.pp_my_type";
+  ]
+
+let eval_string
+      ?(print_outcome = false) ?(err_formatter = Format.err_formatter) str =
+  let lexbuf = Lexing.from_string str in
+  let phrase = !Toploop.parse_toplevel_phrase lexbuf in
+  Toploop.execute_phrase print_outcome err_formatter phrase
+
+let rec install_printers = function
+  | [] -> true
+  | printer :: printers ->
+      let cmd = Printf.sprintf "#install_printer %s;;" printer in
+      eval_string cmd && install_printers printers
+
+let () =
+  if not (install_printers printers) then
+    Format.eprintf "Problem installing printers@."
+---------------------------------------------------------------------------
+
+Just add further pretty-printers to the list "printers" if required.
+
+If you link this module into a byte-code library and load it into the
+toplevel (using #load), you will be able to print your types using the 
+custom pretty-printers.
+
+There is one caveat here: the resulting library cannot be used for linking
+with byte-code executables, because the toplevel is not available there.  
+Therefore, if you want to implement a library, you will have to link
+two separate ones: one with and one without the module for installing
+the printers.
+
+If you happen to use "ocamlfind" to "#require" your libraries, you just
+need to add a line to the META-file for each kind of library.  The right
+one will be chosen automatically then, e.g.:
+
+  archive(byte)="mylib.cma"
+  archive(byte,toploop)="mylib_top.cma"
+
+Here is a short demonstration using the pretty-printers of the
+LACAML-library in the toplevel while computing the singular value
+decomposition of a 3x3 Hilbert-matrix:
+
+---------------------------------------------------------------------------
+# #require "lacaml";;
+/usr/local/home/godi/godi/lib/ocaml/std-lib/bigarray.cma: loaded
+/usr/local/home/godi/godi/lib/ocaml/site-lib/lacaml: added to search path
+/usr/local/home/godi/godi/lib/ocaml/site-lib/lacaml/lacaml_top.cma: loaded
+# open Lacaml.D;;
+# let mat = Mat.hilbert 3;;
+val mat : Lacaml_float64.mat = 
+         1      0.5 0.333333
+       0.5 0.333333     0.25
+  0.333333     0.25      0.2
+# gesvd mat;;
+- : Lacaml_float64.vec * Lacaml_float64.mat * Lacaml_float64.mat = 
+(   1.40832
+   0.122327
+ 0.00268734,
+ -0.827045  0.547448  0.127659
+ -0.459864  -0.52829 -0.713747
+ -0.323298 -0.649007  0.688672,
+ -0.827045 -0.459864 -0.323298
+  0.547448  -0.52829 -0.649007
+  0.127659 -0.713747  0.688672)
+---------------------------------------------------------------------------
+
+Enjoy this trick...
+
+Best regards,
+Markus
+
+-- 
+Markus Mottl        http://www.ocaml.info        markus.mottl@gmail.com
+

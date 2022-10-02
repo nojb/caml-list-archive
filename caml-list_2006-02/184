@@ -1,0 +1,108 @@
+Return-Path: <virgile.prevosto@m4x.org>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 03C86BDA4
+	for <caml-list@yquem.inria.fr>; Tue, 21 Feb 2006 10:55:35 +0100 (CET)
+Received: from localhost.localdomain (dhcp-rocq-166.inria.fr [128.93.62.166])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k1L9tYaG027513
+	for <caml-list@yquem.inria.fr>; Tue, 21 Feb 2006 10:55:34 +0100
+Date: Tue, 21 Feb 2006 10:55:34 +0100
+From: Virgile Prevosto <virgile.prevosto@m4x.org>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Rephrasing of dynamic module selection problem
+Message-ID: <20060221105534.0063d0c5@localhost.localdomain>
+In-Reply-To: <43FA64C8.1050704@cs.utah.edu>
+References: <43FA64C8.1050704@cs.utah.edu>
+X-Mailer: Sylpheed-Claws 1.9.100 (GTK+ 2.8.10; i486-pc-linux-gnu)
+Mime-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+X-Miltered: at concorde with ID 43FAE396.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 struct:01 struct:01 defines:01 camlp:01 functors:01 sig:01 ocamlc:01 camlp:01 -pp:01 cmo:01 mlast:01 cmo:01 -impl:01 -impl:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.3
+
+Hello,
+
+Le lun 20 fév 2006 17:54:32 CET, Nathan Cooprider a écrit:
+> [coop@ender example]$ cat main.ml
+> module Hello1 = struct
+>   #include "hello1.ml"
+> end ;;
+> module Hello2 = struct
+>   #include "hello2.ml"
+> end ;;
+
+This is not needed: the file hello1.ml implicitely defines a module Hello1
+(same for hello2.ml and Hello2).
+
+> (* This works . . . *)
+> module H = Hello1
+> (* But I would like this to be something like this instead:
+> let parameter = 1
+> module H =
+>   match parameter with
+>     1 -> Hello1
+>   | _ -> Hello2
+>  *)
+
+This might not completely solve your problem, but the following camlp4
+extension allows you to use the following expression:
+choose_module H = 
+match parameter with
+ 1 -> Hello1
+| _ -> Hello2
+in 
+let argument = 42 in 
+let main () = H.print (H.of_int argument) in
+main ();;
+
+Note that the scope of H is the expression following the first "in" and
+not all the remaining of main.ml. This might be an issue, but it could
+be solved by the use of functors (e.g.:
+module type Hello = sig ... end
+module F (H: Hello) = struct ... end
+...
+choose_module H = ... in
+let module FH = F(H) in ... ;;
+)
+
+-------- choose_module.ml4 ----------
+(* compile it with
+ocamlc -c -I +camlp4 -pp "camlp4o pa_extend.cmo q_MLast.cmo -impl" -impl
+choose_modules.ml4
+
+to use it,
+ocamlc -c -pp "camlp4o choose_modules.cmo" main.ml 
+Note that by default, camlp4 doesn't search for extension in the current
+directory, so that you may have to add a "-I ." directive
+*) 
+open Pcaml;;
+
+let make_one_choice a mod_expr exp =
+  let _loc = Lexing.dummy_pos, Lexing.dummy_pos in 
+    <:expr<let module $uid:a$ = $mod_expr$ in $exp$>> 
+
+let choices = Grammar.Entry.create Pcaml.gram "choices" 
+
+EXTEND
+   expr: [[
+            "choose_module"; a = UIDENT; "="; "match" ; cond = expr;
+            "with"; OPT "|"; l = LIST1 choices SEP "|";  
+            "in"; e = expr -> 
+              let new_l = List.map 
+                            (fun (patt,optwhen,expr) -> 
+                               (patt,optwhen, make_one_choice a expr e)) l
+              in  <:expr< match $cond$ with [$list:new_l$] >> ]];
+  choices: [[ p=patt; w = OPT ["when"; e = expr -> e]; "->"; 
+              m = module_expr -> (p,w,m)
+            ]];
+END
+-------------------------------------
+-- 
+E tutto per oggi, a la prossima volta
+Virgile
+

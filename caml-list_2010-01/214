@@ -1,0 +1,92 @@
+Return-Path: <dra-news@metastack.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 84D8FBC37
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jan 2010 09:23:29 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ao0BAPmGX0tRZ90vkWdsb2JhbACbZAEBAQEJCwoHEwO8WYIwgggE
+X-IronPort-AV: E=Sophos;i="4.49,352,1262559600"; 
+   d="scan'208";a="42265602"
+Received: from mtaout01-winn.ispmail.ntl.com ([81.103.221.47])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 27 Jan 2010 09:23:29 +0100
+Received: from aamtaout02-winn.ispmail.ntl.com ([81.103.221.35])
+          by mtaout01-winn.ispmail.ntl.com
+          (InterMail vM.7.08.04.00 201-2186-134-20080326) with ESMTP
+          id <20100127082328.QDGR4204.mtaout01-winn.ispmail.ntl.com@aamtaout02-winn.ispmail.ntl.com>
+          for <caml-list@yquem.inria.fr>; Wed, 27 Jan 2010 08:23:28 +0000
+Received: from romulus.metastack.com ([81.102.132.77])
+          by aamtaout02-winn.ispmail.ntl.com
+          (InterMail vG.2.02.00.01 201-2161-120-102-20060912) with ESMTP
+          id <20100127082328.PNZO21638.aamtaout02-winn.ispmail.ntl.com@romulus.metastack.com>
+          for <caml-list@yquem.inria.fr>; Wed, 27 Jan 2010 08:23:28 +0000
+Received: from Tenor ([172.16.0.8])
+	(authenticated bits=0)
+	by romulus.metastack.com (8.14.2/8.14.2) with ESMTP id o0R8NOMv009092
+	(version=TLSv1/SSLv3 cipher=AES128-SHA bits=128 verify=NO)
+	for <caml-list@yquem.inria.fr>; Wed, 27 Jan 2010 08:23:25 GMT
+From: "David Allsopp" <dra-news@metastack.com>
+To: "OCaml List" <caml-list@yquem.inria.fr>
+References: <201001262045.49994.romain.beauxis@gmail.com>
+In-Reply-To: <201001262045.49994.romain.beauxis@gmail.com>
+Subject: RE: [Caml-list] Problem with try_lock on win32.
+Date: Wed, 27 Jan 2010 08:23:25 -0000
+Message-ID: <004001ca9f29$fffac320$fff04960$@romulus.metastack.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Mailer: Microsoft Outlook 14.0
+Thread-Index: AQHzhSNdb1jkYL1wEB2PV5zW/ilynQFImwQd
+Content-Language: en-gb
+Organization: MetaStack Solutions Ltd.
+X-Scanned-By: MIMEDefang 2.65 on 81.102.132.77
+X-Cloudmark-Analysis: v=1.1 cv=W3tOLUehizD4qj6VhtReFuw5MKb8d+XqjIxlDsIazEA= c=1 sm=0 a=vejuoKjwFt8A:10 a=kW-EIvPceu_ruIyNokgA:9 a=8r28vjK79O2vWpkpOEMA:7 a=Fdp33nbfWPC3osLlHQd8rk8S2BoA:4 a=HpAAvcLHHh0Zw7uRqdWCyQ==:117
+X-Spam: no; 0.00; printf:01 printf:01 afaik:01 otherlibs:01 systhreads:01 stubs:01 ocaml:01 mutexes:01 windows-only:01 bug:01 semantics:01 threads:01 abstract:01 caml-list:01 posix:01 
+
+Romain Beauxis:
+> I have a problem with the following code under win32:
+> 
+> let m = Mutex.create ()
+> 
+> let () =
+>   Mutex.lock m;
+>   if Mutex.try_lock m then
+>     Printf.printf "locked !\n"
+>   else
+>     Printf.printf "could not lock!\n"
+
+This code is behaving correctly for a Windows mutex (AFAIK - I can't find
+the relevant bit in the Synchronisation on MSDN atm) - once a thread has
+locked a Windows mutex, WaitForSingleObject will return WAIT_OBJECT_0 (i.e.
+success) because for that thread the mutex is signalled (it's only other
+threads which will see the object as non-signalled). I guess it's a
+philosophical discussion for whether it's useful for a thread to be able to
+block itself permanently by trying to lock a mutex which it has already
+locked (the POSIX way).
+
+One possible fix to make it behave like POSIX would be to patch
+otherlibs/systhreads/win32.c so that caml_mutex_lock records the thread ID
+of the thread when it locks the mutex. Some trick would be required to block
+the thread (permanently) if it calls Mutex.lock twice (to match the POSIX
+behaviour). caml_mutex_try_lock can check the thread ID before using
+WaitForSingleObject and return false if it shows that it's locked and
+caml_mutex_unlock would clear the thread ID to null on a successful release.
+Two potential problems (which I'm guessing other Windows users on the list
+may comment on, if relevant):
+
+a) The representation of a mutex internally (the abstract value) changes
+which means that any Windows C stubs which interoperate with OCaml mutexes
+would break.
+b) The behaviour of Mutex.lock and Mutex.try_lock under Windows would be
+altered to be non-Windows-like behaviour which may affect existing
+Windows-only programs which rely on it.
+
+But you could raise it as a bug in Mantis just for cross-platform
+consistency of the Mutex module (another option would be to have a separate
+module PosixMutex with the guaranteed consistent semantics and leave the
+Mutex module as behaving in an OS-specific way)
+
+
+David
+

@@ -1,0 +1,150 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA22708; Sun, 19 Aug 2001 02:24:06 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA23030 for <caml-list@pauillac.inria.fr>; Sun, 19 Aug 2001 02:24:05 +0200 (MET DST)
+Received: from bastion.artisan.com (bastion.artisan.com [209.144.161.130])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f7J0O4113019
+	for <caml-list@inria.fr>; Sun, 19 Aug 2001 02:24:04 +0200 (MET DST)
+Received: from ypmaster.artisan.com (ypmaster [172.16.2.1])
+	by bastion.artisan.com (8.9.2/8.9.2) with ESMTP id RAA24898
+	for <caml-list@inria.fr>; Sat, 18 Aug 2001 17:24:16 -0700 (PDT)
+Received: from ish.artisan.com (ish [172.16.10.79])
+	by ypmaster.artisan.com (8.9.2/8.9.2) with ESMTP id RAA18301
+	for <caml-list@inria.fr>; Sat, 18 Aug 2001 17:24:02 -0700 (PDT)
+Received: (from johnm@localhost)
+	by ish.artisan.com (8.9.2/8.9.2) id RAA03619;
+	Sat, 18 Aug 2001 17:24:02 -0700 (PDT)
+X-Authentication-Warning: ish.artisan.com: johnm set sender to johnm@artisan.com using -f
+From: John Gerard Malecki <johnm@artisan.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <15231.1825.780636.717441@ish.artisan.com>
+Date: Sat, 18 Aug 2001 17:24:01 -0700
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Segfault in a native code multi-threaded program
+In-Reply-To: <3B7EF720.505239B6@maxtal.com.au>
+References: <Pine.LNX.4.30.0108161642410.27858-100000@ontil.ihep.su>
+	<qtlbslf6rao.fsf@pochi.inria.fr>
+	<3B7EF720.505239B6@maxtal.com.au>
+X-Mailer: VM 6.92 under Emacs 20.4.1
+X-Organization: Artisan Components, Inc.
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+John Max Skaller wrote (2001-08-19T09:15:44+1000):
+ > 
+ > > <hint for next ocaml ;)>
+ > > 
+ > >   It would be very nice to be able to rely on Marshal as safely as on
+ > >   ocaml typing. Just to be sure that if I expect an int * string, I will
+ > >   effectively receive an int * string or raise an exception. It could
+ > >   probably be done using the same tricks as used in printf formatters.
+ > > 
+ > > </hint for next ocaml ;)>
+ > 
+ > 	As I understand it, this is a non-trivial research problem.
+
+
+Yes it is but in the mean-time we are stuck with the problem.  I'll
+describe the IMPERFECT solution i use.  If anyone else has something
+better please do describe it.
+
+The idea is to use the already existing extract_crc program to get the
+digest of the data-structure to be written.  There are obvious flaws
+including the fact that the value to be written must have a concrete
+signature and the programmer must ensure that all of the accessible
+signatures are included.  Assuming that one didn't make any mistakes
+this should catch reading an "out of version" marshaled value.
+
+Here is the text from an email i wrote a while ago describing the same
+mechanism followed by all of the code to make a working example.
+
+  Under some assumptions about the things that you are writing out
+  extract_crc can provide some support.  The flaw is that extract_crc is
+  not "deep".  If you create a single .mli file which only contains the
+  signature of the value you are to write then you can, with some
+  additional makefile complexity, automatically generate an extract_crc
+  .ml from that .mli file.  For example, here is the output from
+  extract_crc of the cell.mli file
+  
+  let crc_unit_list = [
+    "Cell",
+      "\032\036\180\144\173\052\208\140\081\102\211\172\198\229\098\218"
+  ]
+  
+  Instead of simply doing an output value you could ALWAYS do an output
+  value of crc_unit_list and then execute
+  
+  let safe_output_value safe oc data =
+    output_value oc safe;
+    output_value oc data
+  
+  let safe_input_value safe ic =
+    let safe_input = input_value ic in
+    if safe_input = safe then
+      input_value ic
+    else
+      raise (Sys_error "safe_input_value")
+  
+  The majority of the work is in (makefile) procedures for automatically
+  generating the crc_unit_list.  One must be careful about the
+  dependencies to make sure that the makefile can both bootstrap and
+  always keep the crc_unit_list file up to date.
+  
+  At one time i thought of using the dynlink module to solve these
+  problems but it turns out that there is no real advantage as the
+  majority of the work is in the makefile.
+
+Here is a sample Makefile
+
+  RESULT := a.out
+  
+  SOURCES := safety.ml test.ml
+  
+  all: safety.ml byte-code
+  
+  include OcamlMakefile
+  
+  EXTRACT_CRC := $(shell $(OCAMLC) -where)/extract_crc
+  
+  safety.ml: test.cmi
+  	$(EXTRACT_CRC) test > $@
+  
+  check: all
+  	OCAMLRUNPARAM='b=1' ./$(RESULT)
+  
+The file test.mli
+
+  type t = (int * int) list
+
+and the file test.ml
+
+  type t = (int * int) list
+  
+  let safe_output_value safe oc data =
+    output_value oc safe;
+    output_value oc data
+      
+  let safe_input_value safe ic =
+    let safe_input = input_value ic in
+    if safe_input = safe then
+      input_value ic
+    else
+      raise (Sys_error "safe_input_value")
+  
+  let _ =
+    let data = [ 0,0; 1,1 ] in
+    let oc = open_out_bin "test.db" in
+    safe_output_value Safety.crc_unit_list oc data;
+    close_out oc
+  
+  let _ =
+    let ic = open_in_bin "test.db" in
+    let data = safe_input_value Safety.crc_unit_list ic in
+    close_in ic;
+    data
+
+-cheers
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

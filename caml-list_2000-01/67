@@ -1,0 +1,261 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA23030 for caml-redistribution@pauillac.inria.fr; Fri, 21 Jan 2000 09:43:14 +0100 (MET)
+Resent-Message-Id: <200001210843.JAA23030@pauillac.inria.fr>
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA16729 for <caml-list@pauillac.inria.fr>; Thu, 20 Jan 2000 17:14:33 +0100 (MET)
+Received: from post.tepkom.ru (post.tepkom.ru [195.9.10.12])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id RAA01163
+	for <caml-list@inria.fr>; Thu, 20 Jan 2000 17:14:27 +0100 (MET)
+Received: (from msk@localhost)
+	by post.tepkom.ru (8.9.3/8.9.3) id TAA25788
+	for caml-list@inria.fr.ANTIVIRUS; Thu, 20 Jan 2000 19:15:19 +0300
+Received: from localhost (msk@localhost)
+	by post.tepkom.ru (8.9.3/8.9.3) with ESMTP id TAA25734;
+	Thu, 20 Jan 2000 19:15:12 +0300
+X-Authentication-Warning: post.tepkom.ru: msk owned process doing -bs
+Date: Thu, 20 Jan 2000 19:15:12 +0300 (MSK)
+From: Anton Moscal <msk@post.tepkom.ru>
+To: Markus Mottl <mottl@miss.wu-wien.ac.at>
+cc: OCAML <caml-list@inria.fr>
+Subject: Re: Q: camlp4 use?
+In-Reply-To: <200001142042.VAA20140@miss.wu-wien.ac.at>
+Message-ID: <Pine.LNX.4.10.10001201857560.18819-100000@post.tepkom.ru>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Resent-From: weis@pauillac.inria.fr
+Resent-Date: Fri, 21 Jan 2000 09:43:14 +0100
+Resent-To: caml-redistribution@pauillac.inria.fr
+
+On Fri, 14 Jan 2000, Markus Mottl wrote:
+
+> > I use CamlP4 for different for of the "syntaxic sugaring" (for example -
+> > for list comprehension syntax) and for incapsulations of some patterns in
+> > matching.
+> 
+> This sounds interesting! List comprehensions would definitely be a neat
+> thing to have in OCaml. Would you mind explaining more about this?  How
+> does this look like in the code and how is it implemented?
+
+code looks like the following: 
+
+let my_map fn list = [fn x | x <- list]
+ 
+yet another example:
+
+  | (Seq (p, p')), toks -> 
+      [(Rcat (r, r'), tail') | 
+         (r, tail) <- parse p toks; (r', tail') <- parse p' tail
+      ]
+
+instead of using bool expression at the right side of '|', I
+use `when' in the pattern matching (this is bad choice, but I'm too lazy
+for good implemetation). Also this construction can be used with array
+types: for iteration through array elements instead of `<-' should be used
+'<-|', and if we want to get array as result - [| |] instead of []. For
+example:
+
+let array_of_list l = [| x | x <-  l |]
+let list_of_array v = [  x | x <-| v  ]
+
+Implementation wasn't works very fast, but when efficinecy are really
+important I use "usual" ML notation.
+
+Regards, 
+Anton Moscal
+
+This is the text for camlp4. This text also contains other syntax sugar
+(such as local types and open declaration, some support for lazy lists
+etc), and send "as is". Use it on your own risk:
+
+======================================================
+open Stdpp 
+open Pcaml
+
+type strictness = Strict | Lazy | Vector
+
+let rec is_irrefut_patt =
+  function
+    | <:patt< $lid:_$ >> -> true
+    | <:patt< () >> -> true
+    | <:patt< _ >> -> true
+    | <:patt< ($x$ as $_$) >> -> is_irrefut_patt x
+    | <:patt< { $list:fpl$ } >> ->
+	List.for_all (fun (_, p) -> is_irrefut_patt p) fpl
+    | <:patt< ($p$ : $_$) >> -> is_irrefut_patt p
+    | <:patt< ($list:pl$) >> -> List.for_all is_irrefut_patt pl
+    | _ -> false 
+
+
+let compr loc out is gbl_str =
+  let gen_patt_fun p whn expr default = 
+    match (whn, is_irrefut_patt p) with
+    | None, true -> <:expr< fun acc $p$ -> $expr$ >>
+    | _, _ -> <:expr< fun acc -> fun [$list:[p,whn,expr; <:patt<_>>,None,<:expr<acc>>]$ ] >>
+  in
+  let empty_list = match gbl_str with 
+  | Vector
+  | Strict -> <:expr< [] >> 
+  | Lazy   -> <:expr<lazy Seq.Nil>> 
+  in
+  let (_, inp, _, str) = List.hd is in
+  let gen_fold fn acc inp = function
+    | Lazy   -> <:expr<Seq  .fold      $fn$ $acc$ $inp$>>
+    | Vector -> <:expr<Array.fold_left $fn$ $acc$ $inp$>>
+    | Strict -> <:expr<List .fold_left $fn$ $acc$ $inp$>>
+  in
+  let rec gen_fun = function
+    | ((p, inp, whn, str)::tail) -> 
+	begin let cons a b = 
+	  match gbl_str with
+	  |	Lazy   -> <:expr<lazy Seq.Cons $a$ $b$>>
+	  |	Strict 
+	  |	Vector -> <:expr< [$a$::$b$] >>
+	in
+	let acc = <:expr<acc>> in
+	match tail with
+	| [] -> 
+	    gen_patt_fun p whn (cons (List.hd out) acc) acc
+	      
+	| (_,inp', _, str)::_ -> 
+ 	    gen_patt_fun p whn (gen_fold (gen_fun tail) acc inp' str) acc
+	end
+
+    | _ ->
+	failwith "Syn.gen_fun"
+  in 
+  let rev_res = <:expr< $gen_fold (gen_fun is) empty_list inp str$ >> in
+  match gbl_str with
+  | Strict -> <:expr< List.rev $rev_res$ >>
+  | Vector -> <:expr< Array.of_list (List.rev $rev_res$) >>
+  | Lazy   -> <:expr< Seq .rev $rev_res$ >>
+
+let mklistexp loc last =
+  let rec loop top =
+    function
+	[] ->
+       (match last with
+          Some e -> e
+        | None -> <:expr< [] >> )
+      | e1 :: el ->
+        <:expr< [$e1$ :: $loop False el$] >> 
+  in loop True
+
+let is_str_type =
+  Grammar.Entry.of_parser gram "operator" (fun strm ->
+    match Stream.peek strm with
+    | Some ("", "type") 
+    | Some ("", "open") 
+    | Some ("", "class") 
+    | Some ("", "external") 
+    | Some ("", "exception") -> ()
+    | _ -> raise Stream.Failure
+	  )
+
+let _ = Gramext.warning_verbose := false 
+EXTEND
+   GLOBAL: expr str_item patt let_binding ctyp;
+
+  patt: BEFORE "simple" [ "ref" [LIDENT "ref"; p = patt LEVEL "simple" -> <:patt< { contents = $p$ } >> ]];
+
+   whn: [["when"; cond = expr LEVEL "expr1" -> cond]];
+
+  item: [[ p = patt; "<-?"; inp = expr LEVEL "expr1"; whn = OPT whn -> (p, inp, whn, Lazy  ) 
+         | p = patt; "<-|"; inp = expr LEVEL "expr1"; whn = OPT whn -> (p, inp, whn, Vector)
+         | p = patt; "<-" ; inp = expr LEVEL "expr1"; whn = OPT whn -> (p, inp, whn, Strict)
+        ]];
+
+  expr1_semi_list:
+    [ [ e = expr LEVEL "expr1"; ";"; el = expr1_semi_list -> e :: el
+      | e = expr LEVEL "expr1"; ";" -> [e]
+      | e = expr LEVEL "expr1" -> [e] ] ]
+  ;
+
+  expr: LEVEL "simple"
+    [[ "["; "]" -> <:expr< [] >>
+     | "["; el = expr1_semi_list; inp = ["]" -> None | "|"; is = LIST1 item SEP ";"; "]" -> Some is] -> ( 
+       match inp with 
+       | None -> <:expr< $mklistexp loc None el$ >>
+       | Some is -> compr loc el is Strict
+	     )
+     | "[|"; "|]" -> <:expr< [| |] >>
+     | "[|"; el = expr1_semi_list; inp = ["|]" -> None | "|"; is = LIST1 item SEP ";"; "|]" -> Some is] -> ( 
+       match inp with 
+       | None -> <:expr< [| $list:el$ |] >>
+       | Some is -> compr loc el is Vector
+       )
+
+     | "["; "?"; "?"; "]" -> <:expr<lazy Seq.Nil>>
+     | "["; "?"; el = expr1_semi_list; inp = ["?"; "]" -> None | "|"; is = LIST1 item SEP ";"; "?"; "]" -> Some is] -> ( 
+       match inp with 
+       | None -> 
+	   List.fold_right (fun item acc -> 
+	     <:expr<lazy (Seq.Cons ($item$, $acc$))>>) el <:expr<lazy Seq.Nil>>
+       | Some is -> compr loc el is Lazy
+       )
+
+]];
+(*
+  expr: LEVEL "simple" [[ "nest"; name = STRING -> 
+    let chan = open_in name in 
+    let old_name = !input_file in
+    input_file := name;
+    let res = 
+      try
+	Grammar.Entry.parse expr (Stream.of_channel chan) 
+      with
+	ex -> close_in chan; input_file := old_name; raise ex
+    in
+    close_in chan;
+    input_file := old_name;
+    res
+   ]];
+*)
+  expr: LEVEL "top"
+  [ LEFTA
+      [ e = SELF; "where"; rf = OPT "rec"; lbs = LIST1 let_binding SEP "and" ->
+	let recf = match rf with Some _ -> true | None -> false in
+          <:expr< let $rec:recf$ $list:lbs$ in $e$ >> ]
+  ];
+
+  expr: LEVEL "expr1"
+  [["let"; is_str_type; s = str_item; "in"; e = expr LEVEL "top" ->
+      <:expr< let module M_M_temp = struct $s$; value _res = $e$; end in M_M_temp._res >>
+  ]];
+(*
+  expr: LEVEL "expr1"
+  [[
+    "let"; "open"; m = UIDENT; "in"; e = expr LEVEL "top" ->
+      <:expr< let module M_M_temp = struct open $[m]$; value _res = $e$; end in M_M_temp._res >>]
+  | ["let_mod"; si = str_item; "in"; e = expr LEVEL "top"  ->
+      <:expr< let module M_M_temp = struct $si$; value _res = $e$; end in M_M_temp._res >>
+  ] ];
+*)
+  patt: LAST
+    [ LEFTA [l = patt; "@@"; v = patt -> <:patt< ($l$, $v$) >>] ];
+
+  str_item: [[ "infix"; op = LIDENT; op' = OPT ["="; op' = LIDENT -> op']  -> 
+      let op' = match op' with None -> op | Some op' -> op' in
+      EXTEND GLOBAL: expr;
+        expr: LEVEL "*"  [[ a = expr; $op$; b = expr -> <:expr< $lid:op'$ $a$ $b$ >> ]];
+      END; <:str_item< () >>
+   ]];
+
+  expr: BEFORE "+" [ "//" RIGHTA [ hd = expr; "//"; tl = expr -> <:expr<lazy (Seq.Cons ($hd$, $tl$))>> ]];
+
+END;;
+let _ = Gramext.warning_verbose := true
+
+EXTEND
+  expr: LEVEL "*"  [[ a = expr; "o"; b = expr -> <:expr< Common.compose $a$ $b$ >> ]];
+  expr: LEVEL "**" [[ a = expr; "$"; b = expr -> <:expr< Common.compose $b$ $a$ >> ]];
+  expr: LEVEL "+" [[ a = expr; "++"; b = expr -> <:expr< Seq.cat $b$ $a$ >> ]];
+END;;
+
+(*
+EXTEND
+  GLOBAL: expr;
+  expr: LEVEL "simple" [[ "[<"; e = expr; ">]" -> <:expr< Tk'.eval $e$ >> ]];
+  expr: LEVEL "simple" [[ "{<"; e = expr; ">}" -> <:expr< Tk'.cback (fun args -> $e$) >> ]];
+END
+*)
+======================================================
+
+

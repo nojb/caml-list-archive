@@ -1,0 +1,133 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=AWL,NO_REAL_NAME,SPF_FAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 37831BC69
+	for <caml-list@yquem.inria.fr>; Wed,  3 Oct 2007 10:37:38 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAAPyAkfAXQInemdsb2JhbACOOAIJCg
+X-IronPort-AV: E=Sophos;i="4.21,223,1188770400"; 
+   d="scan'208";a="3688075"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 03 Oct 2007 10:37:24 +0200
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l938bNTM005049
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Wed, 3 Oct 2007 10:37:24 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAJbxAkfAEKcgh2dsb2JhbACOOAIBCAon
+X-IronPort-AV: E=Sophos;i="4.21,223,1188770400"; 
+   d="scan'208";a="17227601"
+Received: from selenite.metnet.navy.mil ([192.16.167.32])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 03 Oct 2007 10:37:22 +0200
+Received: (qmail 29133 invoked by uid 107); 3 Oct 2007 08:37:20 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.152)
+  by selenite.metnet.navy.mil with SMTP; 3 Oct 2007 08:37:20 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id 40DA2A99F; Wed,  3 Oct 2007 01:35:29 -0700 (PDT)
+To: kirillkh@gmail.com
+Cc: caml-list@inria.fr
+Subject: Locally-polymorphic exceptions [was: folding over a file]
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20071003083529.40DA2A99F@Adric.metnet.fnmoc.navy.mil>
+Date: Wed,  3 Oct 2007 01:35:29 -0700 (PDT)
+X-Miltered: at concorde with ID 470354C3.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; oleg:01 unspecified:01 delimited:01 delimited:01 channel-:01 'a-:01 'b-:01 prev:01 val:01 prev:01 val:01 compiler:01 channel-:01 'a-:01 'b-:01 
+
+
+kirillkh wrote
+> Is there a way to instantiate an exception with a value of unspecified type
+> and then do explicit casting on catch?
+
+Surprisingly, the answer in many (or all?) cases is yes. The answer is
+definitely yes in the case when we need to define an exception local
+to a polymorphic function. Incidentally, SML permits declarations of
+such local exceptions whose type is tied to that of the host
+polymorphic function. That feature has been used to implement
+delimited continuations. Perhaps unsurprisingly, delimited
+continuations can be used to implement such locally-polymorphic
+exceptions.
+
+The recent thread gave a good motivation for locally polymorphic
+exceptions: writing a library function fold_file. The following code
+has been proposed.
+
+> exception Done of 'a
+>
+>  let fold_file (file: in_channel)
+>               (read_func: in_channel->'a)
+>               (elem_func: 'a->'b->'b)
+>               (seed: 'b) =
+>   let rec loop prev_val =
+>     let input =
+>       try read_func file
+>       with End_of_file -> raise (Done prev_val)
+>     in
+>       let combined_val = elem_func input prev_val in
+>       loop combined_val
+>   in
+>     try loop seed with Done x -> x
+
+Alas, the compiler does not accept the exception declaration, because
+the declaration says that the exception should carry a value of all
+types. There is no value that belongs to all types (and if it were, it
+wouldn't be useful). But we don't actually need the value of all
+types. We need the value of our Done exception to have the same type
+as the result of the polymorphic function fold_file. We should have
+declared the exception Done _inside_ fold_file. And that can be done:
+Delimcc.prompt is precisely this type of `local exceptions'.
+
+So, we can implement fold_file, by slightly adjusting the above code:
+
+let fold_file (file: in_channel)
+              (read_func: in_channel->'a)
+              (elem_func: 'a->'b->'b)
+              (seed: 'b) =
+  let result = new_prompt () in (* here is our local exn declaration *)
+  let rec loop prev_val =
+     let input =
+       try read_func file
+       with End_of_file -> abort result prev_val
+     in
+       let combined_val = elem_func input prev_val in
+       loop combined_val
+   in
+     push_prompt result (fun () -> loop seed)
+;;
+
+(*
+val fold_file :
+  in_channel -> (in_channel -> 'a) -> ('a -> 'b -> 'b) -> 'b -> 'b = <fun>
+*)
+
+let line_count filename =
+   let f = open_in filename in
+   let counter _ count = count + 1 in
+   fold_file f input_line counter 0;;
+
+(*
+ val line_count : string -> int = <fun>
+*)
+
+let test = line_count "/etc/motd";;
+(*
+ val test : int = 24
+*)
+
+
+The analogy between exceptions and delimited continuations is
+profound: in fact, delimited continuations are implemented in terms of
+exceptions. Abort is truly raise. Well, observationally. The current
+delimcc library tried to follow Dybvig, Sabry and Peyton-Jones
+interface -- which, being minimalistic, did not include abort as a
+primitive. We have to implement abort in terms of take_subcont, which
+is wasteful as we save the captured continuation for no good
+reason. Internally, the library does have an abort primitive, and it
+indeed works in the same way as raise.
+

@@ -1,0 +1,105 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 9D95EBC43
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 13:16:12 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id i9VCGCoB023814
+	for <caml-list@yquem.inria.fr>; Sun, 31 Oct 2004 13:16:12 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA23827 for <caml-list@pauillac.inria.fr>; Sun, 31 Oct 2004 13:16:11 +0100 (MET)
+Received: from smtp005.mail.ukl.yahoo.com (smtp005.mail.ukl.yahoo.com [217.12.11.36])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with SMTP id i9VCGB0B021457
+	for <caml-list@inria.fr>; Sun, 31 Oct 2004 13:16:11 +0100
+Received: from unknown (HELO ?192.168.1.113?) (vincenzo?ml@82.49.166.25 with plain)
+  by smtp005.mail.ukl.yahoo.com with SMTP; 31 Oct 2004 12:16:10 -0000
+From: Vincenzo Ciancia <vincenzo_mlRE.MOVE@yahoo.it>
+To: caml-list@inria.fr
+Subject: memory allocation when ... calling Ocaml from C called from multiple ocaml threads
+Date: Sun, 31 Oct 2004 14:19:29 +0100
+User-Agent: KMail/1.7
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200410311419.30007.vincenzo_mlRE.MOVE@yahoo.it>
+X-Miltered: at concorde with ID 4184D78C.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 4184D78B.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; ocaml:01 ocaml:01 threads:01 mainloop:01 reuse:01 threads:01 camlparam:01 camlreturn:01 segfault:01 buffer:01 const:01 char:01 char:01 buf:01 val:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+Hi all, I am fighting again in my infinite quest for a working, 
+multithreaded fuse binding for ocaml. It costed me a lot of free time 
+to get where I am, I already have code for all the fuse callbacks, and 
+single-threaded mainloop works well. When I use the multithreaded loop 
+explained below, I can't find a stable way to allocate memory for read 
+and write operations.
+
+I have the following setup:
+
+- ocaml starts
+- ocaml calls fuse initialization
+- ocaml starts an infinite loop where at each step
+  - C is called to retrieve a fuse command from kernel
+
+  - A ocaml thread is created, where
+
+    - C is called again to process the command (it's not that simple and
+      I would like to avoid implementing this in ocaml), and as a part
+      of this processing:
+
+      - (1) A C function for each filesystem operation is called, where
+
+        - OCaml is called back to implement the operation
+
+It's not too complicated: this way I reuse all fuse code for reading 
+commands and send responses to the kernel, and process every fuse 
+command in a separate thread (of course, I will put a limit but it's 
+not so important right now). Threads are created in ocaml, since while 
+googling for enter_blocking_section and friends I found in this list 
+archives that it should be made that way. It would be much simpler if 
+threads could be created from C, but it just does not work. I use 
+leave_blocking_section when calling back ocaml.
+
+I can't use CAMLparam, CAMLlocal and CAMLreturn when entering the C 
+callback named (1), they just segfault, I think because these functions 
+are called from C. Therefore I allocate needed temporaries needed to 
+call back ocaml using C declarations, like 
+
+ value vtmp=copy_string(path);
+ value vres=callback(*closure,tmp);
+
+Unexpectedly, this seems to work fine when hammering with parallel 
+filesystem requests, but every attempt to allocate a buffer for read 
+and write operations fails (in the following piece of code 
+string_create is a callback to String.create):
+
+int read (const char *path, char *buf, size_t size, off_t offset)
+{
+  [...]
+  vtmp=callback(*ocaml_string_create,Val_int(size)); 
+  vres=callback3(*read_closure,vpath,vtmp,copy_int64(offset));
+  [...]
+  res=Int_val(Field(vres,0)); /* vres has a sum type */
+  memcpy(buf,String_val(vtmp),min(size,res));
+  return res;
+}
+
+Obviously, vtmp will be garbage-collected before the callback will use 
+it, but also alloc_string in place of the callback to 
+ocaml_string_create will just segfault, and this is the whole point. 
+How can I get out of this all?
+
+Also, it would be more efficient to just pass the already allocated C 
+buffer wrapped inside an ocaml string, even if it could be dangerous to 
+pass around it. Is there a way to do so?
+
+Thanks
+
+Vincenzo
+
+
+

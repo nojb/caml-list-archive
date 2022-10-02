@@ -1,0 +1,391 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id UAA05002 for caml-redistribution; Fri, 4 Oct 1996 20:56:49 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id RAA01036 for <caml-list@pauillac.inria.fr>; Fri, 4 Oct 1996 17:29:50 +0200
+Received: from relay2.eunet.fr (relay2.EUnet.fr [192.134.192.149]) by concorde.inria.fr (8.7.6/8.7.1) with SMTP id RAA03827 for <caml-list@pauillac.inria.fr>; Fri, 4 Oct 1996 17:29:44 +0200 (MET DST)
+Received: from dassav (dassav.dassault-avion.fr) by relay2.eunet.fr (5.65c8d/96.05.03)
+	via EUnet-France id AA08501; Fri, 4 Oct 1996 17:29:26 +0200 (MET)
+Received: from fnet-ia1.dassault-avion.fr by dassav (5.x/SMI-SVR4)
+	id AA01882; Fri, 4 Oct 1996 16:24:54 +0100
+Received: by fnet-ia1.dassault-avion.fr (5.x/SMI-SVR4)
+	id AA02909; Fri, 4 Oct 1996 16:32:42 +0100
+Date: Fri, 4 Oct 1996 16:32:42 +0100
+From: bravier@dassault-avion.fr (Utilisateur FNET)
+Message-Id: <9610041532.AA02909@fnet-ia1.dassault-avion.fr>
+Subject: Functorized stdlib ???
+Content-Type: text
+Apparently-To: caml-list@pauillac.inria.fr
+Sender: weis
+
+
+961004
+(* ========================================================================= *)
+Here is a suggestion about the standard ocaml library Hashtbl.
+
+This module is very useful but it happens to uses the polymorphic
+equality ( = ) : 'a -> 'a -> bool.
+
+Unfortunately, there are cases where you want a hash-table with another
+equality predicate, for example you might want physical equality ( == ).
+
+This is precisely what functors are for !
+
+Here is first a short example building a min function from an order
+(the order is possibly polymorphic)
+
+(* ========================================================================= *)
+(* short_example.ml *)
+(* ========================================================================= *)
+module type ORDER =
+sig
+   type 'a t
+   val ( <= ) : 'a t -> 'a t -> bool
+end
+
+module Min (Order : ORDER) =
+struct
+   let min x y = if (Order.( <= ) x y) then x else y
+end
+
+(* ========================================================================= *)
+module OrderPoly =
+struct
+   type 'a t = 'a
+   let ( <= ) = ( <= )
+end
+
+module MinPoly = Min (OrderPoly)
+
+(* ========================================================================= *)
+module OrderString =
+struct
+   type 'a t = string
+   let ( <= ) x y = String.length x <= String.length y
+end
+
+module MinString = Min (OrderString)
+
+(* ========================================================================= *)
+
+let _ =
+begin
+   Printf.printf "minpoly   3.14 2.71 = %.2f\n" (MinPoly.min 3.14 2.71);
+   Printf.printf "minpoly   b    az   = %s\n"   (MinPoly.min "b" "az");
+   Printf.printf "minstring b    az   = %s\n"   (MinString.min "b" "az");
+   ()
+end
+
+(* ========================================================================= *)
+
+And here, applied to hash-tables to get polymorphic
+(or, if needed, monomorphic) hash-tables :
+
+(* ========================================================================= *)
+(* File h.mli *)
+(* ========================================================================= *)
+module type EQUALITY =
+  sig
+    type 'a t
+    val ( = ) : 'a t -> 'a t -> bool
+    val hash_param : int -> int -> 'a t -> int
+  end
+
+module type H =
+    sig
+      type 'a equality
+      type ('a, 'b) t
+      val create : int -> ('a, 'b) t
+      val clear : ('a, 'b) t -> unit
+      val add : ('a equality, 'b) t -> 'a equality -> 'b -> unit
+      val remove : ('a equality, 'b) t -> 'a equality -> unit
+      val find : ('a equality, 'b) t -> 'a equality -> 'b
+      val find_all : ('a equality, 'b) t -> 'a equality -> 'b list
+      val iter : ('a equality -> 'b -> 'c) -> ('a equality, 'b) t -> unit
+    end
+
+module H (Equality : EQUALITY) : (H with type 'a equality = 'a Equality.t)
+
+(* ========================================================================= *)
+module HEqual : (H with type 'a equality = 'a)
+module HEq : (H with type 'a equality = 'a)
+
+(* ========================================================================= *)
+
+(* ========================================================================= *)
+(* File h.ml : contains stdlib/hashtbl.ml mostly unmodified *) 
+(* ========================================================================= *)
+module type EQUALITY =
+sig
+   type 'a t
+   val ( = ) : 'a t -> 'a t -> bool
+   val hash_param : int -> int -> 'a t -> int
+end
+
+module type H =
+    sig
+      type 'a equality
+      type ('a, 'b) t
+      val create : int -> ('a, 'b) t
+      val clear : ('a, 'b) t -> unit
+      val add : ('a equality, 'b) t -> 'a equality -> 'b -> unit
+      val remove : ('a equality, 'b) t -> 'a equality -> unit
+      val find : ('a equality, 'b) t -> 'a equality -> 'b
+      val find_all : ('a equality, 'b) t -> 'a equality -> 'b list
+      val iter : ('a equality -> 'b -> 'c) -> ('a equality, 'b) t -> unit
+    end
+
+(* ========================================================================= *)
+module H (Equality : EQUALITY) =
+struct
+   let ( -- ) = ( = )
+   and ( = ) = Equality.( = )
+   and hash_param = Equality.hash_param
+   type 'a equality = 'a Equality.t
+(* ========================================================================= *)
+
+
+(***********************************************************************)
+(*                                                                     *)
+(*                           Objective Caml                            *)
+(*                                                                     *)
+(*            Xavier Leroy, projet Cristal, INRIA Rocquencourt         *)
+(*                                                                     *)
+(*  Copyright 1996 Institut National de Recherche en Informatique et   *)
+(*  Automatique.  Distributed only by permission.                      *)
+(*                                                                     *)
+(***********************************************************************)
+
+(* $Id: hashtbl.ml,v 1.5 1996/04/30 14:50:09 xleroy Exp $ *)
+
+(* Hash tables *)
+
+(* We do dynamic hashing, and we double the size of the table when
+   buckets become too long, but without re-hashing the elements. *)
+
+type ('a, 'b) t =
+  { mutable max_len: int;                    (* max length of a bucket *)
+    mutable data: ('a, 'b) bucketlist array } (* the buckets *)
+
+and ('a, 'b) bucketlist =
+    Empty
+  | Cons of 'a * 'b * ('a, 'b) bucketlist
+
+let create initial_size =
+  { max_len = 2; data = Array.create initial_size Empty }
+
+let clear h =
+  for i = 0 to Array.length h.data - 1 do
+    h.data.(i) <- Empty
+  done
+
+let resize h =
+  let n = Array.length h.data in
+  let newdata = Array.create (n+n) Empty in
+    Array.blit h.data 0 newdata 0 n;
+    Array.blit h.data 0 newdata n n;
+    h.data <- newdata;
+    h.max_len <- 2 * h.max_len
+
+let rec bucket_too_long n bucket =
+  if n < 0 then true else
+    match bucket with
+      Empty -> false
+    | Cons(_,_,rest) -> bucket_too_long (pred n) rest
+
+(* CHANGE : removed external declaration of hash_param *)
+
+let add h key info =
+  let i = (hash_param 10 100 key) mod (Array.length h.data) in
+  let bucket = Cons(key, info, h.data.(i)) in
+    h.data.(i) <- bucket;
+    if bucket_too_long h.max_len bucket then resize h
+
+let remove h key =
+  let rec remove_bucket = function
+      Empty ->
+        Empty
+    | Cons(k, i, next) ->
+        if k = key then next else Cons(k, i, remove_bucket next) in
+  let i = (hash_param 10 100 key) mod (Array.length h.data) in
+    h.data.(i) <- remove_bucket h.data.(i)
+
+let find h key =
+  match h.data.((hash_param 10 100 key) mod (Array.length h.data)) with
+    Empty -> raise Not_found
+  | Cons(k1, d1, rest1) ->
+      if key = k1 then d1 else
+      match rest1 with
+        Empty -> raise Not_found
+      | Cons(k2, d2, rest2) ->
+          if key = k2 then d2 else
+          match rest2 with
+            Empty -> raise Not_found
+          | Cons(k3, d3, rest3) ->
+              if key = k3 then d3 else begin
+                let rec find = function
+                    Empty ->
+                      raise Not_found
+                  | Cons(k, d, rest) ->
+                      if key = k then d else find rest
+                in find rest3
+              end
+
+let find_all h key =
+  let rec find_in_bucket = function
+    Empty ->
+      []
+  | Cons(k, d, rest) ->
+      if k = key then d :: find_in_bucket rest else find_in_bucket rest in
+  find_in_bucket h.data.((hash_param 10 100 key) mod (Array.length h.data))
+
+let iter f h =
+  let d = h.data in
+  let len = Array.length d in
+  for i = 0 to len - 1 do
+    let rec do_bucket = function
+        Empty ->
+          ()
+      | Cons(k, d, rest) ->
+          if (hash_param 10 100 k) mod len -- i (* CHANGE -- instead of == *)
+          then begin f k d; do_bucket rest end
+          else do_bucket rest in
+    do_bucket d.(i)
+  done
+
+let hash x = hash_param 50 500 x
+(* ========================================================================= *)
+(* original stdlib/hashtbl.ml ends here *)
+(* ========================================================================= *)
+end
+
+(* ========================================================================= *)
+module EqualityEqual =
+struct
+   type 'a t = 'a
+   let ( = ) = ( = )
+   let hash_param = Hashtbl.hash_param
+end
+
+module HEqual = H (EqualityEqual)
+
+(* ========================================================================= *)
+module EqualityEq =
+struct
+   type 'a t = 'a
+   let ( = ) = ( == )
+
+   (* just to try *)
+   (*
+   let hash_param _ _ x = 0
+   *)
+   (* or more realistic *)
+   (**)
+   external hash_eq : 'a -> int = "ML_hash_eq"
+   let hash_param _ _ = hash_eq
+   (**)
+end
+
+module HEq = H (EqualityEq)
+
+(* ========================================================================= *)
+
+/* ========================================================================= */
+/* file h_c.c : found inspiration in byterun/hash.c */
+/* ========================================================================= */
+#include <mlvalues.h>
+
+value ML_hash_eq (value v) { return Val_long (v & 0x3FFFFFFF); }
+  /* The & has two purposes: ensure that the return value is positive
+     and give the same result on 32 bit and 64 bit architectures. */
+   
+/* ========================================================================= */
+
+(* ========================================================================= *)
+(* file test_h.ml *)
+(* ========================================================================= *)
+module HEqual = H.HEqual
+module Hashtbl = HEqual            (* backward compatibility is possible *)
+
+let tequal = HEqual.create 127
+let _ =
+begin
+   HEqual.add tequal 1 "one";
+   ()
+end
+let dummy = HEqual.find tequal 1   (* "one" *)
+
+(* ========================================================================= *)
+module HEq = H.HEq
+
+let a1 = "a"
+and a2 = "a"                       (* a1 = a2 but a1 != a2 *)
+
+let teq = HEq.create 127
+let _ =
+begin
+   HEq.add teq a1 1;
+   HEq.add teq a2 2;
+   ()
+end
+let dummy = HEq.find teq a1        (* 1 *)
+let dummy = HEq.find teq a2        (* 2 *)
+
+(* ========================================================================= *)
+
+It seems to me that functors and polymorphism might/should go together well.
+
+At any rate I would like a way to conceive modules and functors that
+do not forbid polymorphism because, if you look at the short example :
+
+module type ORDER =
+sig
+   type 'a t
+   val ( <= ) : 'a t -> 'a t -> bool
+end
+
+It is really conter-intuitive since I have to parameterize the type t
+with 'a before any use of type t.
+
+What I first wrote (which does not work in the end) was :
+
+module type ORDER_first =
+sig
+   type t
+   val ( <= ) : 'a t -> 'a t -> bool
+end
+
+this is what I meant but OrderPoly was not of module type ORDER_first,
+that's why I finally had to choose type 'a t.
+
+Unfortunately this is no real solution since a predicate over
+couples, say (fun (x1,y1) (x2, y2) -> y1 <= y2) : 'a * 'b -> 'a * 'b -> bool
+will not fit in module type ORDER whose type 'a t has only one parameter.
+
+Well, well, if somebody has clues ...
+
+By the way, this technique of using paramerized types can also be used
+to modify the Set module of stdlib to get a polymorphic set type
+(just change type t into type 'obj t and type elt into type 'obj elt !)
+
+This does not seem much but it enables the user to share code (as I do not
+know whether applying functors duplicates code or not) and most of all, to
+use only one module (no need to create modules all over the code ...)
+
+Please, feel free to be controversial :-)
+
+(* ========================================================================= *)
+Thierry Bravier
+Dassault Aviation.
+DGT / DTN / ELO / EAV
+78, Quai Marcel Dassault
+F-92214 Saint-Cloud Cedex
+France
+
+Telephone : (33) 01 47 11 53 07
+Telecopie : (33) 01 47 11 52 83
+E-Mail :    bravier@dassault-avion.fr
+
+(* ========================================================================= *)
+
+
+
+
+

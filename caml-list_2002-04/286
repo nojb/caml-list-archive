@@ -1,0 +1,147 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA31576; Mon, 22 Apr 2002 10:44:36 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA31579 for <caml-list@pauillac.inria.fr>; Mon, 22 Apr 2002 10:44:35 +0200 (MET DST)
+Received: from ebene.inrialpes.fr (ebene.inrialpes.fr [194.199.18.70])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3M8iYT14775
+	for <caml-list@inria.fr>; Mon, 22 Apr 2002 10:44:34 +0200 (MET DST)
+Received: from pop-serv.inrialpes.fr (pop-serv.inrialpes.fr [194.199.18.66])
+	by ebene.inrialpes.fr (8.11.6/8.11.6) with ESMTP id g3M8hoR02385
+	for <caml-list@inria.fr>; Mon, 22 Apr 2002 10:43:50 +0200 (MEST)
+Received: from inrialpes.fr (cime.inrialpes.fr [194.199.23.76])
+	by pop-serv.inrialpes.fr (8.11.3/8.11.3/ImagV2) with ESMTP id g3M8hoX29356
+	for <caml-list@inria.fr>; Mon, 22 Apr 2002 10:43:50 +0200 (MEST)
+Message-ID: <3CC3CD45.E6D6E166@inrialpes.fr>
+Date: Mon, 22 Apr 2002 10:43:49 +0200
+From: Frederic Tronel <Frederic.Tronel@inrialpes.fr>
+X-Mailer: Mozilla 4.76 [en] (X11; U; SunOS 5.8 sun4u)
+X-Accept-Language: en
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: [Caml-list] Problem with parametric classes
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hello,
+
+I'm using Ocaml 3.04 (plus a patch applied to circumvent a 
+problem with parametric classes bug id 841).
+
+I'm trying to compile the following piece of code (more
+precisely, this is a significant excerpt of the faulty code).
+which fails with the following error:
+
+File "essai.ml", line 71, characters 5-491:
+The abbreviation specElement expands to type
+< get_ident : int; get_name : string; mytype : specelement;
+  recv : string * comm list -> string * string list -> unit;
+  send : comm -> string -> unit; set_ident : int -> unit;
+  set_name : string -> unit >
+but is used with type < get_ident : int; set_ident : int -> unit; .. >
+
+
+open Hashtbl;;
+
+
+type specelement = 
+    [`Spec | `Activite | `Conteneur 
+  | `Controleur | `ControleParent 
+  | `ControleEnfant | `Deploiement 
+  | `DeploiementEnfant | `ConfigurationComposite
+  | `ExportationService | `DeploiementAgent
+  | `DeploiementControleur | `ConfigurationAgent 
+  | `ConfigurationControleur | `Attente
+  | `ReconfigurationParesseuse | `Configuration
+  | `Importation |`Controle | `InstantiationAsynchrone 
+  | `Initialisation | `LiaisonTardive | `Referentiel]
+
+class ['a] countingObjects =
+  object (this)
+    val mutable elements = ([] : 'a list)
+   (* Identificateur 0 est non attribue *)
+    val mutable id = 0
+    method identify x =
+      if not (List.memq x elements) then (
+	elements <- [x]@elements ;
+	id <- id+1 ; x#set_ident id 
+       )
+   method retrieveObject (id:int) =
+      List.find (fun x -> x#get_ident = id) elements
+  end
+
+
+let countingObjects = new countingObjects ;;
+
+type comm = 
+    Direct of int
+  | ControleurParent
+  | Referentiel
+  | ComposantControle
+
+class synchronisationAccounting =
+  object (this)
+    val mutable synchroRecv = create 10
+    val mutable synchroSend = create 10
+    method private addToTable table cle1 cle2 obj =
+      if(not(mem table cle1)) then (
+	let ht = create 10 in
+ 	add ht cle2 obj ;
+	add table cle1 ht
+       )
+      else (
+	let ht = find table cle1 in
+	if (not(mem ht cle2)) then 
+	  add ht cle2 obj
+	else
+	  let all = find_all ht cle2 in
+	  if(not(List.mem obj all)) then
+	    add ht cle2 obj
+       );
+    method send fid tid event =
+      this#addToTable synchroSend fid tid event ;
+      match (fid,tid) with 
+	(Direct idf, Direct idt) -> Printf.fprintf stdout "%s" event 
+      |	(_,_) -> failwith "Not yet implemented"
+    method recv fidd tid eventd =
+      match (fidd,eventd) with 
+	((fidn,fidl),(eventn,eventl)) ->
+	  List.iter (fun fid -> (List.iter (fun event -> this#addToTable
+synchroRecv fid tid event) eventl)) fidl ; 
+	  Printf.fprintf stdout "%s %s" eventn fidn ;
+  end
+
+let synchroAccounting = new synchronisationAccounting ;;
+
+class specElement =
+  fun  (x:specelement)  ->
+  object (this)
+    val mutable ident = 0
+    val mutable name = "" 
+    method mytype = x 
+    method set_ident id = ident <- id 
+    method get_ident = ident
+    method set_name x = name <- x
+    method get_name = name
+    method send tid event = synchroAccounting#send (Direct ident) tid
+event
+    method recv fid event =  synchroAccounting#recv fid (Direct ident)
+event
+   
+    initializer countingObjects#identify (this:>specElement)
+  end
+
+
+What is the problem ???
+It does compile if I comment out send and recv methods of class
+specElement.
+Any help would be really appreciated.
+
+Best regards,
+
+Frederic Tronel.
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,81 @@
+Return-Path: <fw@deneb.enyo.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 5ED3ABB81
+	for <caml-list@yquem.inria.fr>; Fri, 11 Nov 2005 15:41:41 +0100 (CET)
+Received: from mail.enyo.de (mail.enyo.de [212.9.189.167])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jABEfeL9013013
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Fri, 11 Nov 2005 15:41:41 +0100
+Received: from deneb.vpn.enyo.de ([212.9.189.177] helo=deneb.enyo.de)
+	by albireo.enyo.de with esmtp id 1Eaa60-0005gm-P2
+	for caml-list@yquem.inria.fr; Fri, 11 Nov 2005 15:41:40 +0100
+Received: from fw by deneb.enyo.de with local (Exim 4.54)
+	id 1Eaa5w-0006EB-FM
+	for caml-list@yquem.inria.fr; Fri, 11 Nov 2005 15:41:36 +0100
+From: Florian Weimer <fw@deneb.enyo.de>
+To: caml-list@yquem.inria.fr
+Subject: Finalization and object dependencies
+Date: Fri, 11 Nov 2005 15:41:36 +0100
+Message-ID: <878xvv1c2n.fsf@mid.deneb.enyo.de>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Miltered: at nez-perce with ID 4374ADA4.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; dependencies:01 arrays:01 handler:01 arrays:01 pointers:01 signaling:98 exception:01 exception:01 explicitly:01 explicitly:01 finalization:01 finalization:01 underlying:01 underlying:01 caml:02 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+I've got to different types of objects, say database tables and
+cursors for one table.  Caml code is expected to access these objects
+using some handle reference.
+
+  * If the GC detects that no handles for a particular cursor exist
+    anymore, the underlying cursor object should be closed (which may
+    free external resources such as locks).  At this time, all "equal"
+    handles become invalid, subsequent operations will fail.
+
+  * If the GC detects that no handles for some table object exist, and
+    there are no handles for that table, this table is closed.
+    Subsequent operations on "equal" table handles will fail.
+    
+  * The user may explicitly close a cursor handle.  In this case, the
+    underlying object is closed, and the handle is marked invalid.
+    (Same as above.)
+
+  * The user may explicitly close a table handle.  In this case, all
+    cursor which are still open are closed.  Future operations on
+    them, or the table, will fail.
+
+  * When the program exits, all cursors and tables shall be closed,
+    even if the program was termined by an exception.
+
+(Here, "to fail" means to raise an exception or some other kind of
+deterministic error signaling mechanism.)
+
+Usually, application code will gracefully close all cursors, and the
+table, but I want my library to be as safe as possible to use, and
+avoid random crashes or memory leaks.
+
+There are a couple of approaches to implement the desired behavior:
+
+  (1) Just use weak arrays of tables and cursor, together with Gc.alarm.
+
+  (2) Use Gc.finalise for handler objects which contain an index into
+      (plain) arrays of tables and cursors.  Use reference counting
+      (or back pointers) to prevent premature finalization of table
+      objects while there are still cursors around.
+
+  (3) Same as (2), but using custom blocks and C code.
+
+  (4) Some hybrid approach.
+
+I'm not exactly happy with each appraoch because it seems I must
+implement a simple memory manager on my own for managing the array
+elements.  Perhaps I'm missing something?
+
+How is the performance of the three approaches?  Each one uses a
+different GC mechanism to achieve its goals, so I'm a bit puzzled.
+

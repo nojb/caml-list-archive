@@ -1,0 +1,124 @@
+Return-Path: <alain@frisch.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 7437EBC6B
+	for <caml-list@yquem.inria.fr>; Mon, 26 Nov 2007 18:20:15 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAJSPSkdQDPIucWdsb2JhbACPQAEKBAQREw
+X-IronPort-AV: E=Sophos;i="4.21,468,1188770400"; 
+   d="scan'208";a="19694270"
+Received: from smtp21.orange.fr ([80.12.242.46])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 26 Nov 2007 18:20:15 +0100
+Received: from me-wanadoo.net (localhost [127.0.0.1])
+	by mwinf2129.orange.fr (SMTP Server) with ESMTP id B93881C000A1
+	for <caml-list@yquem.inria.fr>; Mon, 26 Nov 2007 18:20:14 +0100 (CET)
+Received: from [10.0.2.15] (APuteaux-154-1-25-148.w83-199.abo.wanadoo.fr [83.199.80.148])
+	by mwinf2129.orange.fr (SMTP Server) with ESMTP id 749301C0008F;
+	Mon, 26 Nov 2007 18:20:14 +0100 (CET)
+X-ME-UUID: 20071126172014477.749301C0008F@mwinf2129.orange.fr
+Message-ID: <474B0040.4080706@frisch.fr>
+Date: Mon, 26 Nov 2007 18:20:00 +0100
+From: Alain Frisch <alain@frisch.fr>
+User-Agent: Thunderbird 2.0.0.9 (X11/20071031)
+MIME-Version: 1.0
+To: viktor tron <viktor.tron.ml@gmail.com>
+Cc: Caml Mailing List <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] C libs from Ocaml libs
+References: <8cc3d8520711202343q2951aee2lca188a185b84b511@mail.gmail.com>	<4743FE39.9000208@frisch.fr>	<8cc3d8520711210906k2c8ed0abg6f4305b275cddbf3@mail.gmail.com>	<47446BE3.4070606@frisch.fr> <8cc3d8520711211035w6c9fa3a6je4622195e5a752af@mail.gmail.com>
+In-Reply-To: <8cc3d8520711211035w6c9fa3a6je4622195e5a752af@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; frisch:01 frisch:01 libs:01 ocaml:01 libs:01 ocamlopt:01 -output-obj:01 foo:01 foo:01 cmxa:01 ocamlopt:01 stub:01 gcc:01 stub:01 ocamllib:01 
+
+viktor tron wrote:
+> If anyone can make me understand the above, I'd be forever grateful.
+
+Here is the more direct way to achive what you want:
+
+===========================================================
+ocamlopt -output-obj -o foo_caml.o foo.cmxa foo_export.ml
+ocamlopt -c foo_stub.c
+gcc -o foo_test foo_test.c foo_stub.o foo_caml.o \
+    $(OCAMLLIB)/libasmrun.a -lm -ldl
+===========================================================
+
+
+Note that "ocamlopt -output-obj" uses the so-called partial linking 
+feature (ld -r) to produce a single object file that contains:
+- the startup code
+- all the native OCaml code (including the code of the libraries, like 
+  foo.a and stdlib.a)
+
+But *not* the extra C objects and libraries (-ccopt, *.c/*.o/*.a 
+arguments). (Thanks to Rabih for this off-line reminder.) I don't know 
+whether this qualifies as a bug or as a feature.
+
+Here is a variant where we pack foo_caml.o and foo_stub.o together in a 
+single object using the partial linker manually:
+
+===========================================================
+ocamlopt -output-obj -o foo_caml.o foo.cmxa foo_export.ml
+ocamlopt -c foo_stub.c
+ld -r -o libfoo.o foo_stub.o foo_caml.o	
+gcc -c foo_test.c
+gcc -o foo_test foo_test.c libfoo.o $(OCAMLLIB)/libasmrun.a -lm -ldl
+===========================================================
+
+We can do more and also put the libasmrun.a library in the same object:
+
+===========================================================
+ocamlopt -output-obj -o foo_caml.o foo.cmxa foo_export.ml
+ocamlopt -c foo_stub.c
+ld -r -o libfoo.o foo_stub.o foo_caml.o	$(OCAMLLIB)/libasmrun.a
+gcc -c foo_test.c
+gcc -o foo_test foo_test.c libfoo.o -ldl -lm
+===========================================================
+
+One could try to put foo_stub.o and foo_caml.o together in a library:
+
+===========================================================
+ocamlopt -output-obj -o foo_caml.o foo.cmxa foo_export.ml
+ocamlopt -c foo_stub.c
+ar r libfoo.a foo_stub.o foo_caml.o	
+gcc -c foo_test.c
+gcc -o foo_test foo_test.c libfoo.a $(OCAMLLIB)/libasmrun.a -lm -ldl
+===========================================================
+
+This does not work because the two libraries libfoo.a and libasmrun.a 
+depend on symbols defined in the other library. This can be addressed 
+with the linker options --start-group/--end-group:
+
+===========================================================
+ocamlopt -output-obj -o foo_caml.o foo.cmxa foo_export.ml
+ocamlopt -c foo_stub.c
+ar r libfoo.a foo_stub.o foo_caml.o	
+gcc -c foo_test.c
+gcc -o foo_test foo_test.c \
+  -Wl,--start-group libfoo.a $(OCAMLLIB)/libasmrun.a -Wl,--end-group \
+  -lm -ldl
+===========================================================
+
+
+In the current development version of OCaml, it is also possible to go 
+through a shared library:
+
+===========================================================
+ocamlopt -output-obj -o foo_caml.so foo.cmxa foo_export.ml foo_stub.c
+gcc -c foo_test.c
+gcc -o foo_test foo_test.c foo_caml.so -Wl,-R.
+===========================================================
+
+When -output-obj is used to produce a shared library, it will put extra 
+C objects and options (here, foo_stub.o, libasmrun.a -lm, -ldl) in the 
+result.
+
+Feel free to ask more questions (and to write a tutorial on this issues)!
+
+
+Alain
+

@@ -1,0 +1,144 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 700BDBBBB
+	for <caml-list@yquem.inria.fr>; Mon, 13 Mar 2006 09:40:41 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2D8eePs012828
+	for <caml-list@yquem.inria.fr>; Mon, 13 Mar 2006 09:40:40 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA31187 for <caml-list@pauillac.inria.fr>; Mon, 13 Mar 2006 09:40:40 +0100 (MET)
+Received: from smtp3.adl2.internode.on.net (smtp3.adl2.internode.on.net [203.16.214.203])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2D8ebtp012813
+	for <caml-list@inria.fr>; Mon, 13 Mar 2006 09:40:38 +0100
+Received: from [192.168.1.200] (ppp9-113.lns1.syd7.internode.on.net [59.167.9.113])
+	by smtp3.adl2.internode.on.net (8.13.5/8.13.5) with ESMTP id k2D8eV59056753
+	for <caml-list@inria.fr>; Mon, 13 Mar 2006 19:10:32 +1030 (CST)
+	(envelope-from skaller@users.sourceforge.net)
+Subject: unification of alternatives
+From: skaller <skaller@users.sourceforge.net>
+To: caml-list@inria.fr
+Content-Type: text/plain
+Organization: Async P/L
+Date: Mon, 13 Mar 2006 19:47:00 +1100
+Message-Id: <1142239620.8419.314.camel@budgie.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.4.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 44153008.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 44153005.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; unification:01 unification:01 unify:01 unify:01 endmatch:01 endmatch:01 arises:01 typedef:01 typedef:01 model:01 notation:01 genericity:01 overload:01 endl:01 endl:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+I have an interesting problem with unification algorithm.
+The problem is basically that given two terms,
+either that unify, they don't unify, or *NEW* they don't
+unify yet but might later.
+
+Does anyone know how to modify the algorithm to account
+for this?
+
+It's hard for me to give a formal description, so I'll
+illustrate with an example. I have a term
+
+	typematch t with
+	| t1 => t1'
+	| t2 => t2'
+	..
+	endmatch
+
+The reduction rule for this term is:
+
+(a) if t is t1, return t1'
+(b) if t cannot unify with t1, return
+
+	reduce (typematch t with | t2 => t2' .. endmatch)
+
+In other words throw out the first branch and try again.
+
+(c) Otherwise return the whole term.
+ 
+The indeterminism arises whenever there are type variables
+present which may be replaced later on. Since we don't
+know what substitutions will occur yet, we have no choice
+but to delay reduction. Whilst this is probably not as
+general as one may like it is actually very useful:
+
+
+typedef fast_sints = typesetof (tiny, short, int, long, vlong);
+...
+
+// C integer promotion rule
+typedef fun integral_promotion: TYPE -> TYPE =
+  | tiny => int
+  | utiny => int
+  | short => int
+  ...
+
+typedef fun arithmax(l: TYPE, r: TYPE): TYPE =>
+  typematch integral_promotion l, integral_promotion r with
+  | vlong,vlong => vlong 
+  ...
+
+  fun add[t1:fast_ints, t2:fast_ints]: t1 * t2 -> arithmax(t1,t1)="$1
++$2";
+
+The last rule here allows mixed mode arithmetic in Felix
+to model the usual C rules .. without allowing any implicit
+conversions. The typesetof operator converts a type tuple
+into a set of types. The notation:
+
+	t1:fast_ints
+
+is constrained genericity. Basically, the overload resolution
+algorithm uses unification to find the type variables,
+then then constraints are checked. Unfortunately that
+isn't good enough. Consider this case:
+
+fun g[t,u:ptr[t]]: u -> t = "*$1";
+var x = 1;
+var px:ptr[int] = addr x;
+print$ g[int] px; endl;
+
+This actually works, but this one does not:
+
+print$ g px; endl;
+
+because it isn't possible to deduce t from the argument.
+I have modified the algorithm so  that this now does work,
+by adding the type constraint into the set of equations
+to be unified.
+
+Ok -- sorry it took so long -- so here is the problem.
+The above works fine with 'regular types'. But if the
+constraint is a typeset, it doesn't work.
+
+The obvious way to make it work is to consider each
+member of the typeset in turn.. however that just
+isn't tractable (combinatorial explosion).
+
+However the regular solution WILL work in many cases
+if we simply delay reduction of any typesets, in particular,
+just leave any typeset constraints out of the unification
+step, and just check the constraint afterwards (as before).
+
+Of course this is a real hack, since the rule isn't recursive.
+The 'proper' way to do it is to throw everything at a modified
+unification algorithm. The problem is to stop the algorithm
+aborting prematurely with a failure. In particular in the
+original example:
+
+fun add[t1:fast_ints, t2:fast_ints]: t1 * t2
+
+we don't want the algorithm to fail unification, when in
+fact it works just fine *without* the constraints being
+thrown in.
+
+-- 
+John Skaller <skaller at users dot sourceforge dot net>
+Async PL, Realtime software consultants
+Checkout Felix: http://felix.sourceforge.net
+

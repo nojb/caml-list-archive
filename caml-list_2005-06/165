@@ -1,0 +1,96 @@
+Return-Path: <weis@pauillac.inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 6652CBBFA
+	for <caml-list@yquem.inria.fr>; Tue, 21 Jun 2005 00:45:08 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j5KMj7w1016686
+	for <caml-list@yquem.inria.fr>; Tue, 21 Jun 2005 00:45:08 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA21616 for <caml-list@pauillac.inria.fr>; Tue, 21 Jun 2005 00:45:07 +0200 (MET DST)
+Received: from cgpsrv2.cis.mcmaster.ca (univmail.CIS.McMaster.CA [130.113.64.46])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id j5KMj6Fr014767
+	for <caml-list@inria.fr>; Tue, 21 Jun 2005 00:45:07 +0200
+Received: from [130.113.68.27] (account carette@univmail.cis.mcmaster.ca HELO pccarettej)
+  by cgpsrv2.cis.mcmaster.ca (CommuniGate Pro SMTP 4.1.8)
+  with ESMTP id 96136852 for caml-list@inria.fr; Mon, 20 Jun 2005 18:45:05 -0400
+Reply-To: <carette@mcmaster.ca>
+From: "Jacques Carette" <carette@mcmaster.ca>
+To: <caml-list@inria.fr>
+Subject: RE: [Caml-list] Unexplained infinite loop
+Date: Mon, 20 Jun 2005 18:45:05 -0400
+Organization: McMaster University
+Message-ID: <003601c575e9$b4215400$1b447182@cas.mcmaster.ca>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Priority: 3 (Normal)
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook, Build 10.0.6626
+In-Reply-To: <002c01c575d5$c463b600$1b447182@cas.mcmaster.ca>
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2900.2180
+Importance: Normal
+X-Miltered: at concorde with ID 42B746F3.003 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 42B746F2.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 off-list:01 metaocaml:01 memoization:01 lazy:01 ocamldebug:01 stepping:01 struct:01 struct:01 printf:01 printf:01 retn:98 idx:98 retn:98 idx:98 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Sorry to answer my own post, but off-list I got the answer.
+
+The problem is that I was too cavalier in erasing the MetaOCaml markup.  
+I need to replace .< x >. with fun () -> x
+and .~x with x () for any expression x.
+
+And because of memoization, I need to do that, I can't use the Lazy module.
+For the curious, I the resulting code is below.  While ocamldebug can deal
+with this code without difficulty, stepping through it by hand is quite
+mystifying!
+
+Jacques
+
+(* Base monad type, to be used throughout *)
+type ('v,'s,'w) monad = 's -> ('s -> 'v -> 'w) -> 'w
+
+let ret a = fun s k -> k s a
+let retN a = fun s k -> fun () -> (let t = a () in k s (fun () -> t) () )
+let bind a f = fun s k -> a s (fun s' b -> f b s' k)
+let k0 s v = v  (* Initial continuation -- for `reset' and `run' *)
+let runM m = m [] k0 (* running our monad *)
+let liftGet x = fun () -> (! (x()) )
+let liftRef x = fun () -> (ref (x ()))
+
+let l1 f x = bind x (fun t -> f t)
+
+let seqM a b = fun s k -> k s (fun () -> (begin a s k0 () ; b s k0 () end))
+
+(* while ``loops'' do not naturally bind a value *)
+let retWhileM cond body = fun s k -> 
+    k s (fun () -> (while (cond s k0 ()) do body s k0 () done))
+
+(* operations on indices *)
+module Idx = struct
+  let zero = fun () -> 0
+  let succ a = fun () -> (a () +1)
+  let less a b = fun () -> (a () < b () )
+end
+
+(* code generators *)
+module Code = struct
+  let update a f = let b = f (liftGet a) in ret (fun () -> (a () := b ()))
+end
+
+let dogen a = 
+  bind (retN (liftRef Idx.zero)) (fun c ->
+  bind (retN (fun () -> (Array.length a))) (fun m -> 
+    (retWhileM (ret (Idx.less (liftGet c) m))
+       (bind (retN (liftGet c)) (fun cc ->
+       Printf.printf "%i %i\n" (cc ()) !(c ());
+       (Code.update c Idx.succ)))))) ;;
+
+let gen a = runM (dogen a) ;;
+
+(gen (Array.make 1 1.)) ();;
+

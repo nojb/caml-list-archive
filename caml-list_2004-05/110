@@ -1,0 +1,131 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA06435; Wed, 5 May 2004 19:31:55 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA06634 for <caml-list@pauillac.inria.fr>; Wed, 5 May 2004 19:31:54 +0200 (MET DST)
+Received: from fed1rmmtao10.cox.net (fed1rmmtao10.cox.net [68.230.241.29])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i45HVqSH019973
+	for <caml-list@inria.fr>; Wed, 5 May 2004 19:31:53 +0200
+Received: from server.vns.oc.ca.us ([68.5.38.56]) by fed1rmmtao10.cox.net
+          (InterMail vM.6.01.03.02 201-2131-111-104-20040324) with ESMTP
+          id <20040505173149.ONHE15152.fed1rmmtao10.cox.net@server.vns.oc.ca.us>
+          for <caml-list@inria.fr>; Wed, 5 May 2004 13:31:49 -0400
+Received: from server.vns.oc.ca.us (91863ea5953d463f39fb772b6a7f33a5@localhost.vns.oc.ca.us [127.0.0.1])
+	by server.vns.oc.ca.us (8.12.9p2/8.12.6) with ESMTP id i45HVo7k072596
+	for <caml-list@inria.fr>; Wed, 5 May 2004 10:31:50 -0700 (PDT)
+	(envelope-from vns@server.vns.oc.ca.us)
+Received: (from vsilyaev@localhost)
+	by server.vns.oc.ca.us (8.12.9p2/8.12.6/Submit) id i45HVnmv072595
+	for caml-list@inria.fr; Wed, 5 May 2004 10:31:50 -0700 (PDT)
+Date: Wed, 5 May 2004 10:31:49 -0700
+From: "Vladimir N. Silyaev" <vsilyaev@mindspring.com>
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Re: Common IO structure
+Message-ID: <20040505173149.GA72564@server.vns.oc.ca.us>
+References: <20040503061212.GA64216@server.vns.oc.ca.us> <40980BA2.1010102@socialtools.net>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <40980BA2.1010102@socialtools.net>
+User-Agent: Mutt/1.4.1i
+X-Miltered: at concorde with ID 40992508.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 2004:99 encodings:01 pervasives:01 helper:01 camomile:01 reusing:01 non-blocking:01 non-blocking:01 figuring:01 buffer:01 buffer:01 async:01 val:01 val:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Tue, May 04, 2004 at 10:31:14PM +0100, Benjamin Geer wrote:
+> >If you felt interested, please look into the attached file io.ml.
+> 
+> This looks like a good start to me; what do others think?
+> 
+> I have two questions about it:
+> 
+> First, I think that rather than having to hard-code the use of the UTF8 
+> module in an application in order to handle UTF-8 characters, it would 
+> be more useful to be able to specify encodings using string arguments; 
+> the choice of encoding is often determined by reading a configuration 
+> file.  Would there be a way to support this?
+Sure. I probably should specify more clearly, it was envisioned
+that IO module would only specify signatures for IO.Stream.[Read/Write],
+IO.Block.[Read/Write] and IO.Filter.[Read/Write]. Rest of the file was
+just an quick and dirty implementation of mapping IO to Pervasives modules,
+Unix socket and sample filter for UTF8 bytestream<->unicode converter.
+
+And assume that we have in addition to UTF8 filter, filter
+UTF16 bytestream <->unicode, Latin1 bytestream<->unicode, there is could
+be a helper function, which takes filename, encoding name and returns
+IO.Stream.Read specialized with Unicode type. This could be done
+relatively easy, by providing functoral interface to the camomile, and
+reusing existing code.
+
+> 
+> Second, I'm wondering if this design can be adapted to accommodate 
+> non-blocking I/O.  The 'get' function has to return a character, but on 
+> a non-blocking socket, there might not be any character to return.  I've 
+> attached a sketch of an approach that might be more suitable for 
+> non-blocking I/O; I'd like to add it to your design, but I'm having 
+> trouble figuring out how.  I would be very interested in your thoughts 
+> on this.
+Sure non blocking I/O could be supported, but one should be aware,
+that get and/or put could throw exception.
+
+> exception Buffer_underflow
+> exception Buffer_overflow
+> 
+> module type Async =
+> sig
+>   type t
+>   val create : unit -> t
+>   val get : t -> char
+>   val put : t -> char -> unit
+>   val read : t -> string -> int -> int -> int
+>   val write : t -> string -> int -> int -> unit
+>   val from_fd : t -> Unix.file_descr -> unit
+>   val to_fd : t -> Unix.file_descr -> unit
+>   val clear : t -> unit
+>   val flip : t -> unit
+>   val compact : t -> unit
+>   val rewind : t -> unit
+>   val limit : t -> int
+>   val position : t -> int
+>   val remaining : t -> int
+>   val contents : t -> string
+> end
+
+This signature looks like a good starting point. However I would rather
+separate this code to three different pieces:
+ - input, asynchronous source of bytes
+ - output, synchronous source of symbols (char)
+ - algorithm(filter), converts input to output,
+   and throws exception where apropriate
+
+Input is a signature, for example like this:
+module Block = struct
+  module type Read =
+  sig
+    type t
+    val nb_read:  t -> string -> int -> int -> int
+  end
+
+Output is IO.Stream.Read + IO.Block.Read
+
+And algorithm is a functor, which actually manages all buffering
+and offset arithmetic.
+
+Such code structuring would allow algorithm reuse with different
+type of input.
+
+Please note,  that write and read inherently separated in signatures,
+it allows simpler interface, supports read/write only streams
+and better feet common model, where read and writes are separated.
+However, module couldn't implement both read and write signatures, if
+it's required.
+
+Regards,
+Vladimir
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

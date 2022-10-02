@@ -1,0 +1,156 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id B4A0EBC57
+	for <caml-list@yquem.inria.fr>; Sun, 12 Dec 2010 15:54:44 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsYAAItxBE3UnwdjkWdsb2JhbACVaYEljQEVAQEBAQkLCgcRBCW+ZIVKBI4N
+X-IronPort-AV: E=Sophos;i="4.59,332,1288566000"; 
+   d="scan'208";a="83617512"
+Received: from relay.pcl-ipout01.plus.net ([212.159.7.99])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 12 Dec 2010 15:54:24 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArcFAJxwBE3Unw4S/2dsb2JhbACVaYEljQF4vl6FSgSODQ
+Received: from outmx06.plus.net ([212.159.14.18])
+  by relay.pcl-ipout01.plus.net with ESMTP; 12 Dec 2010 14:54:23 +0000
+Received: from [84.93.149.66] (helo=WinEight)
+	 by outmx06.plus.net with esmtp (Exim) id 1PRnJf-000160-9q
+	for caml-list@inria.fr; Sun, 12 Dec 2010 14:54:23 +0000
+From: "Jon Harrop" <jon@ffconsultancy.com>
+To: <caml-list@inria.fr>
+Subject: Value types (Was: [Caml-list] ocamlopt LLVM support)
+Date: Sun, 12 Dec 2010 14:54:14 -0000
+Message-ID: <036001cb9a0c$725acef0$57106cd0$@com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="iso-8859-1"
+Content-Transfer-Encoding: quoted-printable
+X-Mailer: Microsoft Office Outlook 12.0
+Thread-Index: AcuaDHAC5hHxcQFxRxC6irvhmtI7Ig==
+Content-Language: en-gb
+X-Spam: no; 0.00; ocamlopt:01 haskell:01 ocaml:01 haskell:01 stdio:01 const:01 printf:01 ocaml:01 ocamlopt:01 gcc:01 unboxing:01 0.76:98 frog:98 rec:01 rec:01 
+
+The Haskell guys got their best performance improvement moving to LLVM =
+from
+the hailstone benchmark so it is interesting to examine this case as =
+well. I
+just added support for 64-bit ints to HLVM to implement that benchmark =
+and
+my code is:
+
+  let rec collatzLen ((c, n): int * int64) : int =3D
+    if n =3D 1L then c else
+      collatzLen (c+1, if n % 2L =3D 0L then n / 2L else 3L * n + 1L);;
+
+  let rec loop ((i, (nlen, n)): int64 * (int * int64)) : int64 =3D
+    if i =3D 1L then n else
+      let ilen =3D collatzLen(1, i) in
+      let nlen, n =3D if ilen > nlen then ilen, i else nlen, n in
+      loop (i-1L, (nlen, n));;
+
+When run without using LLVM's optimization passes, this produces the
+following output for 10k, 100k and 1M, respectively:
+
+  - : `Int64 =3D 6171L
+  Live: 0
+  0.00704098s total; 0s suspend; 0s mark; 0s sweep
+  - : `Int64 =3D 77031L
+  Live: 0
+  0.087815s total; 0s suspend; 0s mark; 0s sweep
+  - : `Int64 =3D 837799L
+  Live: 0
+  1.06907s total; 0s suspend; 0s mark; 0s sweep
+
+With LLVM's default optimization passes enabled, I get:
+
+  - : `Int64 =3D 6171L
+  Live: 0
+  0.00508595s total; 0s suspend; 0s mark; 0s sweep
+  - : `Int64 =3D 77031L
+  Live: 0
+  0.0626569s total; 0s suspend; 0s mark; 0s sweep
+  - : `Int64 =3D 837799L
+  Live: 0
+  0.759738s total; 0s suspend; 0s mark; 0s sweep
+
+Note the ~30% performance improvement in this case. In other cases, =
+LLVM's
+default optimization passes can degrade performance significantly.
+
+Here=92s the equivalent OCaml code:
+
+  let rec collatzLen(c, n) : int =3D
+    if n =3D 1L then c else
+      collatzLen (c+1, if Int64.rem n 2L =3D 0L then Int64.div n 2L else
+Int64.add (Int64.mul 3L n) 1L);;
+
+  let rec loop(i, (nlen, n)) =3D
+    if i =3D 1L then n else
+      let ilen =3D collatzLen(1, i) in
+      let nlen, n =3D if ilen > nlen then ilen, i else nlen, n in
+      loop (Int64.sub i 1L, (nlen, n));;
+
+and Haskell:
+
+  import Data.Int
+
+  collatzLen :: Int -> Int64 -> Int
+  collatzLen c 1 =3D c
+  collatzLen c n =3D collatzLen (c+1) $ if n `mod` 2 =3D=3D 0 then n =
+`div` 2 else
+3*n+1
+
+  pmax x n =3D x `max` (collatzLen 1 n, n)
+
+  main =3D print $ foldl pmax (1,1) [2..1000000]
+
+and C99:
+
+  #include <stdio.h>
+
+  int collatzLen(int c, long long n) {
+    return (n=3D=3D1 ? c : collatzLen(c+1, (n%2=3D=3D0 ? n/2 : 3*n+1)));
+  }
+
+  long long loop(long long m) {
+    int nlen=3D1;
+    long long n =3D 1;
+    for (long long i=3D2; i<=3Dm; ++i) {
+      const int ilen =3D collatzLen(1, i);
+      if (ilen > nlen) {
+        nlen =3D ilen;
+        n =3D i;
+      }
+    }
+    return n;
+  }
+
+  int main() {
+    printf("%lld", loop(1000000));
+  }
+
+And here are my timings:
+
+OCaml:      24.3s   ocamlopt
+Haskell:    24.0s   ghc6.10 --make -O2
+F#.NET:      3.45s  fsc --optimize+ --platform:x86
+C:           1.20s  gcc -O3 -std=3Dc99
+HLVM:        1.07s  ./repl --compile
+HLVM (opt):  0.76s  opt -tailcallelim -std-compile-opts
+
+These results really demonstrate two things:
+
+1. Unboxing can give huge performance improvements on serial code, let =
+alone
+parallel code. The optimized HLVM is running 32=D7 faster than the OCaml =
+here.
+
+2. LLVM makes it easy to JIT fast code from OCaml. HLVM is using it to =
+beat
+GCC-compiled C code here.
+
+--=20
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com
+

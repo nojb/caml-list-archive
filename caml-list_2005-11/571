@@ -1,0 +1,130 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 8D586BB81
+	for <caml-list@yquem.inria.fr>; Mon, 28 Nov 2005 09:13:44 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jAS8DhRV029643
+	for <caml-list@yquem.inria.fr>; Mon, 28 Nov 2005 09:13:44 +0100
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA09677 for <caml-list@pauillac.inria.fr>; Mon, 28 Nov 2005 09:13:43 +0100 (MET)
+Received: from smtp.cegetel.net (217-19-192-73.dti.cegetel.net [217.19.192.73])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id jAS8DhKj029640
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Mon, 28 Nov 2005 09:13:43 +0100
+Received: from [192.168.144.128] (80-125-86-59.adslgp.cegetel.net [80.125.86.59])
+	by smtp.cegetel.net (Postfix) with ESMTP id 523CF59A10A;
+	Mon, 28 Nov 2005 09:13:42 +0100 (CET)
+Message-ID: <438ABC4C.5060103@univ-savoie.fr>
+Date: Mon, 28 Nov 2005 09:14:04 +0100
+From: Christophe Raffalli <raffalli@univ-savoie.fr>
+User-Agent: Mozilla Thunderbird 1.0.6 (Macintosh/20050716)
+X-Accept-Language: fr, en
+MIME-Version: 1.0
+To: Lukasz Stafiniak <lukstafi@gmail.com>
+Cc: "Michael D. Adams" <mdmkolbe@gmail.com>, caml-list@inria.fr
+Subject: Re: [Caml-list] Efficency of varient types
+References: <c62c8d860511251553k782c574cg37fa1116d6fc3064@mail.gmail.com> <4a708d20511270657j2518f0b6m@mail.gmail.com>
+In-Reply-To: <4a708d20511270657j2518f0b6m@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 8bit
+X-Miltered: at nez-perce with ID 438ABC37.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 438ABC37.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; christophe:01 raffalli:01 raffalli:01 univ-savoie:01 caml-list:01 lukasz:01 ocaml:01 ocaml:01 char:01 char:01 failwith:01 runtime:01 unification:01 idem:01 unification:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Lukasz Stafiniak a écrit :
+
+>2005/11/26, Michael D. Adams <mdmkolbe@gmail.com>:
+>  
+>
+>>I have recently learned about OCaml and have been impressed by how
+>>fast it is in the benchmarks.  However I have discovered that variant
+>>types can slow down a program quite a bit.
+>>    
+>>
+>[...]
+>  
+>
+>>I am working on a program that translates code from scheme into ocaml.
+>> (Later I will try python into ocaml.)  Because it is a dynamicly
+>>typed language, the most natural translation would make everything a
+>>function of a large variant type like:
+>>
+>>type value = Int of int
+>> | Char of char
+>> | String of string
+>> (* etc. *)
+>>
+>>    
+>>
+
+I would suggest that you run a typing algorithm on your scheme program 
+with an extra type "top" for
+polymorphic function where object are boxed as proposed above.
+
+Then, when typing fails, you insert in your code the proper conversion 
+which are defined by induction over types:
+
+
+(from int to top) : fun x -> Int x
+(from char to top) : fun x -> Char x
+...
+
+(from top to int) : function Int x -> x | _ -> failwith "bad scheme program"
+...
+
+(from a to a) : identity (needed for optimization bellow)
+
+(from a -> b to a' -> b') : fun f x -> (from b to b') f ((from a' to a) x)
+
+(from a list to b list) : fun l -> List.map (from a to b) l
+
+The pb here is to try to avoid as much as possible the composed function 
+(the two latest, especially the latest, the one for
+function is not that bad, it does not allocate a lot of memory at 
+runtime) ... a possible way to do this is the following:
+
+in the typing algorithm, do not solve the unification constraint 
+immediately, just collect them as triple
+
+(a,b,p) where a and b are the type that should be equal and p is the 
+position in the code where to insert the (from to ...) function.
+
+Then, consider the smallest relation on type variable with a < b if 
+something like (b, list a, p) or (list a, b) appear (idem for arrow and
+type constructor ...
+
+there may be cycle in this relation, but do your best to propagate 
+unification constraint from the "maximum" type for this relation ...
+the solution being not unique, this is not a trivial task.
+
+Moreover, if you compile a library, you may get a very nice solution for 
+the library ... that require a lot of translation when you
+finally use the library. But then, the only solution is probably to ask 
+a little help from the programmer ...
+
+This is the hardness of this problem that makes statically typed 
+language better than dynamically typed language.
+
+For lisp, there is one more specific pb, you use "cons" both for pairs 
+and lists so for each "cons" there is a choice to translate it as (,) or 
+(::)
+... exploring all the possibility will probably increase a lot the 
+complexity of the algorithm... but feaseable solution may be possible by 
+trying
+to delay the problem again chosing the order in which you solve 
+unification constraint (you try to make "pertinent" information 
+propagate before
+doing compromising choices) ...
+
+But I am sure this is an active field of reasearch in the lisp compiler 
+community ...
+
+I hope this helps.
+
+Christophe
+

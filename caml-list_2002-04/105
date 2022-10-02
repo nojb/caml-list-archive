@@ -1,0 +1,468 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA09474; Mon, 15 Apr 2002 11:48:56 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA13190 for <caml-list@pauillac.inria.fr>; Mon, 15 Apr 2002 11:48:55 +0200 (MET DST)
+Received: from p-mail2.rd.francetelecom.com (p-mail2.rd.francetelecom.com [193.49.124.32])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with SMTP id g3F9msv15487
+	for <caml-list@inria.fr>; Mon, 15 Apr 2002 11:48:54 +0200 (MET DST)
+Received: by p-voyageur.rd.francetelecom.fr with Internet Mail Service (5.5.2655.55)
+	id <H604M5RB>; Mon, 15 Apr 2002 11:48:45 +0200
+Message-ID: <0489A7888F080B4BA73B53F7E145F29A197BE1@LANMHS20.rd.francetelecom.fr>
+From: zze-MARCHEGAY Michael stagiaire FTRD/DTL/LAN
+	 <michael.marchegay@rd.francetelecom.com>
+To: "'caml-list@inria.fr'" <caml-list@inria.fr>
+Subject: [Caml-list] Objects design and type inference complexity
+Date: Mon, 15 Apr 2002 11:48:51 +0200
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.5.2655.55)
+Content-Type: multipart/mixed;
+	boundary="----=_NextPartTM-000-9f1b29b0-5039-11d6-b1ea-00508b69ab48"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This message is in MIME format. Since your mail reader does not understand
+this format, some or all of this message may not be legible.
+
+------=_NextPartTM-000-9f1b29b0-5039-11d6-b1ea-00508b69ab48
+Content-Type: multipart/alternative;
+	boundary="----_=_NextPart_001_01C1E462.BFB55390"
+
+------_=_NextPart_001_01C1E462.BFB55390
+Content-Type: text/plain;
+	charset="iso-8859-1"
+
+Hello,
+
+I'm writing a program using the object facilities provided by Objective
+Caml.
+In this program, I have to write a tree structure, and the class hierarchy
+is
+used to apply functions (which could be overwritten) to the tree nodes.
+
+The program was quick to compile until soon. But when I added a new method
+in
+one of the base class of the tree, the compilation time had been multiplied
+by 
+more than 300 (12s to more than one hour).
+
+The inheritance structure is quite complex, so I dropped a lot of lines to
+make
+an example that produce the same problem, but is less complex. I removed
+virtual
+methods and most of methods:
+
+(************** Start of the module ********************)
+module OS =
+  struct
+    type t = string
+    let compare (s1 : string) (s2 : string) = Pervasives.compare s1 s2
+  end
+
+module OSO= 
+  struct
+    type t = string option
+    let compare (s1 : string option) (s2 : string option) = 
+      match (s1, s2) with
+	(None, None)      -> 0
+      |	(None, Some _)    -> -1
+      |	(Some _, None)    -> 1
+      |	(Some v1, Some v2) -> Pervasives.compare v1 v2
+  end
+
+module MapString = Map.Make OS
+
+module MapStringOption = Map.Make OSO
+
+
+class virtual  node = 
+  object (self)	
+    val mutable children : childNode list = []
+
+    method sub_nodes = children
+	
+    method append_subnode subnode  = 
+      children <- children@[subnode]
+  end        
+
+and rootNode = 
+    object (self)
+      inherit node
+
+    end
+      
+and virtual childNode (parent : node) =
+  object (self)
+    inherit  node
+
+    method get_parent : node = parent
+
+(***********************************)
+(* method that lead to problem when added *)
+method collect_environment : 
+
+    ((referenceableRefNode * string) list *  (userTypeRefNode * string) list
+* 
+     (referenceableNode MapString.t) * (userTypeNode MapString.t))
+MapStringOption.t ->
+
+    ((referenceableRefNode * string) list * (userTypeRefNode * string) list
+* 
+     (referenceableNode MapString.t) * (userTypeNode MapString.t))
+MapStringOption.t =
+
+      fun env -> env (* should be List.fold_left (fun env (n : childNode) ->
+n#collect_environment env) env children *)
+(***********************************)
+
+and virtual typedNode (parent : node) =
+  object (self)
+    inherit childNode parent
+		
+  end
+    
+and virtual typeBuilderNode (parent : node) =
+    object(self)
+      inherit typedNode parent
+      val mutable _content : typedNode option = None
+
+      method set_content : typedNode -> unit = fun content -> _content <-
+Some content
+	  
+    end      
+
+and virtual userTypeNode (parent : node) =
+    object(self)
+      inherit typeBuilderNode parent
+	  
+    end
+
+and virtual baseTypeNode (name : string) (parent : node) = 
+  object(self)
+    inherit typedNode parent    	
+	
+    val mutable _name : string = name
+
+  end
+
+and userTypeRefNode (name : string) (parent : node) =
+  object(self)
+    inherit baseTypeNode name parent	
+  end
+
+
+and virtual referenceableNode (parent : node) =
+    object 
+      inherit typedNode parent	    	  
+    end
+      
+and virtual referenceableRefNode (parent : node) =
+    object 
+      inherit typedNode parent	  
+    end
+      
+
+class stringTypeNode (base : string) (parent : node) =
+  object(self)
+    inherit baseTypeNode base parent	
+  end
+
+class integerTypeNode (base : string) (parent : node) =
+  object(self)
+    inherit baseTypeNode base parent       
+  end
+
+class booleanTypeNode (parent : node) =
+  object(self)
+    inherit baseTypeNode "boolean" parent	
+  end
+
+(***************************************
+  method that takes a lot of time to type
+   after collect_environment add been added into
+   childNode class 
+ *)
+let getTypeForName : node -> string -> typedNode = 
+  fun parent_node type_name ->
+    match type_name with
+      "string" as _type -> (new stringTypeNode _type parent_node :>
+typedNode)	       	
+	
+    | "foo" as _type ->
+	failwith ("this type is not available yet: " ^ _type)
+	 
+      (* boolean type *)
+    | "boolean" -> (new booleanTypeNode parent_node :> typedNode)
+	
+      (* integer types *)
+    | "integer" as _type -> (new integerTypeNode _type parent_node :>
+typedNode)
+
+    | ref -> (new userTypeRefNode ref parent_node :> typedNode)	  
+
+(************** end of the module ******************)
+
+If I compile this module with the method collect_environment, the
+compilation lasts
+70 sec on my computer. If I drop it, it takes only 0.66s
+
+If I change the type of the function and write it:
+
+method collect_environment : 
+  ((node * string) list *  (node * string) list * (node MapString.t) * (node
+MapString.t)) MapStringOption.t -> 
+  ((node * string) list * (node * string) list * (node MapString.t) * (node
+MapString.t)) MapStringOption.t =	  
+  fun env -> env (* should be List.fold_left (fun env (n : childNode) ->
+n#collect_environment env) env children *)
+  end
+
+the compilation of the module lasts 1s.
+
+Do you have any idea on the origin of this problem, and on the way to solve
+it ?
+
+Thanks.
+
+--
+Michaël Marchegay, Stagiaire France Telecom R&D du 11/02/2002 au 26/07/2002
+Sous la responsabilité d'Olivier Dubuisson
+DTL/TAL - 22307 Lannion Cedex - France
+
+------_=_NextPart_001_01C1E462.BFB55390
+Content-Type: text/html;
+	charset="iso-8859-1"
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2//EN">
+<HTML>
+<HEAD>
+<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=iso-8859-1">
+<META NAME="Generator" CONTENT="MS Exchange Server version 5.5.2653.12">
+<TITLE>Objects design and type inference complexity</TITLE>
+</HEAD>
+<BODY>
+
+<P><FONT SIZE=2>Hello,</FONT>
+</P>
+
+<P><FONT SIZE=2>I'm writing a program using the object facilities provided by Objective Caml.</FONT>
+<BR><FONT SIZE=2>In this program, I have to write a tree structure, and the class hierarchy is</FONT>
+<BR><FONT SIZE=2>used to apply functions (which could be overwritten) to the tree nodes.</FONT>
+</P>
+
+<P><FONT SIZE=2>The program was quick to compile until soon. But when I added a new method in</FONT>
+<BR><FONT SIZE=2>one of the base class of the tree, the compilation time had been multiplied by </FONT>
+<BR><FONT SIZE=2>more than 300 (12s to more than one hour).</FONT>
+</P>
+
+<P><FONT SIZE=2>The inheritance structure is quite complex, so I dropped a lot of lines to make</FONT>
+<BR><FONT SIZE=2>an example that produce the same problem, but is less complex. I removed virtual</FONT>
+<BR><FONT SIZE=2>methods and most of methods:</FONT>
+</P>
+
+<P><FONT SIZE=2>(************** Start of the module ********************)</FONT>
+<BR><FONT SIZE=2>module OS =</FONT>
+<BR><FONT SIZE=2>&nbsp; struct</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; type t = string</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; let compare (s1 : string) (s2 : string) = Pervasives.compare s1 s2</FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>module OSO= </FONT>
+<BR><FONT SIZE=2>&nbsp; struct</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; type t = string option</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; let compare (s1 : string option) (s2 : string option) = </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; match (s1, s2) with</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <FONT SIZE=2>(None, None)&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; -&gt; 0</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | (None, Some _)&nbsp;&nbsp;&nbsp; -&gt; -1</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | (Some _, None)&nbsp;&nbsp;&nbsp; -&gt; 1</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | (Some v1, Some v2) -&gt; Pervasives.compare v1 v2</FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>module MapString = Map.Make OS</FONT>
+</P>
+
+<P><FONT SIZE=2>module MapStringOption = Map.Make OSO</FONT>
+</P>
+<BR>
+
+<P><FONT SIZE=2>class virtual&nbsp; node = </FONT>
+<BR><FONT SIZE=2>&nbsp; object (self) </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; val mutable children : childNode list = []</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp; method sub_nodes = children</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; method append_subnode subnode&nbsp; = </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; children &lt;- children@[subnode]</FONT>
+<BR><FONT SIZE=2>&nbsp; end&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+</P>
+
+<P><FONT SIZE=2>and rootNode = </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; object (self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; inherit node</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp; end</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>and virtual childNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp; object (self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit&nbsp; node</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp; method get_parent : node = parent</FONT>
+</P>
+
+<P><FONT SIZE=2>(***********************************)</FONT>
+<BR><FONT SIZE=2>(* method that lead to problem when added *)</FONT>
+<BR><FONT SIZE=2>method collect_environment : </FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp; ((referenceableRefNode * string) list *&nbsp; (userTypeRefNode * string) list * </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp; (referenceableNode MapString.t) * (userTypeNode MapString.t)) MapStringOption.t -&gt;</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp; ((referenceableRefNode * string) list * (userTypeRefNode * string) list * </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp; (referenceableNode MapString.t) * (userTypeNode MapString.t)) MapStringOption.t =</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; fun env -&gt; env (* should be List.fold_left (fun env (n : childNode) -&gt; n#collect_environment env) env children *)</FONT>
+<BR><FONT SIZE=2>(***********************************)</FONT>
+</P>
+
+<P><FONT SIZE=2>and virtual typedNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp; object (self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit childNode parent</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>and virtual typeBuilderNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; inherit typedNode parent</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; val mutable _content : typedNode option = None</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; method set_content : typedNode -&gt; unit = fun content -&gt; _content &lt;- Some content</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <FONT SIZE=2>&nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; end&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+</P>
+
+<P><FONT SIZE=2>and virtual userTypeNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; inherit typeBuilderNode parent</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <FONT SIZE=2>&nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>and virtual baseTypeNode (name : string) (parent : node) = </FONT>
+<BR><FONT SIZE=2>&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit typedNode parent&nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; val mutable _name : string = name</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>and userTypeRefNode (name : string) (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit baseTypeNode name parent&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+<BR>
+
+<P><FONT SIZE=2>and virtual referenceableNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; object </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; inherit typedNode parent&nbsp; &nbsp;&nbsp;&nbsp; &nbsp;&nbsp;&nbsp; &nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; end</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>and virtual referenceableRefNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; object </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; inherit typedNode parent&nbsp; &nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; end</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+</P>
+
+<P><FONT SIZE=2>class stringTypeNode (base : string) (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit baseTypeNode base parent&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>class integerTypeNode (base : string) (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit baseTypeNode base parent&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>class booleanTypeNode (parent : node) =</FONT>
+<BR><FONT SIZE=2>&nbsp; object(self)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; inherit baseTypeNode &quot;boolean&quot; parent&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>(***************************************</FONT>
+<BR><FONT SIZE=2>&nbsp; method that takes a lot of time to type</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp; after collect_environment add been added into</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp; childNode class </FONT>
+<BR><FONT SIZE=2>&nbsp;*)</FONT>
+<BR><FONT SIZE=2>let getTypeForName : node -&gt; string -&gt; typedNode = </FONT>
+<BR><FONT SIZE=2>&nbsp; fun parent_node type_name -&gt;</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; match type_name with</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; &quot;string&quot; as _type -&gt; (new stringTypeNode _type parent_node :&gt; typedNode)&nbsp; &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; </FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; | &quot;foo&quot; as _type -&gt;</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; <FONT SIZE=2>failwith (&quot;this type is not available yet: &quot; ^ _type)</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<FONT SIZE=2> </FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (* boolean type *)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; | &quot;boolean&quot; -&gt; (new booleanTypeNode parent_node :&gt; typedNode)</FONT>
+<BR>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; 
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (* integer types *)</FONT>
+<BR><FONT SIZE=2>&nbsp;&nbsp;&nbsp; | &quot;integer&quot; as _type -&gt; (new integerTypeNode _type parent_node :&gt; typedNode)</FONT>
+</P>
+
+<P><FONT SIZE=2>&nbsp;&nbsp;&nbsp; | ref -&gt; (new userTypeRefNode ref parent_node :&gt; typedNode) &nbsp; </FONT>
+</P>
+
+<P><FONT SIZE=2>(************** end of the module ******************)</FONT>
+</P>
+
+<P><FONT SIZE=2>If I compile this module with the method collect_environment, the compilation lasts</FONT>
+<BR><FONT SIZE=2>70 sec on my computer. If I drop it, it takes only 0.66s</FONT>
+</P>
+
+<P><FONT SIZE=2>If I change the type of the function and write it:</FONT>
+</P>
+
+<P><FONT SIZE=2>method collect_environment : </FONT>
+<BR><FONT SIZE=2>&nbsp; ((node * string) list *&nbsp; (node * string) list * (node MapString.t) * (node MapString.t)) MapStringOption.t -&gt; </FONT>
+<BR><FONT SIZE=2>&nbsp; ((node * string) list * (node * string) list * (node MapString.t) * (node MapString.t)) MapStringOption.t =&nbsp;&nbsp; &nbsp; </FONT>
+<BR><FONT SIZE=2>&nbsp; fun env -&gt; env (* should be List.fold_left (fun env (n : childNode) -&gt; n#collect_environment env) env children *)</FONT>
+<BR><FONT SIZE=2>&nbsp; end</FONT>
+</P>
+
+<P><FONT SIZE=2>the compilation of the module lasts 1s.</FONT>
+</P>
+
+<P><FONT SIZE=2>Do you have any idea on the origin of this problem, and on the way to solve it ?</FONT>
+</P>
+
+<P><FONT SIZE=2>Thanks.</FONT>
+</P>
+
+<P><FONT SIZE=2>--</FONT>
+<BR><FONT SIZE=2>Michaël Marchegay, Stagiaire France Telecom R&amp;D du 11/02/2002 au 26/07/2002</FONT>
+<BR><FONT SIZE=2>Sous la responsabilité d'Olivier Dubuisson</FONT>
+<BR><FONT SIZE=2>DTL/TAL - 22307 Lannion Cedex - France</FONT>
+</P>
+
+</BODY>
+</HTML>
+------_=_NextPart_001_01C1E462.BFB55390--
+
+------=_NextPartTM-000-9f1b29b0-5039-11d6-b1ea-00508b69ab48--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

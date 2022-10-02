@@ -1,0 +1,113 @@
+Return-Path: <rajb@rice.edu>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id DA6EDBC6B
+	for <caml-list@yquem.inria.fr>; Wed, 28 Nov 2007 19:05:42 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ah4FABI9TUeAKgEfbGdsb2JhbACPPgsEBhAZ
+X-IronPort-AV: E=Sophos;i="4.23,225,1194217200"; 
+   d="scan'208";a="19779047"
+Received: from mail.cs.rice.edu ([128.42.1.31])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 28 Nov 2007 19:05:41 +0100
+Received: from mail.cs.rice.edu (localhost.localdomain [127.0.0.1])
+	by mail.cs.rice.edu (Postfix) with ESMTP id 534652C2CC5;
+	Wed, 28 Nov 2007 12:05:40 -0600 (CST)
+X-Virus-Scanned: by amavis-2.4.0 at mail.cs.rice.edu
+Received: from mail.cs.rice.edu ([127.0.0.1])
+	by mail.cs.rice.edu (mail.cs.rice.edu [127.0.0.1]) (amavisd-new, port 10024)
+	with LMTP id 0CQHfV3Z3qMM; Wed, 28 Nov 2007 12:05:39 -0600 (CST)
+Received: from dhcp-7-24.cs.rice.edu (dhcp-7-24.cs.rice.edu [128.42.7.24])
+	(using TLSv1 with cipher DHE-RSA-AES256-SHA (256/256 bits))
+	(No client certificate requested)
+	by mail.cs.rice.edu (Postfix) with ESMTP id 9E90C2C2CBB;
+	Wed, 28 Nov 2007 12:05:39 -0600 (CST)
+Message-ID: <474DADF7.5020204@rice.edu>
+Date: Wed, 28 Nov 2007 12:05:43 -0600
+From: Raj <rajb@rice.edu>
+User-Agent: Thunderbird 2.0.0.9 (Macintosh/20071031)
+MIME-Version: 1.0
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Disabling the OCaml garbage collector
+References: <ECF91B46-A0FC-46FD-BFAD-7BE07CEF1C85@rice.edu> <474C48C5.708@starynkevitch.net>
+In-Reply-To: <474C48C5.708@starynkevitch.net>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 mutable:01 ocaml:01 suffices:01 refcount:01 compiler:01 stdlib:01 stdlib:01 mli:01 byterun:01 camlprim:01 camlparam:01 camlreturn:01 val:01 camlprim:01 
+
+The issue for me is that I need to be able to modify mutable objects in 
+OCaml (eg. array-modification in-place) from both OCaml and C/Python. 
+However, the OCaml GC moves things around while the execution is in 
+C/Python and this crashes my program.
+
+The Python GC is very simple, based on reference counts, hence (I think) 
+it suffices just to make sure that any object has a refcount > 0 to keep 
+the Python GC off.
+
+Well, I decided to go ahead and hack some C code to build a custom OCaml 
+compiler. These are the steps I followed:
+
+1) Add the following declarations to stdlib/gc.ml and stdlib/gc.mli
+
+external disable: unit -> unit = "caml_gc_disable"
+external enable: unit -> unit = "caml_gc_enable"
+
+2) Modify byterun/gc_ctrl.c and implement the C functions. For example,
+
+int gc_enabled = 1; //global variable
+
+CAMLprim value caml_gc_enable(){
+        CAMLparam0();
+        gc_enabled = 1;
+        CAMLreturn(Val_unit);
+}
+
+3) Modify the "main loop" in gc_ctrl.c as
+
+CAMLprim value caml_gc_compaction(value v)
+{
+if(gc_enabled) {
+  Assert (v == Val_unit);
+  caml_empty_minor_heap ();
+  caml_finish_major_cycle ();
+  caml_finish_major_cycle ();
+  caml_compact_heap ();
+  caml_final_do_calls ();
+}
+  return Val_unit;
+}
+
+
+However, when I compile this code with 'make world' I get the following 
+error while linking:
+
+boot/ocamlrun boot/ocamlc -nostdlib -I boot  -linkall -o ocaml.tmp 
+toplevel/toplevellib.cma toplevel/topstart.cmo
+Error while linking boot/stdlib.cma(Gc):
+The external function `caml_gc_enable' is not available
+make: *** [ocaml] Error 2
+
+
+Any ideas what I am missing?
+
+Thanks!
+Raj
+
+
+
+
+>
+> You definitely may need to hack the C code inside byterun/minor_gc.c 
+> (for example), but I don't understand what you want exactly.
+>
+> However, I do know that mixing GCs, like Ocaml & Python, is a nightmare.
+> Did you consider having two separate Unix processes, one for the Ocaml 
+> code and one for the Python code, and having them communicate thru 
+> standard stuff like pipes, memory mapped files, ...
+>
+>
+

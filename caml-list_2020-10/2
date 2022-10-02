@@ -1,0 +1,103 @@
+Return-Path: <francois.pottier@inria.fr>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id A489EE00E5
+	for <caml-list@sympa.inria.fr>; Tue,  6 Oct 2020 13:57:06 +0200 (CEST)
+X-IronPort-AV: E=Sophos;i="5.77,343,1596492000"; 
+   d="scan'208";a="360998122"
+Received: from 91-175-127-215.subs.proxad.net (HELO MacBook-Pro-5.local) ([91.175.127.215])
+  by mail3-relais-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 06 Oct 2020 13:57:05 +0200
+To: OCaML Mailing List <caml-list@inria.fr>
+From: =?UTF-8?Q?Fran=c3=a7ois_Pottier?= <francois.pottier@inria.fr>
+Message-ID: <29c64a17-6bda-89eb-49c9-e986116d8e70@inria.fr>
+Date: Tue, 6 Oct 2020 13:57:05 +0200
+User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:68.0)
+ Gecko/20100101 Thunderbird/68.11.0
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8; format=flowed
+Content-Language: fr
+Content-Transfer-Encoding: 8bit
+Subject: [Caml-list] Question on the covariance of a GADT (polymorphic
+ variants involved)
+
+
+Dear all,
+
+I have a problem convincing OCaml that a GADT is covariant in one of its
+parameters.
+
+Here is a simplified version of what I am trying to do:
+
+type 'a t =
+   | Wine: [> `Wine ] t
+   | Food: [> `Food ] t
+   | Box : 'a t * 'a t -> 'a t
+   | Fridge: [< `Wine | `Food ] t -> [> `Fridge ] t
+
+In this definition, the type parameter 'a is a phantom parameter. It is not
+used to describe the type of a value; it is used only to restrict the set of
+values of type "t" that can be constructed.
+
+The goal here is to allow storing wine and food (and boxes containing boxes
+containing wine and food) in a fridge, but forbid storing a fridge in a 
+fridge
+(or a fridge in a box in a fridge, etc.).
+
+The lower bounds >`Wine and >`Food and >`Fridge are used to keep track 
+of the
+basic objects that are (transitively) contained in a box. The Box 
+constructor
+takes the conjunction of these lower bounds. The Fridge constructor imposes
+the upper bound <`Wine|`Food, thereby forbidding a fridge to appear
+(transitively) inside a fridge.
+
+You may be wondering why I am using an algebraic data type whose index is
+constrained by abusing polymorphic variants, instead of using polymorphic
+variants directly. The answer is that is the real type definition I am 
+working
+with is more complex than this: it has more parameters and it is actually a
+(real) GADT in these other parameters, so (I think) I cannot turn it into a
+polymorphic variant.
+
+Now, the problem is, the OCaml type-checker does not recognize that the type
+'a t is covariant in 'a.
+
+Intuitively, it seems clear that this type is covariant in 'a: the
+constructors Wine, Food, Fridge impose lower bounds on 'a only, and the
+constructor Box uses 'a in a covariant position (if one admits, inductively,
+that 'a t is covariant in 'a).
+
+I would like OCaml to accept the fact that t is covariant in 'a because 
+I have
+several functions (smart constructors) that produce values of type 'a t. 
+When
+an application of such a function produces a result of type _'a t, I would
+like it to be generalized, so as to obtain 'a t. Currently, this does not
+work.
+
+This lack of generalization is not just a minor inconvenience. It leads to
+pollution (that is, lower bounds and upper bounds bearing on the same type
+variable, when they should normally bear on two distinct type 
+variables). For
+instance, if an object whose type has not been generalized is once placed
+*beside* a fridge, then it can no longer be put *inside* a fridge:
+
+   let food() = Food
+   let meat = food()              (* weak type variable appears *)
+   let _ = Box(meat, Fridge Wine) (* place the meat beside a fridge *)
+   let _ = Fridge meat            (* meat can no longer be put into 
+fridge *)
+                  ^^^^
+Error: This expression has type [> `Food | `Fridge ] t
+        but an expression was expected of type [< `Food | `Wine ] t
+        The second variant type does not allow tag(s) `Fridge
+
+An explanation of why OCaml cannot recognize that this type is 
+covariant, or a
+suggestion of a workaround, would be very much appreciated. Thanks!
+
+--
+François Pottier
+francois.pottier@inria.fr
+http://cambium.inria.fr/~fpottier/

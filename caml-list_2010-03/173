@@ -1,0 +1,138 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 77350BC57
+	for <caml-list@yquem.inria.fr>; Wed, 17 Mar 2010 17:39:45 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsMBAPqioEvZSMDdkGdsb2JhbACbCBUBAQEBCQkMBxMDH7pMhHYE
+X-IronPort-AV: E=Sophos;i="4.49,658,1262559600"; 
+   d="scan'208";a="47037631"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 17 Mar 2010 17:39:44 +0100
+Received: from smtp08.web.de (fmsmtp08.dlan.cinetic.de [172.20.5.216])
+	by fmmailgate01.web.de (Postfix) with ESMTP id 3877114E32F22
+	for <caml-list@inria.fr>; Wed, 17 Mar 2010 17:39:14 +0100 (CET)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp08.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #4)
+	id 1NrwH3-0005fA-00
+	for caml-list@inria.fr; Wed, 17 Mar 2010 17:39:13 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.71)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1NrwGy-0001l2-Sq
+	for caml-list@inria.fr; Wed, 17 Mar 2010 17:39:09 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list <caml-list@inria.fr>
+Subject: Random segfaults / out of memory [Was: Re: [Caml-list] Rewriting the Digest module causes linking errors]
+References: <87wrxb5p59.fsf@frosties.localdomain>
+	<20100317083907.GC26002@janestreet.com>
+	<87sk7zgtpq.fsf@frosties.localdomain>
+Date: Wed, 17 Mar 2010 17:39:08 +0100
+In-Reply-To: <87sk7zgtpq.fsf@frosties.localdomain> (Goswin von Brederlow's
+	message of "Wed, 17 Mar 2010 10:53:21 +0100")
+Message-ID: <87hboehphv.fsf_-_@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1+3vwFK1vRM+ehX0HjbbjcLXGRTgXZG/0czPJr8
+	wFa/7aTah7P4oHc4lwl6Sgd6ddujSx1woIJ8On60Rwe5GMgoSU
+	aj7R7YD4Y=
+X-Spam: no; 0.00; segfaults:01 rewriting:01 0100,:01 bigarrays:01 patched:01 ocaml:01 compiler:01 segfaults:01 allocations:01 bug:01 ocamlc:01 homeip:01 ocaml:01 foo:01 bigarray:01 
+
+Goswin von Brederlow <goswin-v-b@web.de> writes:
+
+>> On Wed, Mar 17, 2010 at 09:27:30AM +0100, Goswin von Brederlow wrote:
+>>> I want to rewrite the Digest module to expose a more lowlevel interface
+>>> to the md5 digest and add support to digest Bigarrays. I've patched the
+>>> respective files involved and it all looks alright but when I try to
+>>> build ocaml I get the following error:
+
+Ok, so I managed to bootstrap the compiler properly and build debian
+packages with my new Digest interface. But something is still wrong as I
+randomly get segfaults or
+
+<No room for growing heap
+Fatal error: out of memory.
+
+The more threads I use to compute digests in parallel the more likely
+the error becomes. But that might just be an issue with more allocations
+hapening and not a race condition between threads.
+
+Can anyone spot the bug?
+
+I split the patch into two so it is easier to bootstrap. Apply
+0008-md5-rewrite.patch, build ocamlc and copy it to boot and then apply
+0009-digest-rewrite.patch and build everything. Debian user can also get
+the debian source or amd64 debs.
+
+Patches and source at: http://mrvn.homeip.net/ocaml/
+
+Testcode:
+----------------------------- foo.ml ---------------------------------
+open Bigarray
+
+let blocksize = 1048576
+let num = ref 1024
+let mutex = Mutex.create ()
+
+let compute x =
+  Printf.printf "Thread %d started\n" x; flush_all ();
+  let buf = Array1.create int8_unsigned  c_layout blocksize in
+  let rec loop () =
+    Mutex.lock mutex;
+    if !num = 0
+    then Mutex.unlock mutex
+    else begin
+      decr num;
+      Mutex.unlock mutex;
+      ignore (Array1.Digest.bigarray buf);
+      loop ()
+    end
+  in
+    loop ()
+
+let main x =
+  Printf.printf "Running with %d threads\n" x; flush_all ();
+  let rec loop acc = function
+      0 -> acc
+    | x ->
+	let thread = Thread.create compute x
+	in
+	  loop (thread :: acc) (x - 1)
+  in
+  let threads = loop [] x
+  in
+    List.iter Thread.join threads;
+    Printf.printf "All done\n"
+
+let _ =
+  let control = Gc.get () in
+  let _ = control.Gc.verbose <- 0x3ff in
+  let _ = Gc.set control
+  in
+    Gc.compact ();
+    flush_all ();
+    Scanf.sscanf Sys.argv.(1) "%d" main;
+    Gc.compact ();
+    flush_all ()
+----------------------------------------------------------------------
+
+ocamlopt -thread -o foo unix.cmxa threads.cmxa bigarray.cmxa foo.ml && \
+time ./foo 1 && time ./foo 2 && time ./foo 3 && time ./foo 4 && \
+time ./foo 16
+
+1-4 usualy runs while 16 usualy breaks. But sometimes it breaks earlier
+or 16 runs too. Just repeat ./foo 16 till it fails.
+
+MfG
+        Goswin
+
+PS: Runtimes without the verbose GC:
+./foo 1  7.28s user 0.01s system 100% cpu 7.291 total
+./foo 2  8.75s user 0.02s system 196% cpu 4.474 total
+./foo 3  9.76s user 0.03s system 298% cpu 3.285 total
+./foo 4  10.69s user 0.04s system 371% cpu 2.891 total
+

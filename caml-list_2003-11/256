@@ -1,0 +1,122 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA29992; Sun, 16 Nov 2003 19:21:37 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA31531 for <caml-list@pauillac.inria.fr>; Sun, 16 Nov 2003 19:21:32 +0100 (MET)
+Received: from herd.plethora.net (herd.plethora.net [205.166.146.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id hAGILU100820;
+	Sun, 16 Nov 2003 19:21:31 +0100 (MET)
+Received: from bhurt.plethora.net (bhurt.plethora.net [205.166.146.49])
+	by herd.plethora.net (8.11.6/8.10.1) with ESMTP id hAGIJqC00929;
+	Sun, 16 Nov 2003 12:19:52 -0600 (CST)
+Date: Sun, 16 Nov 2003 13:19:12 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: skaller <skaller@ozemail.com.au>
+cc: Ville-Pertti Keinonen <will@exomi.com>, Dustin Sallings <dustin@spy.net>,
+        Damien Doligez <damien.doligez@inria.fr>,
+        Caml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] GC and file descriptors
+In-Reply-To: <1068917444.25869.244.camel@pelican>
+Message-ID: <Pine.LNX.4.44.0311161255150.5009-100000@localhost.localdomain>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 1100,:01 orderly:01 python:01 finalization:01 python:01 python's:01 era:99 java's:01 interscript:01 orderly:01 finalization:01 dangling:01 unexpected:01 orderings:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On 16 Nov 2003, skaller wrote:
+
+> On Sun, 2003-11-16 at 02:56, Ville-Pertti Keinonen wrote:
+> > On Sun, Nov 16, 2003 at 01:16:08AM +1100, skaller wrote:
+> > 
+> > > It is possible to modify the Ocaml collector to make finalisation
+> > > orderly, but it is very expensive. It is also possible
+> > 
+> > Not just expensive, more like something you definitely don't want to
+> > even try.  Python tries to have deterministic finalization, but
+> > falls back on "normal" garbage collection for containers 
+> 
+> Funny, but I actually *needed* deterministic finalisation. 
+> And the reason was .. I was implementing a Python interpreter
+> in Ocaml, and needed to emulate Python's ref counting.
+> But I didn't want to actually do any ref counting :-)
+
+You can't fake reference counting with mark-and-sweep.
+
+Here's the problem: reference counting is expensive.  In a scripting 
+language this performance hit may not be problem, it may be outweighed by 
+other performance limitation.  But every time some C++ programmers bitchs 
+about garbage collection being slow, he's almost certainly talking about 
+reference counting.
+
+I wish the mainstream would crawl out of the sixties era computer science 
+and get at least into the eighties.  The only "mainstream" programming 
+language I know of with *excusable* garbage collection is Java.  Of 
+course, Java's type system is state of the art- for 1968.  Which convinces 
+everyone that strong typing is bad- in much the same way that reference 
+counting convinces everyone that garbage collection is slow.  Grr.
+
+> 
+> Because of this problem, my own major Python program
+> interscript would not run on my interpreter, since
+> it relied on orderly finalisation.
+> 
+> The reason for *that* is that it effectively executed
+> commands written by the client, and the specification
+> provided for opening and writing to files, but
+> not for closing them. Closing files was important
+> and had to be correctly timed: for example, closing
+> the main document actually generated the table of
+> contents (since only at the end are all the contents
+> known).
+
+You were abusing finalization.  The fact that it worked (in reference 
+counting Python) doesn't mean it was a good idea.  Accidentally having 
+dangling references which delay some objects finalization could introduce 
+unexpected orderings and "bugs".  A much better way to do this would be to 
+have a central command queue.  Every time a new command is created, it 
+adds itself to the queue.  Then you just flush the command queue- 
+executing the commands in the order they were added.  This is done every 
+so often while the program is running and, of course, on program exit.
+
+> 
+> Anyhow .. there do exist cases where explicit finalisation
+> is difficult. 
+
+IIRC, in the general case it's equivelent to solving the halting problem.
+
+On a more general note, I will agree that having the GC free non-memory
+resources raises problems.  I agree (and strongly beleive) that everything
+that isn't memory should have some way for the program to free them
+without invoking the GC- for example, file descriptors should have a close 
+routine.  And I agree that programs *should* use them instead of relying 
+on the GC in all but the most intractable cases.
+
+The question is, is it worse to have the GC try to reclaim the resources
+than it is to have a guarenteed leak?  Consider the case where close 
+return EINTR and doesn't close the file descriptor.  Since the descriptor 
+has already leaked- for it to reach this point the program no longer has 
+any way to reach the descriptor (if the program did, the object wouldn't 
+be being collected).  So what's the difference in this case between the 
+collector silently ignoring the error, and the collector not even trying 
+to free the resource?
+
+Actually, an idea I've had is to add Java-style "throws" information- 
+basically what exceptions a function can throw- to the type information of 
+a function.  With type inference, this shouldn't be the headache in Ocaml 
+it is in Java.  The advantage here is that you could enlist the type 
+system to gaurentee that a destructor doesn't throw any exceptions- i.e. 
+the code for a destructor should handle all exceptions it generates.  
+
+-- 
+"Usenet is like a herd of performing elephants with diarrhea -- massive,
+difficult to redirect, awe-inspiring, entertaining, and a source of
+mind-boggling amounts of excrement when you least expect it."
+                                - Gene Spafford 
+Brian
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

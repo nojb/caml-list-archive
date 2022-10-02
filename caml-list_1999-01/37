@@ -1,0 +1,142 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id MAA19841 for caml-redistribution; Mon, 18 Jan 1999 12:09:58 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA31650 for <caml-list@pauillac.inria.fr>; Mon, 18 Jan 1999 09:24:42 +0100 (MET)
+Received: from infbssys.ips.cs.tu-bs.de (infbssys.ips.cs.tu-bs.de [134.169.32.1])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id JAA29612
+	for <caml-list@inria.fr>; Mon, 18 Jan 1999 09:24:40 +0100 (MET)
+Received: from infbsstq.ips.cs.tu-bs.de (lindig@infbsstq.ips.cs.tu-bs.de [134.169.32.78])
+	by infbssys.ips.cs.tu-bs.de (8.9.1/8.9.1) with ESMTP id JAA16182
+	for <caml-list@inria.fr>; Mon, 18 Jan 1999 09:24:40 +0100
+Date: Mon, 18 Jan 1999 09:24:39 +0100
+From: Christian Lindig <lindig@ips.cs.tu-bs.de>
+To: Caml Mailing List <caml-list@inria.fr>
+Subject: Proposal for new Lexing Module (long)
+Message-ID: <19990118092439.C24948@ips.cs.tu-bs.de>
+Mail-Followup-To: Caml Mailing List <caml-list@inria.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 0.95.1i
+Sender: weis
+
+
+OCamlLex generated lexers often need some state information which must
+survive the actual call of the lexer from a parser.  Examples for this
+kind of state are the current source line and column or some context
+information.  Lexing HTML for example requires information whether the
+scanner reads tokens inside of a <tag attribute="value"> or outside of
+it.  The meaning of quotes is totally different in- and outside of
+tags and thus the lexer must store some informations about its current
+context. 
+
+This information is typically stored in global variables inside the
+lexer.  The generated lexer already uses and passes around a value of
+type `lexbuf' for its internal purposes.  This value is accessible
+inside semantic actions of lexer rules.  I would like to propose an
+extended data type for lexbuf which also permits to store user data
+inside of it.
+
+The current lexbuf declaration in OCaml 2.01:
+
+     type lexbuf =
+      { refill_buff : lexbuf -> unit;
+        mutable lex_buffer : string;
+        mutable lex_buffer_len : int;
+        mutable lex_abs_pos : int;
+        mutable lex_start_pos : int;
+        mutable lex_curr_pos : int;
+        mutable lex_last_pos : int;
+        mutable lex_last_action : int;
+        mutable lex_eof_reached : bool } 
+ 
+The proposed  new type lexstate with a type alias for backward
+compatibility:
+
+    type 'a lexstate =
+      { refill_buff : 'a lexstate -> unit;
+        mutable lex_buffer : string;
+        mutable lex_buffer_len : int;
+        mutable lex_abs_pos : int;
+        mutable lex_start_pos : int;
+        mutable lex_curr_pos : int;
+        mutable lex_last_pos : int;
+        mutable lex_last_action : int;
+        mutable lex_eof_reached : bool ;
+        mutable lex_state: 'a         (* read/write accessible for user *)
+      }
+        
+    type lexbuf = unit lexstate
+
+In a lexstate value a user can store mutable informations of type 'a. 
+A classical lexbuf is simply a lexstate which stores unit.  Also for
+backward compatibility all old access functions working on lexbuf must
+be present together with new access functions which work on lexstate. 
+They can be easily implemented using the following scheme:
+
+    let lex_from_function initial_state f =
+      { refill_buff = lex_refill f (String.create 512);
+        lex_buffer = String.create 1024;
+        lex_buffer_len = 1024;
+        lex_abs_pos = - 1024;
+        lex_start_pos = 1024;
+        lex_curr_pos = 1024;
+        lex_last_pos = 1024;
+        lex_last_action = 0;
+        lex_eof_reached = false ;
+        lex_state = initial_state }
+    
+    let from_function   = lex_from_function ()
+
+The implementation doing the real work have their name prefixed with
+`lex_' and work on the new type lexstate.  They have an additional
+parameter initial_state which is used to initialize the new field
+lex_state.  The function for backward compatibility uses it by passing
+a unit value.
+
+All old sources work correctly because they use the appropriate
+functions.  New sources can use the lexstate type and two functions
+which provide access to the new user state information:
+
+    let lex_get_state lexstate      = lexstate.lex_state
+    let lex_set_state lexstate x    = lexstate.lex_state <- x
+   
+The code to create a lexstate for a scanner looks like this:
+
+    let lexstate = Lexing.lex_from_channel 1 stdin in
+   
+Here 1 is passed as the initial state and could be thought of as the
+current line number.  Inside OCamlLex semantic actions lexstate and
+lexbuf values are always accessed under the (old) name lexbuf. 
+
+The code generator of OCamlLex must not be changed.  The code
+generated is polymorphic enough to work with (old) lexbuf based
+scanners and lexstate based scanners as well.  The lexer engine is
+written in C and is implemented in the runtime system
+(byterun/lexing.c).  It accesses the lexbuf/lexstate from C and the C
+data type declaration should be changed accordingly.  It is not
+strictly necessary because the buffer is never passed by value and
+thus the current C implementation is polymorphic enough as well.
+
+However, simply replacing lexing.ml and lexing.mli in an installed
+OCaml 2.01 system does not work.  The lexing module is heavily used
+inside the whole system.  It must be replaced in the source tree and a
+new OCaml system be built.  I have such a patched system running and
+have not encountered any problems yet.
+
+Since the new Lexing module adds flexibility for future scanners and
+is backward compatible with old sources I would like to see it
+integrated in a future release of OCaml. 
+
+The new Lexing module implementation is available from the following
+web page:
+
+    http://www.cs.tu-bs.de/softech/people/software/lexing.html
+
+-- Christian
+
+-- 
+ Christian Lindig   Technische Universitaet Braunschweig, Germany
+                    http://www.cs.tu-bs.de/softech/people/lindig
+                    mailto:lindig@ips.cs.tu-bs.de
+                   "be declarative. be functional. just be."
+
+
+

@@ -1,0 +1,110 @@
+Return-Path: <keiko@kurims.kyoto-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id DC09CBBAF
+	for <caml-list@yquem.inria.fr>; Fri, 22 Aug 2008 11:03:05 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArEBACwdrkjAXQIniGdsb2JhbACSIgEBAQ8gpCyBaA
+X-IronPort-AV: E=Sophos;i="4.32,251,1217800800"; 
+   d="scan'208";a="28418643"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 22 Aug 2008 11:03:05 +0200
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id m7M931c8014206
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Fri, 22 Aug 2008 11:03:05 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ArEBAIcbrkiCNhABiGdsb2JhbACSIgEBAQ8gpCqBaA
+X-IronPort-AV: E=Sophos;i="4.32,251,1217800800"; 
+   d="scan'208";a="16190499"
+Received: from kurims.kurims.kyoto-u.ac.jp ([130.54.16.1])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 22 Aug 2008 10:56:31 +0200
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.8/8.13.8) with ESMTP id m7M8uJlZ022012;
+	Fri, 22 Aug 2008 17:56:20 +0900 (JST)
+Date: Fri, 22 Aug 2008 17:56:19 +0900 (JST)
+Message-Id: <20080822.175619.125115724.keiko@kurims.kyoto-u.ac.jp>
+To: jeremie.lumbroso@etu.upmc.fr
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Separating two mutually recursive modules
+From: Keiko Nakata <keiko@kurims.kyoto-u.ac.jp>
+In-Reply-To: <2b7b425b0808210400j618e461fre54f73612b920e4a@mail.gmail.com>
+References: <2b7b425b0808201654i61d3f878gbed5c27ca9114438@mail.gmail.com>
+	<20080821.182901.68534700.keiko@kurims.kyoto-u.ac.jp>
+	<2b7b425b0808210400j618e461fre54f73612b920e4a@mail.gmail.com>
+X-Mailer: Mew version 4.2 on Emacs 20.7 / Mule 4.1 (AOI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 48AE80C5.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; recursive:01 checker:01 checker:01 manifests:01 sub-module:01 sig:01 sig:01 functor:01 node:01 val:01 struct:01 val:01 struct:01 anil:01 bool:01 
+
+Hello.
+
+I could not solve your problem, but I report my attempt encountering
+a known limitation of the type checker, which may be of some help to you.
+
+The following program raises a type error:
+"This expression has type Boxes.T.t but is here used with type B.t"
+when typing the second branch of A.o_f.
+It must be possible and sound to equate Boxes.T.t and B.t there,
+but the type checker is not aware of it;
+T's signature manifests the equality to A, but not to Validator. 
+
+This problem is known as the double vision problem;
+related discussions are found, for instance:
+http://caml.inria.fr/pub/ml-archives/caml-list/2007/06/9d75407428bc2c403b99359bec646af2.en.html
+
+As a consequence, I do not know how I can make your program type check
+without revealing the sub-module B.  
+
+With best,
+Keiko
+
+
+module type BOXES_PROVIDER = sig  module T : sig type t end  end
+
+module type FVALIDATOR = functor(Boxes: BOXES_PROVIDER) ->
+sig
+  type t = Me of int | Node of t * t | B of Boxes.T.t
+  val fold_on_B : (Boxes.T.t -> 'a) -> ('a -> 'a -> 'a) -> 'a -> t -> 'a
+end
+
+module BoxesProvider(FValidator : FVALIDATOR) : BOXES_PROVIDER = struct
+  module rec Validator : sig 
+    type t
+    val fold_on_B : (Boxes.T.t -> 'a) -> ('a -> 'a -> 'a) -> 'a -> t -> 'a end 
+      = FValidator(Boxes) 
+  and Boxes : sig module T: sig type t end end = struct
+    module rec T : sig type t = B.t end = struct type t = B.t end
+    and A : sig
+      type t = | Anil| Aout of Validator.t
+      val o_f : ('a -> bool) -> ('a -> bool) -> t -> bool end = struct
+	type t = | Anil | Aout of Validator.t
+	let o_f p1 p2 =
+          let rec aux = function
+  	    | Anil    -> false
+  	    | Aout tv ->
+  		Validator.fold_on_B (fun x -> B.o_f p1 p2 x) (||) false tv
+          in
+          aux
+      end
+    and B : sig
+      type t =  Bnil | Bout of A.t * t
+      val o_f : ('a -> bool) -> ('a -> bool) -> t -> bool  end =  struct
+	type t =  Bnil | Bout of A.t * t
+	let o_f p1 p2 =
+          let rec aux = function
+  	    | Bnil        -> false
+  	    | Bout(a, tv) -> (A.o_f p1 p2 a) || (aux tv)
+          in
+          aux
+      end
+  end
+end
+

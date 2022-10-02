@@ -1,0 +1,94 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA15864; Sat, 21 Apr 2001 10:39:54 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA15843 for <caml-list@pauillac.inria.fr>; Sat, 21 Apr 2001 10:39:53 +0200 (MET DST)
+Received: from mta5.snfc21.pbi.net (mta5.snfc21.pbi.net [206.13.28.241])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f3L8dpv13436
+	for <caml-list@inria.fr>; Sat, 21 Apr 2001 10:39:51 +0200 (MET DST)
+Received: from checkerlap.d6.com ([64.160.53.33])
+ by mta5.snfc21.pbi.net (Sun Internet Mail Server sims.3.5.2000.01.05.12.18.p9)
+ with ESMTP id <0GC400ER8W27MK@mta5.snfc21.pbi.net> for caml-list@inria.fr;
+ Sat, 21 Apr 2001 01:39:44 -0700 (PDT)
+Date: Sat, 21 Apr 2001 01:20:30 -0700
+From: Chris Hecker <checker@d6.com>
+Subject: Re: [Caml-list] Re: toplevel bogging down after a while
+In-reply-to: <4.3.2.7.2.20010406014845.0356f160@shell16.ba.best.com>
+X-Sender: def6@shell16.ba.best.com
+To: caml-list@inria.fr
+Message-id: <4.3.2.7.2.20010421000750.00dd1dd0@shell16.ba.best.com>
+MIME-version: 1.0
+X-Mailer: QUALCOMM Windows Eudora Version 4.3.2
+Content-type: text/plain; charset="us-ascii"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+If anyone is curious, I figured out what the cause of the performance problem here was.  It seems like a problem with Togl.
+
+I'm using lablgl and Togl, and was using the Togl.timer_func function as an animation timer.  This function registers a Tk timer with Timer.add, and then re-adds it every time it triggers (since Timer.add is a on-shot).  The problem is, this means the last timer never gets deleted, and it's still in Tk's timer table (and since the recursive add call is inside Togl, you can't get access to the Timer.t to call Timer.remove).  These old timers accumulate and slow down everything after a few runs.  I replaced the call to Togl.timer_func with this code and everything works fine now:
+
+  let rec timer_t = ref
+      (let rec add_timer () = Timer.add ~ms:1
+          ~callback:(fun () -> (try display togl with _ -> ()); 
+                                timer_t := add_timer ()) in
+       add_timer ())
+
+And then I call Timer.remove on !timer_t after mainLoop.  (Is there a cleaner way to do this without the two let recs?)  Not sure if we should consider this a bug in Togl.timer_func or not, but it certainly does hose multiple runs on the toplevel.  Another option, besides manually deleting each timer like above, would be to have a Timer.clear_all, but I couldn't figure out how to enumerate through the currently registered timers.
+
+Chris
+
+
+At 01:49 AM 4/6/01 -0700, Chris Hecker wrote:
+
+>I should point out that the app isn't printing things out to stdout and emacs is filling up or anything.  I can restart the inferior-caml process in an already existing buffer where things were slow and it still speeds right back up.
+>
+>Chris
+>
+>------------------
+>
+>I tend to use this emacs macro a lot while I'm developing:
+>
+>             (define-key caml-mode-map "\C-c\C-t"
+>               (lambda ()
+>                 "Eval the entire buffer with *inferior-caml*"
+>                 (interactive)
+>                 (inferior-caml-eval-region (point-min) (point-max))))
+>
+>I love having a language with a toplevel, especially when I can run tk/gl apps straight out of emacs!  Groovy.
+>
+>However, after about 15 or 20 runs of my 300 line labltk/lablgl app, the runtime performance of the app starts really decreasing.  If I kill the inferior-caml process, and start it up again, everything's back to normal.  
+>
+>It seems like the gl-drawn mouse cursor is slowing down even more than the app, but the app definitely slows way down.
+>
+>Below are some Gc.stat () calls at various times.  Is it likely that this is Gc related?  I don't know how to read the stats below and whether they're saying anything.  I don't mind restarting the inferior-caml process, but is this some problem with my app that I'm going to run into if the native code version is run for long enough?  Is there any way I can figure out what's causing this?  Is there a way to reset the toplevel without killing the process?
+>
+>This is on Win98, OCaml 3.00, with a custom toplevel (built with unix, lablgl, and labltk).
+>
+>Chris
+>
+>fresh inferior-caml:
+>{Gc.minor_words=104712; Gc.promoted_words=41874; Gc.major_words=101633;
+> Gc.minor_collections=5; Gc.major_collections=1; Gc.heap_words=126976;
+> Gc.heap_chunks=2; Gc.live_words=101633; Gc.live_blocks=20071;
+> Gc.free_words=25343; Gc.free_blocks=2; Gc.largest_free=25166;
+> Gc.fragments=0; Gc.compactions=0}
+>
+>after one run, things are nice and fast:
+>{Gc.minor_words=4963116; Gc.promoted_words=481604; Gc.major_words=681315;
+> Gc.minor_collections=153; Gc.major_collections=3; Gc.heap_words=717824;
+> Gc.heap_chunks=11; Gc.live_words=272130; Gc.live_blocks=77445;
+> Gc.free_words=50961; Gc.free_blocks=222; Gc.largest_free=45281;
+> Gc.fragments=54; Gc.compactions=0}
+>
+>after ten or so runs, things are chugging at this point:
+>{Gc.minor_words=26965304; Gc.promoted_words=3293457; Gc.major_words=3519501;
+> Gc.minor_collections=824; Gc.major_collections=8; Gc.heap_words=2241536;
+> Gc.heap_chunks=35; Gc.live_words=201410; Gc.live_blocks=63981;
+> Gc.free_words=222291; Gc.free_blocks=2316; Gc.largest_free=34683;
+> Gc.fragments=1258; Gc.compactions=0}
+>
+>-------------------
+>To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

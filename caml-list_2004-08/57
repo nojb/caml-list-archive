@@ -1,0 +1,138 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA14953; Wed, 4 Aug 2004 01:24:54 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA14561 for <caml-list@pauillac.inria.fr>; Wed, 4 Aug 2004 01:24:53 +0200 (MET DST)
+Received: from mproxy.gmail.com (rproxy.gmail.com [64.233.170.201])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i73NOqRM004322
+	for <caml-list@inria.fr>; Wed, 4 Aug 2004 01:24:52 +0200
+Received: by mproxy.gmail.com with SMTP id 75so166220rnl
+        for <caml-list@inria.fr>; Tue, 03 Aug 2004 16:24:51 -0700 (PDT)
+Received: by 10.38.81.54 with SMTP id e54mr583983rnb;
+        Tue, 03 Aug 2004 16:24:51 -0700 (PDT)
+Message-ID: <d849ad2a040803162470ad4f16@mail.gmail.com>
+Date: Tue, 3 Aug 2004 19:24:51 -0400
+From: John Prevost <j.prevost@gmail.com>
+To: Ocaml Mailing List <caml-list@inria.fr>
+Subject: Re: [Caml-list] Functors and classes
+In-Reply-To: <Pine.LNX.4.58.0408031500000.22016@shell2.speakeasy.net>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <20040803120244.GA22304@annexia.org> <20040803121049.GA22418@annexia.org>
+ <20040803131716.GA22773@annexia.org> <d849ad2a04080308062629fb25@mail.gmail.com>
+ <20040803151241.GA25124@annexia.org> <d849ad2a04080308277a3dbf21@mail.gmail.com>
+ <d849ad2a04080308285605bb7e@mail.gmail.com> <Pine.LNX.4.58.0408031252530.22016@shell2.speakeasy.net> <Pine.LNX.4.58.0408031500000.22016@shell2.speakeasy.net>
+X-Miltered: at concorde with ID 41101EC4.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 functors:01 functor:01 functor:01 mli:01 struct:01 val:01 val:01 struct:01 mli:01 sig:01 sig:01 int:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+GOT IT!
+
+The trick is to provide a cast operation from the original module,
+which can then be used by the functor.  The functor gets grumpy
+because it doesn't have enough information (or perhaps smarts) to be
+sure the type can be unified.  But the original creator surely does.
+
+Find below the complete source--I separated things up in some
+semblance of the modules you'd expect to find in wild .ml and .mli
+files, just to be sure that doesn't break anything.  :)
+
+The best part is that even though the functor has to go through "toss"
+to get to the known methods of a connection, the module that uses the
+functor knows the full identity of the type, and can access all
+methods (and use other functions that work on the type) of the
+original object--preserving extensibility.
+
+
+module Things =                         (* Things.ml *)
+  (struct
+    class type base_connection =
+      object
+        method a : int
+      end
+
+    module type Thing_T =
+      sig
+        type connection
+        val connect : unit -> connection
+        val toss : connection -> base_connection
+      end
+
+    module type Thing_Pool_T =
+      sig
+        type connection
+        val connect : unit -> connection
+        val test : connection -> int
+      end
+
+    module Thing_Pool (Thing : Thing_T) :
+        Thing_Pool_T with type connection = Thing.connection =
+      struct
+        type connection = Thing.connection
+        let connect () = Thing.connect ()
+        let test c = (Thing.toss c)#a + 1
+      end
+  end : sig                             (* Things.mli *)
+    class type base_connection =
+      object
+        method a : int
+      end
+
+    module type Thing_T =
+      sig
+        type connection
+        val connect : unit -> connection
+        val toss : connection -> base_connection
+      end
+
+    module type Thing_Pool_T =
+      sig
+        type connection
+        val connect : unit -> connection
+        val test : connection -> int
+      end
+
+    module Thing_Pool : functor (Thing : Thing_T) ->
+      Thing_Pool_T with type connection = Thing.connection
+  end)
+
+(* database package to be pooled *)
+
+module Thing_Test =                     (* Thing_Test.ml *)
+  (struct
+    class connection =
+      object
+        method a = 1
+        method b = 2
+      end
+    let connect () = new connection
+    let toss c = (c :> Things.base_connection)
+  end : sig                             (* Thing_Test.mli *)
+    class connection :
+      object
+        method a : int
+        method b : int
+      end
+    val connect : unit -> connection
+    val toss : connection -> Things.base_connection
+  end)
+
+(* package using the pool *)
+
+module Program =                        (* Program.ml *)
+  struct
+    open Things
+      
+    module X = Thing_Pool(Thing_Test)
+        
+    let x = X.connect ()
+    let a = x#a
+    let b = x#b
+  end
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

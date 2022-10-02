@@ -1,0 +1,118 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA08669 for caml-redistribution; Tue, 6 Jan 1998 19:56:36 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA02386 for <caml-list@pauillac.inria.fr>; Tue, 6 Jan 1998 14:33:23 +0100 (MET)
+Received: from tobago.inria.fr (tobago.inria.fr [128.93.8.21])
+	by concorde.inria.fr (8.8.7/8.8.5) with ESMTP id OAA08307;
+	Tue, 6 Jan 1998 14:28:27 +0100 (MET)
+Received: (from doligez@localhost) by tobago.inria.fr (8.6.10/8.6.6) id OAA27004; Tue, 6 Jan 1998 14:28:21 +0100
+Date: Tue, 6 Jan 1998 14:28:21 +0100
+From: Damien Doligez <Damien.Doligez@inria.fr>
+Message-Id: <199801061328.OAA27004@tobago.inria.fr>
+To: caml-list@inria.fr
+Subject: Re: What exactly can be GC'ed?
+Cc: ctchou@mipos2.intel.com
+Sender: weis
+
+
+This messages gives some details on the current implementation of
+O'Caml.  Most users do not need to know such details and can skip this
+message.
+
+
+I wrote:
+>   Caml is a language with static binding.  The new definition of x does
+>   not replace the old one in any way, except in the table that maps
+>   names to slots in the table of globals.  When you define the second x,
+>   the first one only loses its name.  It still exists as a global
+>   variable.
+
+>From: Ching-Tsun Chou <ctchou@mipos2.intel.com>
+
+>But an inaccessible global variable!  Indeed, since the new definition
+>replaces the old one "in the table that maps names to slots in the
+>table of globals", why is it difficult to figure out that the value
+>object pointed to by the old definition is no longer reachable?
+
+Each global binding is given a number by the compiler, its global
+index.
+
+There are two tables.  One (the global environment) maps variable
+names to indices, the other (the table of globals) maps indices to
+values (the value of the corresponding binding).
+
+The global environment is a data structure of the compiler and
+linker.  It doesn't exist in stand-alone programs.  It does exist in
+the toplevel system because the compiler and linker are included in
+the toplevel.
+
+The table of globals exists in all programs.  When some piece of code
+(e.g. the body of a function) refers to a global variable, this
+reference is compiled into the variable's index.  At run time, the
+index is used to get the value through the table of globals.
+
+This means that references to global values (which are, conceptually,
+pointers) can be embedded in the code, even though the GC doesn't (and
+cannot) scan the code for pointers.  The drawback of this technique is
+of course that the GC cannot deallocate the global values that are no
+longer used (the whole table of globals is a root object, i.e. it is
+never deallocated).
+
+In most stand-alone programs, this is not a problem because all
+globals are functions and global variables with the same lifetime as
+the whole program.
+
+
+>   Assume that you insert "let f () = x;;" anywhere between the two
+>   bindings of x.  Then the old value is still reachable through f.
+>
+>But not through x.  In fact, suppose that the definition of f is:
+>
+>        let f () = String.sub x 0 1 ;;
+>
+>The old value of x, "aaa", should still be garbage-collectible after
+>the re-definition of x.
+
+In this case, no, because the old value of x could be changed by
+another function, so that f() would give a result different from "a".
+
+What happens here, is that "x" is given an global index, for example
+42, and f is compiled to a piece of code that applies global 314
+(String.sub) to (the value of global 42), 0, 1.
+
+
+>Hence it is crucial that O'Caml does GC aggressively so that pointers
+>from the O'Caml heap to those objects can be removed whenever possible
+>to enable GC on those objects.  Many scientific applications of O'Caml
+>can benefit from a more aggressive GC.
+
+Memory leaks (pointers that live beyond their useful lifespan and
+prevent the GC from collecting some objects) are a well-known
+difficult problem for compiler implementors.  Of course we do our
+best, but it is almost impossible to guarantee the absence of memory
+leaks in the stack, independently of the problem with global
+variables.
+
+
+>There is another point that I'd like to make.  In O'Caml, GC *already*
+>works as one (well, I anyway) would expect in most cases.
+[examples omitted]
+
+Yes, that's how it's supposed to work, and that's how it works in most
+cases.  Except for global variables.
+
+
+>I really don't see why it would be hard to "fix" it for top-level
+>variables.
+
+It could be done, for example by putting the referenced global into
+the closures of the referencing functions.  However, this would add
+some complexity to the compiler and linker, and it may add some
+run-time overhead.  And, once again, this is not a big problem in
+practice.
+
+-- Damien
+
+
+
+
+
+

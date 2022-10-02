@@ -1,0 +1,115 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA06804 for caml-redistribution; Mon, 11 Oct 1999 00:30:22 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA14024 for <weis@pauillac.inria.fr>; Mon, 11 Oct 1999 00:27:53 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id AAA16732;
+	Mon, 11 Oct 1999 00:27:53 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA13344; Mon, 11 Oct 1999 00:27:52 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199910102227.AAA13344@pauillac.inria.fr>
+Subject: Re: OCaml et l'évaluation paresseuse
+To: Pierre.Weis@inria.fr (Pierre Weis)
+Date: Mon, 11 Oct 1999 00:27:52 +0200 (MET DST)
+Cc: caml-list@inria.fr
+In-Reply-To: <199910032253.AAA19376@pauillac.inria.fr> from "Pierre Weis" at Oct 4, 99 00:53:12 am
+X-Mailer: ELM [version 2.4 PL24 ME8]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+I add a post-scriptum to my long message on lazy evaluation, to
+describe what have been and could be some lazy support in Caml.
+
+Along the lines of mutable annotations for fields of records, we add a
+``lazy annotation'' for fields of records and arguments of
+constructors. This is pretty easy to use since the lazy annotation
+appears only once, in the type definition. In programs using this
+``lazy type'', calls to ``force'' and ``delay'' are automatically
+inserted by the compiler. Also the call by need semantics is done by
+the compiler, hence no assignments are needed in users programs. Also,
+mutable and lazy are mutually exclusive annotations.
+
+Examples of lazy programs:
+--------------------------
+Definition of delay and force, as constructor Freeze and function unfreeze:
+
+type 'a frozen = lazy Freeze of 'a;;
+
+let unfreeze (Freeze x) = x;;
+
+Definition of lazy streams:
+
+type 'a stream = {lazy hd : 'a ; lazy tl : 'a stream};;
+
+let rec map_stream f = function
+  | {hd = x; tl = t} -> {hd = f x; tl  =  map_stream f t};;
+
+Lazy recursive defintions:
+
+let rec nat = {hd = 0; tl = map_stream succ nat};;
+
+(* Erathostenes sieve and prime numbers *)
+let rec sieve p =
+ let rec sieve_rec = function
+ | {hd = x;tl = t} ->
+    if x mod p = 0 then sieve_rec t
+    else {hd = x; tl = sieve_rec t} in
+ sieve_rec;;
+
+let rec primes = function
+ {hd = x; tl = t} -> {hd = x; tl =  primes (sieve x t)};;
+
+let rec (Freeze nat_from_2) =
+    Freeze {hd = 2; tl = map_stream succ nat_from_2};;
+let Primes = primes nat_from_2;;
+
+Formal series:
+
+Our aim is to define the function \verb"sinus" and \verb"cosinus" as
+the streams of the coefficients of their serial developments.
+
+let sf_uminus = map_stream (fun x -> (-x));;
+
+let integrate l =
+    let rec intrec n {hd = x; tl = l} =
+        {hd = (x/(n+1)); tl = (intrec (n+1) l)} in
+    intrec 0 l;;
+
+let rec cosinus =  {hd = 1; tl = integrate (sf_uminus sinus)}
+and sinus = {hd = 0; tl = integrate (cosinus)};;
+
+Static semantics:
+-----------------
+
+-- This has no influence on the result of typechecking, except that
+argument of lazy constructors of lazy fileds can be polymorphically
+typechecked (no ``non expansivity rule'' applies).
+
+Compilation:
+------------
+
+-- Allocation : when allocating records or applying constructors,
+lazy fields or constructors arguments are delayed (if not syntactically
+a value), encapsulating their argument expression e under a thunk: fun
+() -> e.
+
+-- Record access: when accessing a lazy field, the thunk is
+automatically forced if necessary and the value obtained replaces the
+thunk (call by need semantics).
+
+-- Pattern matching: When pattern matching, the pattern matching
+algorithm also force lazy thunks in lazy fields or lazy constructors
+arguments (in case of a constructor argument the result also replaces
+the original unevaluated thunk).
+
+This has been implemented in an old version of Caml, and is much more
+convenient to use (but more complex to implement) than the simple Lazy
+module facility of the current version of Objective Caml.
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

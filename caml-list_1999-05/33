@@ -1,0 +1,229 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA27028 for caml-redistribution; Wed, 19 May 1999 19:52:44 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA26519 for <caml-list@pauillac.inria.fr>; Wed, 19 May 1999 19:45:24 +0200 (MET DST)
+Received: from zaphod.in.tu-clausthal.de (zaphod.in.tu-clausthal.de [139.174.100.142])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id TAA07351
+	for <caml-list@inria.fr>; Wed, 19 May 1999 19:45:16 +0200 (MET DST)
+Received: from eressea.in.tu-clausthal.de (3742f8aa5b07c@eressea.in.tu-clausthal.de [139.174.100.9])
+	by zaphod.in.tu-clausthal.de (8.8.7/8.8.7) with SMTP
+	id TAA14178;
+	Wed, 19 May 1999 19:45:14 +0200 (MET DST)
+From: Joerg Czeranski <jc@joerch.org>
+To: caml-list@inria.fr
+Date: Wed, 19 May 1999 19:44:57 +0200 (MET DST)
+Message-ID: <5vbInDAh9$2ip$1@joerch.org>
+Subject: yet another signal mask patch and: what's the indended semantics?
+Sender: weis
+
+Hi.
+
+These patches are again incremental.  I think most of the signal
+stuff is now working.  Stream output isn't reentrant and thus must
+not be used in handlers.
+
+Generally, what's the meaning of enter_blocking_section()/
+leave_blocking_section()?  Were they intended to be only used in
+reentrant C functions?
+
+And what's the semantics of the Unix.xxx functions supposed to be?
+While the Single Unix C write() function never blocks are a successful
+select(), Unix.write will block until all data is written unless the
+descriptor is set to non-blocking mode.
+
+So far I assumed that the semantics should be the same for C and Caml-Unix
+functions with the same name.  I didn't yet try to check which functions
+are merely wrappers and which implement a higher level semantics.
+
+These questions make me hesitate to use O'Caml "in anger" for low level
+Unix programming.
+
+BTW, there are also a few prototypes missing, e.g. the
+"extern char ** cstringvect();" in
+otherlibs/unix/{execv.c,execve.c,execvp.c} should be
+"extern char ** cstringvect(value);" - Ansi doesn't allow mixing
+of prototypes and non-prototypes for the same function.
+
+joerch
+
+===== begin patches =====
+*** asmrun/signals.c.old	Tue May 18 23:11:51 1999
+--- asmrun/signals.c	Tue May 18 23:20:18 1999
+***************
+*** 13,18 ****
+--- 13,19 ----
+  
+  #include <signal.h>
+  #include <stdio.h>
++ #include <string.h> /* for memcpy */
+  #if defined(TARGET_power) && defined(__linux)
+  #include <asm/sigcontext.h>
+  #endif
+***************
+*** 76,81 ****
+--- 77,83 ----
+  static void execute_signal(int signal_number, int in_handler)
+  {
+    struct caml_sigblock_node sigblock_node;
++   sigset_t saved_mask;
+    int i;
+  
+    Assert (!async_signal_mode);
+***************
+*** 94,105 ****
+    sigblock_node.signal_number = signal_number;
+    caml_sigblock_stack = &sigblock_node;
+  
+    sigaddset(&current_signal_mask, signal_number);
+    sigprocmask(SIG_SETMASK, &current_signal_mask, NULL);
+  
+    callback(Field(signal_handlers, signal_number), Val_int(signal_number));
+  
+!   sigdelset(&current_signal_mask, signal_number);
+    /* don't reset the signal mask if we're in the handler, so the handler
+       doesn't nest unnecessarily */
+    if (!in_handler)
+--- 96,108 ----
+    sigblock_node.signal_number = signal_number;
+    caml_sigblock_stack = &sigblock_node;
+  
++   get_current_signal_mask(&saved_mask);
+    sigaddset(&current_signal_mask, signal_number);
+    sigprocmask(SIG_SETMASK, &current_signal_mask, NULL);
+  
+    callback(Field(signal_handlers, signal_number), Val_int(signal_number));
+  
+!   update_signal_mask(&saved_mask);
+    /* don't reset the signal mask if we're in the handler, so the handler
+       doesn't nest unnecessarily */
+    if (!in_handler)
+***************
+*** 178,194 ****
+    if (async_signal_mode) {
+      /* We are interrupting a C function blocked on I/O.
+         Callback the Caml code immediately. */
+-     struct caml_sigblock_node sigblock_node;
+- 
+-     sigblock_node.next = caml_sigblock_stack;
+-     sigblock_node.signal_number = sig;
+-     caml_sigblock_stack = &sigblock_node;
+- 
+      leave_blocking_section();
+!     callback(Field(signal_handlers, sig), Val_int(sig));
+      enter_blocking_section();
+- 
+-     caml_sigblock_stack = sigblock_node.next;
+    } else {
+      /* We can't execute the signal code immediately.
+         Instead, we remember the signal and play with the allocation limit
+--- 181,189 ----
+    if (async_signal_mode) {
+      /* We are interrupting a C function blocked on I/O.
+         Callback the Caml code immediately. */
+      leave_blocking_section();
+!     execute_signal(sig, 1 /* in handler */);
+      enter_blocking_section();
+    } else {
+      /* We can't execute the signal code immediately.
+         Instead, we remember the signal and play with the allocation limit
+*** byterun/signals.c.old	Tue May 18 14:32:56 1999
+--- byterun/signals.c	Tue May 18 15:54:41 1999
+***************
+*** 76,81 ****
+--- 76,82 ----
+  static void execute_signal(int signal_number, int in_handler)
+  {
+    struct longjmp_buffer raise_buf, *saved_external_raise;
++   sigset_t saved_mask;
+    int i;
+  
+    Assert (!async_signal_mode);
+***************
+*** 103,114 ****
+        external_raise = &raise_buf;
+    }
+  
+    sigaddset(&current_signal_mask, signal_number);
+    sigprocmask(SIG_SETMASK, &current_signal_mask, NULL);
+  
+    callback(Field(signal_handlers, signal_number), Val_int(signal_number));
+  
+!   sigdelset(&current_signal_mask, signal_number);
+    /* don't reset the signal mask if we're in the handler, so the handler
+       doesn't nest unnecessarily */
+    if (!in_handler)
+--- 104,116 ----
+        external_raise = &raise_buf;
+    }
+  
++   get_current_signal_mask(&saved_mask);
+    sigaddset(&current_signal_mask, signal_number);
+    sigprocmask(SIG_SETMASK, &current_signal_mask, NULL);
+  
+    callback(Field(signal_handlers, signal_number), Val_int(signal_number));
+  
+!   update_signal_mask(&saved_mask);
+    /* don't reset the signal mask if we're in the handler, so the handler
+       doesn't nest unnecessarily */
+    if (!in_handler)
+............
+
+*** otherlibs/unix/execv.c.orig	Tue Sep  2 14:54:33 1997
+--- otherlibs/unix/execv.c	Tue May 18 15:31:55 1999
+***************
+*** 15,21 ****
+  #include <memory.h>
+  #include "unixsupport.h"
+  
+! extern char ** cstringvect();
+  
+  value unix_execv(value path, value args)     /* ML */
+  {
+--- 15,21 ----
+  #include <memory.h>
+  #include "unixsupport.h"
+  
+! extern char ** cstringvect(value);
+  
+  value unix_execv(value path, value args)     /* ML */
+  {
+*** otherlibs/unix/execve.c.orig	Tue Sep  2 14:54:33 1997
+--- otherlibs/unix/execve.c	Tue May 18 15:31:59 1999
+***************
+*** 15,21 ****
+  #include <memory.h>
+  #include "unixsupport.h"
+  
+! extern char ** cstringvect();
+  
+  value unix_execve(value path, value args, value env)     /* ML */
+  {
+--- 15,21 ----
+  #include <memory.h>
+  #include "unixsupport.h"
+  
+! extern char ** cstringvect(value);
+  
+  value unix_execve(value path, value args, value env)     /* ML */
+  {
+*** otherlibs/unix/execvp.c.orig	Tue Sep  2 14:54:34 1997
+--- otherlibs/unix/execvp.c	Tue May 18 15:32:03 1999
+***************
+*** 15,21 ****
+  #include <memory.h>
+  #include "unixsupport.h"
+  
+! extern char ** cstringvect();
+  extern char ** environ;
+  
+  value unix_execvp(value path, value args)     /* ML */
+--- 15,21 ----
+  #include <memory.h>
+  #include "unixsupport.h"
+  
+! extern char ** cstringvect(value);
+  extern char ** environ;
+  
+  value unix_execvp(value path, value args)     /* ML */
+===== end patches =====
+
+
+

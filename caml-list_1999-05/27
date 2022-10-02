@@ -1,0 +1,62 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA05611 for caml-redistribution; Mon, 17 May 1999 17:25:31 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA02833 for <caml-list@pauillac.inria.fr>; Mon, 17 May 1999 13:03:36 +0200 (MET DST)
+Received: from zaphod.in.tu-clausthal.de (zaphod.in.tu-clausthal.de [139.174.100.142])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id NAA05193
+	for <caml-list@inria.fr>; Mon, 17 May 1999 13:03:33 +0200 (MET DST)
+Received: from eressea.in.tu-clausthal.de (373ff785467cd@eressea.in.tu-clausthal.de [139.174.100.9])
+	by zaphod.in.tu-clausthal.de (8.8.7/8.8.7) with SMTP
+	id NAA20255;
+	Mon, 17 May 1999 13:03:33 +0200 (MET DST)
+From: Joerg Czeranski <jc@joerch.org>
+To: caml-list@inria.fr
+In-Reply-To: <5v6tgd6vv$19X$1@joerch.org>
+Date: Mon, 17 May 1999 13:03:28 +0200 (MET DST)
+Message-ID: <5v7vbEfo9$0Ta$1@joerch.org>
+Subject: Are exceptions evil? (was: more patches)
+Sender: weis
+
+This morning I rethought my patches under the shower and found another
+bug (signals are not blocked while the handler is executed, if the
+signal was caught with async_signal_mode == 0).
+
+It's not difficult to fix, I'll do that later.  Even the signal
+loss race condition can be fixed without too much thought.
+
+But that's because signals are easy to control, they move down the
+stack (for stacks growing down).  They won't bypass interrupted
+functions, they only return to them after being handled.
+
+Exceptions on the other hand go straight up the stack until they find
+a handler, and then *immediately* invalidate the handler.
+In a non-pure programming language like O'Caml this creates unavoidable
+race conditions:
+
+	let resource = acquire () in
+	try
+		use resource;
+		release resource
+	with e ->
+		release resource;
+		raise e
+
+"release" is never called if two exceptions arrive at virtually
+the same time, and neither if an exception arrives after the call
+to "acquire", but before the "try".
+
+N.b.: For me acquire is usually Unix.openfile, but it could as well
+be a native O'Caml function with sideeffects (like "incr semaphore").
+
+I think the fundamental reason for this problem is that exceptions
+are thrown up the stack and not forward on the timeline of side effects.
+They ought to skip new acquire calls, but never a release call for
+a resource already acquired.
+
+Is there anything that can be done about this?  Or does it require
+wrapping all (relevant) side effects with monads?  Or am I missing
+something?
+
+regards,
+joerch
+
+
+

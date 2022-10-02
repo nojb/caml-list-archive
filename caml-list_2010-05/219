@@ -1,0 +1,167 @@
+Return-Path: <bluestorm.dylc@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 321DFBC58
+	for <caml-list@yquem.inria.fr>; Mon, 24 May 2010 09:35:51 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Aq8BAHrJ+UtKfVK2mGdsb2JhbACeCAgVAQEBAQEICQwHESKsK4IBhHEuiE8BAQMFhQ4E
+X-IronPort-AV: E=Sophos;i="4.53,290,1272837600"; 
+   d="scan'208";a="63323296"
+Received: from mail-wy0-f182.google.com ([74.125.82.182])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 24 May 2010 09:35:50 +0200
+Received: by wyf28 with SMTP id 28so452612wyf.27
+        for <caml-list@inria.fr>; Mon, 24 May 2010 00:35:50 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:received:in-reply-to
+         :references:date:message-id:subject:from:to:cc:content-type;
+        bh=ATJmDphfP7b2zG2c7VOf0+nJPUzGDEd4v91Sfcr5UFk=;
+        b=vkF42ptVG6jIZuZIylDZAo2Loqjv6egPqY8szJ226ncalkSDMn59B13Vc4OZjCqwSJ
+         eesB31g1zU4BSy5MxZW0GFM4+X7hUn+VaO3bfWkRm54lFJq/fW+BiQFy9oIa1YLNX81n
+         yOaqeC2bb2vOjO5x8btwp/wJ1ki0HOt3xcqLU=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:in-reply-to:references:date:message-id:subject:from:to
+         :cc:content-type;
+        b=pdfB5SAjT0VSeRVKQeVhPjaX6GaJCjmfN0Nq+zocIyXd4f8TyaAGYnAqY7zz0skkyi
+         F9VWaRxIzcnCFajBE+8koRcA5uZrtDf4YUXXn4a3H8kWncA6Cy0IfZzVj/8s4D7mlj/7
+         UFXOY4stA8MShjwNPqQEIcJyHFK0psR6ZPFnI=
+MIME-Version: 1.0
+Received: by 10.227.69.213 with SMTP id a21mr5156928wbj.220.1274686550210; 
+	Mon, 24 May 2010 00:35:50 -0700 (PDT)
+Received: by 10.216.46.199 with HTTP; Mon, 24 May 2010 00:35:50 -0700 (PDT)
+In-Reply-To: <Pine.LNX.4.64.1005240532130.6622@myhome>
+References: <Pine.LNX.4.64.1005240532130.6622@myhome>
+Date: Mon, 24 May 2010 09:35:50 +0200
+Message-ID: <AANLkTinxUCinuRgU41QbAq42j-HzsMEfjXGWOiDhmNAs@mail.gmail.com>
+Subject: Re: [Caml-list] Two Different Exception Behaviors in camlp4 on the 
+	toplevel
+From: blue storm <bluestorm.dylc@gmail.com>
+To: Joseph Young <ocaml@optimojoe.com>
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; camlp:01 toplevel:01 ocaml:01 expr:01 expr:01 occurence:01 occurence:01 runtime:01 ocaml:01 toplevel:01 camlp:01 inserting:01 runtime:01 exn:01 eprintf:01 
+
+The reason you have two different kinds of error is that you use
+type_ast in two different places :
+
+  (* Converts a calculator AST into an OCaml AST *)
+  let to_expr base_loc prog=
+     let e=CalcGram.parse_string term_eoi base_loc prog in
+     let _= type_ast e in
+     let rec to_expr e= ... in
+     let e= to_expr e in ...
+     <:expr< let _ = type_ast $e$ in $e$ >>
+  ;;
+
+The first occurence of "type_ast" in that code is executed at
+parsing-time. The second occurence, inside <:expr< ... >>, is executed
+at runtime, like a classical OCaml exception, and the toplevel does no
+special error reporting on Camlp4-related exceptions.
+
+You could fix this by inserting (at runtime) a call to the Camlp4
+exception printer :
+   <:expr< let _ =
+             try type_ast $e$ with exn ->
+               Format.eprintf "%a@." Camlp4.ErrorHandler.print exn;
+               raise exn in
+           $e$ >>
+
+Unfortunately, I'm not sure it will work in the toplevel (wich has a
+special location handling as there is no "file" associated to
+locations). It will work however if you #use a file containing an
+erroneous code.
+
+$ cat foo.ml
+open Camlp4.PreCast
+open Calc
+let _ = <:calc< 1 + (2 + $"<:calc< true >>"$) >>
+
+$ ocamlc -pp 'camlp4o calc.cmo' -I +camlp4 dynlink.cma camlp4lib.cma
+calc.cmo foo.ml -o foo
+$ ./foo
+File "foo.ml", line 3, characters 21-45:
+Camlp4: Uncaught exception: Calc.Type_error
+Fatal error: exception Loc.Exc_located(_, _)
+
+$ ocaml dynlink.cma camlp4o.cma calc.cmo
+# #use "foo.ml";;
+File "foo.ml", line 3, characters 21-45:
+Camlp4: Uncaught exception: Calc.Type_error
+Exception: Loc.Exc_located (<abstr>, Calc.Type_error).
+
+
+
+
+You are actually doing unecessary work. The OCaml type system being
+quite powerful, it is easy to have it doing the work, instead of
+coding your own limited typechecker. The idea is that you should only
+generate OCaml terms that are typed exactly when you want them to be
+typed.
+
+(** We use a RuntimeCalc module with a typed interface to enforce correct types
+    for calc values *)
+module RuntimeCalc : sig
+  type calc =
+      [ `Nonterm of [ `Add | `Sub | `Or | `And ] * calc list
+      | `Term of [ `Int of int | `Bool of bool ] ]
+  type 'a t
+  val add : int t list -> int t
+  val sub : int t list -> int t
+  val or_ : bool t list -> bool t
+  val and_ : bool t list -> bool t
+  val int : int -> int t
+  val bool : bool -> bool t
+  val expose : 'a t -> calc
+end = struct
+  type calc =
+      [ `Nonterm of [ `Add | `Sub | `Or | `And ] * calc list
+      | `Term of [ `Int of int | `Bool of bool ] ]
+  type 'a t = calc
+  let expose calc = calc
+  let op name li = `Nonterm (name, li)
+  let add li = op `Add li
+  let sub li = op `Sub li
+  let and_ li = op `And li
+  let or_ li = op `Or li
+  let int n = `Term (`Int n)
+  let bool b = `Term (`Bool b)
+  let expose t = t
+end
+
+(* Generates an expression with the nonterminal information *)
+let expr_of_nonterm _loc e=
+   match e with
+   | `Add -> <:expr< RuntimeCalc.add >>
+   | `Sub -> <:expr< RuntimeCalc.sub >>
+   | `Or -> <:expr< RuntimeCalc.or_ >>
+   | `And -> <:expr< RuntimeCalc.and_ >>
+;;
+
+(* Generates an expression with the terminal information *)
+let expr_of_term _loc e=
+   match e with
+   | `Int i -> <:expr< RuntimeCalc.int $`int:i$ >>
+   | `Bool b -> <:expr< RuntimeCalc.bool $`bool:b$ >>
+   | `Ocaml(l,e) -> Gram.parse_string Syntax.expr_eoi l e
+;;
+
+(* Converts a calculator AST into an OCaml AST *)
+let to_expr _loc prog =
+   let rec to_expr : calc -> Ast.expr = function
+     | `Nonterm (_loc, name, nodes) ->
+         let nodes= expr_of_list _loc (List.map to_expr nodes) in
+         let name = expr_of_nonterm _loc name in
+         <:expr< $name$ $nodes$ >>
+     | `Term(_loc, term) ->
+         expr_of_term _loc term in
+   let e = to_expr (CalcGram.parse_string term_eoi _loc prog) in
+   <:expr< $e$ >>
+;;
+
+In that example, I put RuntimeCalc inside the Calc module for
+convenience (and similarity with your code). You should really put it
+outside, in a separated module, and keep a strong separation between
+camlp4-time code and runtime code.
+

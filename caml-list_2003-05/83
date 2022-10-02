@@ -1,0 +1,149 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id KAA02529; Thu, 8 May 2003 10:48:19 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA06598 for <caml-list@pauillac.inria.fr>; Thu, 8 May 2003 10:48:18 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h488mGT12732
+	for <caml-list@inria.fr>; Thu, 8 May 2003 10:48:16 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2/3.7W) with ESMTP id RAA03244;
+	Thu, 8 May 2003 17:48:03 +0900 (JST)
+To: David.Gurr@med.ge.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] a puzzling polymorphic variant type
+In-Reply-To: <D4DBD8568F05D511A1C20002A55C008C11AC04FD@uswaumsx03medge.med.ge.com>
+References: <D4DBD8568F05D511A1C20002A55C008C11AC04FD@uswaumsx03medge.med.ge.com>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20030508174826L.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 08 May 2003 17:48:26 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 116
+X-Spam: no; 0.00; jacques:01 caml-list:01 unifying:01 unification:01 wwwfun:01 gurr:01 miniml:01 constants:01 longident:01 expr:01 val:01 int:01 garrigue:01 rec:01 kyoto:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Hi David,
+
+The explanation of your problem is simple:
+you've solved the input side, but you're still unifying everything on
+the output side of your first scope_term.
+
+A possible solution is to match again the output of scope_term_lst, to
+avoid this spurious unification.
+
+     let rec scope_term sc  = function
+       | #lambda as t -> scope_term_lambda scope_term sc t
+       | #lst as t    ->
+           let #lst as r = scope_term_lst scope_term sc t
+           in r
+
+Cheers,
+
+---------------------------------------------------------------------------
+Jacques Garrigue      Kyoto University     garrigue at kurims.kyoto-u.ac.jp
+		<A HREF=http://wwwfun.kurims.kyoto-u.ac.jp/~garrigue/>JG</A>
+
+From: "Gurr, David (MED, self)" <David.Gurr@med.ge.com>
+> I had quick hack I wanted to try with XL's modular module system.  I
+> changed MiniML.ML.term to a polymorphic variant and thus changed the 
+> definitions of MiniML.MLScoping.scope_term : MiniML.ML.term ->
+> MiniML.ML.term
+> as follows:
+> 
+> 
+>     type 'term lst = [
+>       | `Nil
+>       | `Cons of 'term * 'term lst
+>       ]
+>     type 'term lambda = [
+>       | `Constant of int                        (* integer constants *)
+>       | `Longident of path                      (* id or mod.mod...id *)
+>       | `Function of Ident.t * 'term             (* fun id -> expr *)
+>       | `Apply of 'term * 'term                   (* expr(expr) *)
+>       | `Let of Ident.t * 'term * 'term           (* let id = expr in
+> expr *)
+>       ]
+>     type term = [
+>       | term lambda
+>       | term lst
+>       ]
+> 
+>     let rec scope_term_lst scope_term sc = function 
+>       | `Nil -> `Nil
+>       | `Cons(h,t) -> `Cons(scope_term sc h,scope_term_lst scope_term sc
+> t) 
+> 
+>     let rec scope_term_lambda scope_term sc = function
+>       | `Constant n -> `Constant n
+>       | `Longident path -> `Longident(Scope.value_path path sc)
+>       | `Function(id, body) ->
+>           `Function(id, scope_term (Scope.enter_value id sc) body)
+>       | `Apply(t1, t2) -> `Apply(scope_term sc t1, scope_term sc t2)
+>       | `Let(id, t1, t2) ->
+>           `Let(id, scope_term sc t1, scope_term (Scope.enter_value id
+> sc) t2)
+> 
+>      let rec scope_term sc  = function
+>        | #lambda as t -> scope_term_lambda scope_term sc t
+>        | #lst as t    -> scope_term_lst scope_term sc t
+> 
+> But I did not get the type I expected.  Instead I got:
+> 
+> val scope_term :
+>  Scope.t ->
+>  ([< `Apply of 'a * 'a
+>    | `Cons of 'a * 'a lst
+>    | `Constant of int
+>    | `Function of Ident.t * 'a
+>    | `Let of Ident.t * 'a * 'a
+>    | `Longident of path
+>    | `Nil] as 'a) ->
+>  ([> `Apply of 'b * 'b
+>    | `Cons of 'b * 'b    <<<<<<<<<<<<<<< what?
+>    | `Constant of int
+>    | `Function of Ident.t * 'b
+>    | `Let of Ident.t * 'b * 'b
+>    | `Longident of path
+>    | `Nil] as 'b)
+> 
+> But if I tried a slightly different definition:
+> 
+>      let rec scope_term sc  = function
+>        | #lambda as t -> scope_term_lambda scope_term sc t
+>        | `Nil -> `Nil
+>        | `Cons(h,t) -> `Cons(scope_term sc h,scope_term_lst scope_term
+> sc t)
+> 
+> Then I do get the type I expect:
+> 
+> val scope_term :
+>  Scope.t ->
+>  ([< `Apply of 'a * 'a
+>    | `Cons of 'a * ([< `Cons of 'a * 'b | `Nil] as 'b)
+>    | `Constant of int
+>    | `Function of Ident.t * 'a
+>    | `Let of Ident.t * 'a * 'a
+>    | `Longident of path
+>    | `Nil] as 'a) ->
+>  ([> `Apply of 'c * 'c
+>    | `Cons of 'c * ([> `Cons of 'c * 'd | `Nil] as 'd)
+>    | `Constant of int
+>    | `Function of Ident.t * 'c
+>    | `Let of Ident.t * 'c * 'c
+>    | `Longident of path
+>    | `Nil] as 'c) 
+> 
+> Does anyone have any ideas?
+> 
+> Thanks, 
+> 
+> -D
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

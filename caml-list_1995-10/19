@@ -1,0 +1,128 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id UAA24417 for caml-redistribution; Fri, 20 Oct 1995 20:08:00 +0100
+From: Pierre Weis <weis>
+Message-Id: <199510201908.UAA24417@pauillac.inria.fr>
+Subject: Re: [Q]: Mutable variant types in Caml Light 0.7
+To: arc@labri.u-bordeaux.fr
+Date: Fri, 20 Oct 1995 19:55:09 +0100 (MET)
+In-Reply-To: <9510191516.AA04207@waves> from "Andrew Conway" at Oct 19, 95 04:16:10 pm
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Content-Length: 3458      
+Sender: weis
+Status: O
+
+
+> Why I would like it? Well, although I generally like strictness, 
+> sometimes lazy lists are useful. So I decided to make some lazy list
+> routines. I used the following type:
+> 
+> type 't lazylist =
+>           EndLL 
+>         | Element of 't llcont
+>         | Unconstructed of (unit -> 't lazylist)
+> and 't llcont = { value : 't ; mutable next : 't lazylist}
+> ;;
+> 
+> The trouble is that takes 5 words per evaluated element, whereas 
+> with Christian's suggestion it could be done in 3 words like 
+> normal lists, as well as avoiding the ugliness in the above type
+> definition. Neither are huge things for me, but since it has already been
+> suggested, I second it.
+> 
+> ( Incidentally, is there a nicer basic structure for lazy lists? )
+
+If you need lazy construction of lists that are consumed once unfrozen
+you may use streams (in Caml Light only).
+
+I do not discuss about efficiency of the representation of values,
+since this issue is higly compiler dependent.
+I just present my best way to implement lazyness in (core) Caml.
+
+If you really want to use lazyness you probably need to start by
+defining the type of frozen objects:
+
+type 'a frozen =
+  Freeze of (unit -> 'a)
+| Val of 'a;;
+
+Then you have to declare you're lazy data structures involving 'a
+frozen parts.
+
+For lazy lists you must use two types: one for the union of empty and
+non-empty lists, the other for the kind of cells you use for your lazy
+lists (are your list ``lazy in the head'' and ``lazy in the tail'' or
+only ``lazy in the tail'' ?). I assume you want lists lazy in the
+tail:
+
+type 'a llist =
+  Nil
+| Cons of 'a cell
+
+and 'a cell = { hd : 'a ; mutable tl : 'a llist frozen}
+;;
+
+Now you can define functions and functionals that carefully implements
+call by need or call by name (with call by name, computations are not
+shared: a frozen value may be ``forced'' as many times as necessary;
+in contrast, with call by need, the frozen value is physically replaced by the
+result of its computation, which is thus shared. I assume you want
+call by need):
+
+let rec mapl f = function
+  Nil -> Nil
+| Cons {hd = x; tl = Val l} ->
+   Cons {hd = f x; tl = Freeze (function () -> mapl f l)}
+| Cons ({hd = x; tl = Freeze th} as cell) ->
+   let thunk () =  
+     let tail = th() in cell.tl <- Val tail; mapl f tail in
+   Cons {hd = f x; tl = Freeze thunk};;
+
+let rec do_llist f n = function
+  Nil -> ()
+| Cons {hd = x; tl = Val l} ->
+   if n > 0 then begin
+    f x;
+    do_llist f (n - 1) l end
+| Cons ({hd = x; tl = Freeze th} as cell) ->
+   if n > 0 then begin
+    f x;
+    let tail = th () in
+    cell.tl <- Val tail;
+    do_llist f (n - 1) tail end;;
+
+Potentially infinite data are now available:
+
+let rec nat = Cons {hd = 0; tl = Freeze (fun () -> mapl succ nat)};;
+nat : int llist = Cons {hd=0; tl=Freeze <fun>}
+#do_llist print_int 5 nat;;
+01234- : unit = ()
+
+And call by need is properly implemented:
+
+#nat;;
+- : int llist =
+ Cons
+  {hd=0;
+   tl=
+    Val
+     (Cons
+       {hd=1;
+        tl=
+         Val
+          (Cons
+            {hd=2;
+             tl=Val (Cons {hd=3; tl=Val (Cons {hd=4; tl=Freeze <fun>})})})})}
+
+Pierre Weis
+----------------------------------------------------------------------------
+WWW Home Page: http://pauillac.inria.fr/~weis
+Projet Cristal
+INRIA, BP 105, F-78153 Le Chesnay Cedex (France)
+E-mail: Pierre.Weis@inria.fr
+Telephone: +33 1 39 63 55 98
+Fax: +33 1 39 63 53 30
+----------------------------------------------------------------------------
+
+
+

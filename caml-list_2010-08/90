@@ -1,0 +1,287 @@
+Return-Path: <p.donadeo@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 65F42BC57
+	for <caml-list@yquem.inria.fr>; Mon, 16 Aug 2010 13:57:11 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Au4BAPLDaEzRVdQ0kGdsb2JhbACDFZUUiBAIFQEBAQEJCQwHEQMfn0iIVDyCEoVvLohUAQEDBYRDcwSBVYgN
+X-IronPort-AV: E=Sophos;i="4.55,375,1278280800"; 
+   d="scan'208";a="57387508"
+Received: from mail-vw0-f52.google.com ([209.85.212.52])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 16 Aug 2010 13:57:10 +0200
+Received: by vws14 with SMTP id 14so3761059vws.39
+        for <caml-list@yquem.inria.fr>; Mon, 16 Aug 2010 04:57:10 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:received:mime-version:received:from:date
+         :message-id:subject:to:content-type;
+        bh=ULnWocWhgW2wgGVvwOYjVEjJpceFzQFyCMZNR/kxkv0=;
+        b=ej9gcVLBh896Y5aHvJpWP15Jjkuu3swGnXZhhL3by1c9ZUnvAKU5eN3eUJ3vGjF9ia
+         hoUjhRGFCw6lwB7JA4eJUSE4UjjrGoLC3/yL0RnSdR/abZ1UbewRDeYsg0jntMamszJP
+         bGN9CZjtMaVLNYDMAWOoEaAA+ki6IsUSh2s/0=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:from:date:message-id:subject:to:content-type;
+        b=wJpzUXbWDOaa92wXap7DA9aFi91qXf/IKOzb3Ac9L2Zqm3VEqTb/QXH04EjPLUPz31
+         qFpoTJgrFZvjrlFFTFTPVtaMMOCze1s0IoeN4LPxcSIMxywqCCaECpJQ1XTvMbSevgJV
+         rJeDjjCsFCWR8eaOK6YL8QGT/OKb8Oim9VMpo=
+Received: by 10.220.62.5 with SMTP id v5mr3075975vch.241.1281959829184; Mon,
+ 16 Aug 2010 04:57:09 -0700 (PDT)
+MIME-Version: 1.0
+Received: by 10.220.125.72 with HTTP; Mon, 16 Aug 2010 04:56:49 -0700 (PDT)
+From: Paolo Donadeo <p.donadeo@gmail.com>
+Date: Mon, 16 Aug 2010 13:56:49 +0200
+Message-ID: <AANLkTin54NBm8pZVLKdwnL_rLPnr=JvRsEEETRxDwvMr@mail.gmail.com>
+Subject: Thread.delay afraid of SIGTERM
+To: OCaml mailing list <caml-list@yquem.inria.fr>
+Content-Type: multipart/alternative; boundary=e0cb4e887ee93c20ad048def8867
+X-Spam: no; 0.00; sigterm:01 model:01 sigterm:01 printf:01 sig:01 printf:01 ocamlfind:01 ocamlopt:01 -linkpkg:01 -thread:01 -package:01 model:01 sig:01 ocamlfind:01 ocamlopt:01 
+X-Attachments: cset="UTF-8" cset="UTF-8" 
+
+--e0cb4e887ee93c20ad048def8867
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+I'm writing an application in which some threads do their job, communicatin=
+g
+with the Concurrent Cell library <http://ccell.forge.ocamlcore.org/>. In
+this context I decided to avoid 1) the multiprocess model, for the sake of
+simplicity and 2) libraries like Lwt, because the threads use many external
+and non lwt-aware libraries.
+
+When the process receives a SIGTERM, I want to smoothly kill the process. T=
+o
+do this I send (in the signal handler) a message to all the threads, and th=
+e
+main thread waits (Thread.join) for the other worker to finish. Then the
+main thread exits. To do this I install a signal handler in the main thread
+(Sys.set_signal)
+
+I found a strange behavior: when the process receives the SIGTERM, the
+programs terminates with the exception Unix.Unix_error(11, "select", "").
+
+I was able to remove all the noise and obtain a minimal program exposing
+the behavior. Here it is:
+
+$ cat thread_test.ml
+
+open Printf;;
+
+Random.self_init ();;
+
+let do_something id () =3D
+  let _ =3D Thread.sigmask Unix.SIG_SETMASK [15] in
+  while true
+  do
+    Thread.delay (1.0 +. (Random.float 1.0));
+    printf "Thread %d\n%!" id
+  done
+;;
+
+(* MAIN THREAD FROM HERE *)
+let kill_handler _ =3D printf "Signal caught\n%!";;
+
+Sys.set_signal 15 (Sys.Signal_handle kill_handler);;
+
+ignore (Thread.create (do_something 1) ());;
+ignore (Thread.create (do_something 2) ());;
+ignore (Thread.create (do_something 3) ());;
+
+while true
+do
+  Thread.delay 5.0; (* Unix.sleep 5 WORKS! *)
+  printf "Main Thread\n%!";
+done;;
+
+
+The process should (at least I think) catch the SIGTERM signal and continue
+without problems. Instead the result is this:
+
+$ ocamlfind ocamlopt -linkpkg -thread -package threads thread_test.ml -o
+thread_test
+$ ./thread_test
+Thread 1
+Thread 2
+Thread 3
+Thread 1
+Thread 2
+Thread 3
+Thread 1
+Thread 2
+Main Thread
+Thread 1
+Thread 3
+Thread 2
+Thread 3
+Thread 1
+Thread 2
+Thread 1
+Thread 3
+Signal caught  <--- *in* *another shell*: $ kill -15 PID
+Fatal error: exception Unix.Unix_error(11, "select", "")
+
+The exception is raised by the Thread.delay function present in the loop of
+the main thread. Note that if I use Unix.sleep 5 instead of Thread.delay 5.=
+0
+the program runs as expected.
+
+Any ideas?
+
+Best regards,
+
+
+--=20
+Paolo =E2=A0=A0=E2=A0=B5
+
+--e0cb4e887ee93c20ad048def8867
+Content-Type: text/html; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+
+I&#39;m writing an application in which some threads do their job, communic=
+ating with the <a href=3D"http://ccell.forge.ocamlcore.org/" target=3D"_bla=
+nk">Concurrent Cell library</a>. In this context I decided to avoid 1) the =
+multiprocess model, for the sake of simplicity and 2) libraries like Lwt, b=
+ecause the threads use many external and non lwt-aware libraries.<div>
+
+
+<br></div><div>When the process receives a SIGTERM, I want to=C2=A0smoothly=
+ kill the process. To do this I send (in the signal handler) a message to a=
+ll the threads, and the main thread waits (Thread.join) for the other worke=
+r to finish. Then the main thread exits. To do this I install a signal hand=
+ler in the main thread (Sys.set_signal)</div>
+
+
+<div><br></div><div>I found a strange=C2=A0behavior: when the process recei=
+ves the SIGTERM, the programs terminates with the exception=C2=A0Unix.Unix_=
+error(11, &quot;select&quot;, &quot;&quot;).</div><div><br></div><div>I was=
+ able to remove all the noise and obtain a minimal program exposing the=C2=
+=A0behavior. Here it is:</div>
+
+<div><br></div><div><font class=3D"Apple-style-span" face=3D"&#39;courier n=
+ew&#39;, monospace">$ cat=C2=A0<a href=3D"http://thread_test.ml">thread_tes=
+t.ml</a></font></div><div><font class=3D"Apple-style-span" face=3D"&#39;cou=
+rier new&#39;, monospace"><br>
+
+</font></div><div><div><font class=3D"Apple-style-span" face=3D"&#39;courie=
+r new&#39;, monospace">open Printf;;</font></div><div><font class=3D"Apple-=
+style-span" face=3D"&#39;courier new&#39;, monospace"><br></font></div><div=
+><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospace"=
+>Random.self_init ();;</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace"><br></font></div><div><font class=3D"Apple-style-span" face=3D"&#39;co=
+urier new&#39;, monospace">let do_something id () =3D</font></div><div><fon=
+t class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospace">=C2=
+=A0=C2=A0let _ =3D Thread.sigmask Unix.SIG_SETMASK [15] in</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">=C2=A0=C2=A0while true</font></div><div><font class=3D"Apple-style-spa=
+n" face=3D"&#39;courier new&#39;, monospace">=C2=A0=C2=A0do</font></div><di=
+v><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospace=
+">=C2=A0=C2=A0 =C2=A0Thread.delay (1.0 +. (Random.float 1.0));</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">=C2=A0=C2=A0 =C2=A0printf &quot;Thread %d\n%!&quot; id</font></div><di=
+v><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospace=
+">=C2=A0=C2=A0done</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">;;</font></div><div><font class=3D"Apple-style-span" face=3D"&#39;cour=
+ier new&#39;, monospace"><br></font></div><div><font class=3D"Apple-style-s=
+pan" face=3D"&#39;courier new&#39;, monospace">(* MAIN THREAD FROM HERE *)<=
+/font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">let kill_handler _ =3D printf &quot;Signal=C2=A0</font><font class=3D"=
+Apple-style-span" face=3D"&#39;courier new&#39;, monospace">caught\n%!&quot=
+;;;</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace"><br></font></div><div><font class=3D"Apple-style-span" face=3D"&#39;co=
+urier new&#39;, monospace">Sys.set_signal 15 (Sys.Signal_handle kill_handle=
+r);;</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace"><br></font></div><div><font class=3D"Apple-style-span" face=3D"&#39;co=
+urier new&#39;, monospace">ignore (Thread.create (do_something 1) ());;</fo=
+nt></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">ignore (Thread.create (do_something 2) ());;</font></div><div><font cl=
+ass=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospace">ignore (=
+Thread.create (do_something 3) ());;</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace"><br></font></div><div><font class=3D"Apple-style-span" face=3D"&#39;co=
+urier new&#39;, monospace">while true</font></div><div><font class=3D"Apple=
+-style-span" face=3D"&#39;courier new&#39;, monospace">do</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">=C2=A0=C2=A0Thread.delay 5.0; (* Unix.sleep 5 WORKS! *)</font></div><d=
+iv><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospac=
+e">=C2=A0=C2=A0printf &quot;Main Thread\n%!&quot;;</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">done;;</font></div><div><br></div><div><br></div><div>The process shou=
+ld (at least I think) catch the SIGTERM signal and continue without problem=
+s. Instead the result is this:</div>
+
+<div><br></div><div><div><font class=3D"Apple-style-span" face=3D"&#39;cour=
+ier new&#39;, monospace">$=C2=A0ocamlfind ocamlopt -linkpkg -thread -packag=
+e threads <a href=3D"http://thread_test.ml">thread_test.ml</a> -o thread_te=
+st</font></div>
+
+</div><div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, =
+monospace">$ ./thread_test=C2=A0</font></div><div><div><font class=3D"Apple=
+-style-span" face=3D"&#39;courier new&#39;, monospace">Thread 1</font></div=
+><div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monos=
+pace">Thread 2</font></div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">Thread 3</font></div><div><font class=3D"Apple-style-span" face=3D"&#3=
+9;courier new&#39;, monospace">Thread 1</font></div><div><font class=3D"App=
+le-style-span" face=3D"&#39;courier new&#39;, monospace">Thread 2</font></d=
+iv>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">Thread 3</font></div><div><font class=3D"Apple-style-span" face=3D"&#3=
+9;courier new&#39;, monospace">Thread 1</font></div><div><font class=3D"App=
+le-style-span" face=3D"&#39;courier new&#39;, monospace">Thread 2</font></d=
+iv>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">Main Thread</font></div><div><font class=3D"Apple-style-span" face=3D"=
+&#39;courier new&#39;, monospace">Thread 1</font></div><div><font class=3D"=
+Apple-style-span" face=3D"&#39;courier new&#39;, monospace">Thread 3</font>=
+</div>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">Thread 2</font></div><div><font class=3D"Apple-style-span" face=3D"&#3=
+9;courier new&#39;, monospace">Thread 3</font></div><div><font class=3D"App=
+le-style-span" face=3D"&#39;courier new&#39;, monospace">Thread 1</font></d=
+iv>
+
+<div><font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monosp=
+ace">Thread 2</font></div><div><font class=3D"Apple-style-span" face=3D"&#3=
+9;courier new&#39;, monospace">Thread 1</font></div><div><font class=3D"App=
+le-style-span" face=3D"&#39;courier new&#39;, monospace">Thread 3</font></d=
+iv>
+
+<font class=3D"Apple-style-span" face=3D"&#39;courier new&#39;, monospace">=
+Signal=C2=A0caught=C2=A0 &lt;--- <b>in</b> <b>another shell</b>: $ kill -15=
+=C2=A0PID<br></font><div><font class=3D"Apple-style-span" face=3D"&#39;cour=
+ier new&#39;, monospace">Fatal error: exception Unix.Unix_error(11, &quot;s=
+elect&quot;, &quot;&quot;)</font></div>
+
+</div><div><br></div><div>The exception is raised by the Thread.delay funct=
+ion present in the loop of the main thread. Note that if I use Unix.sleep 5=
+ instead of Thread.delay 5.0 the program runs as expected.</div><div><br>
+
+</div><div>Any ideas?</div><div>
+<br></div><div>Best regards,<br><div><br></div><div><br></div><div>--=C2=A0=
+</div><div>Paolo =E2=A0=A0=E2=A0=B5<br></div><div><br></div></div>
+</div>
+
+--e0cb4e887ee93c20ad048def8867--
+

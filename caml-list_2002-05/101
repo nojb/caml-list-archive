@@ -1,0 +1,212 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA28905; Mon, 6 May 2002 16:18:21 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id QAA28907 for <caml-list@pauillac.inria.fr>; Mon, 6 May 2002 16:18:20 +0200 (MET DST)
+Received: from TheWorld.com (pcls2.std.com [199.172.62.104])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g46EIJ928796
+	for <caml-list@inria.fr>; Mon, 6 May 2002 16:18:19 +0200 (MET DST)
+Received: from watergate.world.std.com (pool-141-154-29-240.bos.east.verizon.net [141.154.29.240])
+	by TheWorld.com (8.9.3/8.9.3) with ESMTP id KAA16765
+	for <caml-list@inria.fr>; Mon, 6 May 2002 10:18:18 -0400
+Message-Id: <5.1.0.14.0.20020504185035.027211b0@pop.theWorld.com>
+X-Sender: chase@pop.theWorld.com
+X-Mailer: QUALCOMM Windows Eudora Version 5.1
+Date: Mon, 06 May 2002 10:19:34 -0400
+To: caml-list@inria.fr
+From: David Chase <chase@world.std.com>
+Subject: Re: [Caml-list] string_of_float less accurate than sprintf
+  "%f" ?
+In-Reply-To: <20020504105324.A15588@pauillac.inria.fr>
+References: <C3F9C806AEC6D5119643000347055E322088D8@G9JNW.mgb01.telekom.de>
+ <C3F9C806AEC6D5119643000347055E322088D8@G9JNW.mgb01.telekom.de>
+Mime-Version: 1.0
+Content-Type: multipart/mixed;
+	boundary="=====================_269391468==_"
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+--=====================_269391468==_
+Content-Type: text/plain; charset="us-ascii"
+
+At 10:53 AM 5/4/2002 +0200, Xavier Leroy wrote:
+>I'm not taking sides here, just noticing that Java takes the computer
+>engineering viewpoint and C (and Caml, by inheritance of
+>implementation :-) takes the physicist's viewpoint...
+
+I think it is more likely that C "just happened".  Among
+other things, White and Steele had not yet written their
+paper on converting machine numbers to strings at the time
+C was created.
+
+The computer engineering viewpoint (in this case) is the correct
+one for GENERAL use, because it guarantees that no matter
+how many times you parse and unparse a floating point number,
+you keep the same value.  This seems like a good thing to me.
+It may be a value that is an approximation to an inaccurately
+measured quantity, but after the initial input-to-FP translation,
+the wiggling stops.  This does have one problem, in that the
+number of digits printed may vary quite a bit (e.g., between
+1.25 and 1.333333333333333) depending upon whether a number
+has an exact binary representation.
+
+Because of this problem, and because the number of actually
+meaningful digits may vary, it makes plenty of sense to have
+ways to print that do allow finer control.  I am not sure that
+either C or Java is worth blindly following here.  Java's
+decimal format code is a bit baroque in its corner cases
+(depending upon how you encode the # and 0 and . and , in its
+input, you can describe normal notation, scientific notation,
+and engineering-scientific notation.  Unfortunately, the
+input notation allows you to say many things that are
+nonsensical, and it is not immediately evident what is
+desired by looking at a format string).
+
+It's also not entirely clear what rounding you are supposed
+to get when you ask for less-precise printing.  The possibilities
+include:
+
+1.   round-toward-zero
+2.   round-toward-positive-infinity
+3.   round-toward-negative-infinity
+4.   round-toward-infinity
+5.   round-to-nearest-even-if-tie (1.5 --> 2, 2.5 --> 2)
+6.   round-to-nearest-rti-if-tie  (1.5 --> 2, 2.5 --> 3, -1.5 --> -2)
+
+1-3,5 correspond to modes often found supported by hardware.
+5     is the default answer from numerical people; I think it
+      loses the smallest amount of information without introducing
+      a bias.
+6     is what I think most people expect to see.
+
+What often gets implemented (e.g., by Sun in their implementation
+of java.text.DecimalFormat) is actually a combination of two of
+these -- first the number is formatted out to "full" (adequately
+precise) form (this assumes some sort of rounding), and then that
+is reduced in size using some more rounding.  Double-rounding is
+bad -- in the worst case, you might arrive at 1.45 rounding (once)
+to 1.5 rounding (twice) to 2.0, which is clearly wrong.  The
+magnitude of the error is generally much smaller in actual
+formatting (1.4999999999995 rounding to 1.5, e.g.) but it is still
+an error, and it is avoidable at low or no cost.  Gdtoa from netlib
+will do this for you -- I have used it myself, for an implementation
+of java.text.DecimalFormat -- and it provides control over the
+rounding of the output as well.  (I've attached a test program that
+illustrates this, crudely.  It requires gdtoa, obviously.)
+
+But (on the other hand) I really haven't a good idea how
+someone might go about elegantly specifying desired rounding
+in formatting.  It does matter -- people working with money
+(at least in the US) have very definite opinions about how
+half of anything is supposed to round (it rounds away from zero,
+towards the nearest infinity).
+
+David Chase
+
+--=====================_269391468==_
+Content-Type: text/plain; charset="us-ascii"
+Content-Disposition: attachment; filename="tfp.c"
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "gdtoa.h"
+
+FPI fpi_near = {
+  53, 1-1023-53+1, 2046-1023-53+1, 1, 0
+};
+
+FPI fpi_zero = {
+  53, 1-1023-53+1, 2046-1023-53+1, 0, 0
+};
+
+FPI fpi_up = {
+  53, 1-1023-53+1, 2046-1023-53+1, 2, 0
+};
+
+FPI fpi_down = {
+  53, 1-1023-53+1, 2046-1023-53+1, 3, 0
+};
+
+typedef __int64 s64;
+
+char * mygdtoa( double d, int mode, int ndigits, FPI * amper_fpi) {
+  s64 l = * (s64*)&d;
+  int i0 = (int) (l >> 32);
+  int i1 = (int) l;
+  int m0 = i0 & 0xfffff;
+  int e0 = (i0 >> 20) & 0x7ff; 
+  int isNeg = i0 < 0;
+  int mantissa[2];
+  int decpt;
+  int kind = STRTOG_Normal;
+  char * result;
+  char * rve;
+  int length;
+
+  if (e0 == 0x7ff) {
+    if ((m0 | i1) != 0) {
+      return "NaN";
+    } else {
+      return isNeg ? "-Infinity" : "Infinity";
+    }
+  }
+  if ((m0 | i1 | e0) == 0) {
+    return isNeg ? "-0.0" : "0.0";
+  }
+
+  if (e0 != 0) m0 |= 0x100000;
+  else e0 = 1;
+
+  e0 -= 0x3ff + 52;
+
+  mantissa[0] = i1;
+  mantissa[1] = m0;
+
+  
+  result = gdtoa(amper_fpi, e0, mantissa, &kind, mode, ndigits, &decpt, &rve);
+
+  length = rve - result;
+  return result;
+}
+
+test1(double x, int n) {
+  printf("near %d %s\n", n, mygdtoa(x,2,n, &fpi_near)); 
+  printf("zero %d %s\n", n, mygdtoa(x,2,n, &fpi_zero)); 
+  printf("up   %d %s\n", n, mygdtoa(x,2,n, &fpi_up)); 
+  printf("down %d %s\n", n, mygdtoa(x,2,n, &fpi_down)); 
+  
+}
+
+void test (double x) {
+  test1(x,1); 
+  test1(x,5); 
+  test1(x,6); 
+  test1(x,7); 
+  test1(x,8); 
+
+  test1(-x,5); 
+  test1(-x,6); 
+  test1(-x,7); 
+  test1(-x,8); 
+
+  printf("\n");
+}
+
+int main(int argc, char ** argv) {
+  test (0.40999995);
+  test (0.40444449);
+  test (1.5);
+  test (2.5);
+}
+
+--=====================_269391468==_
+Content-Type: text/plain; charset="us-ascii"
+
+
+--=====================_269391468==_--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

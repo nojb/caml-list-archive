@@ -1,0 +1,73 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA09437; Thu, 24 Apr 2003 15:42:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA09950 for <caml-list@pauillac.inria.fr>; Thu, 24 Apr 2003 15:42:21 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h3ODfsH26841;
+	Thu, 24 Apr 2003 15:41:54 +0200 (MET DST)
+Received: (from xleroy@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA10459; Thu, 24 Apr 2003 15:41:54 +0200 (MET DST)
+Date: Thu, 24 Apr 2003 15:41:53 +0200
+From: Xavier Leroy <xavier.leroy@inria.fr>
+To: Daniel Andor <Daniel.Andor@physics.org>
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Bigarray vs. array - mixing?
+Message-ID: <20030424154153.A9809@pauillac.inria.fr>
+References: <200304231556.20335.da209@cam.ac.uk>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0i
+In-Reply-To: <200304231556.20335.da209@cam.ac.uk>; from da209@cam.ac.uk on Wed, Apr 23, 2003 at 03:56:20PM +0100
+X-Spam: no; 0.00; caml-list:01 bigarrays:01 interfacing:01 lacaml:01 co-exist:01 lapack:01 judicious:01 blit:01 ocamlopt:01 statically:01 3.14:01 inlined:01 run-time:01 elt:01 slower:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+> Basically I have numerical code that uses Bigarrays in some parts
+> (for example in interfacing with Lacaml), but other parts that use
+> arrays.  It doesn't seem to be that clean to make them co-exist.
+> Which should I use?  Since I was forced to use Bigarrays for Lacaml
+> (which is a wonderful interface to LAPACK -- but missing some
+> drivers. :((( ), I decided to use Bigarrays for much of the rest of
+> my program.  I made judicious use of blit and splice, since I assume
+> that they only do two bounds checks. But my code still spends a lot
+> of time in Bigarray.  In fact approx the *same amount of time* as it
+> spends calculating! (according to gprof)
+
+If the profile shows that significant time is spent in the bigarray_get_*
+and igarray_set_* functions, this indicates that your Caml code is too
+polymorphic.  ocamlopt can inline bigarray accesses only when the
+types of the bigarrays is fully, statically known.  
+
+It is easy to get unwanted polymorphism for Caml code that uses
+bigarrays.  For instance,
+
+        let f a = a.{0} <- 3.14
+
+has type (float, 'a, 'b) Bigarray.Array1.t -> unit.  The assignment
+determines that the Caml type of the array elements is float,
+but it doesn't determine fully the underlying representation type
+(could be float32 as well as float64), nor the layout of the array
+(could be C or Fortran layout).  
+
+Thus, the assignment cannot be inlined and must be performed by a C
+function that discriminates at run-time on the actual representation
+types and layout.  This is quite slow indeed.  To avoid this, consider
+adding a type constraint:
+
+        open Bigarray
+
+        type floatarray = (float, float64_elt, c_layout) Array1.t
+
+        let f (a: floatarray) = a.{0} <- 3.14
+
+That should improve performance somewhat.  Still, the extra
+flexibility of bigarrays over regular arrays causes the inlined
+bigarray access code to be a bit slower than regular array accesses.
+
+Hope this helps.
+
+- Xavier Leroy
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

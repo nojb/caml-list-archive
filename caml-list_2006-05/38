@@ -1,0 +1,113 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id C6184BB84
+	for <caml-list@yquem.inria.fr>; Sun,  7 May 2006 21:10:50 +0200 (CEST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k47JAoXS027623
+	for <caml-list@yquem.inria.fr>; Sun, 7 May 2006 21:10:50 +0200
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA32237 for <caml-list@pauillac.inria.fr>; Sun, 7 May 2006 21:10:49 +0200 (MET DST)
+Received: from mz3.forethought.net (mzpi5.forethought.net [216.241.36.14])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k47JAlXw029512
+	(version=TLSv1/SSLv3 cipher=EDH-RSA-DES-CBC3-SHA bits=168 verify=NO)
+	for <caml-list@inria.fr>; Sun, 7 May 2006 21:10:48 +0200
+Received: from [216.241.35.41] (helo=[10.0.0.2])
+	by mz3.forethought.net with esmtp (Exim 4.51)
+	id 1FcoeU-0007Iv-Bc
+	for caml-list@inria.fr; Sun, 07 May 2006 13:10:46 -0600
+Message-ID: <445E4697.3010109@gushee.net>
+Date: Sun, 07 May 2006 13:12:23 -0600
+From: Matt Gushee <matt@gushee.net>
+User-Agent: Thunderbird 1.5.0.2 (X11/20060504)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: LablGTK2: problem w/ GMain.Io
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 445E463A.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at nez-perce with ID 445E4637.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; lablgtk:01 gmain:01 lablgtk:01 labltk:01 ocaml:01 3.08.4:01 gtk:01 gtk:01 ocaml-:01 initialized:01 giochannel:01 util:01 util:01 unix:01 mkdir:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+Hello, all--
+
+I suppose this question is best suited for the LablGTK list. But since I 
+have been trying to subscribe to that list for several days, and haven't 
+gotten any response yet ...
+
+I have a GUI application (the Bantam file manager) that I originally 
+wrote in LablTk, and have just ported to LablGTK2. I wrote most of the 
+code on a Slackware 10.1 box using GODI with OCaml 3.08.4 and LablGTK2 
+20040716. The GTK2 version is 2.6.1. After implementing all current 
+features in GTK and eliminating most of the known serious bugs, I built 
+and installed the package on my other Linux box, which runs Arch Linux 
+0.7.1, with Ocaml-3.09.2, GTK2-2.8.17, and LablGTK2-2.6.0.
+
+Since I found startup to be a bit slow with GTK, I implemented a 'daemon 
+mode' for the application. When you start it in daemon mode, the GUI is 
+initialized, but remains hidden until it receives a '%show' command via 
+a named pipe. Also, when you 'quit' the application via a keystroke 
+command or the window manager, it actually only hides the main window. 
+To actually quit the application in daemon mode, you send a '%quit' 
+command via the above-mentioned pipe.
+
+Here's the problem: on the development (Slackware) box, I had the app 
+running in both normal (GUI shows on startup & is destroyed by quitting) 
+and daemon modes with no apparent problems. On the second box, normal 
+mode works fine; the app will also run in daemon mode. But when I 
+attempt to send a command to the app in daemon mode, I get the following 
+error message:
+
+  ** (bantam.bin:13244): CRITICAL **: GIOChannel watch: callback raised \
+     an exception
+
+The relevant code is as follows. Have I done something obviously wrong? 
+If not, can anyone suggest how to debug this? TIA for any assistance.
+
+
+   method daemon_setup () =
+      is_daemon <- true;
+      msg_pipe <- Filename.concat Util.temp_user_dir "message.pipe";
+      if not (Sys.file_exists Util.temp_user_dir) then
+         Unix.mkdir Util.temp_user_dir 0o755
+      else if Sys.file_exists msg_pipe then
+         Unix.unlink msg_pipe;
+      Unix.mkfifo msg_pipe 0o600;
+      msg_fd <-
+         Unix.openfile msg_pipe [Unix.O_RDONLY; Unix.O_NONBLOCK] 0o600;
+      let chan = GMain.Io.channel_of_descr msg_fd in
+      let watcher _ =
+         let cmdbuf = Buffer.create 4
+         and temp = " " in
+         let rec read_input ready =
+            let nchars = GMain.Io.read chan ~buf:temp ~pos:0 ~len:1 in
+            if nchars = 0 then ()
+            else
+               match temp with
+               | "%" -> read_input true
+               | "\n" -> read_input false
+               | s when ready -> (Buffer.add_string cmdbuf s; read_input 
+true)
+               | _ -> read_input false
+         and do_command cmdstring =
+            match cmdstring with
+            | "show" -> self#show ()
+            | "hide" -> self#hide ()
+            | "quit" -> self#really_quit ()
+            | "hup" -> self#hup ()
+            | cs -> self#warn ("Unknown command: " ^ cs) in
+         read_input false;
+         do_command (Buffer.contents cmdbuf);
+         true in
+      ignore (GMain.Io.add_watch ~cond:[`IN] ~callback:watcher chan)
+
+
+
+-- 
+Matt Gushee
+The Reluctant Geek: http://matt.gushee.net/rg/
+

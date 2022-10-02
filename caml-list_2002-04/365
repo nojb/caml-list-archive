@@ -1,0 +1,158 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA05574; Thu, 25 Apr 2002 09:03:53 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA05561 for <caml-list@pauillac.inria.fr>; Thu, 25 Apr 2002 09:03:52 +0200 (MET DST)
+Received: from sunny.pacific.net.au (sunny.pacific.net.au [203.25.148.40])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3P73hr02446
+	for <caml-list@inria.fr>; Thu, 25 Apr 2002 09:03:49 +0200 (MET DST)
+Received: from wisma.pacific.net.au (wisma.pacific.net.au [210.23.129.72])
+          by sunny.pacific.net.au with ESMTP
+          id g3P73FXt014143; Thu, 25 Apr 2002 17:03:15 +1000 (EST)
+Received: from ozemail.com.au (ppp90.dyn146.pacific.net.au [210.23.146.90])
+        by wisma.pacific.net.au with ESMTP
+        id RAA13098; Thu, 25 Apr 2002 17:03:13 +1000 (EST)
+Message-ID: <3CC7AA30.4080700@ozemail.com.au>
+Date: Thu, 25 Apr 2002 17:03:12 +1000
+From: John Max Skaller <skaller@ozemail.com.au>
+User-Agent: Mozilla/5.0 (X11; U; Linux i686; en-US; rv:0.9.2.1) Gecko/20010901
+X-Accept-Language: en-us
+MIME-Version: 1.0
+To: caml-list@inria.fr
+CC: Andreas Rossberg <rossberg@ps.uni-sb.de>
+Subject: Re: [Caml-list] How to compare recursive types? Solution!
+References: <3CBD4523.6080707@ozemail.com.au> <87y9fmr4fo.dlv@wanadoo.fr> <3CC656E1.5020108@ozemail.com.au> <3CC675D7.40ADAD0F@ps.uni-sb.de> <3CC6AF9F.5040801@ozemail.com.au> <3CC6C986.A32F40F7@ps.uni-sb.de> <3CC757B2.7030706@ozemail.com.au> <3CC78908.7050507@ozemail.com.au>
+Content-Type: text/plain; charset=us-ascii; format=flowed
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+OK, I think I have a solution .. and it is so dang simple too.
+
+Basically, I normalise the type terms and use ocamls polymorphic
+equality operator! The normalisation involves counting what
+*real* level of the tree the recursive descent is in -- add one for
+each binary Pair node. Each typedef name substituted along
+the branch is tracked in an association list along with its level.
+When a typedef name is encountered that is in this list,
+replace it with Fix n, where n is the associated level number:
+this uniquely determines the recursion argument.
+
+The result of this algorithm is completely different to
+what I had before .. and it seems right. There's ONLY
+one way to represent a given type here.
+
+The intended model is: a pair is a C struct,
+the included types are expanded if they're
+not strongly coupled with the containing type
+if they are, a pointer is used.
+[I think this model is sound, I'm not sure yet ..]
+
+----------------------------------------------------------------------
+type node_t =
+  | Prim of string
+  | Pair of node_t * node_t
+  | Name of string
+
+type env_t = (string * node_t) list
+
+type lnode_t =
+  | LPrim of string
+  | LPair of lnode_t * lnode_t
+  | LFix of int
+
+let rec bind' env n labels t = match t with
+  | Prim s -> LPrim s
+  | Pair (t1, t2) ->
+    LPair
+    (
+      bind' env (n+1) labels t1,
+      bind' env (n+1) labels t2
+    )
+  | Name s ->
+    if List.mem_assoc s labels
+    then LFix (List.assoc s labels)
+    else
+      bind' env n ((s,n)::labels) (List.assoc s env)
+
+let bind env t =  bind' env 0 [] t
+
+
+let rec str' n t =
+  string_of_int n ^":" ^
+  match t with
+  | LPrim s -> s
+  | LPair (t1,t2) -> "(" ^ str' (n+1) t1 ^ " * " ^ str' (n+1) t2 ^ ")"
+  | LFix i -> "fix " ^ string_of_int i
+
+let str t = str' 0 t
+
+let cmp a b = a = b
+let strb b = if b then "true" else "false"
+let pres a b =
+  print_endline (str a);
+  print_endline (str b);
+  let res = cmp a b in
+  print_endline (strb res)
+;;
+
+(* ---------------------------------- *)
+let env = [
+  "x", Pair (Name "y", Prim "int");  (* typedef x = y * int *)
+  "y", Pair (Name "x", Prim "float") (* typedef y = x * float *)
+]
+
+let t1 = Pair (Name "x", Prim "float")
+let t1' = bind env t1
+let t2' = bind env (Name "y")
+;;
+
+pres t1' t2';; (* FALSE *)
+
+(* ---------------------------------- *)
+let env = [
+  "x", Pair (Name "x", Prim "int");
+  "y", Pair (Name "y", Prim "int")
+]
+;;
+
+let t1' = bind env (Name "x")
+let t2' = bind env (Name "y")
+;;
+
+pres t1' t2';; (* TRUE *)
+
+(* ---------------------------------- *)
+let env = [
+  "x", Pair (Pair (Name "x", Prim "int"), Prim "int");
+  "y", Pair (Name "y", Prim "int")
+]
+;;
+
+let t1' = bind env (Name "x")
+let t2' = bind env (Name "y")
+;;
+
+pres t1' t2';; (* FALSE *)
+
+(* ---------------------------------- *)
+
+pres t1' t1';; (* TRUE *)
+
+(* ---------------------------------- *)
+let env = ["x", Name "x"]
+let t = bind env (Name "x")
+;;
+pres t t;;
+
+-- 
+John Max Skaller, mailto:skaller@ozemail.com.au
+snail:10/1 Toxteth Rd, Glebe, NSW 2037, Australia.
+voice:61-2-9660-0850
+
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

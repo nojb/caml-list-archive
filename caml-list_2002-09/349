@@ -1,0 +1,127 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA11976; Wed, 25 Sep 2002 17:28:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA11972 for <caml-list@pauillac.inria.fr>; Wed, 25 Sep 2002 17:28:21 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from epexch01.qlogic.org ([63.170.40.3])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g8PFSK528531
+	for <caml-list@inria.fr>; Wed, 25 Sep 2002 17:28:20 +0200 (MET DST)
+Received: from epmailtmp.qlogic.org ([10.20.33.254]) by epexch01.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Wed, 25 Sep 2002 10:28:17 -0500
+Received: from [10.20.33.146] ([10.20.33.146]) by epmailtmp.qlogic.org with Microsoft SMTPSVC(5.0.2195.4905);
+	 Wed, 25 Sep 2002 10:28:20 -0500
+Date: Wed, 25 Sep 2002 10:33:10 -0500 (CDT)
+From: Brian Hurt <brian.hurt@qlogic.com>
+X-X-Sender:  <brianh@eagle.ancor.com>
+Reply-To: Brian Hurt <brian.hurt@qlogic.com>
+To: Ocaml Mailing List <caml-list@inria.fr>
+Subject: [Caml-list] Probably FAQ: Why is list-append (list :: elem) so expensive?
+Message-ID: <Pine.LNX.4.33.0209250958520.1974-100000@eagle.ancor.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+X-OriginalArrivalTime: 25 Sep 2002 15:28:20.0028 (UTC) FILETIME=[2D7D87C0:01C264A8]
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+Hello, all.  I'm new to Ocaml and have what is probably a frequently asked 
+question.  It's actually one of the faqs which caused me question:
+
+From:
+http://caml.inria.fr/FAQ/FAQ_EXPERT-eng.html#couts
+
+I get that the cost of list concatenation is proportional to the length of 
+the first list.  So (elem :: list) is O(1) no matter what the length of 
+list is.  But (list :: elem) is O(n), with n being the length of the list.
+
+Why doesn't Ocaml keep a pointer to the last element of the list, as well 
+as the first element?  This would make all list concatenation (in 
+situations where you don't have to duplicate a list) an O(1) operation.  
+At the cost of increasing the size of a list object.
+
+An example of where this would come in usefull.  Consider the merge 
+portion of a merge sort (yes, I know I'm duplicating code that is in the 
+List module- I'm doing it so that I can learn the language.  Plus, here we 
+all understand the problem).  The current implementation I have (probably 
+chock full of inefficiencies) is:
+
+let merge a b =
+    (* merge sorted lists a and b into one big list *)
+
+    let reverse_list lst =
+        (* again, duplicating List module functionality for clarity *)
+        let rec reverse_list_int lst accum =
+            match lst with
+                [] -> accum
+                | x :: [] -> (x :: accum)
+                | x :: tail -> reverse_list_int tail (x :: accum)
+        in
+            reverse_list_int lst []
+
+    in
+        let rec merge_int a b accum =
+            match (a, b) with
+                ( [], [] ) -> accum
+                | ( ahead :: [], [] ) -> (ahead :: accum)
+                | ( ahead :: atail, [] ) -> 
+                                    merge_int atail b (ahead :: accum)
+                | ( [] , bhead :: [] ) -> (bhead :: accum)
+                | ( [] , bhead :: btail ) -> 
+                                    merge_int a btail (bhead :: accum)
+                | ( ahead :: atail, bhead :: btail) ->
+                    if (ahead < bhead) then 
+                        (* should replace this test with a call to cmp *)
+                        merge_int atail b (ahead :: accum)
+                    else
+                        merge_int a btail (bhead :: accum)
+        in
+            reverse_list (merge_int a b [])
+;;
+
+Note that I've had to add a whole second function (reverse_list) which is 
+O(n) just to allow me to prepend instead of append to the accumulation 
+list.  The natural way to do this would be:
+
+let merge a b =
+    (* merge sorted lists a and b into one big list *)
+
+    let rec merge_int a b accum =
+        match (a, b) with
+            ( [], [] ) -> accum
+            | ( ahead :: [], [] ) -> (accum :: ahead)
+            | ( ahead :: atail, [] ) -> 
+                                merge_int atail b (accum :: ahead)
+            | ( [] , bhead :: [] ) -> (accum :: bhead)
+            | ( [] , bhead :: btail ) -> 
+                                merge_int a btail (accum :: bhead)
+            | ( ahead :: atail, bhead :: btail) ->
+                if (ahead < bhead) then 
+                    (* should replace this test with a call to cmp *)
+                    merge_int atail b (accum :: ahead)
+                else
+                    merge_int a btail (accum :: bhead)
+    in
+        merge_int a b []
+;;
+
+Were appends O(1) instead of O(N), the second version of this code would 
+be signifigantly faster, as I don't have to do the O(N) reversal of the 
+list at the end.  However, since appends aren't O(1), the second version 
+of the code is O(N^2)- diaster!  
+
+My first inclination would be to make all lists include a tail pointer.  
+Then, at a later point, the compiler could detect those lists which don't 
+need the tail pointer, and switch back to the old style lists.
+
+Unless there's something I'm missing.  I've only been playing with this 
+language for ~2 days or so.  I am definately still a newbie.  Pointers 
+and/or explanations would be greatly appreciated.
+
+Brian
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

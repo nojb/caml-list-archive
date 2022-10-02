@@ -1,0 +1,124 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA13362; Fri, 6 Sep 2002 21:23:39 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA13650; Fri, 6 Sep 2002 21:23:38 +0200 (MET DST)
+Received: from lobus.fungible.com (adsl-64-161-114-6.dsl.snfc21.pacbell.net [64.161.114.6])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g86JNa113834;
+	Fri, 6 Sep 2002 21:23:36 +0200 (MET DST)
+Received: by lobus.fungible.com (Postfix, from userid 1000)
+	id 1663A7F9A; Fri,  6 Sep 2002 12:23:33 -0700 (PDT)
+Date: Fri,  6 Sep 2002 12:12:42 -0700
+From-Tims-Fingers: true
+To: caml-list@inria.fr, caml-bugs@inria.fr
+Subject: [Caml-list] Allow declaring classes "final" so self type has no type variables?
+Message-Id: <20020906192333.1663A7F9A@lobus.fungible.com>
+From: tim@fungible.com (Tim Freeman)
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+I find that when I'm writing types of objects, there are a lot more
+type variables running around than I need.  The fundamental cause of
+this appears to be that it is possible to inherit from any class, so
+the type of "self" for an object is never constant; it always has to
+be a type variable just in case the present object is a subclass of
+the object that's presently being defined.
+
+In practice, it seems that many of the classes I write will never have
+a subclass and these type variables are unnecessary.  I'd like to be
+able to declare that a class will never have a subclass, and then the
+compiler will be willing to unify constant types with the type of
+self.  In this case, of course, any attempt to inherit the class
+should get an error.
+
+Here's some sample code illustrating the situation.  The comment at
+the end shows how I'd like to be able to write the last class.
+
+I suspect method invocation on a final class could be more efficient
+than method invocation in the general case, too.
+
+Any comments on whether this is a good idea?
+
+-- 
+Tim Freeman       
+tim@fungible.com
+GPG public key fingerprint ECDF 46F8 3B80 BB9E 575D  7180 76DF FE00 34B1 5C78 
+
+(* The real hierarchy_node is exported by a package that displays trees of
+   nodes in general.  The type variables are necessary. *)
+class type hierarchy_node = object ('node)
+  method children: 'node array
+end
+
+(* I can believe the type variables are necessary here, too. *)
+class type nodetype =
+object ('node)
+  constraint 'node = #hierarchy_node
+  method children: 'node array
+  method add_child: 'node -> unit
+  method parent: 'node option
+end
+
+(* I omitted a bunch of code here that uses nodetype (above) and is used by
+   omitted methods on node (below).  This is why I have to separate the
+   declaration of nodetype from the declaration of node. *)
+
+(* I don't think the type variables in the definition of node make anything
+   better at all.  Fundamentally, node has to be polymorphic when considering
+   its own class so we can cope with taking a subclass of node.
+   But I know that I don't want to take any subclasses, so I'd rather not have
+   the polymorphism.  I'd like the option of telling the compiler this so I
+   could avoid type variables I don't need. *)
+
+class node ~(parent: 'node option) =
+object (self: 'node)
+  constraint 'node = #nodetype
+                      
+  val mutable children: 'node array = [||]
+
+  initializer
+    match parent with
+        None -> ()
+      | Some p -> p#add_child self
+
+  method children: 'node array = children
+
+  method add_child (n: 'node): unit =
+    assert (n#parent = Some self);
+    for i = 0 to Array.length children - 1 do
+      assert (n != children.(i));
+    done;
+    children <- Array.append children [|n|]
+
+  method parent: 'node option = parent
+end
+
+(* I propose that the way to tell the compiler that the class will never have a
+   subclass is by using the new keyword "final", as in Java.  Then I could
+   write something like this instead:
+
+class final node ~(parent: node option): nodetype =
+object self
+  val mutable children: node array = [||]
+
+  initializer
+    match parent with
+        None -> ()
+      | Some p -> p#add_child self
+
+  method children: node array = children
+
+  method add_child (n: node): unit =
+    assert (n#parent = Some self);
+    for i = 0 to Array.length children - 1 do
+      assert (n != children.(i));
+    done;
+    children <- Array.append children [|n|]
+
+  method parent: node option = parent
+end
+*)
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

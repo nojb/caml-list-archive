@@ -1,0 +1,120 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id AAA14143; Sat, 28 Jul 2001 00:11:26 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id AAA14171; Sat, 28 Jul 2001 00:11:25 +0200 (MET DST)
+Received: from iiserv.iis.sinica.edu.tw (iiserv.iis.sinica.edu.tw [140.109.20.250])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f6RMBMn21410;
+	Sat, 28 Jul 2001 00:11:23 +0200 (MET DST)
+Received: from iota.iis.sinica.edu.tw (iota [140.109.20.164])
+	by iiserv.iis.sinica.edu.tw (8.11.1/8.11.1) with ESMTP id f6RMDrX14564;
+	Sat, 28 Jul 2001 06:13:53 +0800 (CST)
+Received: (from trc@localhost)
+	by iota.iis.sinica.edu.tw (8.8.8+Sun/8.8.8) id GAA24340;
+	Sat, 28 Jul 2001 06:09:07 +0800 (CST)
+From: Tyng-Ruey Chuang <trc@iis.sinica.edu.tw>
+Message-Id: <200107272209.GAA24340@iota.iis.sinica.edu.tw>
+Subject: [Caml-list] module constraints bug?
+To: caml-bugs@inria.fr
+Date: Sat, 28 Jul 2001 06:09:07 +0800 (CST)
+Cc: trc@iiserv.iis.sinica.edu.tw, caml-list@inria.fr
+X-Mailer: ELM [version 2.5 PL2]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Dear all,
+
+There seems to be a bug in the way o'caml handling higher-order modules
+with constrained module arguments. Consider the following module types:
+
+  module type T =
+  sig
+    type t
+  end
+
+  module type SELF = 
+  sig
+    module Self: T
+  end
+
+  module type F =
+  sig
+    module A: T
+
+    module Eta: functor (X: SELF with module Self = A) ->
+    sig
+      val t2t: X.Self.t -> X.Self.t
+    end
+  end
+
+In module type F, one specifies a functor Eta that takes in an argument X
+containing a module Self. Self is to have the same implementation of module A,
+which is also specified in F.
+
+However, the following module ThisF cannot be type-checked by ocaml
+to have module type F:
+
+  module ThisF: F =
+  struct
+    module A = 
+    struct
+      type t = Pink | Blue
+    end
+
+    module Eta = functor (X: SELF with module Self = A) ->
+    struct
+      let t2t x = match x with A.Pink -> A.Blue | A.Blue -> A.Pink
+    end
+  end
+
+The error message is reproduced below:
+
+	...	
+
+  Modules do not match:
+    functor(X : sig module Self : sig type t = A.t = | Pink | Blue end end) ->
+      sig val t2t : A.t -> A.t end
+  is not included in
+    functor(X : sig module Self : sig type t = A.t end end) ->
+      sig val t2t : X.Self.t -> X.Self.t end   
+
+	...
+
+  Type declarations do not match:
+    type t = A.t
+  is not included in
+    type t = A.t = | Pink | Blue     
+
+
+However, if we change the module constraint to a type constraint
+in the definition of Eta, as shown below in module ThatF,
+then it will type-check.
+
+          module ThatF: F =
+          struct
+            module A = 
+            struct
+              type t = Pink | Blue
+            end
+
+(* here *)  module Eta = functor (X: SELF with type Self.t = A.t) ->
+            struct
+              let t2t x = match x with A.Pink -> A.Blue | A.Blue -> A.Pink
+            end
+          end
+
+Is this a bug or am I missing something?
+
+The above is simplied code. In real code, I have many modules
+defined in the module type SELF, and each of these module again defines
+several parametric type constructors. So it is quite tedious
+to spell out all the type constraints. 
+
+best,
+Tyng-Ruey Chuang
+
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

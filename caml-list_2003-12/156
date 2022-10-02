@@ -1,0 +1,141 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA25417; Sat, 13 Dec 2003 22:38:23 +0100 (MET)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA25398 for <caml-list@pauillac.inria.fr>; Sat, 13 Dec 2003 22:38:21 +0100 (MET)
+Received: from pecan.cc.columbia.edu (pecan.cc.columbia.edu [128.59.59.178])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id hBDLcKr03880
+	for <caml-list@inria.fr>; Sat, 13 Dec 2003 22:38:20 +0100 (MET)
+Received: from tw304h3.cpmc.columbia.edu (tw304h3.cpmc.columbia.edu [156.111.84.180])
+	(user=ot14 mech=LOGIN bits=0)
+	by pecan.cc.columbia.edu (8.12.10/8.12.10) with ESMTP id hBDLcFG4010732
+	(version=TLSv1/SSLv3 cipher=RC4-MD5 bits=128 verify=NOT);
+	Sat, 13 Dec 2003 16:38:16 -0500 (EST)
+From: Oleg Trott <oleg_trott@columbia.edu>
+To: Markus Mottl <markus@oefai.at>, romildo@uber.com.br
+Subject: Re: [Caml-list] Matrix libraries
+Date: Sat, 13 Dec 2003 16:38:00 -0500
+User-Agent: KMail/1.5.4
+Cc: OCaml <caml-list@inria.fr>
+References: <20031213135142.GA8519@gentoo.malaquias.no-ip.org> <20031213163610.GA4004@fichte.ai.univie.ac.at>
+In-Reply-To: <20031213163610.GA4004@fichte.ai.univie.ac.at>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200312131638.01256.oleg_trott@columbia.edu>
+X-No-Spam-Score: Local
+X-Scanned-By: MIMEDefang 2.35
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; oleg:01 oleg:01 caml-list:01 romildo:01 lacaml:01 blas:01 lapack:01 lacaml:01 matlab:01 vals:01 vals:01 low-level:01 lapack:01 interfacing:01 low-level:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Saturday 13 December 2003 11:36 am, Markus Mottl wrote:
+> On Sat, 13 Dec 2003, romildo@uber.com.br wrote:
+> > I am looking for a good library for numerical
+> > matrixes manipulation in OCaml. Can anybody help me?
+>
+> Although it has already been on the web for a few weeks, I hadn't actually
+> announced it yet, waiting for comments of some co-developers:
+>
+> Lacaml is available in a new major version. This library interfaces
+> the Fortran libraries BLAS and LAPACK for heavy-weight linear algebra
+> (i.e. matrix computations). New features include support for complex
+> transformations (complex numbers), and a convenient way of accessing
+> submatrices using labels. As usual, you can choose either single or
+> double precision computations. The computations can run in parallel
+> on SMP-machines.
+>
+> You can download the library here:
+>
+>   http://www.oefai.at/~markus/home/ocaml_sources.html#LACAML
+>
+> I'd be grateful for feedback!
+
+All right! I was actually thinking of giving it lately. First of all, I think 
+the library is very interesting. Here are some of my assorted thoughts 
+regarding improving it.
+
+1.) I think a matrix library has to have >= 2 levels of user-frienliness. One 
+level should be easy to use and have a MATLAB feel to it, i.e. if someone
+wants the eigenvalues of a real matrix, he should just be able to write
+    e_vals = eigenvalues(A)
+or
+   (e_vals, e_vecs) = eigensystem(A)
+without having to worry about details. This should be built on top of a 
+low-level interface similar to LAPACK functions themselves. E.g. DGEEV does 
+not even return the eigenvectors corresponding to complex eigenvalues, but 
+rather something from which they can be reconstructed (which is what
+one might actually want sometimes)
+
+Right now, it appears to me that LaCaml is close to the low level, but not 
+quite there (because e.g. some LAPACK interfaces _return_ a matrix rather
+then letting the user modify some piece of memory in place like in FORTRAN)
+
+2.) Currently, LaCaml interfaces only a fraction of LAPACK. LAPACK is big, and 
+interfacing all of it by hand is a huge job. On the other hand, MOST of the 
+information needed for the low-level interface can be parsed from function 
+declarations in *.f files (I kept thinking about this while using LAPACK in 
+my C++ programs). Maybe the way to interface all of LAPACK is
+to parse those *.f files into some intermediate form, let humans edit it (e.g. 
+add minimum workspace size expressions, etc. - obvious from docs, but hard to 
+parse/NLP), and then auto-generate the whole interface from the result. This 
+will have the addtional benefit of being consistent (If you just let a bunch 
+of developers contribute interface code directly, they will bring their own 
+"style" to their parts of the interface)
+
+3.) Regarding "WORK" arguments. Why not have a shared workspace:
+
+(* module Workspace, untested *)
+
+(* private *)
+let workspace = ref (Array1.create float64 100)
+
+(* public *)
+let size () = Array1.dim !workspace
+
+let resize n = workspace := Array1.create float64 n
+
+let delete () = resize 0
+
+let get_float64 n = if size () >= n then !workspace 
+                                                else (resize n; !workspace)
+
+This way, one does not need to "hoist" workspace allocation out of loops 
+manually. OTOH performance does not suffer from allocating workspace
+for each function call. I don't know how this would inter-operate with 
+threading or SMP though.
+
+4) Submatrices. For a function f that takes a matrix argument "a" of size m by 
+n, you normally use something like
+
+f ar ac a m n
+
+where ar and ac refer to the "beginning" of the submatrix. Even though they 
+can default to 1, this is kind of inconvenient compared to
+
+f a
+
+I would propose using the latter everywhere, and letting the "mat" type 
+include ar, ac, m and n.
+
+submatrix : int -> int -> int -> int -> mat -> mat
+(* submatrix x1 y1 x2 y2 a *)
+
+would provide "views" into matrix a.
+
+5) I think a function that lets one view matrices as vectors vec_of_mat is 
+needed. They are all just ordered sets of numbers after all. 
+
+6) License. Have you thought of adding a static linking exception to your LGPL 
+license? Even INRIA did with Caml standard library. I might even consider 
+contributing then :-)
+
+-- 
+Oleg Trott <oleg_trott@columbia.edu>
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,112 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA12211; Sat, 20 Jul 2002 03:31:26 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA12204 for <caml-list@pauillac.inria.fr>; Sat, 20 Jul 2002 03:31:25 +0200 (MET DST)
+Received: from favie.faith.gr.jp (favie.faith.gr.jp [61.127.175.250])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g6K1VMj04722
+	for <caml-list@inria.fr>; Sat, 20 Jul 2002 03:31:23 +0200 (MET DST)
+Received: from localhost (dhcp7.faith.gr.jp [192.168.1.17])
+	by favie.faith.gr.jp (8.9.3/8.9.3) with ESMTP id KAA23718;
+	Sat, 20 Jul 2002 10:31:18 +0900
+To: alex@baretta.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Protected methods
+In-Reply-To: <3D37E364.5060607@baretta.com>
+References: <3D36AA1B.2090101@baretta.com>
+	<20020719175002N.garrigue@kurims.kyoto-u.ac.jp>
+	<3D37E364.5060607@baretta.com>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020720103117U.garrigue@kurims.kyoto-u.ac.jp>
+Date: Sat, 20 Jul 2002 10:31:17 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 79
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Alessandro Baretta <alex@baretta.com>
+
+> How about the following pseudocode? Is it sensible/viable?
+> 
+> let module M : sig
+>    class type public = object <public_methods> end
+>    val make_public : unit -> public
+> end = struct
+>    class type public = object <public_methods> end
+>    class protectd =
+>      object (self : #public)
+>      <public_methods>
+>      <protected_methods>
+>    end
+>    let make_public () -> (new protected :> public)
+> end
+
+Actually, after a more thorough look at your code, I'm not sure of
+what you're trying to achieve with it.  Applied directly, it seems
+that it would give you no more than private methods: you can not use
+them outside of the class.
+
+And I've found a better idiom, that should do about anything you want.
+
+module M : sig
+  type hidden
+  class type public = object < public methods >  method full : hidden end
+  val make_public : unit -> public
+  class virtual protected : object ('a)
+    < public methods >
+    < protected methods >
+    method full : 'a
+  end
+end = struct
+  class protected = object (self)
+    < public methods >
+    < protected methods >
+    method full = self
+  end
+  type hidden = protected
+  class type public = object < public methods >  method full : hidden end
+  let make_public () = (new protected : protected :> public)
+end
+
+The point is that now you can access the protected methods while
+your code appears in the same module, through the full method (which
+just returns self, but with its protected methods accessible), but not
+from outside the module (hidden is abstract).
+
+Note also how I exported protected as virtual: this way you cannot
+create objects from it, but you can still use it through inheritance.
+If you don't need to inherit, you don't have to export it though, and
+then you don't have to distinguish protected and hidden either.
+
+Here is a concrete instance of that, to verify the type checking:
+
+module M : sig
+  type hidden
+  class type public = object method pub : int  method full : hidden end
+  val make_public : unit -> public
+  val call_prot : public -> int
+  class virtual protected : object ('a)
+    method pub : int
+    method prot : int
+    method full : 'a
+  end
+end = struct
+  class protected = object (self)
+    method prot = 1
+    method pub = self#prot
+    method full = self
+  end
+  type hidden = protected
+  class type public = object method pub : int  method full : hidden end
+  let make_public () = (new protected : protected :> public)
+  let call_prot (o : public) = o#full#prot
+end
+
+Jacques Garrigue
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

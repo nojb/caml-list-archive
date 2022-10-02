@@ -1,0 +1,127 @@
+Return-Path: <David.Teller@ens-lyon.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.3 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 4EDD0BBAF
+	for <caml-list@yquem.inria.fr>; Mon, 15 Sep 2008 14:37:59 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgwCAJnzzUjCpx6wiGdsb2JhbACSdQEBAQ8goj+BZA
+X-IronPort-AV: E=Sophos;i="4.32,401,1217800800"; 
+   d="scan'208";a="16956369"
+Received: from smtpmin.univ-orleans.fr (HELO min.univ-orleans.fr) ([194.167.30.176])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 15 Sep 2008 14:37:58 +0200
+Received: from smtps.univ-orleans.fr (localhost [127.0.0.1])
+	by min.univ-orleans.fr (Postfix) with ESMTP id 3ED4912B4B3
+	for <caml-list@yquem.inria.fr>; Mon, 15 Sep 2008 14:37:58 +0200 (CEST)
+Received: from [192.168.0.12] (ras75-4-82-235-58-110.fbx.proxad.net [82.235.58.110])
+	by smtps.univ-orleans.fr (Postfix) with ESMTP id E2D7136E60
+	for <caml-list@yquem.inria.fr>; Mon, 15 Sep 2008 14:37:59 +0200 (CEST)
+Subject: Keeping local types local?
+From: David Rajchenbach-Teller <David.Teller@ens-lyon.org>
+To: Caml <caml-list@yquem.inria.fr>
+Content-Type: text/plain
+Date: Mon, 15 Sep 2008 14:37:58 +0200
+Message-Id: <1221482278.6569.87.camel@Blefuscu>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.12.1 
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ens-lyon:01 monads:01 camlp:01 struct:01 leaking:01 camlp:01 hackery:01 monads:01 univ-orleans:01 lifo:01 liquidations:98 polymorphic:01 exceptions:01 unsafe:01 primitives:01 
+
+        Hi everyone,
+
+ Recently, I've been thinking about a small technique which I would like
+to use to design some libraries. Essentially, I'd like to define values
+which can't escape a given scope. One way of doing so would be to use
+monads but my idea is to use local modules and local types and take
+advantage of the fact that values of that type cannot escape the scope
+of the local module. Unfortunately, as it turns out, sometimes, values
+with a local type can escape their scope -- and I'm looking for an idea
+on how to plug the leak.
+
+Let's try and make this clear with an example. In the following code, we
+have two operations [set] and [get], which should only be called between
+initialization and clean-up. To enforce this guarantee, we use a local
+module (added by Camlp4), with a local type ['a t] and we make sure that
+our two operations have a return type ['a t]. We also have some client
+code (actually written by the user), which may use [get], [set] and
+[return] (note: 
+
+let f () =
+  let result = 
+    let module A =
+	struct
+	  type 'a t = Guard of 'a (*Used only to prevent scope escape.*)
+
+                  (** Local primitives, usage guarded by [Guard] *)
+
+	  let set v =
+	    (*perform some side-effect*)
+	    Guard ()
+
+                  let get () =
+                    (*perform some side-effect*)
+                    Guard 42(*or some other value*)
+
+                  let return x =
+                    Guard x
+
+                  (** Infrastructure *)
+
+	  let result =
+                    (*initialize some stuff*)
+                     match
+                      (*start of client code*)
+                            (*client code doesn't know about [Guard]*)
+                      (*end of client code*)
+                     with Guard x -> 
+                      (*do some clean-up*)
+                      x
+
+	end in A.result
+  in result
+
+Now, any use of [set] or [get] will yield a result of type ['a A.t]. By
+definition of local modules, this type can't escape the scope of [A],
+which means that we can't store references to either value in an outside
+reference, we can't put it into a continuation and it can't cross module
+boundaries. Which means that we have safely used our resources. Yeah.
+
+Unfortunately that's not always true, as there is a way for the client
+code to sneak a continuation which can call [set]:
+
+(*start of client code*)
+   return (fun () -> ignore (set 99))
+(*end of client code*)
+
+I can then write [f () ()] and avoid the whole resource-protection
+infrastructure :( 
+
+Now, as far as I can tell, the only way of leaking unsafe operations is
+to return a continuation which perform one of our local operations,
+trigger the continuation and somehow ignore the value of the result.
+
+Does anyone have ideas regarding how to prevent this kind of leaks? I'm
+willing to resort to Camlp4 and/or advanced type hackery but not to
+write my own type system.
+
+Thanks in advance,
+ David
+
+P.S.:
+ In case you're interested, such a design pattern would permit
+definition of fast checked local and polymorphic exceptions without
+monads, and might be applicable to some cases of types-and-effects.
+
+
+
+
+-- 
+David Teller-Rajchenbach
+ Security of Distributed Systems
+  http://www.univ-orleans.fr/lifo/Members/David.Teller
+ Angry researcher: French Universities need reforms, but the LRU act brings liquidations. 
+

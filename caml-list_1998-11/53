@@ -1,0 +1,185 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id TAA03572 for caml-redistribution; Mon, 30 Nov 1998 19:47:56 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id TAA26510 for <caml-list@pauillac.inria.fr>; Mon, 30 Nov 1998 19:35:59 +0100 (MET)
+Received: from post.tepkom.ru (relay.tepkom.ru [195.9.240.162])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id TAA06478
+	for <caml-list@inria.fr>; Mon, 30 Nov 1998 19:35:56 +0100 (MET)
+Received: from localhost (msk@localhost)
+	by post.tepkom.ru (8.8.7/8.8.7) with ESMTP id VAA22691
+	for <caml-list@inria.fr>; Mon, 30 Nov 1998 21:36:07 +0300
+Date: Mon, 30 Nov 1998 21:36:07 +0300 (MSK)
+From: Anton Moscal <msk@post.tepkom.ru>
+To: caml-list@inria.fr
+Subject: Text inclusion
+Message-ID: <Pine.LNX.4.03.9811302134520.21292-100000@post.tepkom.ru>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII
+Sender: weis
+
+Hello,
+
+I made an attempt to implement by camlp4 some form of the file inclusion. Everything works, 
+but I've encountered the following problem: because AST contains only position information
+(and not the file name), ocaml produces incorrect info about error location.
+
+After the discussion with Daniel de Rauglaudre, it turned out that supporting this info
+required small changes in ocaml & camlp4 (I can send patches, with which
+everything works well on my computer). Daniel says the following:
+
+> Well, if Xavier implements your system of location, I make the
+> associated change in Camlp4 (even if there are numerous changes). The
+> problem is to convince him.
+
+I've prepared a text with some argumentation in favour of the usefulness of  
+certain kinds of text inclusion: 
+
+++++++++++++++++++++++++++++++++++++++++++++
+First of all: an example of changes in syntax, which uses the construction given below.
+
+This allows to write in program files x.ml instead of the expression (or module expression)
+construction `nest "y"', and in the file x.y.ml - `val (or module) egg "y" = <expression>' 
+(or <module expression>). 
+
+------------------------------------------
+let do_egg loc sfx egg_rule =
+  let name = (Filename.chop_suffix !input_file ".ml") ^ "." ^ sfx ^ ".ml"in
+  let chan = 
+    try open_in name with
+      exn -> raise_with_loc loc exn
+  in 
+  let old_name = !input_file in
+  input_file := name;
+  let ((sfx', loc_sfx'), res) = 
+    try
+      Grammar.Entry.parse egg_rule (Stream.of_channel chan) 
+    with
+      exn -> close_in chan; raise exn
+  in
+  close_in chan;
+  if sfx' <> sfx then 
+    raise_with_loc loc_sfx' (Stream.Error ("name of egg must be equal nest name: \""^sfx^"\""));
+  input_file := old_name;
+  (name, res)
+
+EXTEND
+  GLOBAL: expr module_expr;
+
+  string_with_loc: [[ str = STRING -> (str, loc) ]];
+
+  expr_egg:
+    [[ "val"; LIDENT "egg"; sfx = string_with_loc; "="; body = expr -> (sfx, body)]];
+
+  expr: LEVEL "simple" [[ "nest"; sfx = STRING -> 
+    let (name, res) = do_egg loc sfx expr_egg in MLast.ExNst (loc, name, res)
+			]];
+
+  module_expr_egg:
+    [[ "module"; LIDENT "egg"; sfx = string_with_loc; "="; body = module_expr -> (sfx, body)]];
+
+  module_expr: [[ "nest"; sfx = STRING -> 
+    let (name, res) = do_egg loc sfx module_expr_egg in MLast.MeNst (loc, name, res)
+			]];
+END
+
+---------------------------------------
+
+I used this "nest-egg" construction in my sources of some syntax analyzer, and got 
+the following directory structure (I've removed from this list all files, which 
+remain in the `old style'):
+
++++++++++++++++++++++++++++++++++++
+-rw-r--r--   1 msk      msk          2759 Nov 20 15:36 analyzer.ml
+-rw-rw-r--   1 msk      msk           293 Nov 20 15:33 analyzer.balance.ml
+-rw-rw-r--   1 msk      msk           786 Nov 20 15:35 analyzer.block.ml
+-rw-rw-r--   1 msk      msk          1461 Nov 20 15:33 analyzer.expression.ml
+-rw-rw-r--   1 msk      msk          1842 Nov 20 15:34 analyzer.statement.ml
+
+-rw-r--r--   1 msk      msk          3036 Nov 20 15:50 declaration.ml
+-rw-rw-r--   1 msk      msk          2037 Nov 20 15:38 declaration.base_type.ml
+-rw-rw-r--   1 msk      msk           324 Nov 20 15:45 declaration.type_specifier.ml
+-rw-rw-r--   1 msk      msk          2527 Nov 20 15:48 declaration.type_specifier.builtin.ml
+-rw-rw-r--   1 msk      msk          2136 Nov 20 15:40 declaration.type_specifier.enum.ml
+-rw-rw-r--   1 msk      msk           220 Nov 20 15:41 declaration.type_specifier.ident.ml
+
+-rw-r--r--   1 msk      msk          2042 Nov 20 16:01 tokens.ml
+-rw-rw-r--   1 msk      msk          2120 Nov 20 15:58 tokens.get.ml
+-rw-rw-r--   1 msk      msk           316 Nov 20 16:00 tokens.next.ml
+-rw-rw-r--   1 msk      msk           217 Nov 20 15:59 tokens.req.ml
+-rw-rw-r--   1 msk      msk           193 Nov 20 16:00 tokens.test.ml
+
+-rw-r--r--   1 msk      msk          4020 Nov 20 15:57 types.ml
+-rw-rw-r--   1 msk      msk          1939 Nov 20 15:56 types.builtin.ml
+-rw-rw-r--   1 msk      msk          1558 Nov 20 15:57 types.to_string.ml
+-----------------------------------
+
+I hope, this directory structure has a self-evident sense.
+
+And (for example) two short files from this list:
+
++++++++++++++++++++++++++++++++++++
+(* declaration.type_specifier.ml *)
+val egg "type_specifier" = 
+  let default_type = Builtin.signed_int in
+  let (t, storage_class') = 
+    match scanner#curr with
+    | Lex.Enum       -> nest "enum"
+    | Lex.Ident name -> nest "ident"
+    | lex            -> nest "builtin"
+  in (add_qualifiers qualifiers t, obsolete_storage_class_specifier storage_class')
+-----------------------------------
+
++++++++++++++++++++++++++++++++++++
+(* declaration.type_specifier.ident.ml *)
+val egg "ident" = 
+  (begin
+    try
+      match id_tab#find (Scope.Ident, name) with
+	{id_value = Type t} -> scanner#get; t
+      |	_ -> default_type
+    with
+      Ident.Not_found -> default_type
+  end, storage_class)
+-----------------------------------
+
+The first of these files is much more readable than its original
+version (sizes of `enum' and `builtin' eggs being about 100 lines 
+each, while total original size of the `type_specifier' function was 
+about 230 lines).
+
+I.e. I think that usage of the 'nest-egg' construction greatly improves
+readability of a program and eliminates the main trouble with 
+deeply nested declarations structures - the huge size of single source 
+file, which makes it unmanageable.
+
+Also, an important property of this style is the easiness of extracting
+a block into a separate file: we can simply create a new file, containing
+the text of this block, and write instead of it the corresponding `nest' statement.
+No additional variables, function parameters or anything else are needed.
+
+
+Historically, this syntax was derived from the proposal concerning extending Algol-68 with 
+modules and separate compilation, which was in some issue of "Algol-bulletin"
+(I can't give the exact reference now, but if you are interested, I'll try
+to find it).
+
+In this proposal, the nest-egg wasn't a form of the `include' directive, but rather a
+tool for separate compilation: on a `nest' construction the compiler generates
+tables with symbolic information for the `nest', and during the compilation
+the corresponding egg compiler uses this information. Also, in A-68 
+many 'eggs' may correspond to one 'nest', one of them having to be an expression (`unit' in
+the A-68 terminology) and all others - modules' definitions, which are compiled
+in the same environment as the expression egg and can access each others (and can be
+accessed by the expression egg of the same name).
+
+This is the best solution of the problem of nested modules, known to me (in 
+all other systems local modules has little use, because their active usage 
+leads to huge top-level modules).
+
+Obviously, the text inclusion mechanism may also prove useful in many other situations. 
+
+-----------------------------
+
+Regards, 
+Anton
+
+
+

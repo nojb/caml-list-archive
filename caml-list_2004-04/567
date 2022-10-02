@@ -1,0 +1,125 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA11334; Fri, 23 Apr 2004 23:08:55 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA11265 for <caml-list@pauillac.inria.fr>; Fri, 23 Apr 2004 23:08:54 +0200 (MET DST)
+Received: from kraid.nerim.net (smtp-105-friday.nerim.net [62.4.16.105])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i3NL8rjq026989
+	for <caml-list@inria.fr>; Fri, 23 Apr 2004 23:08:53 +0200
+Received: from hector.lesours (ours.starynkevitch.net [213.41.130.15])
+	by kraid.nerim.net (Postfix) with ESMTP
+	id EE32C40F08; Fri, 23 Apr 2004 23:08:51 +0200 (CEST)
+Received: from basile by hector.lesours with local (Exim 4.32)
+	id 1BH7um-0000Tx-CO; Fri, 23 Apr 2004 23:08:52 +0200
+Date: Fri, 23 Apr 2004 23:08:52 +0200
+To: Oliver Bandel <oliver@first.in-berlin.de>, caml-list@inria.fr
+Subject: Re: [oliver: Re: [Caml-list] Unix.chmod => what codes for what mode?!]
+Message-ID: <20040423210852.GA1294@ours.starynkevitch.net>
+References: <20040423200949.GD271@first.in-berlin.de>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Content-Disposition: inline
+Content-Transfer-Encoding: 8bit
+In-Reply-To: <20040423200949.GD271@first.in-berlin.de>
+User-Agent: Mutt/1.5.5.1+cvs20040105i
+From: Basile STARYNKEVITCH <basile@starynkevitch.net>
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; oliver:01 caml-list:01 chmod:01 basile:01 basile:01 2004:99 oliver:01 bandel:01 caml-list:01 chmod:01 2004:99 bandel:01 755:99 755:99 experimented:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, Apr 23, 2004 at 10:09:49PM +0200, Oliver Bandel wrote:
+> 
+> To: Richard Jones <rich@annexia.org>
+> Subject: Re: [Caml-list] Unix.chmod => what codes for what mode?!
+> 
+> On Fri, Apr 23, 2004 at 07:01:02PM +0100, Richard Jones wrote:
+> > On Fri, Apr 23, 2004 at 07:16:34PM +0200, Oliver Bandel wrote:
+> > > Hello,
+> > > 
+> > > The Unix.chmod function is bad documented.
+
+No it is not
+
+> > 
+> > Almost certainly you're not using octal numbers right.  The format
+> > for octal numbers in OCaml is different from C, for example:
+> > 
+> > Unix.chmod filename 0o755
+> > 
+> > would have the same effect as:
+> > 
+> > % chmod 755 filename
+> 
+> 
+> Would be nice if this litte more of explanation could be added to the
+> reference Manual. 
+
+I respectfully mostly disagree. Unix.chmod Ocaml function is, like the
+chmod C function, of type
+   int -> string -> unit
+
+The way a language represent integers is not related to Unix.chmod;
+consider for example an imaginary programming language where you have
+to express number in Roman notation. Then, you should have to code
+  chmod (CDXCIII, "/your/path")
+or perhaps
+  chmod (CCCCLXXXXIII, "/your/path")
+or maybe
+  chmod (IIVD, "/your/path")
+however I am not sure that IIVD is a correct latin notation for
+four-hundred-ninety-three which is written 0o755 (as an octal number)
+in Ocaml, ahd which does the same as the shell command 
+    chmod u=rwx,g=rx,o=rx /your/path 
+
+My point is that every experimented Unix programmer knows that the
+integer argument to chmod is actually a bit mask. It is not the
+purpose of the Ocaml documentation to remind this (otherwise, the
+Ocaml documentation for the Unix module should be as big as the
+section 2 of Unix man pages, which would triple its volume).
+
+In other words, when I code in Ocaml a Unix call and I forgot what it
+does, I consult the man page for the system call to understand what
+the syscall does, and then I read the description of Unix module in
+the Ocaml documentation.
+
+However, per your suggestion, I added in unix.mli (at work, on the
+CVS of Ocaml) the above comment for type file_perm = int definition 
+
+(** The type of file access rights, e.g. [0o640] is read and write for
+user, read for group, none for others *)
+
+
+Perhaps the only functions from the Unix module which could be a bit
+more documented are the basic Unix.read and Unix.write functions,
+because Unix.read truncate the amount of bytes (see
+otherlibs/unix/read.c) read to UNIX_BUFFER_SIZE which is 16384 (in
+unixsupport.h), while Unix.write actually loops and may issue several
+write system calls, by chunking the written string in (possibly
+several) chunks of UNIX_BUFFER_SIZE bytes. So (as Didier Rémy told me)
+if a Unix.write of a million byte string is interrupted, you might get
+a Unix_error exception after a hundred thousand bytes have been
+successfully written. However, I don't know exactly what is the
+recommended Posix behavior (w.r.t interrupts) for a read system call
+(in C) of a million byte.
+
+The reason of this chunking is that Unix.read and Unix.write actually
+copy the data into (or from) an internal buffer before making the
+(interruptible and preemptible) system call. It is important to have
+the syscall be blockable, so that another Caml thread could run (hence
+allocate and call the GC, this is why the data is copied).
+
+
+In practice, it might be better to use Unix.read & Unix.write with a
+length of no more than 16384.
+
+-- 
+Basile STARYNKEVITCH         http://starynkevitch.net/Basile/ 
+email: basile<at>starynkevitch<dot>net 
+aliases: basile<at>tunes<dot>org = bstarynk<at>nerim<dot>net
+8, rue de la Faïencerie, 92340 Bourg La Reine, France
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

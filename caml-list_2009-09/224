@@ -1,0 +1,1034 @@
+Return-Path: <kybic@fel.cvut.cz>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 1214EBBAF
+	for <caml-list@yquem.inria.fr>; Wed, 23 Sep 2009 16:11:24 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvQBAMvJuUqTIMAkmWdsb2JhbACBUZkoAQEBAQEICwoHE6tdBwEIj2KCLRMHAYFTBYFY
+X-IronPort-AV: E=Sophos;i="4.44,438,1249250400"; 
+   d="scan'208";a="33368927"
+Received: from max.feld.cvut.cz ([147.32.192.36])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 23 Sep 2009 16:11:23 +0200
+Received: from localhost (unknown [192.168.200.4])
+	by max.feld.cvut.cz (Postfix) with ESMTP id DC6AB19F36F8
+	for <caml-list@inria.fr>; Wed, 23 Sep 2009 16:11:22 +0200 (CEST)
+X-Virus-Scanned: IMAP AMAVIS
+Received: from max.feld.cvut.cz ([192.168.200.1])
+	by localhost (styx.feld.cvut.cz [192.168.200.4]) (amavisd-new, port 10044)
+	with ESMTP id 95umegLPtyZ3 for <caml-list@inria.fr>;
+	Wed, 23 Sep 2009 16:11:14 +0200 (CEST)
+Received: from imap.feld.cvut.cz (imap.feld.cvut.cz [147.32.192.34])
+	by max.feld.cvut.cz (Postfix) with ESMTP id 0441B19F371A
+	for <caml-list@inria.fr>; Wed, 23 Sep 2009 16:11:13 +0200 (CEST)
+Received: from localhost.fel.cvut.cz (meyer.felk.cvut.cz [147.32.84.20])
+	(Authenticated sender: kybicjan)
+	by imap.feld.cvut.cz (Postfix) with ESMTPSA id 8EEE0FA003
+	for <caml-list@inria.fr>; Wed, 23 Sep 2009 16:11:12 +0200 (CEST)
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Cache algorithms: implementation or library available?
+Reply-To: Jan Kybic <kybic@fel.cvut.cz>
+From: Jan Kybic <kybic@fel.cvut.cz>
+In-Reply-To: <1253710475.32466.4.camel@flake.lan.gerd-stolpmann.de> (Gerd Stolpmann's message of "Wed, 23 Sep 2009 14:54:35 +0200")
+References: <4AB8A6F1.7090802@inescporto.pt>
+	<1253710475.32466.4.camel@flake.lan.gerd-stolpmann.de>
+Date: Wed, 23 Sep 2009 16:11:11 +0200
+Message-ID: <87tyyt3g5c.fsf@fel.cvut.cz>
+User-Agent: Gnus/5.1008 (Gnus v5.10.8) Emacs/22.3 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Spam: no; 0.00; ocaml:01 memoized:01 camlp:01 cmo:01 memoizing:01 caching:01 computations:01 utils:01 utils:01 sig:01 sig:01 memoized:01 val:01 val:01 bool:01 
+
+> I would like to know if anyone has or knows of an Ocaml
+> library or open-source code implementation of some cache
+> algorithms (example: least recently used).
+
+I have written something similar some time ago. I am attaching the
+code, maybe you will find it useful but beware that I have written it
+just for my own purposes, so the code might be hard to read, there are
+very little comments, you will probably have to modify it, and I do
+not have time to provide support.
+
+The idea is that as long as there is enough memory, the function
+values are cached (memoized). When the memory gets tight, the
+"cheapest" entries are forgotten. For this purpose, the function
+evaluations are timed.
+
+Hope this helps,
+
+Jan
+
+
+-- 
+-------------------------------------------------------------------------
+Jan Kybic <kybic@fel.cvut.cz>                       tel. +420 2 2435 5721
+http://cmp.felk.cvut.cz/~kybic (updated!)           ICQ 200569450
+
+(*pp camlp4o pa_macro.cmo *)
+(** memocache.ml memoizing (caching) functions
+
+   @author Jan Kybic, July 2004
+
+ *)
+
+(* $Id: memocache.ml 539 2005-03-23 09:47:32Z jkybic $ *)
+
+(* define this macro if you do not want the computations to be performed, 
+   just the timing to be measured. *)
+(* DEFINE MONLY *)
+(* DEFINE ESTIMATE *)
+
+module Utils=Utils.Utils
+module IntIntFloatHashtbl=Ehashtbl.IntIntFloatHashtbl
+module Ehashtbl=Ehashtbl.Ehashtbl
+
+module type MemocacheSig =
+sig
+  (** a functorized equivalent for [memo] *)
+  module type MemoSig =
+  sig
+    type a 
+
+    type b
+
+    type k 
+
+    (** [memo f] creates a memoized version of a single parameter
+      function [f]. The key [k], possibly equal to [a] can be used if [a]
+      itself does not have to be stored. The optional parameter name is used
+      to identify the class of the memoized function in the weak cache
+      formulation that optimizes block sizes for each class. Each class
+      should return objects of the same size and take approximately the same
+      size to compute.  *)
+    val memo : ?name:string -> (a -> b) -> (a -> k -> b)
+
+  end
+
+  module type MemoTypeSig = 
+  sig
+    type a
+
+    type k
+      
+    type b      
+
+    val equal : k -> k -> bool
+
+    val hash : k -> int
+  end 
+
+  module type IntIntFloatMemoSig =
+  sig
+
+    val memo : ?name:string -> ('a -> 'b -> float) -> 
+      ('a -> 'b -> int -> int -> float)
+
+  end
+
+
+  module Memo ( H : MemoTypeSig ) : ( MemoSig with 
+                                                type a=H.a and type b=H.b and type k=H.k)
+
+  module IntIntFloatMemo  : IntIntFloatMemoSig
+
+    
+  (** [cacheSize] is the amount of MB that weak cache is supposed to occupy.
+    It is computed from [Gc.stat.live_words] item *)
+  val cacheSize : int ref 
+
+  (** what is the target memory size, respective to cacheSize *)
+  val targetRatio : float ref
+
+  (** verifyies if the amount of memory used is below [cacheSize] and
+    tries to delete something if not. It also reports statistics about
+    cache usage. Normally this function is called automatically at every
+    GC *)
+  val verifyMem : unit -> unit 
+
+  (** report statistics about cache usage *)
+  val reportCacheStats : unit -> unit 
+
+end
+
+
+
+
+module Memocache : MemocacheSig =
+struct
+  module type MemoSig =
+  sig
+    type a 
+
+    type b
+ 
+    type k 
+
+    val memo : ?name:string -> (a -> b) -> (a -> k -> b)
+  end
+
+  module type MemoTypeSig = 
+  sig
+    type a
+
+    type k
+      
+    type b      
+
+    val equal : k -> k -> bool
+
+    val hash : k -> int
+  end 
+
+  module type IntIntFloatMemoSig = 
+  sig
+
+    val memo : ?name:string -> ('a -> 'b -> float) -> 
+      ('a -> 'b -> int -> int -> float)
+
+  end 
+
+  IFDEF MONLY THEN
+    (* cache retrieval time *)
+    let totctime = ref 0.0               
+  END
+
+  let guessCacheSize () =
+    try
+      let fd = open_in "/proc/meminfo" in
+      let s = Utils.streamFrom ( fun _ -> 
+               Utils.split_on_wspace (Utils.input_nonempty_line fd) ) in
+      let [_;ms;_] = Stream.next ( 
+        Utils.filter ( fun (n::_) -> (n = "MemTotal:") ) s ) in
+      let mem = int_of_string ms in
+      (* from the total memory in kB, take 100MB for other programs and 
+         divide by 1.7 to account for 50% GC overhead and some extra *)
+      let memmb= float mem  /. 1024.0 in
+      let cSize = truncate ( (  memmb -. 100.0 ) /. 1.6 ) in
+      Utils.message 5 
+        "Setting cacheSize to %d MB from total of %d MB memory.\n" 
+        cSize mem ; cSize
+    with x -> 
+      Utils.message 3 
+      "We could not get the amount of free memory, using defaults. Exception: %s\n" (Printexc.to_string x) ; 
+      300 (** how much (live) memory can we use, default in MB *)
+
+
+  let cacheSize = ref ( guessCacheSize () )
+
+
+  (** what is the target memory size, respective to cacheSize *)
+  let targetRatio = ref 0.8  
+
+  (** relative costs (in us/B) and result sizes of classes *)
+  let classData= ( Hashtbl.create 11 : 
+     (string,float * int ) Hashtbl.t )
+
+  module WS=Weak.Make(struct (* weak set *)
+                        type t= (int->int) * (unit->unit) * string 
+                        let equal a b = ( a == b )
+                        let hash a = Hashtbl.hash a
+                      end)
+    
+  (** a set of deletor functions for each memo instance, together with
+    a class name. A deletor gets a number of items to delete and returns a
+    number of items successfully deleted. *)
+  let deletors= WS.create 11 
+
+
+  let measuring = ref false (** are we measuring right now? *)
+
+  (** Measure, how much time is needed to execute f *)
+  let measureTime f =
+    let measureNtimes n =
+      let t0=Sys.time () in
+      for i=1 to n do f () done ;
+      let t=Sys.time () -. t0 in
+      (* Utils.message 9 "measureTime: n=%d t=%g\n" n t ; *)
+      t in
+    let rec measure n =
+      let t = measureNtimes n in
+      if t>1.0 then t /. float n else measure (2*n) in
+    measure 1
+
+  let testMeasureTime _ = Utils.verbosity:=6 ;
+    let q1=measureTime (fun _ -> sin 0.5) in
+    let q2=measureTime (fun _ -> exp 0.5 +. cos 2.3 /. sqrt 13.9 +. 
+                         exp 0.5 +. cos 2.3 /. sqrt 13.9 ) in
+    Utils.message 3 "q1=%g q2=%g\n" q1 q2
+
+
+  exception Measuring 
+
+  (** Estimate or retrieve cost (in us/B) (in B) and block size for
+    class [name] and function f.  The values are remembered in a hash
+    table [classData]. Will fail if another measurement is in progress. *)
+  let getClassInfo name f =
+    try
+        Hashtbl.find classData name
+    with Not_found -> 
+      Utils.message 5 "getClassInfo: measuring class '%s'.\n" name  ;
+      if !measuring then raise Measuring  ;
+      measuring:=true ;
+      let (s,t) = 
+        IFDEF ESTIMATE THEN (8,1e-3) ELSE
+          ( Size.size_b (f ()) , measureTime f ) END in
+      measuring:=false ;
+      let cost = t *. 1e6 /. float s in
+      Utils.message 4  
+"getClassInfo: class '%s', time %g us, result of %d B, cost %g us/B.\n" 
+                           name (t *. 1e6) s cost  ;
+      let r = (cost,s) in
+      Hashtbl.add classData name r ; r
+
+  (** [deleteCheapests] will call the deletors corresponding to 
+      the cheapest classes to remove [m : float] MB of memory. *)
+  let deleteCheapests m =
+    let module S = Set.Make(struct
+                              type t = float * int * ( int -> int ) 
+                              let compare (c0,_,_) (c1,_,_) = compare c0 c1
+                            end) in
+    let f (df,_,name) a =
+      let (cost,size)= 
+        try 
+          Hashtbl.find classData name 
+        with Not_found ->
+          Utils.message 4 "deleteCheapest: no entry for class '%s' in classData, using defaults.\n" name   ;
+          (1e10,8) in
+    S.add (cost,size,df) a in
+    (* make a set of deletors sorted according to cost *)
+    let s = WS.fold f deletors S.empty in
+    let rec doDelete s mb = (* [mb] is now in bytes *)
+      Utils.message 5 "deleteCheapest: doDelete: %d bytes to be freed, %d deletors.\n"  mb (S.cardinal s) ;
+      if mb>0 then (* we still need to delete something *)
+        try 
+          let (cost,size,df) as c=S.min_elt s in (* cheapest element *)
+          let s'=S.remove c s in  (* remove it from the set *)
+          let n= succ ( mb / size ) in (* how many to delete, conservatively *)
+          let m'= mb - ( df n * size  ) in
+          doDelete s' m'
+        with Not_found ->
+          Utils.message 4 ("deleteCheapest: no deletor available.\n") in
+    doDelete s ( truncate ( m *. 1048576.0 ) )
+
+  let reportCacheStats _ =
+      IFDEF MONLY THEN totctime := 0.0 ELSE () END ;
+      WS.iter ( fun (_,reporter,_) -> reporter () ) deletors ;
+      IFDEF MONLY THEN 
+        Utils.message 3 "Total estimated cache time %g.\n" !totctime 
+      ELSE () END 
+      
+  (** [verifyMem] will check if the memory consumption is all right
+    and call [deleteCheapest] if not *)
+  let verifyMem _ =
+    let mem = (** used memory in MB *) 
+        float (Gc.stat ()).Gc.live_words *. 
+          float (Sys.word_size / 8 ) /. 1048576.0 in
+    if  truncate mem > !cacheSize then (
+      Utils.message 4 
+              "verifyMem: Using %g MB of memory, removing.\n" mem  ;
+      deleteCheapests ( mem -. float !cacheSize *. !targetRatio) )
+    else (
+      Utils.message 7 "verifyMem: using %g MB of memory, OK.\n" mem ;
+      (* show statistics of all registered memo instances *)
+      if !Utils.verbosity >  7 then  reportCacheStats ()
+    )
+    
+
+  (* arrange for [verifyMem] to be called at major GC cycle *)
+  let verifyAlarm = Gc.create_alarm verifyMem 
+
+  (* arange for a major collection to be performed at program exit, so that 
+     cache statistics are properly reported *)
+  let _ = at_exit Gc.major
+
+
+  (* [StrongMemo] is a non-forgetting cache *)
+  module StrongMemo ( H : MemoTypeSig ) : MemoSig 
+  with type a=H.a and type b=H.b and type k=H.k  =
+    struct
+      type a=H.a
+      type b=H.b
+      type k=H.k
+
+      module T=Hashtbl.Make(struct 
+                              type t=k
+                              let equal = H.equal
+                              let hash = H.hash
+                            end)
+                              
+      let memo ?name f = 
+        let h = T.create 11 in
+        fun x k -> 
+          try 
+            T.find h k 
+        with Not_found -> 
+          let r = f x in ( T.add h k r; r )
+             
+    end
+
+  module WeakMemo ( H : MemoTypeSig ) : MemoSig 
+  with type a=H.a and type b=H.b and type k=H.k =
+    struct
+      type a=H.a
+      type b=H.b
+      type k=H.k
+
+      module T=Ehashtbl(struct 
+                              type t=k
+                              let equal = H.equal
+                              let hash = H.hash
+                            end)
+
+      let memo ?(name="unknown") f = 
+        let h = T.create 11 in
+        let registered = ref false in 
+        let known = ref false in (* is the class cost known? *)
+        let memoHits = ref 0 in
+        let memoMisses = ref 0 in
+        let exval = IFDEF MONLY THEN ref None ELSE () END in 
+        (* the following is there so that the reporter can work even
+           after some items were garbage collected *)
+        let hm=(memoHits,memoMisses,name,h) in
+        let reporter' hm = 
+          let (memoHits,memoMisses,name,h) = hm in
+          (* Utils.message 0 "about to report\n" ; *)
+          if (T.size h) = 0 then () else (
+            let (cost,size)= 
+              try 
+                Hashtbl.find classData name 
+              with Not_found -> Utils.message 4 
+                "reporter: no entry for class '%s' in classData, using defaults.\n"
+                name   ; (1e10,8) in
+            IFDEF MONLY THEN
+            let t = (float !memoMisses) *. 1e-6 *. cost in
+            totctime := !totctime +. t ;
+            Utils.message 0 
+              "memo: class=%s  hits=%d misses=%d ratio=%g e. time=%g\n" 
+              name !memoHits !memoMisses ((float !memoHits) 
+                                          /. (float !memoMisses))  t 
+              ELSE
+              Utils.message 0 
+              "memo: class=%s  n=%d uses=%gMB hits=%d misses=%d\n    ratio=%g spenttime=%g savedtime=%g\n" 
+              name (T.size h) (float (T.size h * size) /. 1048576.0 ) !memoHits
+              !memoMisses ((float !memoHits) /. (float !memoMisses))  
+              ((float !memoMisses) *. 1e-6 *. cost *. (float size))
+              ((float !memoHits) *. 1e-6 *. cost *. (float size))
+              END ) in
+        let reporter () = (* report the cache stats *)
+          reporter' hm in
+        (* report when we are deleted *)
+        if !Utils.verbosity >  6 then Gc.finalise reporter' hm ;
+        let deletor m = (* we are asked to delete [m] items *)
+            let n=T.size h in
+            Utils.message 4 "deletor: %s n=%d m=%d.\n" name n m ;
+            if m=0 then 0 else (
+              if (m >= n) then ( T.clear h ; n ) 
+              else ( T.forget h m ; n - (T.size h) ) 
+            ) in
+        let dname = (deletor,reporter,name) in
+        Utils.message 6 "memo: class %s instantiated.\n" name ;
+        fun x k -> 
+          try 
+            let y = T.find h k in
+          incr memoHits ; y
+        with Not_found -> 
+          incr memoMisses ; 
+          if not !registered then 
+            ( WS.add deletors dname ; registered:=true ;
+              Utils.message 6  
+                 "memo: class %s deletor registered.\n" name)  ;
+          let r = 
+            IFDEF MONLY THEN
+              match !exval with
+                  Some r -> r 
+                | None -> let r= f x in exval:=Some r ; r
+            ELSE f x END in 
+          if not (!known or !measuring) then ( 
+            try
+              let (_,s) =getClassInfo name (fun _ -> f x) in
+              known := true ; 
+              Utils.message 7  "memo: %s classInfo known.\n" name
+            with 
+                Measuring -> 
+                Utils.message 4 "memo: %s measurement in progress.\n" name ;
+            ) ;
+          T.add h k r ; r (* the result *)
+        
+    end
+
+   
+  module Memo ( H : MemoTypeSig ) = ( 
+    (* StrongMemo *)   WeakMemo   ( H )
+    : MemoSig with type a=H.a and type b=H.b and type k=H.k )
+
+  module IntIntFloatMemo : IntIntFloatMemoSig  =
+    struct
+
+      module T=IntIntFloatHashtbl
+
+      let memo ?(name="unknown") f = 
+        let h = T.create 11 in
+        let known = ref false in (* is the class cost known? *)
+        let registered = ref false in 
+        let memoHits = ref 0 in
+        let memoMisses = ref 0 in
+        let reporter _ = (* report the cache stats *)
+          if (T.size h) = 0 then () else (
+          let (cost,size)= 
+            try 
+              Hashtbl.find classData name 
+            with Not_found -> Utils.message 4 
+           "reporter: no entry for class '%s' in classData, using defaults.\n"
+              name   ; (1e10,8) in
+          Utils.message 0 
+   "memo: class=%s  n=%d uses=%gMB hits=%d misses=%d\n     ratio=%g spenttime=%g savedtime=%g\n" 
+                name (T.size h) 
+            (float (T.size h * size) /. 1048576.0 ) !memoHits
+            !memoMisses ((float !memoHits) /. (float !memoMisses))  
+            ((float !memoMisses) *. 1e-6 *. cost *. float size)
+            ((float !memoHits) *. 1e-6 *. cost *. float size)
+          )
+        in
+        let hm=(memoHits,memoMisses) in
+        let maybeReport _ = (* report when we are deleted *)
+          if !Utils.verbosity >  4 then  reporter () in
+        Gc.finalise maybeReport hm ;
+        let deletor m = (* we are asked to delete [m] items *)
+          let n=T.size h in
+          Utils.message 4 
+            "deletor: IntIntFloatMemo %s n=%d m=%d, will not delete.\n"
+            name n m ; 
+          if m=0 then 0 else ( 
+            if (m >= n) then ( T.clear h ; n ) 
+            else ( T.forget h m ; n - (T.size h) ) 
+          ) in
+        let dname = (deletor,reporter,name) in
+        Utils.message 6 "memo: IntIntFloatMemo, class %s instantiated.\n" 
+          name ;
+        fun x y xi yi -> try 
+          let y = T.find h xi yi in
+          incr memoHits ; y
+        with Not_found -> 
+          incr memoMisses ; 
+          if not !registered then 
+            ( WS.add deletors dname ; registered:=true ;
+              Utils.message 6 
+                "memo: IntIntFloatMemo, class %s deletor registered.\n" name ) ;
+          let r = f x y in 
+          if not (!known or !measuring) then ( 
+            try
+              let (_,s) =getClassInfo name (fun _ -> f x y) in
+              known := true ; 
+              Utils.message 7  "memo: %s classInfo known.\n" name
+            with 
+                Measuring -> 
+                  Utils.message 4 "memo: %s measurement in progress.\n" name ;
+          ) ;   
+          T.add h xi yi r ; r (* the result *)
+
+
+    end
+
+end
+
+
+(* end of memocache.ml *)
+
+(** Extension of hashtables from Ocaml standard Hashtbl.ml that can be
+  made to efficiently forget a given number of elements and to be
+  queried about its size
+  
+  Jan Kybic, July 2004
+ *)
+
+(* $Id: ehashtbl.ml 520 2004-09-16 15:33:20Z jkybic $ *)
+
+module type EhashtblSig =
+sig
+  (* the following is a copy of Hashtbl.S, except that the type is abstract *)
+
+    type key
+    type 'a t
+    val create : int -> 'a t
+    val clear : 'a t -> unit
+    val copy : 'a t -> 'a t
+    val add : 'a t -> key -> 'a -> unit
+    val remove : 'a t -> key -> unit
+    val find : 'a t -> key -> 'a
+    val find_all : 'a t -> key -> 'a list
+    val replace : 'a t -> key -> 'a -> unit
+    val mem : 'a t -> key -> bool
+    val iter : (key -> 'a -> unit) -> 'a t -> unit
+    val fold : (key -> 'a -> 'b -> 'b) -> 'a t -> 'b -> 'b
+
+  (** [forget tbl n] will erase at least [n] elements from the
+     hashtable [tbl].  If the hashtable contains less elements, it will
+     leave it empty.  The current implementation just clears all buckets
+     from the beginning until the desired count is reached.  *)
+  val forget : 'a t -> int -> unit
+
+  (** [size tbl] returns the number of elements stored in the hashtable [tbl] *)
+  val size : 'a t -> int
+end
+
+module Ehashtbl ( H : Hashtbl.HashedType ) : 
+  EhashtblSig with type key = H.t  =
+struct
+   type key = H.t
+   type ('a, 'b) ht =
+  { mutable size: int;                        (* number of elements *)
+    mutable data: ('a, 'b) bucketlist array } (* the buckets *)
+
+   and ('a, 'b) bucketlist =
+       Empty
+     | Cons of 'a * 'b * ('a, 'b) bucketlist
+
+
+
+    type 'a hashtbl = (key, 'a) ht
+    type 'a t = 'a hashtbl
+
+    let create initial_size =
+      let s = min (max 1 initial_size) Sys.max_array_length in
+      { size = 0; data = Array.make s Empty }
+
+    let clear h =
+      for i = 0 to Array.length h.data - 1 do
+        h.data.(i) <- Empty
+      done;
+      h.size <- 0
+
+    let copy h =
+      { size = h.size;
+        data = Array.copy h.data }
+
+
+    let size h = h.size
+
+    let safehash key = (H.hash key) land max_int
+
+    let resize hashfun tbl =
+      let odata = tbl.data in
+      let osize = Array.length odata in
+      let nsize = min (2 * osize + 1) Sys.max_array_length in
+      if nsize <> osize then begin
+        let ndata = Array.create nsize Empty in
+        let rec insert_bucket = function
+            Empty -> ()
+          | Cons(key, data, rest) ->
+              insert_bucket rest; (* preserve original order of elements *)
+              let nidx = (hashfun key) mod nsize in
+              ndata.(nidx) <- Cons(key, data, ndata.(nidx)) in
+        for i = 0 to osize - 1 do
+          insert_bucket odata.(i)
+        done;
+        tbl.data <- ndata;
+      end
+
+
+    let add h key info =
+      let i = (safehash key) mod (Array.length h.data) in
+      let bucket = Cons(key, info, h.data.(i)) in
+      h.data.(i) <- bucket;
+      h.size <- succ h.size;
+      if h.size > Array.length h.data lsl 1 then resize safehash h
+
+    let remove h key =
+      let rec remove_bucket = function
+          Empty ->
+            Empty
+        | Cons(k, i, next) ->
+            if H.equal k key
+            then begin h.size <- pred h.size; next end
+            else Cons(k, i, remove_bucket next) in
+      let i = (safehash key) mod (Array.length h.data) in
+      h.data.(i) <- remove_bucket h.data.(i)
+
+    let rec find_rec key = function
+        Empty ->
+          raise Not_found
+      | Cons(k, d, rest) ->
+          if H.equal key k then d else find_rec key rest
+
+    let find h key =
+      match h.data.((safehash key) mod (Array.length h.data)) with
+        Empty -> raise Not_found
+      | Cons(k1, d1, rest1) ->
+          if H.equal key k1 then d1 else
+          match rest1 with
+            Empty -> raise Not_found
+          | Cons(k2, d2, rest2) ->
+              if H.equal key k2 then d2 else
+              match rest2 with
+                Empty -> raise Not_found
+              | Cons(k3, d3, rest3) ->
+                  if H.equal key k3 then d3 else find_rec key rest3
+
+    let find_all h key =
+      let rec find_in_bucket = function
+        Empty ->
+          []
+      | Cons(k, d, rest) ->
+          if H.equal k key
+          then d :: find_in_bucket rest
+          else find_in_bucket rest in
+      find_in_bucket h.data.((safehash key) mod (Array.length h.data))
+
+    let replace h key info =
+      let rec replace_bucket = function
+          Empty ->
+            raise Not_found
+        | Cons(k, i, next) ->
+            if H.equal k key
+            then Cons(k, info, next)
+            else Cons(k, i, replace_bucket next) in
+      let i = (safehash key) mod (Array.length h.data) in
+      let l = h.data.(i) in
+      try
+        h.data.(i) <- replace_bucket l
+      with Not_found ->
+        h.data.(i) <- Cons(key, info, l);
+        h.size <- succ h.size;
+        if h.size > Array.length h.data lsl 1 then resize safehash h
+
+    let mem h key =
+      let rec mem_in_bucket = function
+      | Empty ->
+          false
+      | Cons(k, d, rest) ->
+          H.equal k key || mem_in_bucket rest in
+      mem_in_bucket h.data.((safehash key) mod (Array.length h.data))
+
+    let iter f h =
+      let rec do_bucket = function
+          Empty ->
+            ()
+        | Cons(k, d, rest) ->
+            f k d; do_bucket rest in
+      let d = h.data in
+      for i = 0 to Array.length d - 1 do
+        do_bucket d.(i)
+      done
+
+    let fold f h init =
+      let rec do_bucket b accu =
+        match b with
+            Empty ->
+              accu
+          | Cons(k, d, rest) ->
+              do_bucket rest (f k d accu) in
+      let d = h.data in
+      let accu = ref init in
+      for i = 0 to Array.length d - 1 do
+        accu := do_bucket d.(i) !accu
+      done;
+      !accu
+
+
+    let forget h number =
+      let bucket_count b = 
+        let rec bucket_count' b a =
+          match b with
+            Empty -> a
+          | Cons (_,_,next) -> bucket_count' next (succ a) in
+        bucket_count' b 0 in
+      let d = h.data in
+      let lim = Array.length d in
+      let target = max ( h.size - number ) 0 in
+      let rec forget' i =
+        if h.size <= target || i>=lim then () 
+        else (
+          let n'=bucket_count d.(i) in
+          if n'>0 then ( d.(i) <- Empty ;
+                         h.size <- h.size - n' )
+          else () ;
+          forget' (succ i) 
+        ) in
+      forget' 0 
+
+end 
+
+
+(* the following prime list is taken from 
+   http://planetmath.org/encyclopedia/GoodHashTablePrimes.html
+ *)
+
+let primes = [| 53 ; 97 ; 193 ; 389 ; 769 ; 1543 ; 3079 ; 6151 ; 
+ 	12289 ; 24593 ; 49157 ; 98317 ; 196613 ; 393241 ; 786433 ; 
+      1572869 ; 3145739 ; 6291469 ; 12582917 ; 25165843 ; 50331653 ; 
+      100663319 ; 201326611 ; 402653189 ; 805306457 |] 
+
+
+(** A signature of a specialized (int*int)->float hashtable. *)
+module type IntIntFloatHashtblSig=
+sig
+  type t
+  val create : int -> t
+  val add : t -> int -> int -> float -> unit
+  val find : t -> int -> int -> float
+  val size : t -> int
+  val clear : ?factor:int -> t -> unit
+  val forget : t -> int -> unit
+end
+
+(** Implementation of the (int*int->float) hashtable. It uses double
+  hashing and assumes the int parameters can be used directly as keys
+  and that they are non-negative. It uses Bigarrays so that very large
+  hashtables are possible.  *)
+module IntIntFloatHashtbl : IntIntFloatHashtblSig =
+struct
+  open Bigarray                      
+
+  type vb = (float,float64_elt, c_layout) Array1.t
+
+  type kb = (int, int_elt, c_layout) Array1.t
+
+  type t = { mutable size : int ;  (* number of elements currently in cache *)
+             mutable n : int ;     (* current size of the table *)
+             mutable nmn : int ;   (* max_int mod n *)
+             mutable i : int ;     (* reference to the [primes] table *)
+             mutable vals : vb ;     (* values *)
+             mutable keys : kb }     (* keys *)
+
+  let hash1 h x y = 
+    let n = h.n in ( ( ( x mod n ) * h.nmn + y ) land max_int ) mod n
+
+  let hash2 x y = succ ( ( x + y ) land 15 )
+
+  let createVals n = Array1.create float64 c_layout n 
+
+  let createKeys n = Array1.create int c_layout (2*n) 
+
+    (* find an index to the primes table with value at least [n] *)
+  let find_i n = 
+    let l = Array.length primes in
+    let rec f i =
+      assert ( i < l ) ;
+      if primes.(i) >= n then i else f (succ i) in
+    f 0
+
+  let clearKeys h = 
+    let kb = h.keys in
+    for j = 0 to (pred h.n) do kb.{2*j} <- (-1) done
+
+
+  let create n =
+    let i = find_i n in
+    let n = primes.(i) in
+    let h = { size = 0 ; n = n ; i = i ;
+              vals = createVals n ; keys =  createKeys n ;
+              nmn = max_int mod n } in
+    clearKeys h ; h
+
+
+
+  let setFrom h h1 =
+    h.i <- h1.i ; h.n <- h1.n ; h.size <- h1.size ; 
+    h.vals <- h1.vals ; h.keys <- h1.keys ;
+    h.nmn <- h1.nmn
+
+
+  (* empty the hashtable and make it smaller by [factor] *)
+  let clear ?(factor=3) h =
+    let h1 = create (h.n / factor ) in
+    setFrom h h1
+
+  let iter f h =
+    let vb = h.vals in
+    let kb = h.keys in
+    for j = 0 to pred h.n do 
+      let j2 = 2*j in
+      let x = kb.{j2} in
+      if not ( x = (-1) ) then f x kb.{succ j2} vb.{j}
+    done
+        
+  let rec add h x y v =
+    let i = hash1 h x y in
+    let j = hash2 x y in
+    let kb = h.keys in
+    let n = h.n in
+    let rec f i =
+      let i2 = i * 2 in
+      if kb.{i2} = ~-1 then (
+        kb.{i2} <- x ; kb.{succ i2} <- y ; h.vals.{i} <- v ; 
+        h.size <- succ h.size )
+      else f ((i+j) mod n) in
+    f i ;
+    if h.size > truncate ( 0.66 *. float n ) then grow h
+
+    (* Create a bigger hash table and rehash all current entries into it *)
+  and grow h =
+    let i1= succ h.i in
+    assert (i1 < Array.length primes ) ;
+    let n = primes.(i1) in
+    let h1 = { i = i1 ; n=n  ; size=0 ; nmn = max_int mod n ;
+               vals = createVals n ; keys = createKeys n } in
+    clearKeys h1 ;
+    iter ( fun x y v -> add h1 x y v ) h ;
+    setFrom h h1 
+
+  exception Interrupt 
+
+  let forget h n =
+    let h1 = create ( 2 * (h.size - n) )  in (* target table size *)
+    let count = ref (h.size - n)  in         (* copy this many elements *)
+    iter ( fun x y v -> 
+             if !count >= 0 then ( add h1 x y v ; decr count )
+           else raise Interrupt ) h ;
+    setFrom h h1 
+
+  let find h x y = 
+    let i = hash1 h x y in
+    let j = hash2 x y in
+    let kb = h.keys in
+    let n = h.n in
+    let rec find' i =
+      let i2 = i * 2 in
+      let x' = kb.{i2} in
+      if x' = ~-1 then raise Not_found ;
+      if x' = x && kb.{succ i2} = y then h.vals.{i} else
+        find' ((i+j) mod n) in
+    find' i 
+
+  let size h = h.size
+
+end
+
+(** A signature of a specialized (int*int)->int hashtable. *)
+module type IntIntIntHashtblSig=
+sig
+  type t
+  val create : int -> t
+  val add : t -> int -> int -> int -> unit
+  val find : t -> int -> int -> int
+  val size : t -> int
+end
+
+(** Implementation of the (int*int->int) hashtable. It uses double
+  hashing and assumes the int parameters can be used directly as keys
+  and that they are non-negative. It uses Bigarrays so that very large
+  hashtables are possible.  *)
+module IntIntIntHashtbl : IntIntIntHashtblSig =
+struct
+  open Bigarray                      
+
+  type vb = (int, int_elt, c_layout) Array1.t
+
+  type kb = (int, int_elt, c_layout) Array1.t
+
+  type t = { mutable size : int ;  (* number of elements currently in cache *)
+             mutable n : int ;     (* current size of the table *)
+             mutable nmn : int ;   (* max_int mod n *)
+             mutable i : int ;     (* reference to the [primes] table *)
+             mutable vals : vb ;     (* values *)
+             mutable keys : kb }     (* keys *)
+
+  let hash1 h x y = 
+    let n = h.n in ( ( ( x mod n ) * h.nmn + y ) land max_int ) mod n
+
+  let hash2 x y = succ ( ( x + y ) land 15 )
+
+  let createVals n = Array1.create int c_layout n 
+
+  let createKeys n = Array1.create int c_layout (2*n) 
+
+    (* find an index to the primes table with value at least [n] *)
+  let find_i n = 
+    let l = Array.length primes in
+    let rec f i =
+      assert ( i < l ) ;
+      if primes.(i) >= n then i else f (succ i) in
+    f 0
+
+  let clearKeys h = 
+    let kb = h.keys in
+    for j = 0 to (pred h.n) do kb.{2*j} <- (-1) done
+
+
+  let create n =
+    let i = find_i n in
+    let n = primes.(i) in
+    let h = { size = 0 ; n = n ; i = i ;
+              vals = createVals n ; keys =  createKeys n ;
+              nmn = max_int mod n } in
+    clearKeys h ; h
+
+
+
+  let setFrom h h1 =
+    h.i <- h1.i ; h.n <- h1.n ; h.size <- h1.size ; 
+    h.vals <- h1.vals ; h.keys <- h1.keys ;
+    h.nmn <- h1.nmn
+
+
+  let iter f h =
+    let vb = h.vals in
+    let kb = h.keys in
+    for j = 0 to pred h.n do 
+      let j2 = 2*j in
+      let x = kb.{j2} in
+      if not ( x = (-1) ) then f x kb.{succ j2} vb.{j}
+    done
+        
+  let rec add h x y v =
+    let i = hash1 h x y in
+    let j = hash2 x y in
+    let kb = h.keys in
+    let n = h.n in
+    let rec f i =
+      let i2 = i * 2 in
+      if kb.{i2} = ~-1 then (
+        kb.{i2} <- x ; kb.{succ i2} <- y ; h.vals.{i} <- v ; 
+        h.size <- succ h.size )
+      else f ((i+j) mod n) in
+    f i ;
+    if h.size > truncate ( 0.66 *. float n ) then grow h
+
+    (* Create a bigger hash table and rehash all current entries into it *)
+  and grow h =
+    let i1= succ h.i in
+    assert (i1 < Array.length primes ) ;
+    let n = primes.(i1) in
+    let h1 = { i = i1 ; n=n  ; size=0 ; nmn = max_int mod n ;
+               vals = createVals n ; keys = createKeys n } in
+    clearKeys h1 ;
+    iter ( fun x y v -> add h1 x y v ) h ;
+    setFrom h h1 
+
+  let find h x y = 
+    let i = hash1 h x y in
+    let j = hash2 x y in
+    let kb = h.keys in
+    let n = h.n in
+    let rec find' i =
+      let i2 = i * 2 in
+      let x' = kb.{i2} in
+      if x' = ~-1 then raise Not_found ;
+      if x' = x && kb.{succ i2} = y then h.vals.{i} else
+        find' ((i+j) mod n) in
+    find' i 
+
+  let size h = h.size
+
+end
+
+
+(* let _ =
+   let module M = Ehashtbl(struct
+   type t = int
+   let equal x y = (x = y)
+   let hash x = Hashtbl.hash x
+   end) in
+   let h= M.create 10 in
+   M.add h 1 1  ;
+   M.add h 2 2 ;
+   M.add h 3 (-3) ;
+   M.iter (fun x y -> Printf.printf "%d %d\n" x y) h ;
+   M.forget h 1 ;
+   M.iter (fun x y -> Printf.printf "*%d %d\n" x y) h 
+ *)
+

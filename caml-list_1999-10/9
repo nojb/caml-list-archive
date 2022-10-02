@@ -1,0 +1,120 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id QAA12057 for caml-redistribution; Sun, 3 Oct 1999 16:19:14 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA00503 for <caml-list@pauillac.inria.fr>; Sat, 2 Oct 1999 22:30:01 +0200 (MET DST)
+Received: from beach.frankfurt.netsurf.de (beach.frankfurt.netsurf.de [194.64.181.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id WAA08187
+	for <caml-list@inria.fr>; Sat, 2 Oct 1999 22:30:00 +0200 (MET DST)
+Received: from ice.darmstadt.netsurf.de (board-29.darmstadt.netsurf.de [194.163.86.157])
+	by beach.frankfurt.netsurf.de (8.8.5/8.8.5) with ESMTP id WAA21943;
+	Sat, 2 Oct 1999 22:29:58 +0200 (MET DST)
+Received: from localhost (localhost [[UNIX: localhost]])
+	by ice.darmstadt.netsurf.de (8.9.3/8.9.3) id UAA05211;
+	Sat, 2 Oct 1999 20:44:10 +0200
+From: Gerd Stolpmann <Gerd.Stolpmann@darmstadt.netsurf.de>
+Reply-To: Gerd.Stolpmann@darmstadt.netsurf.de
+Organization: privat
+To: Peter Bruhn <bruhn@isis.wu-wien.ac.at>
+Subject: Re: Newbies question
+Date: Sat, 2 Oct 1999 20:04:48 +0200
+X-Mailer: KMail [version 1.0.21]
+Content-Type: text/plain
+References: <Pine.LNX.4.05.9910011500140.16555-100000@lux1.wu-wien.ac.at>
+Cc: caml-list@inria.fr
+MIME-Version: 1.0
+Message-Id: <99100220441000.05156@ice>
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+>    let read_res file : ('a * 'b) list =
+>      let final_result = ref [] in
+>      let fd = open_in file in
+>      try 
+>        let lexbuf = Lexing.from_channel fd in
+>        while true do
+>          let result = Parseres.main Lexres.token lexbuf in
+>          final_result := result :: !final_result 
+>        done  (* <---- nothing returned here, but we cannot get here anyway
+>                       the loop is exited by an exception only *) 
+
+No, this is not true. "()", the only element of the "unit" type would be
+returned if the loop could be finished; every "while" loop returns "()" by
+definition. The compiler does not detect the infinite loop, so the typing
+constraint applies that the code within "try"  must be compatible with the
+"unit" type. 
+
+>      with             
+>        Lexres.Eof ->  
+>          close_in fd; !final_result (* !final_result is of type ('a * 'b) list *)
+>      | Parsing.Parse_error ->          
+>          close_in fd; printf "ERROR: Ressourcen Datei fehlerhaft\n"; exit (-1);
+
+The whole "try ... with ..." construct enforces the typing constraint that the
+type of the "try" expression and all types of the "with" expressions must be
+compatible. As already pointed out, the "try" expression has unit type; the
+"Lexres.Eof" branch has the mentioned list type; and the "Parsing.Parse_error"
+branch has arbitrary type (because the "exit" function has type int -> 'a).
+The unit type and the list type cannot be unified, so a typing error occurs.
+
+>          
+>But when I use an empty list after the endless-loop, it works alright. Do I
+>really have to fake the compiler? Or am I doing something wrong? This works:
+>
+>    let read_res file : ('a * 'b) list =
+>      let final_result = ref [] in
+>      let fd = open_in file in
+>      try 
+>        let lexbuf = Lexing.from_channel fd in
+>        while true do
+>          let result = Parseres.main Lexres.token lexbuf in
+>          final_result := result :: !final_result 
+>        done; [] (* <---------- EMPTY LIST INSERTED HERE *)
+
+Now the "try" expression has the type 'a list which can be unified with the
+types of the "with" expressions.
+
+The problem is that the compiler does not detect that the loop never finishes.
+In general, this is impossible to detect because the problem is undecidable. 
+
+You are lucky that you can simply form the senseless value []; sometimes this is
+not possible (e.g. if the type is abstract). A solution which always works is to
+call a function which does not return, e.g.
+
+	while true do ... done; failwith "This cannot happen"
+
+"failwith" is a function with type string -> 'a, i.e. it unifies with every
+type.
+
+As "while true do" is a frequent construct, another solution would be to extend
+the language by a new 
+
+	infinitely do ... done
+
+construct which does the same, but has type 'a instead of unit. As OCaml is not
+meant as an imperative language, do not hope that such a feature will be added.
+
+Another possibility is to use an endless recursion:
+
+	let rec read_token () =
+           ...;
+	   read_token()
+        in
+	try
+	  read_token()
+        with
+	   ... -> ... | ... -> ... | ...
+
+The result type of the function "read_token" is not constrained at all (type
+'a), so it unifies with every other type. This is the solution without tricks,
+and it is straight-forward.
+
+Gerd
+
+--
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   Gerd.Stolpmann@darmstadt.netsurf.de (privat)
+Germany                     
+----------------------------------------------------------------------------
+
+
+

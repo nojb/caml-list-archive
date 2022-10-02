@@ -1,0 +1,86 @@
+Return-Path: <jon@jdh30.plus.com>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 0B8E5BC75
+	for <caml-list@yquem.inria.fr>; Sun, 27 Feb 2005 05:43:32 +0100 (CET)
+Received: from ptb-relay02.plus.net (ptb-relay02.plus.net [212.159.14.213])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j1R4hV0u027917
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@yquem.inria.fr>; Sun, 27 Feb 2005 05:43:31 +0100
+Received: from [80.229.56.224] (helo=chetara)
+	 by ptb-relay02.plus.net with esmtp (Exim) id 1D5GHD-000Meq-22
+	for caml-list@yquem.inria.fr; Sun, 27 Feb 2005 04:43:31 +0000
+From: Jon Harrop <jon@jdh30.plus.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] [Bug] Different behavior bytecode/nativecode
+Date: Sun, 27 Feb 2005 04:44:50 +0000
+User-Agent: KMail/1.7.1
+References: <20050227.011343.11780601.Christophe.Troestler@umh.ac.be>
+In-Reply-To: <20050227.011343.11780601.Christophe.Troestler@umh.ac.be>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200502270444.51192.jon@jdh30.plus.com>
+X-Miltered: at concorde with ID 42214FF3.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 bug:01 bytecode:01 nativecode:01 christophe:01 troestler:01 wrote:01 bytecode:01 ocamlc:01 ocamlopt:01 ocamlopt:01 ocamlc:01 numerically:01 numerically:01 inlining:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+On Sunday 27 February 2005 00:13, Christophe TROESTLER wrote:
+> When I compile the attached program to bytecode, I get the output
+> "0.000000 -1.000000 -> 1" (which is correct) but when I compile to
+> native code the result is "0.000000 -1.000000 -> 0".
+>
+> The error stops when I substitute "invw" in "let cr = 300. *. invw
+> -. 1.5" by its definition (i.e. if I write
+> "let cr = 300. *. (2. /. float w) -. 1.5").
+>
+> Curious to know what is the problem.
+
+The problem is the conflict of interests between having ocamlc and ocamlopt 
+behave identically, and having ocamlopt-compiled code achieve good 
+performance. In floating-point code, ocamlopt can sometimes generate slightly 
+different results from ocamlc.
+
+Specifically, your code is numerically unstable at the specified values and 
+ocamlopt is generating x86 code which is partly performed in 80-bit registers 
+(300. *. invw -. 1.5) and partly stored in 64-bit memory locations (2. /. 
+float w) whereas ocamlc is storing everything in 64-bit memory locations. 
+This leads ocamlc to a result of exactly zero and ocamlopt to a result 
+slightly above zero (cr=0.00000000000000003). The rest of the code is then 
+numerically unstable with respect to this result.
+
+Inlining the definition of "invw" simply causes the ocamlopt-compiled 
+program's computation to be performed entirely at 80-bits, giving the desired 
+result of precisely zero:
+
+$ cat >a.ml
+let x = 2. /. 400.;;
+Printf.printf "%.30f\n" (300. *. x -. 1.5);;
+Printf.printf "%.30f\n" (300. *. (2. /. 400.) -. 1.5);;
+$ ocamlc a.ml -o a
+$ ./a
+0.000000000000000000000000000000
+0.000000000000000000000000000000
+$ ocamlopt a.ml -o a
+$ ./a
+0.000000000000000031225022567583
+0.000000000000000000000000000000
+
+This is described in chapter 4 of "Objective CAML for Scientists":
+
+  http://www.ffconsultancy.com/products/ocaml_for_scientists/
+
+See also "Re: bug in floating point implementation ?" by Xavier Leroy:
+
+  http://caml.inria.fr/caml-list/1147.html
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://ffconsultancy.com
+

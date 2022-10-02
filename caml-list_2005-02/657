@@ -1,0 +1,120 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id E2248BC8E
+	for <caml-list@yquem.inria.fr>; Sun, 27 Feb 2005 20:05:27 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j1RJ5RUt017021
+	for <caml-list@yquem.inria.fr>; Sun, 27 Feb 2005 20:05:27 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id UAA31726 for <caml-list@pauillac.inria.fr>; Sun, 27 Feb 2005 20:05:26 +0100 (MET)
+Received: from moutng.kundenserver.de (moutng.kundenserver.de [212.227.126.189])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j1RJ5QKv017010
+	for <caml-list@inria.fr>; Sun, 27 Feb 2005 20:05:26 +0100
+Received: from [212.227.126.160] (helo=mrelayng.kundenserver.de)
+	by moutng.kundenserver.de with esmtp (Exim 3.35 #1)
+	id 1D5TjK-0002ZZ-00; Sun, 27 Feb 2005 20:05:26 +0100
+Received: from [80.129.115.205] (helo=gate.lan.gerd-stolpmann.de)
+	by mrelayng.kundenserver.de with asmtp (Exim 3.35 #1)
+	id 1D5TjJ-0005eK-00; Sun, 27 Feb 2005 20:05:26 +0100
+Received: from flakew.lan.gerd-stolpmann.de (flakew [192.168.0.32])
+	by gate.lan.gerd-stolpmann.de (Postfix) with ESMTP id 624C4C04E;
+	Sun, 27 Feb 2005 20:05:25 +0100 (CET)
+Subject: Re: :pxp_evpull notation (was: yet another silly question on PXP)
+From: Gerd Stolpmann <gerd@gerd-stolpmann.de>
+To: Paul Argentoff <argentoff@rtelekom.ru>
+Cc: caml-list@inria.fr
+In-Reply-To: <86vf8gk45m.fsf_-_@paul.rtelekom.ru>
+References: <86bracttfd.fsf@paul.rtelekom.ru>
+	 <86d5uspi3a.fsf@paul.rtelekom.ru>
+	 <1109099029.5947.0.camel@localhost.localdomain>
+	 <86vf8gk45m.fsf_-_@paul.rtelekom.ru>
+Content-Type: text/plain
+Date: Sun, 27 Feb 2005 20:05:24 +0100
+Message-Id: <1109531124.5835.12.camel@localhost.localdomain>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.0.2 
+Content-Transfer-Encoding: 7bit
+X-Provags-ID: kundenserver.de abuse@kundenserver.de auth:a6865a839c0178d9aa0ce41878507ea2
+X-Miltered: at concorde with ID 422219F7.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 422219F6.001 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; pxp:01 notation:01 pxp:01 gerd:01 stolpmann:01 gerd:01 stolpmann:01 tarball:01 notation:01 foo:01 foo:01 rec:01 cmo:01 cmo:01 pcre:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.2
+X-Spam-Level: 
+
+Am Freitag, den 25.02.2005, 19:14 +0300 schrieb Paul Argentoff:
+> Dear Gerd Stolpmann,
+> 
+> Let GS = "Gerd Stolpmann" in
+>   written_by GS => 
+> 
+>  GS> See the file doc/PREPROCESSOR which is part of the distribution
+>  GS> tarball.
+> 
+> Thanks again for a reference. My next question is about :pxp_evpull
+> notation. Can I make such a construct:
+> 
+> let pile = <:pxp_evpull<
+>              <foo> (: some_fun () :) >>
+> 
+> where some_fun generates a further "subtree" using the same pxp_evpull
+> notation. 
+
+Yes, this works. some_fun is called when the events for the children of
+foo are generated. You must have
+
+some_fun : unit -> Pxp_types.event option
+
+and some_fun is repeatedly called until it returns None.
+
+pxp_evpull generates automata where every state returns an event.
+External functions like some_fun are represented as loops, i.e. the next
+state is the same state when the function returns Some _, and the
+following state for None.
+
+For your example, <:pxp_evpull< <foo> (: some_fun () :) >>, the
+automaton is:
+
+let _ =
+  let _eid = Pxp_dtd.Entity.create_entity_id () in
+  let rec _generator =
+    let _state = ref 0 in
+    fun _arg ->
+      match !_state with
+        0 ->
+          let ev = Pxp_types.E_start_tag ("foo", [], None, _eid) in
+          _state := 1; Some ev
+      | 1 ->
+          begin match some_fun () _arg with
+            None -> _state := 2; _generator _arg
+          | Some Pxp_types.E_end_of_stream -> _generator _arg
+          | Some ev -> Some ev
+          end
+      | 2 ->
+          let ev = Pxp_types.E_end_tag ("foo", _eid) in _state := 3; Some ev
+      | 3 -> None
+      | _ -> assert false
+  in
+  _generator
+
+(output generated with "camlp4 -I ... pa_o.cmo pa_op.cmo pcre.cma
+unix.cma netstring.cma pxp_pp.cma pr_o.cmo sample.ml")
+
+some_fun can even be another pxp_evtree automaton.
+
+> My task really is to build a converter from a huge (>100M) text file (or
+> string Stream.t) to a huge xml file. Of course, I need to do all job with
+> lazy streams to avoid out-of-memory exceptions.
+
+Pull parsers are your friend. They were created with such applications
+in mind.
+
+Gerd
+-- 
+------------------------------------------------------------
+Gerd Stolpmann * Viktoriastr. 45 * 64293 Darmstadt * Germany 
+gerd@gerd-stolpmann.de          http://www.gerd-stolpmann.de
+------------------------------------------------------------
+
+

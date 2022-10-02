@@ -1,0 +1,192 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 1A739BC37
+	for <caml-list@yquem.inria.fr>; Mon, 11 May 2009 15:40:11 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AscAAFLHB0rUnwdkjWdsb2JhbACCH5RxAQEBAQcLCgkPBrUVg34F
+X-IronPort-AV: E=Sophos;i="4.40,328,1238968800"; 
+   d="scan'208";a="25948543"
+Received: from relay.pcl-ipout02.plus.net ([212.159.7.100])
+  by mail2-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 11 May 2009 15:40:10 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlsFAI/HB0rUnw4U/2dsb2JhbACCH8o/g34F
+Received: from pih-relay08.plus.net ([212.159.14.20])
+  by relay.pcl-ipout02.plus.net with ESMTP; 11 May 2009 14:40:10 +0100
+Received: from [87.112.229.53] (helo=leper.local)
+	 by pih-relay08.plus.net with esmtp (Exim) id 1M3Vjl-0005NJ-K6
+	for caml-list@yquem.inria.fr; Mon, 11 May 2009 14:40:09 +0100
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Ocamlopt x86-32 and SSE2
+Date: Mon, 11 May 2009 14:47:04 +0100
+User-Agent: KMail/1.9.9
+References: <20090509100004.353ADBC5C@yquem.inria.fr> <200905111026.18392.jon@ffconsultancy.com> <90823c940905110143k2380b9e2r2ba0a79e6ff8d59e@mail.gmail.com>
+In-Reply-To: <90823c940905110143k2380b9e2r2ba0a79e6ff8d59e@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200905111447.05040.jon@ffconsultancy.com>
+X-Plusnet-Relay: ded4e27f8b2ce2b4f95017ff3c24bb2a
+X-Spam: no; 0.00; ocamlopt:01 ocaml:01 frametable:01 struct:01 struct:01 ocaml:01 icmp:01 malloc:01 stdin:01 globl:01 stdin:01 globl:01 llabel:01 malloc:01 llabel:01 
+
+On Monday 11 May 2009 09:43:59 Dmitry Bely wrote:
+> So it's just pie in the sky. No working implementation has been
+> demonstrated since then.
+
+The file "test/CodeGen/Generic/GC/simple_ocaml.ll" in the LLVM 2.5 source 
+distribution contains the following test code for the OCaml-compatible 
+frametable emitter:
+
+  %struct.obj = type { i8*, %struct.obj* }
+  
+  define %struct.obj* @fun(%struct.obj* %head) gc "ocaml" {
+  entry:
+          %gcroot.0 = alloca i8*
+          %gcroot.1 = alloca i8*
+          
+          call void @llvm.gcroot(i8** %gcroot.0, i8* null)
+          call void @llvm.gcroot(i8** %gcroot.1, i8* null)
+          
+          %local.0 = bitcast i8** %gcroot.0 to %struct.obj**
+          %local.1 = bitcast i8** %gcroot.1 to %struct.obj**
+  
+          store %struct.obj* %head, %struct.obj** %local.0
+          br label %bb.loop
+  bb.loop:
+          %t0 = load %struct.obj** %local.0
+          %t1 = getelementptr %struct.obj* %t0, i32 0, i32 1
+          %t2 = bitcast %struct.obj* %t0 to i8*
+          %t3 = bitcast %struct.obj** %t1 to i8**
+          %t4 = call i8* @llvm.gcread(i8* %t2, i8** %t3)
+          %t5 = bitcast i8* %t4 to %struct.obj*
+          %t6 = icmp eq %struct.obj* %t5, null
+          br i1 %t6, label %bb.loop, label %bb.end
+  bb.end:
+          %t7 = malloc %struct.obj
+          store %struct.obj* %t7, %struct.obj** %local.1
+          %t8 = bitcast %struct.obj* %t7 to i8*
+          %t9 = load %struct.obj** %local.0
+          %t10 = getelementptr %struct.obj* %t9, i32 0, i32 1
+          %t11 = bitcast %struct.obj* %t9 to i8*
+          %t12 = bitcast %struct.obj** %t10 to i8**
+          call void @llvm.gcwrite(i8* %t8, i8* %t11, i8** %t12)
+          ret %struct.obj* %t7
+  }
+  
+  declare void @llvm.gcroot(i8** %value, i8* %tag)
+  declare void @llvm.gcwrite(i8* %value, i8* %obj, i8** %field)
+  declare i8* @llvm.gcread(i8* %obj, i8** %field)
+
+Compiling this with:
+
+  llvm-as <simple_ocaml.ll | llc
+
+gives:
+
+          .file	"<stdin>"
+          .text
+          .globl	caml<stdin>__code_begin
+  caml<stdin>__code_begin:
+          .data
+          .globl	caml<stdin>__data_begin
+  caml<stdin>__data_begin:
+  
+          .text
+          .align	16
+          .globl	fun
+          .type	fun,@function
+  fun:
+  .Leh_func_begin1:
+  .Llabel1:
+          subl	$12, %esp
+          movl	$0, 8(%esp)
+          movl	$0, 4(%esp)
+          movl	16(%esp), %eax
+          movl	%eax, 8(%esp)
+          .align	16
+  .LBB1_1:	# bb.loop
+          movl	8(%esp), %eax
+          cmpl	$0, 4(%eax)
+          je	.LBB1_1	# bb.loop
+  .LBB1_2:	# bb.end
+          movl	$8, (%esp)
+          call	malloc
+  .Llabel2:
+          movl	%eax, 4(%esp)
+          movl	8(%esp), %ecx
+          movl	%eax, 4(%ecx)
+          addl	$12, %esp
+          ret
+          .size	fun, .-fun
+  .Leh_func_end1:
+          .section	.eh_frame,"aw",@progbits
+  .LEH_frame0:
+  .Lsection_eh_frame:
+  .Leh_frame_common:
+          .long	.Leh_frame_common_end-.Leh_frame_common_begin
+  .Leh_frame_common_begin:
+          .long	0x0
+          .byte	0x1
+          .asciz	"zR"
+          .uleb128	1
+          .sleb128	-4
+          .byte	0x8
+          .uleb128	1
+          .byte	0x1B
+          .byte	0xC
+          .uleb128	4
+          .uleb128	4
+          .byte	0x88
+          .uleb128	1
+          .align	4
+  .Leh_frame_common_end:
+  
+  .Lfun.eh:
+          .long	.Leh_frame_end1-.Leh_frame_begin1
+  .Leh_frame_begin1:
+          .long	.Leh_frame_begin1-.Leh_frame_common
+          .long	.Leh_func_begin1-.
+          .long	.Leh_func_end1-.Leh_func_begin1
+          .uleb128	0
+          .byte	0xE
+          .uleb128	16
+          .byte	0x4
+          .long	.Llabel1-.Leh_func_begin1
+          .byte	0xD
+          .uleb128	4
+          .align	4
+  .Leh_frame_end1:
+  
+          .text
+          .globl	caml<stdin>__code_end
+  caml<stdin>__code_end:
+          .data
+          .globl	caml<stdin>__data_end
+  caml<stdin>__data_end:
+          .long	0
+          .globl	caml<stdin>__frametable
+  caml<stdin>__frametable:
+          # live roots for fun
+          .long	.Llabel2
+          .short	0xC
+          .short	0x2
+          .word	8
+          .word	4
+          .align	4
+          .section	.note.GNU-stack,"",@progbits
+
+So perhaps it is worth a look.
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/?e
+

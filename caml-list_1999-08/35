@@ -1,0 +1,141 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id UAA14254 for caml-redistribution; Sun, 22 Aug 1999 20:14:25 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA00196 for <caml-list@pauillac.inria.fr>; Fri, 13 Aug 1999 22:36:10 +0200 (MET DST)
+Received: from beach.frankfurt.netsurf.de (beach.frankfurt.netsurf.de [194.64.181.2])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id WAA14950
+	for <caml-list@inria.fr>; Fri, 13 Aug 1999 22:36:08 +0200 (MET DST)
+Received: from schneemann.darmstadt.netsurf.de (board-18.darmstadt.netsurf.de [194.163.86.146])
+	by beach.frankfurt.netsurf.de (8.8.5/8.8.5) with ESMTP id WAA14317;
+	Fri, 13 Aug 1999 22:35:39 +0200 (MET DST)
+Received: from localhost (localhost [[UNIX: localhost]])
+	by schneemann.darmstadt.netsurf.de (8.8.8/8.8.8) id WAA31668;
+	Fri, 13 Aug 1999 22:31:24 +0200
+From: Gerd Stolpmann <Gerd.Stolpmann@darmstadt.netsurf.de>
+Reply-To: Gerd.Stolpmann@darmstadt.netsurf.de
+Organization: privat
+To: chet@watson.ibm.com, caml-list@inria.fr
+Subject: Re: re-entrant CAMLYACC parsers?
+Date: Fri, 13 Aug 1999 21:52:00 +0200
+X-Mailer: KMail [version 1.0.17]
+Content-Type: text/plain
+References: <199908032145.RAA02205@bismarck.chet.org>
+MIME-Version: 1.0
+Message-Id: <99081322272704.00491@schneemann>
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+On Tue, 03 Aug 1999, chet@watson.ibm.com wrote:
+>How do most people implement re-entrancy in caml-yacc parsers which
+>must manipulate side-state?  E.g., if I want to have some hashtable to
+>store a mapping from name to right-hand-side, which the lexer will
+>expand dynamically and push back onto the lexbuf (I've enclosed the
+>code I use to do that -- it looks right, and it works, but I'm not
+>certain that I got the semantics of Lexing.lexbuf down), it'd be nice
+>to store that someplace on the stack, so that I don't have to count on
+>serialization of calls to the parser.
+>
+>I've thought about hacking Parsing to have an extra slot in the
+>parsing_env record, of polymorphic type, and then adding some syntax
+>to the caml-yacc language to fetch that value.
+>
+>Anybody done anything like this?
+>
+ 
+I had recently the same problem for my XML parser (BTW: will be available
+soon). The idea is simple: make the parser an object!
+
+By default, ocamlyacc creates a module containing some definitions (some
+tables, some functions). More or less the module looks like
+
+	type token = <definition of the token type>
+	open Parsing
+
+	<Here the header between %{ and %} verbatim>
+
+	let yytransl_const = ...
+	let yytransl_block = ...
+	let yylhs = ...
+	let yylen = ...
+	let yydefred = ...
+	let yydgoto = ...
+	let yysindex = ...
+	let yyrindex = ...
+	let yygindex = ...
+	let yytablesize = ...
+	let yytable = ...
+	let yycheck = ...
+	let yyact = =
+		< an array of functions representing the actions of the rules >
+	let yytables = ...
+	< for every start symbol another let <symbol> = ... definition >
+
+	< now the trailer after %% verbatim >
+
+To make this an object, the generated code must be postprocessed, for example
+by some sed scripts: Some of the "let" definitions should be changed into "val"
+definitions, some should be turned into "method" definitions, and of course the
+invocations of the methods must be changed. It seems to be sufficient to 
+change "yyact", "yytables", and all functions representing start symbols into
+methods, and let all other symbols be "val"-defined instance variables.
+
+For me, the following "sed" script works:
+        sed -e 's/^let yyact /method xxact /g' \
+            -e 's/^let yytables /method xxtables /g' \
+            -e 's/^let yy/val yy/g' \
+            -e 's/^let ext_/method ext_/g' \
+            -e 's/yytablesize/zztablesize/g' \
+            -e 's/yyact/(self#yyact)/g' \
+            -e 's/yytables/(self#yytables)/g' \
+            -e 's/xxact/yyact/g' \
+            -e 's/xxtables/yytables/g' \
+            -e 's/zztablesize/yytablesize/g' \
+                markup_yacc.ml0 >>markup_yacc.ml
+It assumes that "markup_yacc.ml0" is the name of the output file of ocamlyacc,
+and that all start symbols begin with "ext_".
+
+Next, the header and trailer must introduce the class we are defining. For
+example, my header contains
+
+	class ['ext] parser_object <some more variables> =
+	object (self)
+
+		<Some more "val" variables, some more methods>
+
+The trailer contains the "end" keyword that corresponds to the "class":
+
+	end
+
+The additional instance variables store the state of every parser object; 
+this should solve your problem. Note that my parser has a type parameter
+'ext, another additional possibility of this solution.
+
+A problem is that ocamlyacc also generates a module interface, and that the
+generated interface is now wrong. This means that you must write some additional
+scripts that extract the "type token" definition from the generated interface
+and adds the class interface. The following "awk" script extracts "token":
+
+        awk 'BEGIN { copy = 0; }\
+             /^type/ { copy = 1; }\
+             /^val/  { copy = 0; }\
+                     { if (copy) print $0 }' <markup_yacc.mli >markup_yacc_token.mlf
+
+Note that it is important that the generated definition of "token" is used
+(even the order of the variants counts); otherwise the wrong tokens are
+recognized.
+
+Of course, it would be best if "ocamlyacc" had a "-class" option that generates
+the class for you...
+
+BTW: ocamlyacc has a bug that leads to wrong line numbers in error messages of
+ocamlc if the error is in the trailer.
+
+Gerd
+--
+----------------------------------------------------------------------------
+Gerd Stolpmann      Telefon: +49 6151 997705 (privat)
+Viktoriastr. 100             
+64293 Darmstadt     EMail:   Gerd.Stolpmann@darmstadt.netsurf.de (privat)
+Germany                     
+----------------------------------------------------------------------------
+
+
+

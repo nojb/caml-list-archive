@@ -1,0 +1,98 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA23745 for caml-redistribution; Mon, 14 Jun 1999 17:44:17 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA05438 for <caml-list@pauillac.inria.fr>; Sat, 12 Jun 1999 13:03:08 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id NAA16590
+	for <caml-list@inria.fr>; Sat, 12 Jun 1999 13:03:05 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id NAA30678;
+	Sat, 12 Jun 1999 13:02:59 +0200 (MET DST)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <199906121102.NAA30678@miss.wu-wien.ac.at>
+Subject: Re: lexer, parser
+To: skaller@maxtal.com.au (John Skaller)
+Date: Sat, 12 Jun 1999 13:02:58 +0100 (MET DST)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <3.0.6.32.19990603215554.0097b100@triode.net.au> from "John Skaller" at Jun 3, 99 09:55:54 pm
+X-Mailer: ELM [version 2.4 PL21]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> Is there an 'object' version of the lexer and parser,
+> or can I use or adapt the existing code?
+> 
+> I need to maintain state, but the component also need
+> to be re-entrant.
+
+I guess you want to have just the syntactic parts in the scanner
+and parser files, but semantics shall be kept within objects (very
+convenient).
+
+My solution to this is to have the parser return streams of functions.
+These functions accept as final argument an object which implements the
+appropriate semantics.
+
+E.g.:
+
+module (file) "Foo":
+
+  class semantics = object
+    method do_something param = ...
+    ...
+  end
+
+  type 'a trans_fun  = semantics -> 'a -> unit
+  and  'a trans_strm = 'a trans_fun Stream.t
+
+  let do_something param obj = obj#do_something param
+  ...
+
+The parser (e.g.):
+
+  %start main
+  %type <'a Foo.trans_strm> main
+
+  main
+    : left_part A_TOKEN { [< $1; 'Foo.do_something $2 >] }
+    | A_TOKEN           { [< $1 >] }
+    | ...
+
+  left_part
+    : ANOTHER_TOKEN     { [< $1 >] }
+    | ...
+
+The main program (e.g.):
+
+  let main () =
+    let lexbuf     = Lexing.from_channel stdin
+    and sm         = new semantics in
+    let msg_stream = Parser.main Scanner.start lexbuf
+    Stream.iter (fun f -> f sm) msg_stream (* this executes semantics *)
+
+It is possible to "rearrange" streams very fast, because substreams
+can be combined arbitrarily (e.g. concatenated) without loss of
+efficiency. This is very important in parsers. Thus, I prefer them over
+lists (of functions).
+
+Execution of "semantics" is also much faster than versions that use
+algebraic datatypes and pattern matching, because here we only have to
+call methods (wrapped in the functions of the stream) on objects instead
+of match abstract syntax trees or else.
+
+Another advantage: the streams can be directed to any kind of object that
+matches the interface of "semantics". Thus, we could have "different"
+semantics and have the parsed program evaluated over them.  This adds
+greatly to the modularity of the semantics implementation.
+
+I have found this approach very expressive, efficient and easy to maintain
+- I hope it will also help you.
+
+Best regards,
+Markus Mottl
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

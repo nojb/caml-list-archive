@@ -1,0 +1,152 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 2016BBBAF
+	for <caml-list@yquem.inria.fr>; Sat, 17 Jul 2010 11:52:33 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AoMDAOMZQUzZSMDdkWdsb2JhbACTN4w3FQEBAQEJCwoHEQMfvx+FJQQ
+X-IronPort-AV: E=Sophos;i="4.55,218,1278280800"; 
+   d="scan'208";a="55700575"
+Received: from fmmailgate01.web.de ([217.72.192.221])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 17 Jul 2010 11:52:32 +0200
+Received:  from smtp07.web.de  ( [172.20.5.215])
+	by fmmailgate01.web.de (Postfix) with ESMTP id 547F91646EA18
+	for <caml-list@yquem.inria.fr>; Sat, 17 Jul 2010 11:52:32 +0200 (CEST)
+Received: from [78.43.204.177] (helo=frosties.localdomain)
+	by smtp07.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #4)
+	id 1Oa44O-00060P-00
+	for caml-list@yquem.inria.fr; Sat, 17 Jul 2010 11:52:32 +0200
+Received: from mrvn by frosties.localdomain with local (Exim 4.72)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1Oa44N-0006SX-MJ
+	for caml-list@yquem.inria.fr; Sat, 17 Jul 2010 11:52:31 +0200
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Smart ways to implement worker threads
+References: <87sk3mcaeq.fsf@frosties.localdomain>
+Date: Sat, 17 Jul 2010 11:52:31 +0200
+In-Reply-To: <87sk3mcaeq.fsf@frosties.localdomain> (Goswin von Brederlow's
+	message of "Wed, 14 Jul 2010 18:09:49 +0200")
+Message-ID: <87hbjy77vk.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110009 (No Gnus v0.9) XEmacs/21.4.22 (linux, no MULE)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1+Ma0BdqC182Gr9LAdpmzWP/zaS7ToZ1s5romBk
+	nEpDRdbm5nTMYm8aRUSa5eMeVKHFJnaLoBuZv5vVel9jO/bdzZ
+	WwxG6CJgc=
+X-Spam: no; 0.00; buffer:01 pred:01 syscalls:01 mfg:98 threads:01 threads:01 rec:01 rec:01 terminate:01 caml-list:01 int:01 data:02 data:02 seems:03 mutex:03 
+
+Hi,
+
+so I've been thinking and testing some possibilities.
+
+It is now clear that I need 2 queues. One queue for jobs the worker
+threads are to do and one queue for results from the worker threads.
+
+The queue for the worker thread seems easy. Combine a Queue.t, Mutex.t
+and Condition.t:
+
+type 'a t = {
+  data : 'a Queue.t;
+  mutex : Mutext.t;
+  condition : Condition.t;
+}
+
+let take q =
+  Mutex.lock q.mutex;
+  while Queue.is_empty q.data do
+    Condition.wait q.condition q.mutex
+  done;
+  let d = Queue.take q.data
+  in
+    Mutex.unlock q.mutex;
+    d
+
+let add q d =
+  Mutex.lock q.mutex;
+  Queue.add q.data d;
+  Condition.signal q.condition;
+  Mutex.unlock q.mutex
+
+and so on. The standard mechanism for a thread safe queue used in most
+languages.
+
+
+Now I have been thinking about the other queue, for reporting the
+results from the worker thread. The thing is that the main thread is
+stuck in a select waiting for new requests to come in or for the send
+buffer to clear so it can send out more replies (or more of a large
+reply). So wouldn't it be nice if I could use select on a queue?
+
+Well, in Linux there is the eventfd() system call.
+
+So instead of using Condition.t to signal something was put into the
+queue I use the eventfd.
+
+type 'a t = {
+  data : 'a Queue.t;
+  mutex : Mutext.t;
+  fd : EventFD.t;
+}
+
+let take q =
+  let num = EventFD.read q.fd
+  in
+    Mutex.lock q.mutex;
+    let res = Queue.take q.data
+    in
+      Mutex.unlock q.mutex;
+      (* We only take one element, restore counter *)
+      EventFD.write q.fd (Int64.pred num);
+      res
+
+let take_all q =
+  let num = EventFD.read q.fd in
+  let rec loop acc = function
+      0 -> List.rev acc
+    | n -> loop ((Queue.take q.data) :: acc) (n - 1)
+  in
+    Mutex.lock q.mutex;
+    let res = loop num
+    in
+      Mutex.unlock q.mutex;
+      res
+
+let process q f =
+  let num = EventFD.read q.fd in
+  let rec loop  = function
+      0 -> ()
+    | n ->
+        Mutex.lock q.mutex;
+        let res = Queue.take q.data
+        in
+          Mutex.unlock q.mutex;
+          f res;
+          loop (n - 1)
+  in
+    loop num
+
+let add q d =
+    Mutex.lock q.mutex;
+    Queue.add q.data d;
+    EventFD.write q.fd 1;
+    Mutex.unlock q.mutex;
+
+
+Now I have a queue that I can include in select. The take function can
+be used by the worker threads. The main thread can use either take_all
+or process to save on syscalls or stick with take to ensure the queue
+does not starve the other FDs.
+
+Also I think I can use the EventFD to terminate a queue and wake up all
+listeners. Closing the EventFD should wake up any thread stuck in read
+and prevent any threads from becoming stuck in the future. Haven't
+tested that yet though.
+
+MfG
+        Goswin
+

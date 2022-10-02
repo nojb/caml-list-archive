@@ -1,0 +1,179 @@
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p6694Zm3025083
+	for <caml-list@sympa-roc.inria.fr>; Wed, 6 Jul 2011 11:04:35 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuIDAOAkFE5KfVIqi2dsb2JhbAAoFQEDEoRCmB+LGggUAQEBCgsLBxIGIYkfpnuLa4MKhGqJIQIDBoMugXaBDASNWIRphHqBHoYPPIE/ghw
+X-IronPort-AV: E=Sophos;i="4.65,485,1304287200"; 
+   d="vcf'?scan'208";a="86683808"
+Received: from mail-ww0-f42.google.com ([74.125.82.42])
+  by mail3-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 06 Jul 2011 11:04:04 +0200
+Received: by wwg11 with SMTP id 11so3208878wwg.3
+        for <multiple recipients>; Wed, 06 Jul 2011 02:04:04 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=sender:message-id:date:from:user-agent:mime-version:to:subject
+         :references:in-reply-to:x-enigmail-version:content-type;
+        bh=o2na/CQaOwB07WG7q3QqxHmt0N1uZiFW5I9s1KJ7fXg=;
+        b=J7MHDTSekFrNSulj47DqDKbtEbrCxEQ2sp3vS35TdSgWHzP6H4vr0JY7QD/orEP4Zr
+         /8RN9FrfSPt1NLE13+P66W79pOMOHZFDAtJ9I2Ar7/jNncg1D/2rQseq1l51eDetcggS
+         uoWqbNUC27BP4afT5E0xt4dll4SIww8aBTc+M=
+Received: by 10.227.39.66 with SMTP id f2mr7306609wbe.2.1309943044116;
+        Wed, 06 Jul 2011 02:04:04 -0700 (PDT)
+Received: from [128.93.60.63] (koch-irill.inria.fr [128.93.60.63])
+        by mx.google.com with ESMTPS id p14sm1654902wbh.30.2011.07.06.02.04.01
+        (version=SSLv3 cipher=OTHER);
+        Wed, 06 Jul 2011 02:04:01 -0700 (PDT)
+Sender: Fabrice Le Fessant <fabrissimo@gmail.com>
+Message-ID: <4E142500.7050605@inria.fr>
+Date: Wed, 06 Jul 2011 11:04:00 +0200
+From: Fabrice Le Fessant <Fabrice.Le_fessant@inria.fr>
+User-Agent: Mozilla/5.0 (X11; U; Linux x86_64; en-US; rv:1.9.2.17) Gecko/20110424 Lightning/1.0b2 Thunderbird/3.1.10
+MIME-Version: 1.0
+To: caml-list@inria.fr, Damien Doligez <Damien.Doligez@inria.fr>
+References: <102E6342-F199-4A3C-B651-06795D14EB89@cs.umd.edu> <20110706081700.GQ10357@janestreet.com>
+In-Reply-To: <20110706081700.GQ10357@janestreet.com>
+X-Enigmail-Version: 1.1.2
+Content-Type: multipart/mixed;
+ boundary="------------010208050405090904070805"
+X-Validation-by: fabrice.le_fessant@inria.fr
+Subject: Re: [Caml-list] Race conditions with asynchronous exceptions in standard
+ library
+
+This is a multi-part message in MIME format.
+--------------010208050405090904070805
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+
+The code in queue.ml should be rewritten as:
+
+let add x q =
+  if q.length = 0 then
+    let rec cell = {
+      content = x;
+      next = cell
+    } in
+    q.length <- q.length + 1;
+    q.tail <- cell
+  else
+    let tail = q.tail in
+    let head = tail.next in
+    let cell = {
+      content = x;
+      next = head
+    } in
+    q.length <- q.length + 1;
+    tail.next <- cell;
+    q.tail <- cell
+
+so that the allocation would be performed before actually mutating the
+data structure. Consequently, the signal handler (executed at the
+allocation points) would not break the invariants of the queue.
+
+I reported this morning the problem into the bug tracker:
+http://caml.inria.fr/mantis/view.php?id=5309
+
+Fabrice
+PS: while waiting for the next bug fix release, you should copy and
+modify the queue module for yourself...
+
+On 07/06/2011 10:17 AM, Mark Shinwell wrote:
+> On Tue, Jul 05, 2011 at 11:26:52PM -0400, Khoo Yit Phang wrote:
+>> The problem occurs in Queue.ml:
+>>
+>>> let create () = {
+>>>   length = 0;
+>>>   tail = Obj.magic None
+>>> }
+>>>
+>>> let add x q =
+>>>   q.length <- q.length + 1;
+>>>   (* asynchronous exception occurs here *)
+>>>   ...
+> [snip]
+>> We look forward to hearing what the official fix or guideline for handling
+>> asynchronous exception will be, for the standard library, third-party
+>> libraries, as well as applications.
+> 
+> I'm presuming this is native code.  Are you compiling with or without the
+> Caml threads library?
+> 
+> If using the threads library, reception of a signal will cause it to be noted
+> down, and the user-defined signal handler written in Caml will be executed
+> later.  "Later" is difficult to pin down in words, but it should be the case
+> that if you have a section of code which does not involve any allocation nor
+> calls to any functions which drop the runtime lock, then it will never be
+> interrupted by the execution of a signal handler.  Indeed, it will also never
+> be interrupted by a context switch between Caml threads, so you can get
+> thread safety guarantees this way.  As far as user code goes, I believe the
+> things you have to think about in the two cases of raising an exception from
+> a signal handler and experiencing a context switch between Caml threads are
+> the same.
+> 
+> Establishing whether a particular section of code is atomic in this
+> regard---let us just say "thread safe"---might involve reading the assembly
+> code.  (I've wondered in the past about a construct which could be used to
+> indicate that a section is required to be atomic, and the compiler would check
+> it.)  I think it is clear that [Queue.add] is not thread safe.  The reason is
+> due to the two record allocations in the code, one of which is:
+> 
+>   let add x q =
+>     q.length <- q.length + 1;
+>                                   <------- signal happens here
+>     if q.length = 1 then
+>       let rec cell =
+>                                   <------- Caml signal handler executed here
+>                                            since the record allocation might
+>                                            trigger a garbage collection
+>       {
+>         content = x;
+>         next = cell
+>       ...
+> 
+> It isn't clear to me that it is reasonable to assume all libraries are thread
+> safe.  Perhaps the documentation needs improving in this area.  Specifically
+> in the case of signal handlers, I would recommend restricting processing in
+> them to an absolute minimum, and in particular not throwing exceptions.  The
+> code will be easier to think about that way.  If you must throw an exception,
+> you have to ensure that any data structure which you rely on in the exception
+> handler is Caml thread safe, in order that it is not caught in an inconsistent
+> state.
+> 
+> If you're not using the threads library then I believe the signal handler could
+> be executed immediately upon reception of the signal in certain cases (for
+> example if you're calling a blocking syscall); and if you're running Caml code
+> at the time of the signal, then it should be queued as above.  As such, in this
+> scenario, you will need to be even more careful about what you do in the signal
+> handler.  Further, you also have to take into account that if your handler is
+> immediately executed then you are still inside the genuine operating system
+> signal handler---which means you've got the C library in an arbitrary state.
+> You need to restrict yourself to async signal safe glibc (or equivalent) calls
+> in that scenario (cf. the signal(2) manual page on Linux) and make sure that
+> the runtime doesn't call any other C library functions as a result of your
+> signal handling code.  I recommend avoiding that can of worms entirely by doing
+> as little as possible in the handler.
+> 
+> Mark
+> 
+
+--------------010208050405090904070805
+Content-Type: text/x-vcard; charset=utf-8;
+ name="fabrice_le_fessant.vcf"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: attachment;
+ filename="fabrice_le_fessant.vcf"
+
+begin:vcard
+fn:Fabrice LE FESSANT
+n:LE FESSANT;Fabrice
+org:INRIA Saclay -- Ile-de-France;P2P & OCaml
+adr;quoted-printable:;;Parc Orsay Universit=C3=A9 ;Orsay CEDEX;;91893;France
+email;internet:fabrice.le_fessant@inria.fr
+title;quoted-printable:Charg=C3=A9 de Recherche
+tel;work:+33 1 74 85 42 14
+tel;fax:+33 1 74 85 42 49 
+url:http://fabrice.lefessant.net/
+version:2.1
+end:vcard
+
+
+--------------010208050405090904070805--

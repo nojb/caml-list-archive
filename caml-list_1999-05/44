@@ -1,0 +1,155 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA03237 for caml-redistribution; Fri, 28 May 1999 17:09:49 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA02865 for <caml-list@pauillac.inria.fr>; Thu, 27 May 1999 23:58:30 +0200 (MET DST)
+Received: from mail4.microsoft.com (mail4.microsoft.com [131.107.3.122])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id XAA12594
+	for <caml-list@inria.fr>; Thu, 27 May 1999 23:58:28 +0200 (MET DST)
+Received: by mail4.microsoft.com with Internet Mail Service (5.5.2524.0)
+	id <K6VZ65ZC>; Thu, 27 May 1999 14:58:27 -0700
+Message-ID: <783D93998201D311B0CF00805FEAA07B7E8DD2@RED-MSG-42>
+From: Manuel Fahndrich <maf@microsoft.com>
+To: "'caml-list@inria.fr'" <caml-list@inria.fr>
+Subject: OCaml - CInterface: interesting bug scenario
+Date: Thu, 27 May 1999 14:58:18 -0700
+X-Mailer: Internet Mail Service (5.5.2524.0)
+Sender: weis
+
+
+Anybody whose using the OCaml-C interface should find the following story
+interesting.
+
+
+I'm using OCaml to interface to a C++ library implementing a C/C++ frontend.
+For a while, things looked really smooth, but then I started having core
+dumps (actually GPF's, this is under NT, but the problem applies to all
+architectures.) It took me weeks to finally identify the problem. Here it
+is:
+
+The OCaml documentation states that an ML value is either
+ 1. an unboxed integer 
+ 2. a pointer to a block inside the ML heap
+ 3. a pointer to an object outside the heap 
+   (e.g., a pointer to a block allocated by malloc, or to a C variable). 
+
+In particular, this means that one can store pointers to malloced blocks
+outside the ML heap into fields of blocks living in the ML heap. The garbage
+collector distinguishes case 1 from cases 2 and 3 by the fact that integers
+have the least significant bit set, and pointers are at least 2-byte
+aligned. Furthermore, the GC distinguishes cases 2 and 3 by checking if a
+pointer points into the ML heap (more precisely, a page associated with the
+ML heap.).
+
+Now consider the following scenario where an allocated block in the ML heap
+contains a pointer to a malloced block in the C heap.
+
+   ML heap page
+   -----------
+   |         |
+   |  block  |
+   |    *--------\
+   |         |   |
+   |         |   |
+   |         |   |
+   -----------   |
+                 |pointer from ML heap to C allocated block
+   C malloced    |
+   block         |
+   ------------  |
+   |          |  |
+   |          |  |
+   |          |  /
+   |    *<-------
+   |          |
+   |          |
+   ------------
+
+Now suppose the C block gets freed. The ML heap contains a dangling pointer,
+but as long as the program is not following it, things are fine, since the
+garbage collector will ignore it too.
+
+
+   ML heap page
+   -----------
+   |         |
+   |  block  |
+   |    *--------\
+   |         |   |
+   |         |   |
+   |         |   |
+   -----------   |
+                 |
+   free space    | dangling pointer into unallocated space
+                 |
+                 |
+                 |
+                 |
+                 /
+        *<-------
+
+
+Now we allocate some more memory for the ML heap, and it so happens that we
+obtain the page from the underlying memory manager that was previously
+allocated to the C code. Now our previously categorized C dangling pointer
+looks like a valid ML pointer. The garbage collector will wreak havoc at the
+next collection.
+
+   ML heap page
+   -----------
+   |         |
+   |  block  |
+   |    *--------\
+   |         |   |
+   |         |   |
+   |         |   |
+   -----------   | dangling pointer now looks like a valid ML pointer!
+                 |
+   Newly allocated
+   ML heap page  |
+   ------------  |
+   |          |  |
+   |          |  |
+   |          |  /
+   |    *<-------
+   |          |
+   |          |
+   ------------
+
+The scenario looks like a rare event, but I was able to observe this bug
+consistently. There are several fixes one can imagine:
+
+1) keep ML and C blocks separate throughout the lifetime of a process.
+
+2) Box every C pointer inside an abstract ML block. This way, the garbage
+collector will never look at the pointer. Unfortunately this causes a lot of
+extra allocation and indirection.
+
+3) Tag C pointers as integers by setting the least significant bit whenever
+the pointer is passed to ML or stored in the ML heap. Similarly, clear the
+bit whenever the pointer is examined on the C side.
+
+I've used option 3 to fix the problem in my case. It seems to not cause any
+problems. I'm using two C macros as follows to achieve this:
+
+/* Set the least significant bit of any C pointer so as to make it look like
+an ML int. This
+ * avoids problems with garbage C pointer still in the ML heap.
+ */
+#define VAL_OF_CPTR(cpt) (value)(((value)(cpt) & 1) ? \
+                                (failwith("C pointer with bit0"),0) :
+((value)(cpt) | 1))
+
+/* clear the LSB and cast back to an ML pointer type. If the type is Foo, 
+ * the variable from which we cast must be named pFoo. 
+ */
+#define CPTR_OF_VAL(ctype) (ctype *)(((p ## ctype) & 1)? ((p ## ctype) ^ 1)
+: \
+                           (failwith("ML->C Pointer without bit0"),0))
+
+
+
+I hope this will save other people some nerve-wracking debugging time.
+
+Regards,
+	Manuel Fahndrich
+
+
+

@@ -1,0 +1,159 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id DAA18612; Wed, 28 Mar 2001 03:04:48 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id DAA18608 for <caml-list@pauillac.inria.fr>; Wed, 28 Mar 2001 03:04:44 +0200 (MET DST)
+Received: from sunshine.math.utah.edu (sunshine.math.utah.edu [128.110.198.2])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f2S14gn18470
+	for <caml-list@inria.fr>; Wed, 28 Mar 2001 03:04:43 +0200 (MET DST)
+Received: from sunfish.math.utah.edu (IDENT:puESQ2XKRkLVBZgrgLBYQnD5f/Hqi2po@sunfish.math.utah.edu [155.99.144.13])
+	by sunshine.math.utah.edu (8.9.3/8.9.3) with ESMTP id SAA22422;
+	Tue, 27 Mar 2001 18:04:41 -0700 (MST)
+Received: (from hohn@localhost)
+	by sunfish.math.utah.edu (8.9.3/8.9.3) id SAA20276;
+	Tue, 27 Mar 2001 18:04:40 -0700 (MST)
+Date: Tue, 27 Mar 2001 18:04:40 -0700 (MST)
+Message-Id: <200103280104.SAA20276@sunfish.math.utah.edu>
+X-Authentication-Warning: sunfish.math.utah.edu: hohn set sender to hohn@math.utah.edu using -f
+From: Michael Hohn <hohn@math.utah.edu>
+To: wester@ilt.fhg.de
+CC: caml-list@inria.fr
+In-reply-to: <200103271622.SAA26996@ilt.fhg.de> (wester@ilt.fhg.de)
+Subject: Re: [Caml-list] Complex numbers in OCaml
+References:  <200103271622.SAA26996@ilt.fhg.de>
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+>> ...
+>> 
+>> I need complex numbers. I tried it this way:
+>> 
+>> ...
+
+I also needed complex numbers a while ago.
+There are several options:
+o   Make a FORTRAN binding.
+    This is tedious, and for simple low-level operations (add, etc.)
+    will probably not help performance.  If 
+
+o   Implement them in ocaml.
+    This is very simple when using user-defined operators.
+    Also, it is fast enough for all simple applications
+
+
+>> ...
+>> This works but is quite cumbersome to use. Is there any other way to do it
+>> ...
+
+Below is the module I used, based on a struct-like product type instead
+of a sum type.
+
+>> ...
+>> and how can arrays of complex numbers be implemented efficiently in OCaml? 
+>> ...
+
+Arrays of  (C) doubles are optimized by ocamlopt, but for complex
+types, which are just structs, I do not know.
+
+For the ultimate in efficiency of complex arrays, there is always
+FORTRASH :(
+
+Cheers,
+Michael
+
+
+(* $Id: cmplx.ml,v 1.6.2.1 2000/04/05 16:29:57 hohn Exp $
+   Elementary complex number support functions.
+   Taken from libf2c/libF77.
+*)
+
+type cmplx = { re : float; im : float}
+
+let cx re im = { re = re ; im = im}
+
+let zarg z = atan2 z.im z.re 
+
+let conj z = { re = z.re ; im = -. z.im}
+
+let (+:) a b = {re =  (a.re +. b.re); im =  (a.im +. b.im) }
+
+let (-:) a b = {re = (a.re -. b.re); im = (a.im -. b.im) }
+
+let ( *: ) a b =
+    {
+      re = (  a.re *. b.re -. a.im *. b.im ) ; 
+      im = (a.re *. b.im +. a.im *. b.re )
+    } 
+
+let f__cabs (real : float) (imag : float) = 
+    let real = if (real < 0.0) then (-. real) else real in
+    let imag = if (imag < 0.0) then (-. imag) else imag in
+    let (real, imag) = if(imag > real) then (imag, real) else (real, imag) in
+    if ((real +. imag) = real) then real
+    else (
+    let temp = imag /.real in
+    real *. (sqrt (1.0 +. temp*.temp))
+       )
+
+let zabs z = {re = f__cabs z.re z.im ; im = 0.0}
+
+let dabs x = abs_float x 
+
+let ( /: ) a b = 
+    let abr = if( b.re < 0.0) then (-. b.re) else (b.re)  in 
+    let abi = if( b.im < 0.0) then (-. b.im) else b.im in 
+    if ( abr <= abi ) then
+    (
+         if (abi = 0.0) then
+             raise Division_by_zero
+	      else
+             let ratio = b.re /. b.im in
+             let den = b.im *. (1.0 +. ratio*.ratio) in 
+             {
+	            re = (a.re *. ratio +. a.im) /. den ; 
+               im = (a.im *. ratio -. a.re) /. den 
+	            } 
+        )
+    else
+        (
+         let ratio = b.im /. b.re in 
+         let den = b.re *. (1.0 +. ratio*.ratio) in
+         {
+	    re = (a.re +. a.im *. ratio) /. den ;
+           im = (a.im -. a.re *. ratio) /. den
+	    } 
+        )
+
+	    
+let zexp z =
+    let zi = z.im in 
+    let expx = exp z.re in 
+    {
+      re = expx *. cos(zi);
+      im = expx *. sin(zi)
+    } 
+
+let zlog z = 
+    let zi = z.im and zr = z.re in 
+    {
+      im = atan2 zi zr;
+      re = (log ( f__cabs zr zi ) )
+    } 
+
+(* Integer power z**i, for small i *)
+let zipow z i =
+    let rv z = 
+    if (i < 0) then ((cx 1.0 0.0) /: z)
+    else z in
+    let i = if i < 0 then -i else i in
+    match i with
+    | 0 -> cx 1.0 0.0
+    | 1 -> rv z
+    | 2 -> rv (z *: z)
+    | 3 -> rv (z *: z *: z)
+    | 4 -> rv (z *: z *: z *: z)
+    | _ ->
+    let p = ref z in 
+    for k=2 to i do p := !p *: z done ;
+    rv !p
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr.  Archives: http://caml.inria.fr
+

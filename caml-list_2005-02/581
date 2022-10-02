@@ -1,0 +1,213 @@
+Return-Path: <RABIH.EL-CHAAR@sgam.com>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 1E20BBC75
+	for <caml-list@yquem.inria.fr>; Wed, 23 Feb 2005 15:35:39 +0100 (CET)
+Received: from mail.sgam.fr (mail.sgam.com [194.119.92.19])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id j1NEZUkW018798
+	for <caml-list@yquem.inria.fr>; Wed, 23 Feb 2005 15:35:38 +0100
+Received: from mailek3.sgam.com (mailek3 [194.119.92.25])
+	by mail.sgam.fr (8.12.10/8.12.10) with SMTP id j1NEZTr2027719;
+	Wed, 23 Feb 2005 15:35:29 +0100 (MET)
+Received: from (10.91.1.117) by mailek3.sgam.com via smtp
+	 id 0ce5_8e40119a_8575_11d9_8254_001143377695;
+	Wed, 23 Feb 2005 08:33:12 +0000 (UTC)
+Received: from fr-mailcnx1.fr.sgam.socgen ([10.4.1.26]) by frcor-exfe02.europe.am.socgen with Microsoft SMTPSVC(6.0.3790.0);
+	 Wed, 23 Feb 2005 15:35:29 +0100
+Received: by FR-MAILCNX1.fr.sgam.socgen with Internet Mail Service (5.5.2657.72)
+	id <1Z38WQ6B>; Wed, 23 Feb 2005 15:35:38 +0100
+Message-ID: <71A291D8E360AF4EA6FFFAF9CAD136CA03773583@FR-MAILBOX2.fr.sgam.socgen>
+From: EL CHAAR RABIH <RABIH.EL-CHAAR@sgam.com>
+To: "'Xavier.Leroy@inria.fr'" <Xavier.Leroy@inria.fr>,
+	"'caml-list@yquem.inria.fr'" <caml-list@yquem.inria.fr>
+Cc: "'jeanmarc.eber@lexifi.com'" <jeanmarc.eber@lexifi.com>
+Subject: Using camljava library in a multithreaded context
+Date: Wed, 23 Feb 2005 15:35:37 +0100
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.5.2657.72)
+Content-Type: text/plain;
+	charset="iso-8859-1"
+X-OriginalArrivalTime: 23 Feb 2005 14:35:29.0756 (UTC) FILETIME=[EC33E9C0:01C519B4]
+X-Miltered: at concorde with ID 421C94B2.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; camljava:01 camljava:01 ocaml:01 ocaml:01 runtime:01 jni:01 threads:01 api:01 jni:01 mli:01 threads:01 appending:01 cygdrive:01 cygdrive:01 dllmain:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.2 (2004-11-16) on yquem.inria.fr
+X-Spam-Status: No, score=0.1 required=5.0 tests=FORGED_RCVD_HELO 
+	autolearn=disabled version=3.0.2
+X-Spam-Level: 
+
+Hello,
+
+I have been using the camljava library for a certain time, in order to
+establish communications between java and caml.
+The initial use of the library (maintained by Mr Leroy) supposed explicitly
+that it is ocaml that initiates the call to java (it is ocaml that creates a
+jvm instance).
+
+I was confronted to the situation where java is the instancianting process
+that should initialize the ocaml runtime. This was done by a little effort,
+by making the following :
+*	Java makes call through native methods
+*	At each call, the JNIEnv variable used in the c code in jnistubs.c
+is set to the actual JNIEnv passed in the native call.
+*	The instanciation and deltetion of the jvm (used when ocaml was the
+instanciating process) is not realised, since a valid JNIEnv is passed at
+each native call.
+
+
+This solution seems satisfactory, but should be used (due to use of global
+variable JNIEnv) in a context where each call to a native method is atomic.
+This reflects in the java world that the call to native methods should be
+made synchronised.
+
+I am now facing a context where i need to make the library coherent with a
+java multi threaded context.
+The JNI manual states that each java thread will have it's own JNIEnv inside
+the jvm. Therefore, two threads calling the same native method will pass two
+different JNIEnv values. 
+
+The camljava API used to achieve communications between java and caml should
+be made reentrant. In order to achieve this, i made a deeper change in the
+camljava library by making all function calls reentrant, handling the JNIEnv
+as a method parameter.
+In the caml world, this was made by defining a new type, jniInterface in
+jni.mli, and by making all fuctions calling java take this new type as an
+additional parameter.
+
+I am aware of the fact that the GC is not thread safe, and therefore the
+synchronisation issues are delicate to handle.
+The other difficulty is the fact that the caml code executed inside a native
+method makes callbacks to java.
+
+The idea that i would like to investigate more thoroughly is the possibility
+to transpose the java threads into caml threads. If this is feasible, will
+the execution be thread safe inside the GC ??
+
+Another possible problem is the fact that java threads are not always
+equivalent to native threads. After doing some exeperimentations, i was
+executing a java multithreaded program and java threads didn't always
+reflect native threads.
+I am appending the trace of the executale after two consecutive runs :
+
+
+****************************** first run
+**********************************************
+
+$ make -C bin runt
+make: Entering directory `/cygdrive/d/recherche/java_engine1/bin'
+java -Djava.class.path="./;test.jar" TestEngineT 
+------------------------Thread number: 0 starts----------------------------
+------------------------Thread number: 1 starts----------------------------
+------------------------Thread number: 2 starts----------------------------
+------------------------Thread number: 3 starts----------------------------
+trying thread attach 2
+trying thread attach 3
+trying thread attach 4
+Thread 3 speaks: calling pure caml method 1
+Thread 2 speaks: calling pure caml method 1
+
+Thread 1 speaks: calling pure caml method 1
+Thread 0 speaks: calling pure caml method 1
+
+
+****************
+Another exception has been detected while we were handling last error.
+Dumping information about last error:
+ERROR REPORT FILE = (N/A)
+PC                = 0x113E657D
+SIGNAL            = -1073741819
+FUNCTION NAME     = (N/A)
+OFFSET            = 0xFFFFFFFF
+LIBRARY NAME      = (N/A)
+Please check ERROR REPORT FILE for further information, if there is any.
+Good bye.
+process detach 4
+make: *** [runt] Error 1
+make: Leaving directory `/cygdrive/d/recherche/java_engine1/bin'
+
+
+
+
+****************************** second run
+**********************************************
+
+$ make -C bin runt
+make: Entering directory `/cygdrive/d/recherche/java_engine1/bin'
+java -Djava.class.path="./;test.jar" TestEngineT 
+------------------------Thread number: 0 starts----------------------------
+------------------------Thread number: 1 starts----------------------------
+------------------------Thread number: 2 starts----------------------------
+------------------------Thread number: 3 starts----------------------------
+Thread 0 speaks: calling pure caml method 1
+Thread 2 speaks: calling pure caml method 1
+
+****************
+Another exception has been detected while we were handling last error.
+Dumping information about last error:
+ERROR REPORT FILE = (N/A)
+PC                = 0x77F77552
+SIGNAL            = -1073741819
+FUNCTION NAME     = (N/A)
+OFFSET            = 0xFFFFFFFF
+LIBRARY NAME      = (N/A)
+Please check ERROR REPORT FILE for further information, if there is any.
+Good bye.
+process detach 1
+make: *** [runt] Error 1
+make: Leaving directory `/cygdrive/d/recherche/java_mgt_engine1/bin'
+
+****************************************************************************
+***************
+
+Each time that a native thread calls the DLLmain function (under windows)
+and goes inside the DLL_THREAD_ATTACH, i increment a global counter, and
+print the message printf("trying thread attach %d",counter)
+At exit (DLL_PROCESS_DETACH), i print the state of counter printf("process
+detach %d",counter)
+
+At the first run, it seems that each java thread is equivalent to a native
+thread, and at exit, counter is equal to 4.
+On the contrary, in the second run, all java threads seems to execute in the
+same native thread.
+
+
+
+My questions are the following :
+*	Will i be able to prolonge a java thread into a caml thread
+*	Will this make the execution GC safe
+*	If java threads are not native threads, can there still be a work
+around ?
+
+
+Thanks in advance for your help and your suggestions.
+
+Sincerely
+
+Rabih El Chaar
+
+
+
+
+*************************************************************************
+Ce message et toutes les pieces jointes (ci-apres le "message") sont
+confidentiels et etablis a l'intention exclusive de ses destinataires.
+Toute utilisation ou diffusion non autorisee est interdite. 
+Tout message electronique est susceptible d'alteration. 
+SG Asset Management et ses filiales declinent toute responsabilite au titre
+de ce message s'il a ete altere, deforme ou falsifie.
+
+Découvrez l'offre et les services de SG Asset Management sur le site
+www.sgam.fr 
+
+				********
+
+This message and any attachments (the "message") are confidential and
+intended solely for the addressees.
+Any unauthorised use or dissemination is prohibited. 
+E-mails are susceptible to alteration.   
+Neither SG Asset Management nor any of its subsidiaries or affiliates shall
+be liable for the message if altered, changed or falsified. 
+
+*************************************************************************
+
+
+

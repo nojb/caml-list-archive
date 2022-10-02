@@ -1,0 +1,142 @@
+Return-Path: <weis@yquem.inria.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=-0.1 required=5.0 tests=AWL,NO_RELAYS 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: by yquem.inria.fr (Postfix, from userid 24253)
+	id 70640BC69; Wed, 14 Nov 2007 22:04:09 +0100 (CET)
+Date: Wed, 14 Nov 2007 22:04:09 +0100
+To: Edgar Friendly <thelema314@gmail.com>
+Cc: Pierre Weis <pierre.weis@inria.fr>,
+	caml-list <caml-list@yquem.inria.fr>
+Subject: Re: [Caml-list] Compiler feature - useful or not?
+Message-ID: <20071114210408.GC28796@yquem.inria.fr>
+References: <473A363F.2080301@gmail.com> <891bd3390711131608g48b584a4n6b0ccab95d7de3f3@mail.gmail.com> <Pine.LNX.4.64.0711140116030.17159@martin.ec.wink.com> <20071114075827.GA24058@yquem.inria.fr> <473B28DF.2050705@gmail.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <473B28DF.2050705@gmail.com>
+User-Agent: Mutt/1.5.9i
+From: weis@yquem.inria.fr (Pierre Weis)
+X-Spam: no; 0.00; compiler:01 weis:01 weis:01 compiler:01 abbreviation:01 abbreviation:01 literals:01 invariants:01 low-level:01 casts:01 avoided:01 mult:01 explicitely:01 invariants:01 coercions:01 
+
+> Pierre Weis wrote:
+> > In the next version of the compiler, you will have an extension to the
+> > definition of types with private construction functions (aka ``private''
+> > types) that just fulfills your programming concern: in addition to usual
+> > private sum and record private type definitions, you can now define a type
+> > abbreviation which is private to the implementation part of a module (see
+> > note 1).
+> > 
+> At first glance, this improvement does satisfy my concerns, but I think
+> it still falls short of optimal in ways that seem easy to fix.
+> 
+> > Since the values of a private type are concrete, it is much easier for the
+> > programmer to use the values of the type abbreviation.
+> > 
+> This concerns me - I'd like to require explicit casting/coercion to
+> create or use the internal value of the abstract type, maybe with an
+> exception for literals.  Could you elaborate on this?
+
+Values of a private type abbreviation are concrete in the sense that they are
+public and not hidden to inspection. However, a value of the private type
+abbreviation has a type that is the one of the private type, not the one f
+the abbreviated expression. To project such a value you need some syntactic
+construct: either a (identity) function call or a sub-typing constraint as
+already proposed on this list.
+
+To create a value of the private type abbreviation, you must use the
+construction function (as usual with private types, you cannot freely crete
+values, you must use the provided injection).
+
+> > This solution does not require any additional tagging or boxing, only the
+> > usage of injection/projection function for the type. As for usual private
+> > types, the injection function is handy to provide useful invariants (in the
+> > row type example case, we get ``a row value is always a positive integer'').
+> > 
+> With a bit of low-level support, I imagine it not difficult to implement
+> the following:
+> 
+> type row = private int constraint (fun i -> i >= 0)
+> 
+> such that the compiler uses the provided constraint function to check
+> any (x :> row) casts, throwing an exception(?) on false. This solution
+> wouldn't involve the module system just to have positive integer types,
+> and gets rid of the function call overhead on 'from'.
+
+The function call overhead can be avoided easily, if the from function is
+provided by the compiler or if we use a sub-typing constraint row :> int.
+
+On the other hand, the construction you proposed also applies to abstract
+types: we need module to define an abstract type; we can have something
+lighter such as a direct abstract type definition:
+
+type rat = abstract {
+     numerator : int;
+     denominator : int;
+  } with
+
+  let make_rat n d = ...
+  and numerator {numerator = n} = n
+  and denominator ...
+
+  let plus_rat r1 r2 = ...
+  let mult_rat r1 r2 = ...
+
+  ...
+
+> > In addition, the private abbreviation is publicly exposed in the interface
+> > file. Hence, the compiler knows about it: it can (and effectively does)
+> > optimize the programs that use values of type row in the same way as if the
+> > type row were defined as a regular public abbreviation.
+> > 
+> Does this mean I can do:
+> 
+> let one (r:row) = r+1
+> let onea (r : row) = r = 1
+> let two (r:row) (i:int) = r+i
+> let three : row -> string = function 3 -> "three" | _ -> "not three"
+
+No, you must explicitely project row values to int values (even if this is an
+identity):
+
+let one r = from r + 1
+let onea r = from r = 1
+let two (r:row) (i:int) = from r + i
+let three : row -> string =
+  fun r -> match from r with
+  | 3 -> "three" | _ -> "not three"
+
+> > Last but not least, being an instance of the identity function, the from
+> > projection function is somewhat generic: we can dream to suppress the burden
+> > of having to write it for each private type definition, if we find a way to
+> > have it automatically associated to the new private type by the compiler.
+> > 
+> The use case for this feature is restricted construction to enforce
+> invariants, no?
+
+Yes.
+
+>  Anything more complex should probably be totally
+> abstract and not simply private.  In which case, the constraint keyword
+> seems an effective way to tell the compiler what to do, and just let :>
+> coercions do their magic.
+
+Given that the injection function (the make function or the constraint part
+of your construction) must enforce arbitrarily complex invariants, we may
+need a module for private abbreviation as well (imagine for instance a
+private abbreviation for prime numbers, that only injects into the prime type
+integer arguments that are indeed prime numbers: you may need some room to
+define the predicate!).
+
+Thank you for your suggestions.
+
+Best regards,
+
+-- 
+Pierre Weis
+
+INRIA Rocquencourt, http://bat8.inria.fr/~weis/
+

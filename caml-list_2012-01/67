@@ -1,0 +1,96 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id q08MXxvh003360
+	for <caml-list@sympa-roc.inria.fr>; Sun, 8 Jan 2012 23:33:59 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AngBACMZCk/RVde2imdsb2JhbABDrDwIIgEBAQoJDQcSBiGBcgEBAQMBEgIkCAEbHAIDDAYFCw0JFg8JAwIBAgEREQEFARwTCAIeh1gImDkKi2mCb4QTP4hxAgULiGyDGgSVCYcGhnw9g3w
+X-IronPort-AV: E=Sophos;i="4.71,476,1320620400"; 
+   d="scan'208";a="138338151"
+Received: from mail-ey0-f182.google.com ([209.85.215.182])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/RC4-SHA; 08 Jan 2012 23:33:53 +0100
+Received: by eaaf13 with SMTP id f13so3205953eaa.27
+        for <caml-list@inria.fr>; Sun, 08 Jan 2012 14:33:53 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=message-id:date:from:user-agent:mime-version:to:subject:references
+         :in-reply-to:content-type:content-transfer-encoding;
+        bh=wwvINn6vFCeO2pxz8VAWzhV+pRQSgg8F1zItbdTFnXM=;
+        b=Nzf+wmaLXDIi6GJXGvt3O6nBM1zGyKaUBkbQH4V3VMUfE74MtJnN3nLF6bCg4k2ms5
+         jFXMJ6LsW4UgVwJ/2Zv6XeCzHA6Hlh55Ry605bd3DdI/8nUyFiDNm6dBNyIfSjVrWRcX
+         jxpSOzICJD4cQ5X4l6LVIMiett1peHvv8WShk=
+Received: by 10.213.113.203 with SMTP id b11mr1153155ebq.136.1326062032779;
+        Sun, 08 Jan 2012 14:33:52 -0800 (PST)
+Received: from ?IPv6:2a02:2f02:1022:7000:1e6f:65ff:fe23:db0d? ([2a02:2f02:1022:7000:1e6f:65ff:fe23:db0d])
+        by mx.google.com with ESMTPS id e12sm131949088eea.5.2012.01.08.14.33.50
+        (version=SSLv3 cipher=OTHER);
+        Sun, 08 Jan 2012 14:33:51 -0800 (PST)
+Message-ID: <4F0A19CD.2030906@gmail.com>
+Date: Mon, 09 Jan 2012 00:33:49 +0200
+From: =?ISO-8859-1?Q?T=F6r=F6k_Edwin?= <edwintorok@gmail.com>
+User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:8.0) Gecko/20120104 Icedove/8.0
+MIME-Version: 1.0
+To: caml-list@inria.fr
+References: <96F225D0-B458-4E25-BE34-3976989984B2@ezabel.com> <CAFqqUFEO5Vxf0jWxSEbDjXY-qE_G2XsOA0uZj47jTt4NMkeBPA@mail.gmail.com> <EED65A08-B24F-42CD-B4D6-4E30667EC6CA@ezabel.com> <20120101124454.GA12851@annexia.org> <012932EC-860F-4A40-98D1-E4B6EC123927@ezabel.com> <20120108184505.GA30498@annexia.org> <20120108190049.GB30498@annexia.org>
+In-Reply-To: <20120108190049.GB30498@annexia.org>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+Subject: Re: [Caml-list] Understanding usage by the runtime
+
+On 01/08/2012 09:00 PM, Richard W.M. Jones wrote:
+> On Sun, Jan 08, 2012 at 06:45:05PM +0000, Richard W.M. Jones wrote:
+>> And that brings us to (c): does it even make sense to give back memory
+>> to the OS?
+
+BTW you can try calling malloc_stats(), it should print statistics
+on how much total memory malloc() is using, and how much of that is reclaimable/unreclaimable free memory.
+
+Sometimes you may have this situation (fragmented memory):
+| malloced bytes | .... large range of free bytes ... | malloced bytes |
+
+AFAIK glibc is not able to give back the middle portion to the OS, you'll
+have to use your own memory pool allocator that can munmap() the middle bit
+when no longer needed.
+
+A quick way to see if the increased mem usage you see in top is due to malloc() is
+to switch temporarely to a different malloc impl. You can try linking with jemalloc, or tcmalloc.
+
+>
+> I forgot to mention one way in which this is more efficient: If you
+> munmap a piece of memory and later decide you need more memory so you
+> call mmap, then the kernel has to give you zeroed memory.  You
+> probably didn't want zeroed memory, but you pay the penalty anyway.
+
+Also mmap() and munmap() are quite expensive in threaded apps because they
+have to take a process-wide lock in the kernel, and that lock also used
+to be held during page-fault I/O. I think thats why glibc "caches"
+the mmap arenas. This doesn't really matter for OCaml though, as it already has
+a process-wide lock for OCaml threads.
+
+>
+> (The converse of this is that if your unused memory is swapped out,
+> then it has to be written to disk and read back, which is even less
+> efficient.)
+>
+> There is an madvise flag "MADV_DONTNEED" which is better than munmap +
+> mmap, although not as optimal as it could be.  See links below.
+
+You can also try to map fresh anonymous memory over the already mapped
+area, saves an munmap call.
+
+>
+> http://gcc.gnu.org/ml/gcc-patches/2011-10/msg00733.html
+> http://www.reddit.com/r/programming/comments/dp5up/implementations_for_many_highlevel_programming/c120n77
+>
+> Probably the OCaml GC should be setting madvise hints anyway.
+
+It should mmap()/munmap() instead of malloc/realloc/free in that case, right?
+Which probably wouldn't be a bad idea, as you don't get the fragmentation issues
+as much as you do with malloc.
+
+>
+> While we're at it, the GC may be able to cooperate better with the
+> new(-ish) Transparent Hugepages feature of Linux.
+
+Does it suffice to allocate the major heap in 2MB increments to take advantage of that?
+
+Best regards,
+--Edwin

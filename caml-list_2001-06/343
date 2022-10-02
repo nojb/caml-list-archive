@@ -1,0 +1,216 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id PAA03618; Thu, 21 Jun 2001 15:43:20 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id PAA03601 for <caml-list@pauillac.inria.fr>; Thu, 21 Jun 2001 15:43:19 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id f5LDhH117282;
+	Thu, 21 Jun 2001 15:43:19 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id PAA13489;
+	Thu, 21 Jun 2001 15:43:16 +0200 (MET DST)
+Date: Thu, 21 Jun 2001 15:43:16 +0200
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+To: Xavier Leroy <Xavier.Leroy@inria.fr>
+Cc: OCAML <caml-list@inria.fr>
+Subject: Re: [Caml-list] native threads not parallel?
+Message-ID: <20010621154316.A18064@miss.wu-wien.ac.at>
+References: <20010615184931.A25835@miss.wu-wien.ac.at> <20010615191046.A20258@pauillac.inria.fr> <20010615204218.C25835@miss.wu-wien.ac.at> <20010615233325.B24915@miss.wu-wien.ac.at>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+User-Agent: Mutt/1.2.5i
+In-Reply-To: <20010615233325.B24915@miss.wu-wien.ac.at>; from mottl@miss.wu-wien.ac.at on Fri, Jun 15, 2001 at 23:33:26 +0200
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Fri, 15 Jun 2001, Markus Mottl wrote:
+> I have just been told that things work smoothly with dual-processor
+> machines under Linux, and it also turned out due to more experimentation
+> that the behaviour of native threads under Solaris is comparable to
+> a lottery: when running very long, it seems that multiple threads are
+> used. Sometimes. But sometimes you can also get bus errors. It's really
+> unpredictable. Better don't bother with native threads under Solaris...
+
+I couldn't resist and have done another test now. First, I have made
+sure that multiple threads work under C. As Xavier has pointed out, this
+requires setting the concurrency level to more than the default of 1.
+Works fine (= in parallel).
+
+Then I have written a small test program that tries to do the same under
+OCaml - but no success...
+
+Here are the the timings achieved by calling C via OCaml:
+
+  Running sequentially:
+  Wall clock time: 6.598713
+
+  Running in parallel:
+  Wall clock time: 6.601169
+
+
+Here are the the timings achieved by using C only (clearly runs faster
+with threads):
+
+  Running sequentially
+  Wall clock time: 6.995337
+
+  Running in parallel
+  Wall clock time: 3.910411
+
+The only thing I can imagine is that OCaml somehow changes
+scheduling so that the threads cannot run in parallel anymore, even if
+"enter_blocking_section" is used. Is this possible? Or am I just making
+some stupid mistake?
+
+Regards,
+Markus Mottl
+
+P.S.:
+
+The files I used in the test:
+
+The C-only version:
+---------------------------------------------------------------------------
+#include <stdio.h>
+#include <sys/time.h>
+#include <unistd.h>
+#include <pthread.h>
+
+#define NUM_THREADS 2
+
+double gtimeofday () {
+  struct timeval t;
+  gettimeofday(&t, NULL);
+  return (t.tv_sec + t.tv_usec/1000000.0);
+}
+
+void init() {
+  thr_setconcurrency(sysconf(_SC_NPROCESSORS_ONLN));
+}
+
+void calc_seq() {
+  int i;
+  for(i=0; i<=50000000; i++);
+}
+
+void * calc_par(void *threadid) {
+  int i;
+  for(i=0; i<=50000000; i++);
+  pthread_exit(NULL);
+}
+
+void seq () {
+  double t1, t2;
+
+  printf("Running sequentially\n");
+
+  t1 = gtimeofday();
+    calc_seq(); calc_seq();
+  t2 = gtimeofday();
+
+  printf("Wall clock time: %f\n", (t2 - t1));
+}
+
+void par () {
+  double t1, t2;
+  pthread_t tids[NUM_THREADS];
+  int rc, t, status;
+
+  printf("Running in parallel\n");
+
+  t1 = gtimeofday();
+    for (t=0; t<NUM_THREADS; t++) {
+      rc = pthread_create(&tids[t], NULL, calc_par, (void *) t);
+
+      if (rc) {
+        printf("pthread_create failed: return code: %d\n", rc);
+        exit(-1);
+      }
+    }
+
+    for (t=0; t<NUM_THREADS; t++) {
+      rc = pthread_join(tids[t], (void **) &status);
+
+      if (rc) {
+        printf("pthread_join failed: return code: %d\n", rc);
+        exit(-1);
+      }
+    }
+  t2 = gtimeofday();
+
+  printf("Wall clock time: %f\n", (t2 - t1));
+}
+
+int main(int argc) {
+  init ();
+  seq (); printf ("\n"); par ();
+  pthread_exit(NULL);
+}
+---------------------------------------------------------------------------
+
+The C-implementation for OCaml:
+---------------------------------------------------------------------------
+#include <stdio.h>
+#include <pthread.h>
+
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/memory.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+
+value test_init () {
+  thr_setconcurrency(sysconf(_SC_NPROCESSORS_ONLN));
+  return Val_unit;
+}
+
+value test_calc () {
+  int i;
+
+  enter_blocking_section();
+
+    for (i=0; i<50000000; i++);
+
+  leave_blocking_section();
+
+  return Val_unit;
+}
+---------------------------------------------------------------------------
+
+The OCaml-file to be used with the C-file right above:
+---------------------------------------------------------------------------
+open Printf
+open Unix
+
+external init : unit -> unit = "test_init" "noalloc"
+external calc : unit -> unit = "test_calc" "noalloc"
+
+let _ = init ()
+
+let seq () =
+  printf "Running sequentially:\n";
+
+  let t1 = gettimeofday () in
+    calc (); calc ();
+  let t2 = gettimeofday () in
+
+  printf "Wall clock time: %f\n" (t2 -. t1)
+
+let par () =
+  printf "Running in parallel:\n";
+
+  let t1 = gettimeofday () in
+    let tids = List.map (Thread.create calc) [(); ()] in
+    List.iter Thread.join tids;
+  let t2 = gettimeofday () in
+
+  printf "Wall clock time: %f\n" (t2 -. t1)
+
+let _ = seq (); print_newline (); par ()
+---------------------------------------------------------------------------
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+-------------------
+Bug reports: http://caml.inria.fr/bin/caml-bugs  FAQ: http://caml.inria.fr/FAQ/
+To unsubscribe, mail caml-list-request@inria.fr  Archives: http://caml.inria.fr
+

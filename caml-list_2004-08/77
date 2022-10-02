@@ -1,0 +1,305 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA14907; Wed, 4 Aug 2004 17:38:19 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id RAA14428 for <caml-list@pauillac.inria.fr>; Wed, 4 Aug 2004 17:38:18 +0200 (MET DST)
+Received: from ensim.smartydns22.com (ev1s-67-15-74-65.ev1servers.net [67.15.74.65] (may be forged))
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i74FcHmL025590
+	for <caml-list@inria.fr>; Wed, 4 Aug 2004 17:38:17 +0200
+Received: from www.ivorykite.com (localhost.localdomain [127.0.0.1])
+	by ensim.smartydns22.com (8.12.10/8.12.10) with SMTP id i74FcGSY015213
+	for <caml-list@inria.fr>; Thu, 5 Aug 2004 01:38:16 +1000
+Received: from 60.246.255.171
+        (SquirrelMail authenticated user effbiae@ivorykite.com)
+        by www.ivorykite.com with HTTP;
+        Thu, 5 Aug 2004 01:38:16 +1000 (EST)
+Message-ID: <37738.60.246.255.171.1091633896.squirrel@www.ivorykite.com>
+In-Reply-To: <50714.60.246.254.84.1091615122.squirrel@www.ivorykite.com>
+References: <36002.60.246.254.84.1091587147.squirrel@www.ivorykite.com>      
+     <d849ad2a040803215967acd9ed@mail.gmail.com>     
+    <36292.60.246.254.84.1091597068.squirrel@www.ivorykite.com>     
+    <d849ad2a040804002840189222@mail.gmail.com>  
+    <44554.60.246.254.84.1091607496.squirrel@www.ivorykite.com>  
+    <4110B512.40108@kittown.com>
+    <50714.60.246.254.84.1091615122.squirrel@www.ivorykite.com>
+Date: Thu, 5 Aug 2004 01:38:16 +1000 (EST)
+Subject: [Caml-list] custom mmap modeled on bigarray
+From: "Jack Andrews" <effbiae@ivorykite.com>
+To: caml-list@inria.fr
+Reply-To: effbiae@ivorykite.com
+User-Agent: SquirrelMail/1.4.2
+MIME-Version: 1.0
+Content-Type: text/plain;charset=iso-8859-1
+Content-Transfer-Encoding: 8bit
+X-Priority: 3
+Importance: Normal
+X-Miltered: at nez-perce with ID 411102E9.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; modeled:01 struct:01 struct:01 resize:01 resize:01 crashes:01 finalizer:01 eleven:99 stdio:01 stdlib:01 unistd:01 errno:01 alloc:01 intext:01 mlvalues:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+sorry if i was at all obnoxious earlier -- i'm a bit manic at the moment.
+
+with that in mind... i've written a prototype C library for mmapping files
+and viewing the map as an array of ints.  i (optimistically) tried
+substituting my get/set externals with the inlineable "%bigarray_ref_1"
+and "%bigarray_set_1" with the expected result -- bang!
+
+is there a way to hack this so %bigarray_get_1 will work?  do i need to
+layout my custom struct in a particular way?
+
+without further ado, here is the mm.ml program, Makefile and mm.c native
+code. (i've made my C code look more conventional than my last post)
+
+$ cat mm.ml
+external init : unit -> unit = "mm_init"
+let _ = init()
+
+module Mm = struct
+  type 'a t
+  external create: string -> int -> 'a t = "mm_create"
+  external mopen: string -> 'a t = "mm_open"
+  external resize: 'a t -> int -> unit = "mm_resize"
+  external sync: 'a t -> unit = "mm_sync"
+  (* here's the slow get/set.....                         *)
+  (*       note that 'a is always int for test purposes   *)
+  external slow_get: 'a t -> int -> 'a = "mm_get_int"
+  external slow_set: 'a t -> 'a -> int -> unit = "mm_set_int"
+  (********************************************************)
+  (* ... and here's the optimistic experiment             *)
+  external get: 'a t -> int -> 'a = "%bigarray_ref_1"
+  external set: 'a t -> 'a -> int -> unit = "%bigarray_set_1"
+  (********************************************************)
+end;;
+
+(* this program crashes after successful completion and before
+   the finalizer for mm is called...?
+*)
+let mm=Mm.create "tmp1" 1024 in
+ for i=0 to 200 do Mm.slow_set mm i i done;
+ Mm.sync mm;;
+
+let mm=Mm.mopen "tmp1" in
+ print_string "expecting eleven, got ";print_int (Mm.slow_get mm 11);
+ print_newline();;
+
+let mm=Mm.mopen "tmp1"
+and odds=ref 0 in
+ for i=0 to 200 do
+  if (Mm.slow_get mm i) land 1 = 1 then odds:=!odds+1
+ done;
+ print_string "number of odds: ";print_int !odds;print_newline();;
+
+let optimistic=false in
+if optimistic then begin
+ let mm=Mm.mopen "tmp1"
+ and odds=ref 0 in
+  for i=0 to 200 do
+   if (Mm.get mm i) land 1 = 1 then odds:=!odds+1
+  done;
+ let mm=Mm.mopen "tmp2" in
+  for i=0 to 200 do Mm.set mm i i done;
+  Mm.sync mm;
+end;;
+
+
+$ cat mm.c
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <errno.h>
+
+#include <caml/alloc.h>
+#include <caml/custom.h>
+#include <caml/fail.h>
+#include <caml/intext.h>
+#include <caml/memory.h>
+#include <caml/mlvalues.h>
+
+
+/******************************************************\
+ ** CHK(mm) is error handler - calls failwith         **
+ ** CHKp(mm) appends system error from strerror       **
+\******************************************************/
+#define CHKbase(x,y) do { if(!(int)(x))\
+ {sprintf(err,"!CHK (%s:%d): %s",__FILE__,__LINE__,#x);\
+  if(y)sprintf(err+strlen(err),"\n%s",strerror(errno));\
+  failwith(err);\
+ }} while(0)
+#define CHK(x) CHKbase(x,0)
+#define CHKp(x) CHKbase(x,1)
+
+static char* err;static long errz;/* error buf and buf size */
+/*page size and mask for aligning in mmap*/
+static size_t page_size;static unsigned long page_mask;
+
+/* MMP is the structure of the file: a UL header specifying length
+** of array, followed by the array
+*/
+typedef struct _MMP{
+ unsigned long n;/* number of bytes in ar */
+ int ar[];/* the data in the array to be cast to any type */
+}*MMP;
+typedef struct _MM {
+ void* data; /* a copy of mmp->ar for use as bigarray */
+ char* filename;
+ long fd; /* file descriptor */
+ MMP mmp; /* the return value of mmap is stored here */
+ unsigned long fz;/* the size of the file (will be multiples of page_size) */
+}*MM;
+
+/******************************************************\
+ ** Here are the C functions that are glued to ocaml **
+\******************************************************/
+MM nMM() /* malloc a MM -- only for use in C test code */
+{MM mm=malloc(sizeof(struct _MM));
+ memset(mm,0,sizeof(struct _MM));
+ return mm;
+}
+int mapMM(MM mm,unsigned long n) /*used by create, open and realloc*/
+{unsigned long fz=(n+sizeof(unsigned long)+(page_size-1))&page_mask;
+ CHK(fz>0);
+ if(fz>mm->fz)
+ {unsigned long lsk,zero=0;
+  CHKp((lsk=lseek(mm->fd,fz-1,SEEK_SET))==fz-1);
+  CHKp(1==write(mm->fd,&zero,1));CHK(lseek(mm->fd,0,SEEK_CUR)==fz);
+ }
+ void* p;
+ p=mmap(0,fz,PROT_READ|PROT_WRITE,MAP_FILE|MAP_SHARED,mm->fd,0);
+ CHKp(p&&-1!=(long)p);
+ mm->mmp=p;
+ mm->mmp->n=n;
+ mm->data=mm->mmp->ar;
+ mm->fz=fz;
+ return n;
+}
+/* mode in {'c':create,'o':open}*/
+int iniMM(MM mm,const char* filename,char mode,unsigned long size)
+{int open_mode=O_RDWR,permissions=S_IRUSR|S_IWUSR;
+ mm->filename=strdup(filename);
+ switch(mode)
+ {case 'c':
+   open_mode|=O_CREAT;
+   CHKp(-1!=(mm->fd=open(filename,open_mode,permissions)));
+   return mapMM(mm,size);
+  case 'o':
+  {FILE *fp;CHK(fp=fopen(filename,"r"));
+   unsigned long this_size;
+   CHK(1==fread(&this_size,sizeof(unsigned long),1,fp));
+   CHK(!fclose(fp));
+   CHKp(-1!=(mm->fd=open(filename,open_mode)));
+   CHK(((mm->fz=lseek(mm->fd,0,SEEK_END))&page_mask)==mm->fz);
+   CHK(this_size+sizeof(unsigned long)<=mm->fz);
+   return mapMM(mm,this_size);/*ignore size - use size from head of file*/
+ }}return -1;
+}
+int unMM(MM mm)
+{unsigned long oldn=mm->mmp->n;CHK(mm->fz);
+ CHKp(!munmap(mm->mmp,mm->fz));
+ FILE *fp;CHKp(fp=fopen(mm->filename,"r"));
+ unsigned long n;CHK(1==fread(&n,sizeof(unsigned long),1,fp));
+ CHK(!fclose(fp));CHK(n==oldn);return 0;
+}
+int finalizeMM(MM mm)
+{CHK(unMM(mm));
+ CHK(!close(mm->fd));
+ free(mm->filename);
+ return 0;
+}
+int resizeMM(MM mm,unsigned long n)
+{if(n>(mm->fz-sizeof(unsigned long)))
+ {unMM(mm);
+  CHK(0<mapMM(mm,n));
+ }
+ mm->mmp->n=n;
+ return n;
+}
+int syncMM(MM mm)
+{CHKp(!msync(mm->mmp,mm->fz,MS_SYNC));
+ return 0;
+}
+/******************************************************\
+ ** Here's the ocaml interface                       **
+\******************************************************/
+#define v2mm MM mm=(MM)Data_custom_val(vmm)
+static void mm_finalize(value vmm)
+{v2mm;
+ printf("mm_finalize\n");
+ finalizeMM(mm);
+}
+static struct custom_operations mm_ops = {
+ "mm", mm_finalize,
+ custom_compare_default, custom_hash_default,
+ custom_serialize_default, custom_deserialize_default
+};
+
+CAMLprim value mm_init(value unit) /*must be called before use*/
+{register_custom_operations(&mm_ops);
+ page_size = (size_t) sysconf (_SC_PAGESIZE);
+ page_mask=0;unsigned long ps=page_size;
+ unsigned long pbit;for(pbit=0;!(ps&1);pbit++)ps>>=1;
+ page_mask=(((unsigned long)-1)>>pbit)<<pbit;
+ errz=1024;err=malloc(errz);if(!err)failwith("unable to alloc error buffer");
+ return Val_unit;
+}
+value mm_ini(value vfn,char mode,value vsize)
+{value vmm=alloc_custom(&mm_ops,sizeof(struct _MM),1,100);
+ v2mm;
+ CHK(mode=='c'||mode=='o');
+ {unsigned long size=-1;
+  if(mode=='c')
+   size=Long_val(vsize)*sizeof(unsigned long);
+  iniMM(mm,String_val(vfn),mode,size);
+ }
+ return vmm;
+}
+CAMLprim value mm_create(value vfn, value vsize) /* see iniMM 'c' */
+{return mm_ini(vfn,'c',vsize);
+}
+CAMLprim value mm_open(value vfn) /* see iniMM 'o' */
+{return mm_ini(vfn,'o',-1);
+}
+CAMLprim value mm_resize(value vmm, value vsize) /* see resizeMM */
+{v2mm;
+ resizeMM(mm,Val_long(vsize));
+ return Val_unit;
+}
+CAMLprim value mm_sync(value vmm) /* see syncMM */
+{v2mm;
+ syncMM(mm);
+ return Val_unit;
+}
+/******************************************************\
+ **                                                  **
+ ** Here's where we want bigarray_ref_1 instead      **
+ **                                                  **
+\******************************************************/
+CAMLprim value mm_get_int(value vmm, value vind)
+{long*ar=((MM)vmm)->data;return Val_int(ar[Int_val(vind)]);
+}
+/******************************************************\
+ **                                                  **
+ ** Here's where we want bigarray_set_1 instead      **
+ **                                                  **
+\******************************************************/
+CAMLprim value mm_set_int(value vmm, value vind, value newval)
+{long*ar=((MM)vmm)->data;ar[Int_val(vind)]=Int_val(newval);return Val_unit;
+}
+
+
+
+$ cat Makefile
+all:
+        ocamlc mm.c
+        ocamlc -custom mm.o bigarray.cma mm.ml -o mm
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

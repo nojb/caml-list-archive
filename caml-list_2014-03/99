@@ -1,0 +1,137 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by sympa.inria.fr (Postfix) with ESMTPS id E92FC7F89E
+	for <caml-list@sympa.inria.fr>; Sun, 23 Mar 2014 05:41:50 +0100 (CET)
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail2-smtp-roc.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail2-smtp-roc.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail2-smtp-roc.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ag8LALBlLlNCJwNzY2dsb2JhbABYFoMriDutYzqMbYEpAxgHDgg8giUBAQECAidFDRsYHGkHDSCHXg3NQheOegeEOASYSQGBMpQsPQ
+X-IPAS-Result: Ag8LALBlLlNCJwNzY2dsb2JhbABYFoMriDutYzqMbYEpAxgHDgg8giUBAQECAidFDRsYHGkHDSCHXg3NQheOegeEOASYSQGBMpQsPQ
+X-IronPort-AV: E=Sophos;i="4.97,713,1389740400"; 
+   d="scan'208";a="64221549"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 23 Mar 2014 05:41:35 +0100
+Received: (qmail 99287 invoked by uid 9370); 23 Mar 2014 04:41:33 -0000
+Date: 23 Mar 2014 04:41:33 -0000
+Message-ID: <20140323044133.99286.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: avatar@hot.ee, jonathan.protzenko@gmail.com
+CC: caml-list@inria.fr
+In-reply-to: <532DEC4E.6040505@hot.ee>
+Subject: Re: [Caml-list] typechecking
+
+
+Misha Aizatulin wrote:
+> type t1 = T1
+> type t2 = T2
+>
+> let f T2 = ()
+>
+> let input (c : in_channel) : t1 =
+>   let t = input_value c in
+>   f t;
+>   t
+
+The expression input_value c has the type 'a. The variable t is
+let-bound, so it receives the generalized, polymorphic type
+        forall 'a. 'a
+In the expression [f t] this polymorphic type is instantiated to t1.
+In [t], the last expression of [input], the polymorphic type is
+instantiated to t2. There are no problems.
+
+One may shout: wait a minute! The expression [input_value c]
+is not syntactically a value. Therefore, the value restriction should
+prevent generalization. The classical value restriction indeed does
+prevent. But OCaml has a relaxed value restriction. For example, the
+following legitimate code
+
+        let foo () = []
+                val foo : unit -> 'a list = <fun>
+        let f [1] = ()
+                val f : int list -> unit = <fun>
+        let bar () : char list =
+          let t = foo () in
+          f t;
+          t
+                val bar : unit -> char list = <fun>
+
+typechecks in OCaml -- but it wouldn't under the classical
+value restriction. The paper
+
+    Jacques Garrigue: Relaxing the Value Restriction.
+    Proc. Int. Symposium on Functional and Logic Programming, Nara, April 2004. 
+    LNCS 2998, pp. 196--213. (extended version: RIMS Preprint 1444)
+    < http://www.math.nagoya-u.ac.jp/~garrigue/papers/morepoly-long.pdf >
+
+explains very well why the original value restriction is too
+restrictive.
+
+So, what to do about the original problem?
+
+Jonathan Protzenko recommended:
+> I was also surprised by this example, and I kind of expected
+> input_value to have type in_channel -> '_a.
+> Since writing '_a is not allowed, I guess there's not much we can do here.
+
+Although writing the type '_a in a type annotation is not allowed,
+internally such a type could be ascribed to a value (I side-step murky
+separate compilation issues that creates). So, one could have
+input_value of the type Jonathan wants. Alas, that is too
+restrictive. Consider
+
+        let ll = ref [];;
+                val ll : '_a list ref = {contents = []}
+        let input_list (c:in_channel) = !ll;;
+                val input_list : in_channel -> '_a list = <fun>
+
+        let c = open_in "/dev/null" in
+        (1::input_list c, true::input_list c)
+
+        Error: This expression has type int list
+        but an expression was expected of type bool list
+        Type int is not compatible with type bool 
+
+Some if input_value has the type Jonathan suggest, we can only use
+input_value to read the values of the same type.
+
+One solution is to give input_value a sound type such as the
+following:
+
+        val input_value : 'a -> in_channel -> 'a
+
+That is, input_value should receive _some_ value of the type it is
+supposed to read. The user must provide the evidence that the type to
+read is populated. One problem: it is too
+cumbersome in practice. The second problem is that function types are
+all populated -- by, for example, [fun _ -> failwith "black hole"].
+
+The complete solution is to update the function
+        generalize_expansive in typing/ctype.ml
+which is responsible for implementing the relaxed value restriction.
+The type 'a should not be considered co-variant in 'a. Alas, such a
+modification is a bit cumbersome since generalize_expansive is called
+recursively. One have to split cases. It is not clear how much benefit
+can be gained -- complicating type checker for the sake of a rare
+error.
+
+

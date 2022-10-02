@@ -1,0 +1,94 @@
+Return-Path: <daniel.c.buenzli@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 633BCBC37
+	for <caml-list@yquem.inria.fr>; Wed,  9 Dec 2009 05:25:12 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AkMBAOO1HktKfU4ZkGdsb2JhbACEJZZ9PwEBAQEJCQwHEwOrJYFdhXmIagECAwWBKoIsVwSDAhuIDg
+X-IronPort-AV: E=Sophos;i="4.47,366,1257116400"; 
+   d="scan'208";a="41647690"
+Received: from ey-out-2122.google.com ([74.125.78.25])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 09 Dec 2009 05:25:12 +0100
+Received: by ey-out-2122.google.com with SMTP id 22so1395213eye.7
+        for <caml-list@inria.fr>; Tue, 08 Dec 2009 20:25:11 -0800 (PST)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:sender:received:in-reply-to
+         :references:date:x-google-sender-auth:message-id:subject:from:to:cc
+         :content-type:content-transfer-encoding;
+        bh=hXI1r/AGcBAnj6md6teyPYo9MOe7A0bdZIhReKUJlis=;
+        b=mL/597B05OwBE/8WkT695dNbEwTWSEvQXTsvQfxelfM0Qh9atFzUJ6sZyZAqpnJRQv
+         zyPAtEVXxJ3W6Tm2r3ayBl6wLxiAItq7LcRAXtR7Ntr7N/gdc9VFQKsVFl1gxLegL63Q
+         thyH7OIyupFF+/Ap5Q/635+rFp1rxhf3G9cNk=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:sender:in-reply-to:references:date
+         :x-google-sender-auth:message-id:subject:from:to:cc:content-type
+         :content-transfer-encoding;
+        b=ZKc7JAkykeFz5iK3fws7tZGkmPoRj7H2bIoITGpBz9Ra426JfmWWkwKTsLYsj5yEuO
+         90QBOw21uC471qVNxObjZZRH5OsRgApLJ7Z1qEW1xXuQulQ9tf+caXq7U9FZzDNkEpnc
+         iSMoNhLKGZe74vO12NjKCP+uiaM4HjA+lCj0Y=
+MIME-Version: 1.0
+Sender: daniel.c.buenzli@gmail.com
+Received: by 10.213.46.148 with SMTP id j20mr9610689ebf.1.1260332711617; Tue, 
+	08 Dec 2009 20:25:11 -0800 (PST)
+In-Reply-To: <4B1F0E3A.3040907@citycable.ch>
+References: <4B1F0E3A.3040907@citycable.ch>
+Date: Wed, 9 Dec 2009 12:25:11 +0800
+X-Google-Sender-Auth: 8da0c8bef8b98cfe
+Message-ID: <91a3da520912082025mf4aba28o2b36884b3b001831@mail.gmail.com>
+Subject: Re: Recursion on React.events.
+From: =?UTF-8?Q?Daniel_B=C3=BCnzli?= <daniel.buenzli@erratique.ch>
+To: guillaume.yziquel@citycable.ch
+Cc: caml-list@inria.fr
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: quoted-printable
+X-Spam: no; 0.00; recursion:01 buenzli:01 recursive:01 recursive:01 occurence:01 reschedule:98 reschedule:98 rec:01 precisely:01 behaviour:01 loops:02 semantic:02 define:02 define:02 primitive:02 
+
+>> let rec regular_schedule start_time period =3D
+>> =C2=A0React.E.switch React.E.never begin React.E.map
+>> =C2=A0 =C2=A0begin fun () -> regular_schedule (Calendar.add (Calendar.no=
+w ())
+>> period) period end
+>> =C2=A0 =C2=A0begin schedule start_time end
+>> =C2=A0end
+
+Look at the semantic definition of E.switch in the documentation. When
+a tick happens the whole switch switches instantaneously to the event
+for the new tick returned by regular_schedule which will happen in
+now+period. You never see ticks because as soon a tick happen you
+replace the event that should "show" the tick by "showing" the next
+tick.
+
+Anyway don't do any recursive tricks unless you really know what you
+are doing (which you don't seem). You are asking for trouble (infinite
+loops and puzzling behaviour more precisely). The ONLY right way to
+define recursive events and signals is to use the fixed point
+operators. So in your case something like this should work :
+
+let regular_schedule start_time period =3D
+  let define tick =3D (* tick is the value of tick' dt times ago *)
+    let tick' =3D
+      let reschedule () =3D Calendar.add (Calendar.now ()) period in
+      React.E.switch (schedule start_time) (E.map reschedule tick)
+    in
+    tick', tick'
+  in
+  E.fix define
+
+So basically after a tick' happens, tick will immediatly (but not
+instantaneously) happen and reschedule a new tick' occurence.
+
+Note that in general I would avoid what you are doing altoghether by
+providing regular_schedule as a primitive as you do for schedule. If
+you are using too much ugly side effects and tricks in your event
+definitions then you loose all the benefits of frp.
+
+Best,
+
+Daniel
+
+P.S. You may want to have a look at rtime : http://erratique.ch/software/rt=
+ime
+

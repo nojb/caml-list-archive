@@ -1,0 +1,170 @@
+Return-Path: <darioteixeira@yahoo.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE,
+	DNS_FROM_RFC_POST,DNS_FROM_RFC_WHOIS autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 90221BB84
+	for <caml-list@yquem.inria.fr>; Sun, 13 Jul 2008 16:32:24 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmMDAEeueUjOvjGucGdsb2JhbACSLAEMBQIGGAOUSw
+X-IronPort-AV: E=Sophos;i="4.30,353,1212357600"; 
+   d="scan'208";a="13077809"
+Received: from web54604.mail.re2.yahoo.com ([206.190.49.174])
+  by mail2-smtp-roc.national.inria.fr with SMTP; 13 Jul 2008 16:32:24 +0200
+Received: (qmail 43831 invoked by uid 60001); 13 Jul 2008 14:32:23 -0000
+DomainKey-Signature: a=rsa-sha1; q=dns; c=nofws;
+  s=s1024; d=yahoo.com;
+  h=Received:X-Mailer:Date:From:Subject:To:In-Reply-To:MIME-Version:Content-Type:Content-Transfer-Encoding:Message-ID;
+  b=MJGXekXEaEnrbgNDZ1N/ARe9pYmST3Fj/y+5Esv3QS9tCdSCdAUyNFRgpc/JljnCAQhb8cHCi/DfC1CZtgyJ+UWGWlAmgz1+Fp0Lx4dmFOhDDCxSAXbSREQ+RWK2vQEqSxxwkOqKoUa7bHJDa+J2FRFplLYGb4OQh1+BmViV1wM=;
+Received: from [212.13.63.127] by web54604.mail.re2.yahoo.com via HTTP; Sun, 13 Jul 2008 07:32:22 PDT
+X-Mailer: YahooMailWebService/0.7.199
+Date: Sun, 13 Jul 2008 07:32:22 -0700 (PDT)
+From: Dario Teixeira <darioteixeira@yahoo.com>
+Subject: Re: [Caml-list] Troublesome nodes
+To: caml-list@yquem.inria.fr
+In-Reply-To: <845241.60615.qm@web54607.mail.re2.yahoo.com>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=utf-8
+Content-Transfer-Encoding: quoted-printable
+Message-ID: <220702.43610.qm@web54604.mail.re2.yahoo.com>
+X-Spam: no; 0.00; nodes:01 nodes:01 node:01 node:01 variants:01 struct:01 variants:01 recursive:01 sig:01 val:01 val:01 struct:01 seq:01 seq:01 enforces:01 
+
+Hi,
+
+For the sake of future reference, I'm going to summarise the solution to
+the original problem, arrived at thanks to the contribution of various
+people in this list (your help was very much appreciated!).  This might
+came in handy in the future if you run into a similar problem.
+
+So, we have a document composed of a sequence of nodes.  There are four
+different kinds of nodes, two of which are terminals (Text and See)
+and two of which are defined recursively (Bold and Mref).  Both See and
+Mref produce links, and we want to impose a constraint that no link node
+shall be the immediate ancestor of another link node.  An additional
+constraint is that nodes must be created via constructor functions.
+Finally, the structure should be pattern-matchable, and the distinction
+between link/nonlink nodes should be preserved so that Node-to-Node
+functions do not require code duplication and/or ugly hacks.
+
+Using conventional variants, the structure can be represented as follows.
+Alas, this solution is not compatible with constructor functions and
+requires unwanted scaffolding:
+
+module Ast =3D
+struct
+    type super_node_t =3D
+        | Nonlink_node of nonlink_node_t
+        | Link_node of link_node_t
+    and nonlink_node_t =3D
+        | Text of string
+        | Bold of super_node_t list
+    and link_node_t =3D
+        | Mref of string * nonlink_node_t list
+        | See of string
+end
+
+
+Below is the solution that was finally obtained.  Nodes are represented
+using polymorphic variants, and the module itself is recursive to get
+around the "type not fully defined" problem:
+
+module rec Node:
+sig
+    type nonlink_node_t =3D [ `Text of string | `Bold of Node.super_node_t =
+list ]
+    type link_node_t =3D [ `See of string | `Mref of string * nonlink_node_=
+t list ]
+    type super_node_t =3D [ nonlink_node_t | link_node_t ]
+
+    val text: string -> nonlink_node_t
+    val bold: [< super_node_t] list -> nonlink_node_t
+    val see: string -> link_node_t
+    val mref: string -> nonlink_node_t list -> link_node_t
+end =3D
+struct
+    type nonlink_node_t =3D [ `Text of string | `Bold of Node.super_node_t =
+list ]
+    type link_node_t =3D [ `See of string | `Mref of string * nonlink_node_=
+t list ]
+    type super_node_t =3D [ nonlink_node_t | link_node_t ]
+
+    let text txt =3D `Text txt
+    let bold seq =3D `Bold (seq :> super_node_t list)
+    let see ref =3D `See ref
+    let mref ref seq =3D `Mref (ref, seq)
+end
+
+
+If you try it out, you will see that this solution enforces the basic
+node constraints.  The values foo1-foo4 are valid, whereas the compiler
+won't accept foo5, because a link node is the parent of another:
+
+open Node
+let foo1 =3D text "foo"
+let foo2 =3D bold [text "foo"]
+let foo3 =3D mref "ref" [foo1; foo2]
+let foo4 =3D mref "ref" [bold [see "ref"]]
+let foo5 =3D mref "ref" [see "ref"]
+
+
+Now, suppose you need to create an Ast-to-Node sets of functions (a likely
+scenario if you are building a parser for documents).  The solution is
+fairly straightforward, but note the need to use the cast operator :>
+to promote link/nonlink nodes to supernodes:
+
+module Ast_to_Node =3D
+struct
+    let rec convert_nonlink_node =3D function
+        | Ast.Text txt          -> Node.text txt
+        | Ast.Bold seq          -> Node.bold (List.map convert_super_node s=
+eq)
+
+    and convert_link_node =3D function
+        | Ast.Mref (ref, seq)   -> Node.mref ref (List.map convert_nonlink_=
+node seq)
+        | Ast.See ref           -> Node.see ref
+
+    and convert_super_node =3D function
+        | Ast.Nonlink_node node -> (convert_nonlink_node node :> Node.super=
+_node_t)
+        | Ast.Link_node node    -> (convert_link_node node :> Node.super_no=
+de_t)
+end
+
+
+Finally, another common situation is to build functions to process nodes.
+The example below is that of a node-to-node "identity" module.  Again, it
+is fairly straightforward, but note the use of the operator # and the need
+to cast link/nonlink nodes to supernodes:
+
+module Node_to_Node =3D
+struct
+    open Node
+
+    let rec convert_nonlink_node =3D function
+        | `Text txt              -> text txt
+        | `Bold seq              -> bold (List.map convert_super_node seq)
+
+    and convert_link_node =3D function
+        | `See ref               -> see ref
+        | `Mref (ref, seq)       -> mref ref (List.map convert_nonlink_node=
+ seq)
+
+    and convert_super_node =3D function
+        | #nonlink_node_t as node -> (convert_nonlink_node node :> super_no=
+de_t)
+        | #link_node_t as node    -> (convert_link_node node :> super_node_=
+t)
+end
+
+
+Best regards,
+Dario Teixeira
+=0A=0A=0A      __________________________________________________________=
+=0ANot happy with your email address?.=0AGet the one you really want - mill=
+ions of new email addresses available now at Yahoo! http://uk.docs.yahoo.co=
+m/ymail/new.html
+

@@ -1,0 +1,244 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA02205 for caml-redistribution; Sun, 23 Feb 1997 22:19:05 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA00170 for <caml-list@pauillac.inria.fr>; Fri, 21 Feb 1997 21:04:55 +0100 (MET)
+Received: from spivey.oriel.ox.ac.uk (mike@spivey.oriel.ox.ac.uk [163.1.147.42]) by nez-perce.inria.fr (8.7.6/8.7.3) with ESMTP id VAA07455 for <caml-list@inria.fr>; Fri, 21 Feb 1997 21:04:50 +0100 (MET)
+Received: (from mike@localhost)
+          by spivey.oriel.ox.ac.uk (8.8.4/8.8.4)
+   id UAA04739; Fri, 21 Feb 1997 20:04:47 GMT
+Date: Fri, 21 Feb 1997 20:04:47 GMT
+Message-Id: <199702212004.UAA04739@spivey.oriel.ox.ac.uk>
+From: Mike Spivey <mike@comlab.ox.ac.uk>
+To: caml-list@inria.fr
+Subject: Error recovery in camlyacc
+Sender: weis
+
+Here's a camlyacc grammar for a little Pascal-like language that has a
+few error recovery points.  The error recovery is far from perfect,
+but it illustrates what to do.
+
+-- Mike
+
+----8<--------8<--------8<--------8<--------8<--------8<--------8<----
+
+/*
+ *  picoPascal compiler
+ *  parser.mly $Revision: 1.1 $ $Date: 1996/12/31 15:44:49 $ 
+ *  Copyright (C) J. M. Spivey 1995
+ */
+
+%{
+#open "eval";;
+#open "dict";;
+#open "tree";;
+#open "error";;
+%}
+
+%token <dict__ident>	IDENT
+%token <eval__op>	MULOP ADDOP RELOP
+%token <int32__int32>	NUMBER 
+%token <char>		CHAR
+%token <dict__codelab * int> STRING
+
+/* punctuation */
+%token			SEMI DOT COLON LPAR RPAR COMMA SUB BUS
+%token			EQUAL MINUS ASSIGN VBAR DOTDOT ARROW 
+%token			BADTOK IMPOSSIBLE
+
+/* keywords */
+%token			ARRAY BEGIN CONST DO ELSE ELSIF END IF OF FOR
+%token			PROC RECORD REPEAT RETURN THEN TO TYPE UNTIL
+%token			VAR WHILE NOT CASE POINTER NIL
+
+/* operator priorities */
+%nonassoc		ERROR
+%right			ELSE
+%nonassoc		COMMA
+%left			RELOP EQUAL
+%left			ADDOP MINUS
+%left			MULOP
+%nonassoc		NOT UMINUS
+%nonassoc		RPAR
+
+%type <tree__program>	program
+%start			program
+
+%%
+
+program :	
+    block DOT				{ Prog $1 } ;
+
+block :	
+    decl_list BEGIN stmts END		{ MakeBlock ($1, $3) } ;
+
+decl_list :	
+    /* empty */				{ [] }
+  | decl decl_list			{ $1 @ $2 } ;
+
+decl :	
+    CONST const_decls			{ $2 }
+  | VAR var_decls			{ $2 }
+  | proc_decl				{ [$1] }
+  | TYPE type_decls			{ [TypeDecl $2] } 
+  | error				{ [] };
+
+const_decls :
+    const_decl				{ [$1] }
+  | const_decl const_decls		{ $1 :: $2 } ;
+
+const_decl :
+    IDENT EQUAL expr SEMI		{ ConstDecl ($1, $3) } ;
+
+type_decls :
+    type_decl				{ [$1] }
+  | type_decl type_decls		{ $1 :: $2 } ;
+
+type_decl :	
+    IDENT EQUAL typexpr SEMI		{ ($1, $3) } ;
+
+var_decls :
+    var_decl				{ [$1] }
+  | var_decl var_decls			{ $1 :: $2 } ;
+
+var_decl :
+    ident_list COLON typexpr SEMI	{ VarDecl (VarDef, $1, $3) } ;
+
+proc_decl :
+    proc_heading SEMI block SEMI	{ ProcDecl ($1, $3) } ;
+
+proc_heading :	
+    PROC IDENT params return_type	{ Heading (MakeName $2, $3, $4) } ;
+
+params :
+    LPAR RPAR				{ [] }
+  | LPAR formal_decls RPAR		{ $2 } ;
+
+formal_decls :	
+    formal_decl				{ [$1] }
+  | formal_decl SEMI formal_decls	{ $1 :: $3 } ;
+
+formal_decl :	
+    ident_list COLON typexpr		{ VarDecl (CParamDef, $1, $3) }
+  | VAR ident_list COLON typexpr	{ VarDecl (VParamDef, $2, $4) }
+  | proc_heading			{ PParamDecl $1 } ;
+
+return_type :
+    /* empty */				{ None }
+  | COLON typexpr			{ Some $2 } ;
+
+stmts :	
+    stmt				{ [$1] }
+  | stmt SEMI stmts			{ $1 :: $3 } ;
+
+stmt :	
+    line stmt1				{ Stmt ($2, $1) }
+  | /* A trick to force the right line number */
+    IMPOSSIBLE				{ failwith "impossible" } ;
+
+line :
+    /* EMPTY */				{ !error__err_line } ;
+
+stmt1 :
+    /* EMPTY */				{ Skip }
+  | error				{ Skip }
+  | variable ASSIGN expr		{ Assign ($1, $3) }
+  | name actuals			{ ProcCall ($1, $2) }
+  | RETURN expr_opt			{ Return $2 }
+  | IF if_chain else_part END 		{ IfStmt ($2, $3) }
+  | CASE expr OF arms else_part END     { CaseStmt ($2, $4, $5) }
+  | WHILE expr1 DO stmts END		{ WhileStmt ($2, $4) }
+  | REPEAT stmts UNTIL expr		{ RepeatStmt ($2, $4) }
+  | FOR name ASSIGN expr1 TO expr1 DO stmts END
+					{ let v = Expr (Name $2) in
+					  ForStmt (v, $4, $6, $8) } ;
+
+if_chain :
+    expr THEN stmts			{ [($1, $3)] }
+  | expr THEN stmts ELSIF if_chain	{ ($1, $3) :: $5 } ;
+
+arms :
+    arm					{ [$1] }
+  | arm VBAR arms			{ $1 :: $3 } ;
+
+arm :
+    caselabs COLON stmts		{ ($1, $3) };
+
+caselabs :
+    caselab				{ [$1] }
+  | caselab COMMA caselabs		{ $1 :: $3 } ;
+
+caselab :
+    expr				{ Single $1 }
+  | expr DOTDOT expr			{ Range ($1, $3) } ;
+
+else_part :
+    /* empty */				{ [] }
+  | ELSE stmts				{ $2 } ;
+
+opt_semi :
+    SEMI				{ () }
+  | /* empty */				{ () } ;
+
+ident_list :	
+    IDENT				{ [$1] }
+  | IDENT COMMA ident_list		{ $1 :: $3 } ;
+
+expr_opt :	
+    /* empty */				{ None }
+  | expr				{ Some $1 } ;
+
+expr1 :
+    expr				{ $1 }
+  | error				{ Expr Nil } ;
+
+expr :
+    variable				{ $1 }
+  | NUMBER				{ Expr (Number $1) }
+  | STRING				{ Expr (String $1) }
+  | CHAR				{ Expr (Char $1) }
+  | NIL					{ Expr Nil }
+  | name actuals			{ Expr (FuncCall ($1, $2)) }
+  | NOT expr				{ Expr (Monop (Not, $2)) }
+  | MINUS expr %prec UMINUS		{ Expr (Monop (Uminus, $2)) }
+  | expr MULOP expr			{ Expr (Binop ($2, $1, $3)) }
+  | expr ADDOP expr			{ Expr (Binop ($2, $1, $3)) }
+  | expr MINUS expr			{ Expr (Binop (Minus, $1, $3)) }
+  | expr RELOP expr			{ Expr (Binop ($2, $1, $3)) }
+  | expr EQUAL expr			{ Expr (Binop (Eq, $1, $3)) }
+  | LPAR expr RPAR			{ $2 } 
+  | LPAR expr %prec ERROR		{ yyerror "expression missing ')'";
+					  raise Parse_error } ;
+
+actuals :	
+    LPAR RPAR				{ [] }
+  | LPAR expr_list RPAR			{ $2 }
+  | LPAR expr_list %prec ERROR		{ yyerror "procedure call missing ')'";
+					  raise Parse_error } ;
+
+expr_list :	
+    expr %prec ERROR			{ [$1] }
+  | expr COMMA expr_list		{ $1 :: $3 } ;
+
+variable :	
+    name				{ Expr (Name $1) }
+  | variable SUB expr BUS		{ Expr (Sub ($1, $3)) }
+  | variable DOT name			{ Expr (Select ($1, $3)) }
+  | variable ARROW			{ Expr (Deref $1) } ;
+
+typexpr :	
+    name				{ TypeName $1 }
+  | ARRAY expr OF typexpr		{ Array ($2, $4) }
+  | RECORD fields END			{ Record $2 }
+  | POINTER TO typexpr			{ Pointer $3 } ;
+
+fields :
+    field_decl opt_semi			{ [$1] }
+  | field_decl SEMI fields		{ $1 :: $3 } ;
+
+field_decl :	
+    ident_list COLON typexpr		{ VarDecl (FieldDef, $1, $3) } ;
+
+name :	
+    IDENT				{ MakeName $1 }	;
+
+
+
+

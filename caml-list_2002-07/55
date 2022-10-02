@@ -1,0 +1,108 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA26708; Thu, 4 Jul 2002 11:18:17 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id LAA26817 for caml-list@pauillac.inria.fr; Thu, 4 Jul 2002 11:18:16 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA23362 for <caml-list@pauillac.inria.fr>; Thu, 4 Jul 2002 05:51:20 +0200 (MET DST)
+Received: from obento.cs.caltech.edu (obento.cs.caltech.edu [131.215.44.101])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g643pIP21829
+	for <caml-list@inria.fr>; Thu, 4 Jul 2002 05:51:19 +0200 (MET DST)
+Received: from orchestra.cs.caltech.edu (orchestra.cs.caltech.edu [131.215.44.20])
+	by obento.cs.caltech.edu (Postfix) with ESMTP id B5BCF400E
+	for <caml-list@inria.fr>; Wed,  3 Jul 2002 20:51:17 -0700 (PDT)
+Received: (from mvanier@localhost)
+	by orchestra.cs.caltech.edu (8.11.6/8.9.3) id g643pHU23917;
+	Wed, 3 Jul 2002 20:51:17 -0700
+Date: Wed, 3 Jul 2002 20:51:17 -0700
+Message-Id: <200207040351.g643pHU23917@orchestra.cs.caltech.edu>
+X-Authentication-Warning: orchestra.cs.caltech.edu: mvanier set sender to mvanier@cs.caltech.edu using -f
+From: Michael Vanier <mvanier@cs.caltech.edu>
+To: caml-list@inria.fr
+Subject: [Caml-list] more on lazy lists
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+
+OK, I've been playing around with the lazy evaluation feature of ocaml.
+Now I understand why references are used internally for lazily evaluated
+values; it's for memoization i.e. so that a particular value doesn't have
+to be recomputed after it's been computed once.  I'm having an odd problem,
+though; consider this code:
+
+(* Definition of lazy list type. *)
+
+type 'a stream =
+    Nil
+  | Cons of 'a * 'a stream Lazy.t
+
+exception Invalid_operation
+
+let rec stream_for_each proc s =
+  match s with
+    Nil -> ()
+  | Cons (x, y) ->
+      (proc x;
+       stream_for_each proc (Lazy.force y))
+
+(* Take the first 'n' elements from a stream. *)
+
+let rec take n s =
+  match s with
+    Nil ->
+      (match n with
+        0 -> Nil
+      | n -> raise Invalid_operation)
+  | Cons (x, y) ->
+      (match n with
+        0 -> Nil
+      | n when n < 0 -> raise Invalid_operation
+      | _ ->
+          let next = Lazy.force y in
+          Cons (x, lazy (take (n - 1) next)))
+
+let print_stream n s =
+  stream_for_each (fun x -> Printf.printf "%i\n" x) (take n s)
+
+let rec stream_map2 proc s1 s2 =
+  match (s1, s2) with
+    (Cons (x1, y1), Cons (x2, y2)) ->
+      let s1' = Lazy.force y1 in
+      let s2' = Lazy.force y2 in
+      Cons ((proc x1 x2), lazy (stream_map2 proc s1' s2'))
+  | _ -> raise Invalid_operation
+
+let add_streams s1 s2 =
+  stream_map2 (+) s1 s2
+
+(* Make a constant stream. *)
+
+let rec constant n =
+  Cons (n, lazy (constant n))
+
+let ones = constant 1
+
+
+So far, so good.  Now consider this:
+
+
+let integers = 
+  let rec ints () =
+    Cons (1, lazy (add_streams ones (ints ())))
+  in
+  ints ()
+
+print_stream 10 integers
+
+
+This generates the error message: 
+
+"Stack overflow during evaluation (looping recursion?)."
+
+I don't understand why this happens.  Shouldn't the recursive call to
+"ints ()" be deferred until it's required?  I borrowed this example from
+SICP, so it works in scheme, for what that's worth.
+
+Mike
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

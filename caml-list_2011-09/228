@@ -1,0 +1,652 @@
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p8TAvZhv027969
+	for <caml-list@sympa-roc.inria.fr>; Thu, 29 Sep 2011 12:57:35 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtUBAPlNhE7D3XqWi2dsb2JhbABBgk2lPxQBAQEKCwsbJYFTAQEEASdXCx0GIAENHyoECgYuh18CuAOGMmEEjAiHToUjjBk
+X-IronPort-AV: E=Sophos;i="4.68,460,1312149600"; 
+   d="scan'208,217";a="122122601"
+Received: from ubpmes.univ-bpclermont.fr ([195.221.122.150])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 29 Sep 2011 12:57:35 +0200
+Received: from localhost (localhost.localdomain [127.0.0.1])
+	by ubpmes.univ-bpclermont.fr (Postfix) with ESMTP id CB6D0545BBE
+	for <caml-list@inria.fr>; Thu, 29 Sep 2011 12:57:34 +0200 (CEST)
+X-Virus-Scanned: amavisd-new at univ-bpclermont.fr
+Received: from ubpmes.univ-bpclermont.fr ([127.0.0.1])
+	by localhost (ubpmes.univ-bpclermont.fr [127.0.0.1]) (amavisd-new, port 10024)
+	with ESMTP id ab7x+--s49fz for <caml-list@inria.fr>;
+	Thu, 29 Sep 2011 12:57:32 +0200 (CEST)
+Received: from [172.27.1.69] (unknown [193.54.50.250])
+	by ubpmes.univ-bpclermont.fr (Postfix) with ESMTP id 5CAC6545A56
+	for <caml-list@inria.fr>; Thu, 29 Sep 2011 12:57:32 +0200 (CEST)
+Message-Id: <785DC134-4170-4B3A-A20D-EEAE48D6E26B@lasmea.univ-bpclermont.fr>
+From: =?ISO-8859-1?Q?Jocelyn_S=E9rot?= <Jocelyn.SEROT@ubpmes.univ-bpclermont.fr>
+To: OCaML Mailing List <caml-list@inria.fr>
+Content-Type: multipart/alternative; boundary=Apple-Mail-4--315764416
+Mime-Version: 1.0 (Apple Message framework v935.3)
+Date: Thu, 29 Sep 2011 12:57:31 +0200
+References: <3522CB9B-B4B4-43EA-BFCA-C0553A5D4636@lasmea.univ-bpclermont.fr>
+X-Mailer: Apple Mail (2.935.3)
+X-Validation-by: jocelyn.serot@ubpmes.univ-bpclermont.fr
+Subject: Fwd: [Caml-list] Dependent types ?
+
+
+--Apple-Mail-4--315764416
+Content-Type: text/plain;
+	charset=ISO-8859-1;
+	format=flowed;
+	delsp=yes
+Content-Transfer-Encoding: quoted-printable
+
+Thanks to all for the propositions !
+
+I think I need to give a more concrete example to explain my pb and=20=20
+wishes.
+Sorry, if this get a bit longish.
+
+So, here's a small example in CAPH, involving a very single actor,=20=20
+performing addition on streams of signed, 8-bit integers :
+
+---------- sizedint.cph -----------
+
+actor foo ()
+   in (a:signed<8>, b:signed<8>)
+   out (c:signed<8>)
+rules
+   (a, b) -> c
+| (x, y) -> x+y
+;
+
+stream i1:signed<8> from "sample1.txt";
+stream i2:signed<8> from "sample2.txt";
+stream o:signed<8> to "result.txt";
+
+net o =3D foo (i1,i2);
+
+---------- ------------ -----------
+
+The VHDL code inferred for this example. In particular, the code=20=20
+describing the behavior of the foo actor will contain lines (lots of=20=20
+lines omitted here) :
+
+---------- foo_act.vhd  -----------
+
+entity foo_act is
+    port (
+     ...
+     a: in std_logic_vector(7 downto 0);
+     b: in std_logic_vector(7 downto 0);
+     c: out std_logic_vector(7 downto 0);
+     ...    );
+end foo_act;
+
+architecture FSM of foo_act is
+    ...
+     variable x_v : std_logic_vector(7 downto 0);
+     variable y_v : std_logic_vector(7 downto 0);
+     ...
+     c <=3D x_v + y_v;
+    ...
+end FSM;
+
+---------- ------------ -----------
+
+If i replace 8 by 16 in the .cph source code, the generated code will=20=20
+be similar, except that the std_logic_vectors will (correctly) have=20=20
+range "15 downto 0".
+The genericity of the "+" operator does the rest.
+
+So far, so good.
+
+But now suppose that the foo actor, instead of using directly the "+"=20=20
+operator calls a user-defined "add" function (which itself uses the=20=20
+"+" operator).
+
+Here's the way to write this in CAPH :
+
+---------- sizedint.cph -----------
+
+function add (x,y) =3D x+y : signed<8> * signed<8> -> signed<8>;
+
+actor foo ()
+   in (a:signed<8>, b:signed<8>)
+   out (c:signed<8>)
+rules
+   (a, b) -> c
+| (x, y) -> add(x,y)
+;
+
+stream i1:signed<8> from "sample1.txt";
+stream i2:signed<8> from "sample2.txt";
+stream o:signed<8> to "result.txt";
+
+net o =3D foo (i1,i2);
+
+---------- ------------ -----------
+
+Again, this compiles and runs ok, with the an extra VHDL file=20=20
+generated, called sizedint_globals.vhd :
+
+---------- sizedint_globals.vhd -----------
+
+package sizedint_globals is
+   function add(x:std_logic_vector(7 downto 0); y:std_logic_vector(7=20=20
+downto 0)) return std_logic_vector;
+end sizedint_globals;
+
+package body sizedint_globals is
+   function add(x:std_logic_vector(7 downto 0); y:std_logic_vector(7=20=20
+downto 0)) return std_logic_vector is
+   begin
+     return x + y;
+   end add;
+end sizedint_globals;
+
+---------- ------------ -----------
+
+But now, suppose i now want to write the same program for 16 bit=20=20
+integers (as Oliver rightly points it out, one major advantage of hw=20=20
+programming is the ability to adjust datapath to applications to avoid=20=
+=20
+waste of ressources).
+For this, i will have to rewrite
+
+---------- sizedint.cph -----------
+
+function add (x,y) =3D x+y : signed<16> * signed<16> -> signed<16>;
+
+actor foo ()
+   in (a:signed<16>, b:signed<16>)
+   out (c:signed<16>)
+rules
+   (a, b) -> c
+| (x, y) -> add(x,y)
+;
+
+stream i1:signed<16> from "sample1.txt";
+stream i2:signed<16> from "sample2.txt";
+stream o:signed<16> to "result.txt";
+
+net o =3D foo (i1,i2);
+
+---------- ------------ -----------
+
+Of course, changing the type signature for foo and the I/Os is normal=20=20
+(after all, it's what i want).
+But I would to like to avoid writing another add function (because i=20=20
+know that, at the VHDL level, my function is generic in size).
+So i would like to be able to write sth like :
+
+---------- sizedint.cph -----------
+
+function add (x,y) =3D x+y : signed<s> * signed<s> -> signed<s>;
+
+...
+
+---------- ------------ -----------
+
+and let the compiler infer, from the context in which add is called=20=20
+the value of s (and generated the right signature and impl in=20=20
+signedint_globals.vhd).
+
+Jocelyn
+
+  Le 27 sept. 11 =E0 16:13, oliver a =E9crit :
+
+> Hello,
+>
+>
+> On Tue, Sep 27, 2011 at 10:23:56AM +0200, Jocelyn S=E9rot wrote:
+>>
+>> Le 26 sept. 11 =E0 18:44, Gabriel Scherer a =E9crit :
+>>
+>>>> Phantom types could be a solution but we must declare a new type=20=20
+>>>> for
+>>>> each possible size, which is cumbersome / annoying.
+>>>
+>>> If you define the type system yourself, you can easily add a=20=20
+>>> family of
+>>> type constants `size<n>` (with `n` an integer literal) to the=20=20
+>>> default
+>>> environment of the type checker. Then you can define a parametrized
+>>> type `type 's sized_int` (or float, etc.) and instantiate it with=20=20
+>>> any
+>>> of the size<n>.
+>>
+>> Yes. Good point. Thanks for the idea.
+>> IIUC, my add function would be declared as :
+>>
+>> val add : 'a sized_int * 'a sized_int -> 'a sized_int
+>>
+>> then, with
+>>
+>> val x : size16 sized_int
+>> val y : size16 sized_int
+>>
+>> the type infered for z in
+>>
+>> let z =3D add (x,y)
+>>
+>> will be
+>>
+>> z : size16 sized_int
+>>
+>> Am i right ?
+> [...]
+>
+> Not sure.
+>
+> Depends on what you want ;-)
+>
+> What would the type system
+> yield fopr a type for
+>
+>
+>
+> val x : size16 sized_int
+> val y : size16 sized_int
+>
+> let z =3D and_msb (x,y)  # AND the MSBs of both input values
+>
+> z might be 16 Bits, if this is your "natural" int size - but: what=20=20
+> is natural on
+> FPGA's, when you can change your HW at will?
+> And: if it's "batural", why to declare it?
+>
+> But ANDing two Bits will result in a 1 Bit result.
+>
+> Why should z be 16 Bits then?
+> That would be wasting ressources.
+>
+> IMHO it does not make sense to derive the type of z from the type of
+> x and y. It must be derived from the operation or function that is=20=20
+> used.
+>
+>
+> If you use  'a sized_int   then  this would offer you
+> the possibility also of taking 2 x 16 Bits and get 1 Bit (as in the=20=20
+> and_msb()-example)
+> but of course also to do your
+>
+> z =3D add (x,y) with z of 16 Bits, which you looked for.
+>
+> But is thats a type that can be derived from x and y?
+>
+> Or is it rather the OPERATION ("add" here), or better: the operation
+> together with the input values, that fives you the resulting type?
+>
+> What if you do:
+>
+> val x : size16 sized_int
+> val y : size8  sized_int
+>
+> z =3D add(x, y)
+>
+> What type does z no have?
+>
+> 8 Bits? 16 Bits?
+> Somewhere in between?
+>
+>
+> AFAIK one of the biggest (or better: THE) advantage of FPGAs/VHDL is:
+> you can create your "HW" (HW connections) by SW.
+>
+> So you are not fixed in width, and you can save some bits here and=20=20
+> there,
+> and use them later somewhere else...
+>
+>
+> And, I doubt, somehow, that what you are talking about is a "type=20=20
+> issue".
+> At least nothing that can be derived from the structure of the inputs
+> without knowing the operation.
+>
+> AFAIK you are not constrained to a fixed ALU and databus width,
+> at least not in a sense as we know it from fixed HW that we normally=20=
+=20
+> use
+> when buying a computer at the store.
+> (There may be limits of course, depending on the FPGA device in use.)
+>
+>
+> So, how do you address these issues?
+>
+> I would say either you also need to define the type of z,
+> or you need to derive the type from the source of which
+> your operations/functions are derived.
+>
+> So: you need more information than what you presented in your=20=20
+> questions,
+> to decide for the resulting type.
+>
+> Ciao,
+>   Oliver
+
+
+
+--Apple-Mail-4--315764416
+Content-Type: text/html;
+	charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+
+<html><body style=3D"word-wrap: break-word; -webkit-nbsp-mode: space; -webk=
+it-line-break: after-white-space; "><div><div><div style=3D"margin-top: 0px=
+; margin-right: 0px; margin-bottom: 0px; margin-left: 0px; min-height: 14px=
+; ">Thanks to all for the propositions !</div></div><div style=3D"word-wrap=
+: break-word; -webkit-nbsp-mode: space; -webkit-line-break: after-white-spa=
+ce; "><div><br></div><div>I think I need to give a more concrete example to=
+ explain my pb and wishes.</div><div>Sorry, if this get a bit longish.</div=
+><div><br></div><div>So, here's a small example in CAPH, involving a very s=
+ingle actor, performing addition on streams of signed, 8-bit integers :</di=
+v><div><br></div><div><font class=3D"Apple-style-span" face=3D"Courier" siz=
+e=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">-------=
+--- sizedint.cph -----------</span></font></div><div><font class=3D"Apple-s=
+tyle-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" sty=
+le=3D"font-size: 12px;"><br></span></font></div><div><div><font class=3D"Ap=
+ple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span=
+" style=3D"font-size: 12px;">actor foo ()</span></font></div><div><font cla=
+ss=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-st=
+yle-span" style=3D"font-size: 12px;">&nbsp;&nbsp;in (a:signed&lt;8&gt;, b:s=
+igned&lt;8&gt;)</span></font></div><div><font class=3D"Apple-style-span" fa=
+ce=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-si=
+ze: 12px;">&nbsp;&nbsp;out (c:signed&lt;8&gt;)</span></font></div><div><fon=
+t class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"App=
+le-style-span" style=3D"font-size: 12px;">rules</span></font></div><div><fo=
+nt class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Ap=
+ple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp;(a, b) -&gt; c</span=
+></font></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=
+=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">| (x, y)=
+ -&gt; x+y</span></font></div><div><font class=3D"Apple-style-span" face=3D=
+"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 1=
+2px;">;</span></font></div><div><font class=3D"Apple-style-span" face=3D"Co=
+urier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px=
+;"><br></span></font></div><div><font class=3D"Apple-style-span" face=3D"Co=
+urier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px=
+;">stream i1:signed&lt;8&gt; from "sample1.txt";</span></font></div><div><f=
+ont class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"A=
+pple-style-span" style=3D"font-size: 12px;">stream i2:signed&lt;8&gt; from =
+"sample2.txt";</span></font></div><div><font class=3D"Apple-style-span" fac=
+e=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-siz=
+e: 12px;">stream o:signed&lt;8&gt; to "result.txt";</span></font></div><div=
+><br></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3=
+"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">net o =3D foo=
+ (i1,i2);</span></font></div><div><font class=3D"Apple-style-span" face=3D"=
+Courier"><br></font></div><div><div><font class=3D"Apple-style-span" face=
+=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size=
+: 12px; ">---------- ------------ -----------</span></font></div><div><font=
+ class=3D"Apple-style-span" face=3D"Courier"><br></font></div><div>The VHDL=
+ code inferred for this example. In particular, the code describing the beh=
+avior of the foo actor will contain lines (lots of lines omitted here) :</d=
+iv><div><br></div><div><div><font class=3D"Apple-style-span" face=3D"Courie=
+r" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px; ">=
+---------- foo_act.vhd &nbsp;-----------</span></font></div><div><font clas=
+s=3D"Apple-style-span" face=3D"Courier"><br></font></div><div><font class=
+=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-styl=
+e-span" style=3D"font-size: 12px;">entity foo_act is</span></font></div><di=
+v><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=
+=3D"Apple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp; port (</span>=
+</font></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D=
+"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp=
+; &nbsp;...</span></font></div><div><font class=3D"Apple-style-span" face=
+=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size=
+: 12px;">&nbsp;&nbsp; &nbsp;a: in std_logic_vector(7 downto 0);</span></fon=
+t></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><=
+span class=3D"Apple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp;&nbs=
+p;&nbsp;b: in std_logic_vector(7 downto 0);</span></font></div><div><font c=
+lass=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-=
+style-span" style=3D"font-size: 12px;">&nbsp;&nbsp;&nbsp;&nbsp;c: out std_l=
+ogic_vector(7 downto 0);</span></font></div><div><font class=3D"Apple-style=
+-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=
+=3D"font-size: 12px;">&nbsp;&nbsp; &nbsp;... &nbsp; &nbsp;);</span></font><=
+/div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><spa=
+n class=3D"Apple-style-span" style=3D"font-size: 12px;">end foo_act;</span>=
+</font></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D=
+"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;"><br></span>=
+</font></div></div><div><div><font class=3D"Apple-style-span" face=3D"Couri=
+er" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">=
+architecture FSM of foo_act is</span></font></div><div><font class=3D"Apple=
+-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" s=
+tyle=3D"font-size: 12px;">&nbsp;&nbsp; ...</span></font></div><div><font cl=
+ass=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-s=
+tyle-span" style=3D"font-size: 12px;">&nbsp;&nbsp; &nbsp;variable x_v : std=
+_logic_vector(7 downto 0);</span></font></div><div><font class=3D"Apple-sty=
+le-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=
+=3D"font-size: 12px;">&nbsp;&nbsp; &nbsp;variable y_v : std_logic_vector(7 =
+downto 0);</span></font></div><div><div><font class=3D"Apple-style-span" fa=
+ce=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-si=
+ze: 12px;">&nbsp;&nbsp; &nbsp;...</span></font></div><div><font class=3D"Ap=
+ple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span=
+" style=3D"font-size: 12px;">&nbsp;&nbsp; &nbsp;c &lt;=3D x_v + y_v;</span>=
+</font></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D=
+"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp=
+; ...</span></font></div><div><div><font class=3D"Apple-style-span" face=3D=
+"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 1=
+2px;">end FSM;</span></font></div><div><br></div></div></div></div><div><di=
+v><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=
+=3D"Apple-style-span" style=3D"font-size: 12px; ">---------- ------------ -=
+----------</span></font></div><div><font class=3D"Apple-style-span" face=3D=
+"Courier"><br></font></div></div><div>If i replace 8 by 16 in the .cph sour=
+ce code, the generated code will be similar, except that the std_logic_vect=
+ors will (correctly) have range "15 downto 0".</div><div>The genericity of =
+the "+" operator does the rest.</div><div><br></div><div>So far, so good.</=
+div><div><br></div><div>But now suppose that the foo actor, instead of usin=
+g directly the "+" operator calls a user-defined "add" function (which itse=
+lf uses the "+" operator).</div><div><br></div><div>Here's the way to write=
+ this in CAPH :&nbsp;</div><div><br></div><div><div><font class=3D"Apple-st=
+yle-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" styl=
+e=3D"font-size: 12px; ">---------- sizedint.cph -----------</span></font></=
+div><div><font class=3D"Apple-style-span" face=3D"Courier"><br></font></div=
+></div><div><div>f<font class=3D"Apple-style-span" face=3D"Courier" size=3D=
+"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">unction add=
+ (x,y) =3D x+y : signed&lt;8&gt; * signed&lt;8&gt; -&gt; signed&lt;8&gt;;</=
+span></font></div><div><font class=3D"Apple-style-span" face=3D"Courier" si=
+ze=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;"><br></=
+span></font></div><div><font class=3D"Apple-style-span" face=3D"Courier" si=
+ze=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;">actor =
+foo ()</span></font></div><div><font class=3D"Apple-style-span" face=3D"Cou=
+rier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;=
+">&nbsp;&nbsp;in (a:signed&lt;8&gt;, b:signed&lt;8&gt;)</span></font></div>=
+<div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span cla=
+ss=3D"Apple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp;out (c:signe=
+d&lt;8&gt;)</span></font></div><div><font class=3D"Apple-style-span" face=
+=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size=
+: 12px;">rules</span></font></div><div><font class=3D"Apple-style-span" fac=
+e=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-siz=
+e: 12px;">&nbsp;&nbsp;(a, b) -&gt; c</span></font></div><div><font class=3D=
+"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-s=
+pan" style=3D"font-size: 12px;">| (x, y) -&gt; add(x,y)</span></font></div>=
+<div><span class=3D"Apple-style-span" style=3D"font-family: Courier; font-s=
+ize: 12px; ">;</span></div><div><font class=3D"Apple-style-span" face=3D"Co=
+urier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px=
+;"><br></span></font></div><div><font class=3D"Apple-style-span" face=3D"Co=
+urier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px=
+;">stream i1:signed&lt;8&gt; from "sample1.txt";</span></font></div><div><f=
+ont class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"A=
+pple-style-span" style=3D"font-size: 12px;">stream i2:signed&lt;8&gt; from =
+"sample2.txt";</span></font></div><div><font class=3D"Apple-style-span" fac=
+e=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-siz=
+e: 12px;">stream o:signed&lt;8&gt; to "result.txt";</span></font></div><div=
+><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=
+=3D"Apple-style-span" style=3D"font-size: 12px;"><br></span></font></div><d=
+iv><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=
+=3D"Apple-style-span" style=3D"font-size: 12px;">net o =3D foo (i1,i2);</sp=
+an></font></div><div><br></div><div><div><font class=3D"Apple-style-span" f=
+ace=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-s=
+ize: 12px; ">---------- ------------ -----------</span></font></div><div><f=
+ont class=3D"Apple-style-span" face=3D"Courier"><br></font></div><div><font=
+ class=3D"Apple-style-span" face=3D"Courier"><span class=3D"Apple-style-spa=
+n" style=3D"font-family: Helvetica; ">Again, this compiles and runs ok, wit=
+h the an extra VHDL file generated, called sizedint_globals.vhd :</span></f=
+ont></div><div><br></div><div><div><font class=3D"Apple-style-span" face=3D=
+"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 1=
+2px; ">---------- sizedint_globals.vhd -----------</span></font></div><div>=
+<font class=3D"Apple-style-span" face=3D"Courier"><br></font></div></div><d=
+iv><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span =
+class=3D"Apple-style-span" style=3D"font-size: 12px;">package sizedint_glob=
+als is</span></font></div><div><font class=3D"Apple-style-span" face=3D"Cou=
+rier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px;=
+">&nbsp;&nbsp;function add(x:std_logic_vector(7 downto 0); y:std_logic_vect=
+or(7 downto 0)) return std_logic_vector;</span></font></div><div><font clas=
+s=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-sty=
+le-span" style=3D"font-size: 12px;">end sizedint_globals;</span></font></di=
+v><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span c=
+lass=3D"Apple-style-span" style=3D"font-size: 12px;"><br></span></font></di=
+v><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span c=
+lass=3D"Apple-style-span" style=3D"font-size: 12px;">package body sizedint_=
+globals is</span></font></div><div><font class=3D"Apple-style-span" face=3D=
+"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 1=
+2px;">&nbsp;&nbsp;function add(x:std_logic_vector(7 downto 0); y:std_logic_=
+vector(7 downto 0)) return std_logic_vector is</span></font></div><div><fon=
+t class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"App=
+le-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp;begin</span></font></=
+div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span=
+ class=3D"Apple-style-span" style=3D"font-size: 12px;">&nbsp;&nbsp; &nbsp;r=
+eturn x + y;</span></font></div><div><font class=3D"Apple-style-span" face=
+=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size=
+: 12px;">&nbsp;&nbsp;end add;</span></font></div><div><font class=3D"Apple-=
+style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" st=
+yle=3D"font-size: 12px;">end sizedint_globals;</span></font></div><div><br>=
+</div><div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3=
+"><span class=3D"Apple-style-span" style=3D"font-size: 12px; ">---------- -=
+----------- -----------</span></font></div><div><font class=3D"Apple-style-=
+span" face=3D"Courier"><br></font></div></div></div></div></div><div>But no=
+w, suppose i now want to write the same program for 16 bit integers (as Oli=
+ver rightly points it out, one major advantage of hw programming is the abi=
+lity to adjust datapath to applications to avoid waste of ressources).</div=
+><div>For this, i will have to rewrite&nbsp;</div><div><br></div><div><div>=
+<div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span cla=
+ss=3D"Apple-style-span" style=3D"font-size: 12px; ">---------- sizedint.cph=
+ -----------</span></font></div><div><font class=3D"Apple-style-span" face=
+=3D"Courier"><br></font></div></div><div><div>f<font class=3D"Apple-style-s=
+pan" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"=
+font-size: 12px; ">unction add (x,y) =3D x+y : signed&lt;16&gt; * signed&lt=
+;16&gt; -&gt; signed&lt;16&gt;;</span></font></div><div><font class=3D"Appl=
+e-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" =
+style=3D"font-size: 12px; "><br></span></font></div><div><font class=3D"App=
+le-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span"=
+ style=3D"font-size: 12px; ">actor foo ()</span></font></div><div><font cla=
+ss=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-st=
+yle-span" style=3D"font-size: 12px; ">&nbsp;&nbsp;in (a:signed&lt;16&gt;, b=
+:signed&lt;16&gt;)</span></font></div><div><font class=3D"Apple-style-span"=
+ face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"font=
+-size: 12px; ">&nbsp;&nbsp;out (c:signed&lt;16&gt;)</span></font></div><div=
+><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=
+=3D"Apple-style-span" style=3D"font-size: 12px; ">rules</span></font></div>=
+<div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span cla=
+ss=3D"Apple-style-span" style=3D"font-size: 12px; ">&nbsp;&nbsp;(a, b) -&gt=
+; c</span></font></div><div><font class=3D"Apple-style-span" face=3D"Courie=
+r" size=3D"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px; ">=
+| (x, y) -&gt; add(x,y)</span></font></div><div><span class=3D"Apple-style-=
+span" style=3D"font-family: Courier; font-size: 12px; ">;</span></div><div>=
+<font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D=
+"Apple-style-span" style=3D"font-size: 12px; "><br></span></font></div><div=
+><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=
+=3D"Apple-style-span" style=3D"font-size: 12px; ">stream i1:signed&lt;16&gt=
+; from "sample1.txt";</span></font></div><div><font class=3D"Apple-style-sp=
+an" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"f=
+ont-size: 12px; ">stream i2:signed&lt;16&gt; from "sample2.txt";</span></fo=
+nt></div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D"3">=
+<span class=3D"Apple-style-span" style=3D"font-size: 12px; ">stream o:signe=
+d&lt;16&gt; to "result.txt";</span></font></div><div><font class=3D"Apple-s=
+tyle-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" sty=
+le=3D"font-size: 12px; "><br></span></font></div><div><font class=3D"Apple-=
+style-span" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" st=
+yle=3D"font-size: 12px; ">net o =3D foo (i1,i2);</span></font></div><div><b=
+r></div><div><div><font class=3D"Apple-style-span" face=3D"Courier" size=3D=
+"3"><span class=3D"Apple-style-span" style=3D"font-size: 12px; ">----------=
+ ------------ -----------</span></font></div></div></div></div><div>&nbsp;<=
+/div><div>Of course, changing the type signature for foo and the I/Os is no=
+rmal (after all, it's what i want).</div><div>But I would to like to avoid =
+writing another add function (because i know that, at the VHDL level, my fu=
+nction is generic in size).</div><div>So i would like to be able to write s=
+th like :</div><div><br></div><div><div><div><font class=3D"Apple-style-spa=
+n" face=3D"Courier" size=3D"3"><span class=3D"Apple-style-span" style=3D"fo=
+nt-size: 12px; ">---------- sizedint.cph -----------</span></font></div><di=
+v><font class=3D"Apple-style-span" face=3D"Courier"><br></font></div></div>=
+<div><div>f<font class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><sp=
+an class=3D"Apple-style-span" style=3D"font-size: 12px; ">unction add (x,y)=
+ =3D x+y : signed&lt;s&gt; * signed&lt;s&gt; -&gt; signed&lt;s&gt;;</span><=
+/font></div><div><font class=3D"Apple-style-span" face=3D"Courier"><br></fo=
+nt></div><div><font class=3D"Apple-style-span" face=3D"Courier">...</font><=
+/div><div><font class=3D"Apple-style-span" face=3D"Courier"><br></font></di=
+v><div><font class=3D"Apple-style-span" face=3D"Courier"><span class=3D"App=
+le-style-span" style=3D"font-family: Helvetica; "><div><div><div><div><font=
+ class=3D"Apple-style-span" face=3D"Courier" size=3D"3"><span class=3D"Appl=
+e-style-span" style=3D"font-size: 12px; ">---------- ------------ ---------=
+--</span></font></div><div><font class=3D"Apple-style-span" face=3D"Courier=
+"><br></font></div></div></div></div></span></font></div></div></div><div>a=
+nd&nbsp;let&nbsp;the&nbsp;compiler&nbsp;infer,&nbsp;from&nbsp;the&nbsp;cont=
+ext&nbsp;in&nbsp;which&nbsp;add&nbsp;is&nbsp;called&nbsp;the value of s (an=
+d generated the right signature and impl in signedint_globals.vhd).</div><d=
+iv><br></div><div>Jocelyn</div><div><br></div><div>&nbsp;Le 27 sept. 11 =E0=
+ 16:13, oliver a =E9crit :</div></div></div><div><div><br class=3D"Apple-in=
+terchange-newline"><blockquote type=3D"cite"><div>Hello,<br><br><br>On Tue,=
+ Sep 27, 2011 at 10:23:56AM +0200, Jocelyn S=E9rot wrote:<br><blockquote ty=
+pe=3D"cite"><br></blockquote><blockquote type=3D"cite">Le 26 sept. 11 =E0 1=
+8:44, Gabriel Scherer a =E9crit :<br></blockquote><blockquote type=3D"cite"=
+><br></blockquote><blockquote type=3D"cite"><blockquote type=3D"cite"><bloc=
+kquote type=3D"cite">Phantom types could be a solution but we must declare =
+a new type for<br></blockquote></blockquote></blockquote><blockquote type=
+=3D"cite"><blockquote type=3D"cite"><blockquote type=3D"cite">each possible=
+ size, which is cumbersome / annoying.<br></blockquote></blockquote></block=
+quote><blockquote type=3D"cite"><blockquote type=3D"cite"><br></blockquote>=
+</blockquote><blockquote type=3D"cite"><blockquote type=3D"cite">If you def=
+ine the type system yourself, you can easily add a family of<br></blockquot=
+e></blockquote><blockquote type=3D"cite"><blockquote type=3D"cite">type con=
+stants `size&lt;n&gt;` (with `n` an integer literal) to the default<br></bl=
+ockquote></blockquote><blockquote type=3D"cite"><blockquote type=3D"cite">e=
+nvironment of the type checker. Then you can define a parametrized<br></blo=
+ckquote></blockquote><blockquote type=3D"cite"><blockquote type=3D"cite">ty=
+pe `type 's sized_int` (or float, etc.) and instantiate it with any<br></bl=
+ockquote></blockquote><blockquote type=3D"cite"><blockquote type=3D"cite">o=
+f the size&lt;n&gt;.<br></blockquote></blockquote><blockquote type=3D"cite"=
+><br></blockquote><blockquote type=3D"cite">Yes. Good point. Thanks for the=
+ idea.<br></blockquote><blockquote type=3D"cite">IIUC, my add function woul=
+d be declared as :<br></blockquote><blockquote type=3D"cite"><br></blockquo=
+te><blockquote type=3D"cite">val add : 'a sized_int * 'a sized_int -&gt; 'a=
+ sized_int<br></blockquote><blockquote type=3D"cite"><br></blockquote><bloc=
+kquote type=3D"cite">then, with<br></blockquote><blockquote type=3D"cite"><=
+br></blockquote><blockquote type=3D"cite">val x : size16 sized_int<br></blo=
+ckquote><blockquote type=3D"cite">val y : size16 sized_int<br></blockquote>=
+<blockquote type=3D"cite"><br></blockquote><blockquote type=3D"cite">the ty=
+pe infered for z in<br></blockquote><blockquote type=3D"cite"><br></blockqu=
+ote><blockquote type=3D"cite">let z =3D add (x,y)<br></blockquote><blockquo=
+te type=3D"cite"><br></blockquote><blockquote type=3D"cite">will be<br></bl=
+ockquote><blockquote type=3D"cite"><br></blockquote><blockquote type=3D"cit=
+e">z : size16 sized_int<br></blockquote><blockquote type=3D"cite"><br></blo=
+ckquote><blockquote type=3D"cite">Am i right ?<br></blockquote>[...]<br><br=
+>Not sure.<br><br>Depends on what you want ;-)<br><br>What would the type s=
+ystem<br>yield fopr a type for<br><br><br><br>val x : size16 sized_int<br>v=
+al y : size16 sized_int<br><br>let z =3D and_msb (x,y) &nbsp;# AND the MSBs=
+ of both input values<br><br>z might be 16 Bits, if this is your "natural" =
+int size - but: what is natural on<br>FPGA's, when you can change your HW a=
+t will?<br>And: if it's "batural", why to declare it?<br><br>But ANDing two=
+ Bits will result in a 1 Bit result.<br><br>Why should z be 16 Bits then?<b=
+r>That would be wasting ressources.<br><br>IMHO it does not make sense to d=
+erive the type of z from the type of<br>x and y. It must be derived from th=
+e operation or function that is used.<br><br><br>If you use &nbsp;'a sized_=
+int &nbsp;&nbsp;then &nbsp;this would offer you<br>the possibility also of =
+taking 2 x 16 Bits and get 1 Bit (as in the and_msb()-example)<br>but of co=
+urse also to do your<br><br>z =3D add (x,y) with z of 16 Bits, which you lo=
+oked for.<br><br>But is thats a type that can be derived from x and y?<br><=
+br>Or is it rather the OPERATION ("add" here), or better: the operation<br>=
+together with the input values, that fives you the resulting type?<br><br>W=
+hat if you do:<br><br>val x : size16 sized_int<br>val y : size8 &nbsp;sized=
+_int<br><br>z =3D add(x, y)<br><br>What type does z no have?<br><br>8 Bits?=
+ 16 Bits?<br>Somewhere in between?<br><br><br>AFAIK one of the biggest (or =
+better: THE) advantage of FPGAs/VHDL is:<br>you can create your "HW" (HW co=
+nnections) by SW.<br><br>So you are not fixed in width, and you can save so=
+me bits here and there,<br>and use them later somewhere else...<br><br><br>=
+And, I doubt, somehow, that what you are talking about is a "type issue".<b=
+r>At least nothing that can be derived from the structure of the inputs<br>=
+without knowing the operation.<br><br>AFAIK you are not constrained to a fi=
+xed ALU and databus width,<br>at least not in a sense as we know it from fi=
+xed HW that we normally use<br>when buying a computer at the store.<br>(The=
+re may be limits of course, depending on the FPGA device in use.)<br><br><b=
+r>So, how do you address these issues?<br><br>I would say either you also n=
+eed to define the type of z,<br>or you need to derive the type from the sou=
+rce of which<br>your operations/functions are derived.<br><br>So: you need =
+more information than what you presented in your questions,<br>to decide fo=
+r the resulting type.<br><br>Ciao,<br> &nbsp;&nbsp;Oliver<br></div></blockq=
+uote></div><br></div></div></div><br></body></html>=
+
+--Apple-Mail-4--315764416--

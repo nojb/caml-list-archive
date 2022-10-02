@@ -1,0 +1,213 @@
+Return-Path: <rixed@happyleptic.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.6 required=5.0 tests=NO_REAL_NAME 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 4AE1DBBAF
+	for <caml-list@yquem.inria.fr>; Tue, 11 Aug 2009 12:11:12 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApQDAAvhgErUGyoFkWdsb2JhbACDApdLAQEBAQkLCgcTA7YshBkFgUxb
+X-IronPort-AV: E=Sophos;i="4.43,359,1246831200"; 
+   d="scan'208";a="31025941"
+Received: from smtp5-g21.free.fr ([212.27.42.5])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 11 Aug 2009 12:11:11 +0200
+Received: from smtp5-g21.free.fr (localhost [127.0.0.1])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 7D7E4D4815D
+	for <caml-list@inria.fr>; Tue, 11 Aug 2009 12:11:05 +0200 (CEST)
+Received: from apc.happyleptic.org (happyleptic.org [82.67.194.89])
+	by smtp5-g21.free.fr (Postfix) with ESMTP id 3CC90D48031
+	for <caml-list@inria.fr>; Tue, 11 Aug 2009 12:11:03 +0200 (CEST)
+Received: from yeeloong (ev [88.169.116.225])
+	by apc.happyleptic.org (Postfix) with ESMTP id A2D6E334EF
+	for <caml-list@inria.fr>; Tue, 11 Aug 2009 12:11:02 +0200 (CEST)
+Received: from rixed by yeeloong with local (Exim 4.69)
+	(envelope-from <rixed@happyleptic.org>)
+	id 1MaoJo-0000qd-Ku
+	for caml-list@inria.fr; Tue, 11 Aug 2009 12:11:00 +0200
+Date: Tue, 11 Aug 2009 12:11:00 +0200
+From: rixed@happyleptic.org
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Native compilation for today's MIPS
+Message-ID: <20090811101100.GA3238@happyleptic.org>
+References: <20090810173413.GA7442@fp-desktop.fr.evistel.com> <20090810230804.GA23104@happyleptic.org>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <20090810230804.GA23104@happyleptic.org>
+User-Agent: Mutt/1.5.18 (2008-05-17)
+X-Spam: no; 0.00; compilation:01 mips:01 mips:01 util:01 util:01 desc:01 desc:01 prerr:01 endline:01 ocaml:01 ocaml:01 wikipedia:01 params:01 addiu:01 pointer:01 
+
+We are in August and there is nothing on TV. So why not read a little
+MIPS assembly instead ?
+
+I commented the part of unison's code that was looping forever, and while
+doing so I think I started to understand what's wrong with it.
+
+Remember this code from fileinfo.ml :
+
+let unchanged fspath path info =
+  (* The call to [Util.time] must be before the call to [get] *)
+  let t0 = Util.time () in
+  let info' = get true fspath path in
+  let dataUnchanged =
+    Props.same_time info.desc info'.desc
+      &&
+    stamp info = stamp info'
+      &&
+    if Props.time info'.desc = t0 then begin
+	 	prerr_endline ("infotime="^(string_of_float (Props.time info'.desc))^" et t0="^(string_of_float t0));
+      Unix.sleep 1;
+      false
+    end else
+      true
+  in
+  ...
+
+Here is the commented assembly (best viewed in 16.9 aspect ratio :-) 
+Please if you have some knowlodge on Mips assembly check that Im
+correct. Also, if you have some knowledge on Ocaml internals feel free
+to fill the missing bits of information. Or if you are just currious
+about what OCaml code looks like, the Mips wikipedia page provide
+almost all the information required to understand the following code.
+The code demonstrate some very good surprises, and some other less so.
+
+
+; The three input params are in a4, a5 and a6.
+; I was expecting Ocaml to follow regular conventions (use a0-a3 instead)
+; but apparently it's not the case. There seams to be something in there
+; already.
+1004b608 <camlFileinfo__unchanged_109>:
+1004b608:	27bdffe0 	addiu	sp,sp,-32	; sp -= 32 (make some room for our temp storage)
+1004b60c:	afbf001c 	sw	ra,28(sp)		; save return address in [sp+28]
+1004b610:	afbc0018 	sw	gp,24(sp)		; save global pointer (?) in [sp+24]
+1004b614:	3c180011 	lui	t8,0x11		; t8 = 0x110000
+1004b618:	27187eb8 	addiu	t8,t8,32440	; t8 += 32440 -> t8 = 0x117eb8
+1004b61c:	0338e02d 	daddu	gp,t9,t8		; gp = t9 + t8 (what's in t9 ? something like caml_young_ptr ?)
+
+1004b620:	afa80000 	sw	a4,0(sp)			; our params are : a4 = fspath, a5 = path, a6 = info, all boxed. Save them.
+1004b624:	afa90004 	sw	a5,4(sp)			; onto [sp+0], [sp+1] and [sp+2]
+1004b628:	afaa0008 	sw	a6,8(sp)
+
+1004b62c:	0c01c5a5 	jal	10071694 <camlUtil__time_308>	; call time()
+1004b630:	24080001 	li	a4,1				; Funny Mips trick #1 : this is executed simultaneously from the previous jump, and gives the only argument (which is unit)
+1004b634:	afa2000c 	sw	v0,12(sp)	; save returned time in [sp+12] ( = t0, boxed float according to signature)
+
+1004b638:	24080003 	li	a4,3			; a4 = 3 (true in Ocaml language)
+1004b63c:	8fa90000 	lw	a5,0(sp)		; a5 = fspath
+1004b640:	0c012c9e 	jal	1004b278 <camlFileinfo__get_78>	; called with true (a4), fspath, path
+1004b644:	8faa0004 	lw	a6,4(sp)		; remember trick#1, here is path.
+1004b648:	afa20004 	sw	v0,4(sp)		; save return value in [sp+4] (info')
+; Notice here how we reused the location of path, which is no more used. Wow!
+
+; We need here to have a look at info and info' type :
+; info type = { typ : typ; inode : int; ctime : float; desc : Props.t; osX : Osx.info}
+; where
+; Props.t type is =  { perm : Perm.t; uid : Uid.t; gid : Gid.t; time : Time.t; typeCreator : TypeCreator.t; length : Uutil.Filesize.t }
+1004b64c:	8c52000c 	lw	s2,12(v0)	; s2 = [v0+12] ie info'.desc
+1004b650:	8fae0008 	lw	t2,8(sp)		; t2 = [sp+8] ie info (our third param)
+1004b654:	8dd1000c 	lw	s1,12(t2)	; s1 = [info+12] ie info.desc
+1004b658:	3c101015 	lui	s0,0x1015	; s0 = 0x1012 (some external symbol ?)
+1004b65c:	8e10f0a4 	lw	s0,-3932(s0)	; s0 = something 3932 bytes before it
+1004b660:	8e0a002c 	lw	a6,44(s0)	; a6 = this_thing.eleventh_slot ? ie a way to reach module Unix.time (see below) ?
+1004b664:	8e49000c 	lw	a5,12(s2)	; a5 = info'.desc[12] ie info'.desc.time
+1004b668:	0c013889 	jal	1004e224 <camlProps__same_368>	; call Props.same, which does not exist according to props.ml
+1004b66c:	8e28000c 	lw	a4,12(s1)	; (mips trick#1 again) a4 = info.desc[12] ie info.desc.time
+; But we have in props.ml this one : 
+; let same_time p p' = Time.same p.time p'.time
+; Look like we have here inter-module inlining.
+; How is it possible ? Perhaps a "same" fucntion is added into Props module with an additionnal parameter to points to Time module,
+; and this info is available somehow in props.cmi ?
+
+1004b670:	24010001 	li	at,1	; a1 = true
+1004b674:	10410051 	beq	v0,at,1004b7bc <$173>	; cmp previous return value with true, and if so goto $173 where we left
+1004b678:	00000000 	nop	; this one is executed in both cases, so nop is safe
+1004b67c:	0c012d44 	jal	1004b510 <camlFileinfo__stamp_105>	; call stamp on ...
+1004b680:	8fa80004 	lw	a4,4(sp)	; ... [sp+4] aka info'
+1004b684:	afa20000 	sw	v0,0(sp)		; and save in [sp]
+1004b688:	0c012d44 	jal	1004b510 <camlFileinfo__stamp_105>	; and call once again stamp with ...
+1004b68c:	8fa80008 	lw	a4,8(sp)	; ... [sp+8] aka info
+1004b690:	0040202d 	move	a0,v0	; a0 = return value
+
+1004b694:	8fa50000 	lw	a1,0(sp)	; restore from stack stamp of info'
+1004b698:	3c18100c 	lui	t8,0x100c	; t8 = 0x100C + 2212 (see below) = 0x18B0 -> C float comparison function certainly.
+1004b69c:	0c033a96 	jal	100cea58 <caml_c_call>	; This will call function at 0x18B0, respecting C calling conventions.
+; register t8 is an alias $24 and mips.s comments about caml_c_call says : Function to call is in $24.
+1004b6a0:	271808a4 	addiu	t8,t8,2212
+
+1004b6a4:	24010001 	li	at,1	; true
+1004b6a8:	10410041 	beq	v0,at,1004b7b0 <$174>	; if both stamps are eq, goto $174 which is equivalent to $147.
+1004b6ac:	00000000 	nop	; done in both alternatives
+
+; Now this is getting harder. We are seing here an inlined version of Props.time p = Time.extract p.time,
+; which is itself inlined. We have :
+; Time.extract t = match t with Synced v -> v | NotSynced v -> v
+; with this type = Synced of float | NotSynced of float
+; I'm still puzzled by the amount of information this code have about Props.t abstract type. Were'nt modules
+; supposed to be compiled separately ?
+1004b6b0:	8faa0004 	lw	a6,4(sp)	; a6 = [sp+4] aka info'
+1004b6b4:	8d48000c 	lw	a4,12(a6)	; a4 = info'.desc
+1004b6b8:	8d07000c 	lw	a3,12(a4)	; a3 = info'.desc.time
+1004b6bc:	90e6fffc 	lbu	a2,-4(a3)	; a2 = the byte at a3-4, ie the tag of info'.desc.time (correct since we are little endian)
+1004b6c0:	10c00007 	beqz	a2,1004b6e0 <$179>	; if it's 0 (Synced), then goto $179
+1004b6c4:	00000000 	nop
+1004b6c8:	8ce50000 	lw	a1,0(a3)	; a1 = the NotSynced float (which is boxed)
+1004b6cc:	68b80000 	ldl	t8,0(a1)	; Mips strange but clever way to load a possibly unaligned doubleword into t8.
+1004b6d0:	6cb80007 	ldr	t8,7(a1)	; Contrary to what an Intel coder might think, we are keeping same byte order and the 7 here should not be a 8 :-)
+1004b6d4:	44b80800 	dmtc1	t8,$f1	; now on a 64bits host this loads $f1 with this doubleword.
+1004b6d8:	10000005 	b	1004b6f0 <$178>	; and we are done
+1004b6dc:	00000000 	nop
+
+1004b6e0 <$179>:	; when info'.desc.time is Synched... just does the same :-)
+; I suppose this duplication of code could have been avoided with another ML syntax ?
+1004b6e0:	8ce40000 	lw	a0,0(a3)
+1004b6e4:	68980000 	ldl	t8,0(a0)
+1004b6e8:	6c980007 	ldr	t8,7(a0)
+1004b6ec:	44b80800 	dmtc1	t8,$f1
+
+; Now that we have (Props.time info'.desc) in $f1, fetch t0
+1004b6f0 <$178>:
+1004b6f0:	8fa8000c 	lw	a4,12(sp)	; a4 = [sp+12] (t0)
+1004b6f4:	69180000 	ldl	t8,0(a4)	; load the double word float into t8
+1004b6f8:	6d180007 	ldr	t8,7(a4)
+1004b6fc:	44b80000 	dmtc1	t8,$f0	; and copy it to FPU's $f0
+1004b700:	00000000 	nop				; specs says : "For MIPS III, the contents of FPR fs are undefined for the instruction immediately following DMTC1.". So be it.
+1004b704:	46200832 	c.eq.d	$f1,$f0	; compare those doublewords FP registers (remember, when running these two times are not equal).
+1004b708:	00000000 	nop	; again, Mips need some rest here before accessing result
+1004b70c:	45000025 	bc1f	1004b7a4 <$175>	; if the previous test was false (thus, if $f1!=$f0) goto $175. This seams correct.
+1004b710:	00000000 	nop
+1004b714:	0c020d9d 	jal	10083674 <camlPervasives__string_of_float_164>	; and yet, we are entering here !
+1004b718:	00000000 	nop
+
+.. This part of this function's code is irrelevant to the problem ...
+
+; The end when dataUnchanged is true. We could have reused $174 or $173.
+; So each time you write a && b && c you end up with 3 different true(s) ?
+1004b7a4 <$175>:
+1004b7a4:	240b0003 	li	a7,3
+1004b7a8:	10000006 	b	1004b7c4 <$172>
+1004b7ac:	afab0000 	sw	a7,0(sp)
+
+; The end when dataUnchanged is true. We could have reused $173.
+1004b7b0 <$174>:
+1004b7b0:	240b0001 	li	a7,1
+1004b7b4:	10000003 	b	1004b7c4 <$172>
+1004b7b8:	afab0000 	sw	a7,0(sp)
+
+; The end when dataUnchanged is true
+1004b7bc <$173>:
+1004b7bc:	240b0001 	li	a7,1
+1004b7c0:	afab0000 	sw	a7,0(sp)
+
+etc.
+
+Interresting indeed.
+But what about this floatnig point comparison ?
+I've read somewhere that MIPS3 FPU can mimick a 32 bits
+MIPS1 FPU, where 64bits doubles were stored on a pair of FPU registers.
+In this mode, writing a double or reading one from an odd register in undefined.
+
+Maybe someone knows if Loongson CPU are configured this way  on Linux ?
+

@@ -1,0 +1,116 @@
+Return-Path: <skaller@users.sourceforge.net>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 61588BC6B
+	for <caml-list@yquem.inria.fr>; Tue, 18 Sep 2007 07:59:31 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAM8F70bAXQInlGdsb2JhbACOEAICBwQGBwg
+X-IronPort-AV: E=Sophos;i="4.20,266,1186351200"; 
+   d="scan'208";a="946811"
+Received: from concorde.inria.fr ([192.93.2.39])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 18 Sep 2007 08:00:35 +0200
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l8I5xrnW020502
+	(version=TLSv1/SSLv3 cipher=RC4-SHA bits=128 verify=OK)
+	for <caml-list@inria.fr>; Tue, 18 Sep 2007 08:00:00 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AgAAAAMG70bLENaMnmdsb2JhbACOEAICBwQGDxg
+X-IronPort-AV: E=Sophos;i="4.20,266,1186351200"; 
+   d="scan'208";a="2843405"
+Received: from ipmail01.adl2.internode.on.net ([203.16.214.140])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 18 Sep 2007 08:00:33 +0200
+X-IronPort-AV: E=Sophos;i="4.20,266,1186324200"; 
+   d="scan'208";a="193264136"
+Received: from ppp121-44-123-220.lns10.syd6.internode.on.net (HELO [192.168.1.201]) ([121.44.123.220])
+  by ipmail01.adl2.internode.on.net with ESMTP; 18 Sep 2007 15:29:29 +0930
+Subject: Re: [Caml-list] [ANN] coThreads 0.10
+From: skaller <skaller@users.sourceforge.net>
+To: caml-list@inria.fr
+In-Reply-To: <20070918121041.6683b111.mle+ocaml@mega-nerd.com>
+References: <87lkb5fe3f.fsf@pps.jussieu.fr>
+	 <20070918121041.6683b111.mle+ocaml@mega-nerd.com>
+Content-Type: text/plain
+Date: Tue, 18 Sep 2007 15:59:27 +1000
+Message-Id: <1190095167.22073.54.camel@rosella.wigram>
+Mime-Version: 1.0
+X-Mailer: Evolution 2.10.1 
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 46EF6959.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 ocaml:01 lseek:01 non-opt:01 errno:01 errno:01 lseek:01 hackery:01 0.10:98 sourceforge:01 wrote:01 wrote:01 unix:01 unix:01 exception:01 
+
+On Tue, 2007-09-18 at 12:10 +1000, Erik de Castro Lopo wrote:
+> Zheng Li wrote:
+> 
+> > 
+> > Hi,
+> > 
+> > I'd like to announce the first public release of coThreads, a 
+> > concurrent programming library for OCaml.
+> 
+> I've compiled this with Ocaml 3.09.1 on x86 Linux and x86-64 Linux.
+> 
+> Looking at the example program ray_nocol.ml, it works correctly
+> on x86 Linux but fails on x86-64 [0]:
+> 
+>     # > ./ray_nocol.proc.opt 9 1024 1 ray_nocol.proc.opt.pgm
+>     Fatal error: exception Unix.Unix_error(12, "lseek", "")
+> 
+> I've also tried the non-opt version and the nath version. All fail
+> in the same way.
+> 
+> The errno value of 12 means "Out of memory". I did a little debugging
+> but couldn't find anything obvious.
+
+But it isn't an errno value that is reported, it is the index
+of the variant that is 12, and that is "Invalid Argument".
+
+I think I found it:
+
+let fresh_number =
+  let usable_size = Sys.word_size -2 in
+  let bits_of_id = 16 in (* Should be sufficient in most OS *)
+  let bits_of_num = usable_size - bits_of_id in
+  let counter = ref 0 in
+  fun () ->
+    let self_id = id (self ()) in
+    let id_part = bit_chop_to_n bits_of_id self_id in
+    let num_part = 
+      counter := bit_chop_to_n bits_of_num (!counter + 1);
+      !counter in
+    (id_part lsl bits_of_num) + num_part
+
+produces:
+
+1695112678495748100
+
+which seems a little big for lseek on a zero size file .. 
+
+My man page says:
+
+       lseek - reposition read/write file offset
+
+RETURN VALUE
+       Upon successful completion, lseek() returns the resulting offset
+location  as
+       measured  in  bytes  from  the  beginning of the file.
+Otherwise, a value of
+       (off_t)-1 is returned and errno is set to indicate the error.
+
+It is not clear that a seek to an invalid position in the file
+is going to succeed. It's also not clear to me that the seek
+argument isn't 32 bits (depends on complex ugly GNU macro
+hackery what type off_t is .. my Caml got built with
+the LARGE_FILE macro thing so it should be 64 bits).
+
+
+
+
+-- 
+John Skaller <skaller at users dot sf dot net>
+Felix, successor to C++: http://felix.sf.net
+

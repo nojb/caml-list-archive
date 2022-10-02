@@ -1,0 +1,128 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA22261; Wed, 30 Apr 2003 07:35:16 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA22214 for <caml-list@pauillac.inria.fr>; Wed, 30 Apr 2003 07:35:14 +0200 (MET DST)
+X-SPAM-Warning: Sending machine is listed in blackholes.five-ten-sg.com
+Received: from ext-ch1gw-1.online-age.net (ext-ch1gw-1.online-age.net [216.34.191.35])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h3U5ZDH24493
+	for <caml-list@inria.fr>; Wed, 30 Apr 2003 07:35:14 +0200 (MET DST)
+Received: from int-ch1gw-3.online-age.net (int-ch1gw-3 [3.159.232.67])
+	by ext-ch1gw-1.online-age.net (8.12.9/8.12.9/030701) with ESMTP id h3U5ZBkr010349
+	for <caml-list@inria.fr>; Wed, 30 Apr 2003 01:35:11 -0400 (EDT)
+Received: from uswaumsxb4medge.med.ge.com (localhost [127.0.0.1])
+	by int-ch1gw-3.online-age.net (8.12.9/8.12.3/990426-RLH) with ESMTP id h3U5Z4E3004631
+	for <caml-list@inria.fr>; Wed, 30 Apr 2003 01:35:05 -0400 (EDT)
+Received: by USWAUMSXB4MEDGE with Internet Mail Service (5.5.2656.59)
+	id <JYLQKKTR>; Wed, 30 Apr 2003 00:35:04 -0500
+Message-ID: <D4DBD8568F05D511A1C20002A55C008C11AC04FD@uswaumsx03medge.med.ge.com>
+From: "Gurr, David (MED, self)" <David.Gurr@med.ge.com>
+To: Caml Mailing List <caml-list@inria.fr>
+Cc: "Gurr David (MED Self) (E-mail)" <David.Gurr@med.ge.com>
+Subject: [Caml-list] a puzzling polymorphic variant type
+Date: Wed, 30 Apr 2003 00:35:03 -0500
+MIME-Version: 1.0
+X-Mailer: Internet Mail Service (5.5.2656.59)
+Content-Type: text/plain
+X-Spam: no; 0.00; gurr:01 miniml:01 constants:01 longident:01 expr:01 val:01 int:01 rec:01 polymorphic:01 variant:02 ident:02 modular:02 module:03 hack:03 nil:03 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+I had quick hack I wanted to try with XL's modular module system.  I
+changed MiniML.ML.term to a polymorphic variant and thus changed the 
+definitions of MiniML.MLScoping.scope_term : MiniML.ML.term ->
+MiniML.ML.term
+as follows:
+
+
+    type 'term lst = [
+      | `Nil
+      | `Cons of 'term * 'term lst
+      ]
+    type 'term lambda = [
+      | `Constant of int                        (* integer constants *)
+      | `Longident of path                      (* id or mod.mod...id *)
+      | `Function of Ident.t * 'term             (* fun id -> expr *)
+      | `Apply of 'term * 'term                   (* expr(expr) *)
+      | `Let of Ident.t * 'term * 'term           (* let id = expr in
+expr *)
+      ]
+    type term = [
+      | term lambda
+      | term lst
+      ]
+
+    let rec scope_term_lst scope_term sc = function 
+      | `Nil -> `Nil
+      | `Cons(h,t) -> `Cons(scope_term sc h,scope_term_lst scope_term sc
+t) 
+
+    let rec scope_term_lambda scope_term sc = function
+      | `Constant n -> `Constant n
+      | `Longident path -> `Longident(Scope.value_path path sc)
+      | `Function(id, body) ->
+          `Function(id, scope_term (Scope.enter_value id sc) body)
+      | `Apply(t1, t2) -> `Apply(scope_term sc t1, scope_term sc t2)
+      | `Let(id, t1, t2) ->
+          `Let(id, scope_term sc t1, scope_term (Scope.enter_value id
+sc) t2)
+
+     let rec scope_term sc  = function
+       | #lambda as t -> scope_term_lambda scope_term sc t
+       | #lst as t    -> scope_term_lst scope_term sc t
+
+But I did not get the type I expected.  Instead I got:
+
+val scope_term :
+ Scope.t ->
+ ([< `Apply of 'a * 'a
+   | `Cons of 'a * 'a lst
+   | `Constant of int
+   | `Function of Ident.t * 'a
+   | `Let of Ident.t * 'a * 'a
+   | `Longident of path
+   | `Nil] as 'a) ->
+ ([> `Apply of 'b * 'b
+   | `Cons of 'b * 'b    <<<<<<<<<<<<<<< what?
+   | `Constant of int
+   | `Function of Ident.t * 'b
+   | `Let of Ident.t * 'b * 'b
+   | `Longident of path
+   | `Nil] as 'b)
+
+But if I tried a slightly different definition:
+
+     let rec scope_term sc  = function
+       | #lambda as t -> scope_term_lambda scope_term sc t
+       | `Nil -> `Nil
+       | `Cons(h,t) -> `Cons(scope_term sc h,scope_term_lst scope_term
+sc t)
+
+Then I do get the type I expect:
+
+val scope_term :
+ Scope.t ->
+ ([< `Apply of 'a * 'a
+   | `Cons of 'a * ([< `Cons of 'a * 'b | `Nil] as 'b)
+   | `Constant of int
+   | `Function of Ident.t * 'a
+   | `Let of Ident.t * 'a * 'a
+   | `Longident of path
+   | `Nil] as 'a) ->
+ ([> `Apply of 'c * 'c
+   | `Cons of 'c * ([> `Cons of 'c * 'd | `Nil] as 'd)
+   | `Constant of int
+   | `Function of Ident.t * 'c
+   | `Let of Ident.t * 'c * 'c
+   | `Longident of path
+   | `Nil] as 'c) 
+
+Does anyone have any ideas?
+
+Thanks, 
+
+-D
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

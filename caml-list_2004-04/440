@@ -1,0 +1,169 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id VAA06922; Fri, 16 Apr 2004 21:55:16 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA08276 for <caml-list@pauillac.inria.fr>; Fri, 16 Apr 2004 21:55:15 +0200 (MET DST)
+Received: from smtp1.adl2.internode.on.net (smtp1.adl2.internode.on.net [203.16.214.181])
+	by nez-perce.inria.fr (8.12.10/8.12.10) with ESMTP id i3GJuGjq014101
+	for <caml-list@inria.fr>; Fri, 16 Apr 2004 21:56:18 +0200
+Received: from [192.168.1.200] (ppp117-65.lns1.syd2.internode.on.net [150.101.117.65])
+	by smtp1.adl2.internode.on.net (8.12.9/8.12.9) with ESMTP id i3GJt8Zq062314;
+	Sat, 17 Apr 2004 05:25:09 +0930 (CST)
+Subject: Re: [Caml-list] build tools - good vs. fast, both cheap
+From: skaller <skaller@users.sourceforge.net>
+Reply-To: skaller@users.sourceforge.net
+To: Kenneth Knowles <kknowles@berkeley.edu>
+Cc: caml-list <caml-list@inria.fr>
+In-Reply-To: <20040416184316.GA27548@tallman.kefka.frap.net>
+References: <20040416011616.GA13198@tallman.kefka.frap.net>
+	 <OOEALCJCKEBJBIJHCNJDAEBHHBAB.vanevery@indiegamedesign.com>
+	 <20040416160618.GA27238@tallman.kefka.frap.net>
+	 <1082139022.20063.136.camel@pelican.wigram>
+	 <20040416184316.GA27548@tallman.kefka.frap.net>
+Content-Type: text/plain
+Message-Id: <1082145307.20063.236.camel@pelican.wigram>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 17 Apr 2004 05:55:08 +1000
+Content-Transfer-Encoding: 7bit
+X-Miltered: at nez-perce by Joe's j-chkmail ("http://j-chkmail.ensmp.fr")!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 sourceforge:01 2004:99 knowles:99 interscript:01 python:01 'src:99 cmi':01 ocamlc:01 exes:01 'src:99 ocamlopt:01 compiles:01 automake:01 uninstall:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sat, 2004-04-17 at 04:43, Kenneth Knowles wrote:
+> > I'm against make. It just isn't necessary. Make is for C developers,
+> > not Ocaml package installation.
+> 
+> So, in a similar system I'll call "MagicScript," because I'm talking
+> hypothetically, not particularly about Interscript:
+> 
+> * Efficient recompilation:  Use a makefile tangler?  Include a "make"
+>   python/OCaml module?  If either of these, then "MagicScript" should provide
+>   them.
+
+That's two options. Another is what I actually do in Felix.
+
+    # STEP 4: Compile ocaml interfaces
+    for interface in INTERFACES:
+      file = 'src/'+interface
+      if buildall or filetime(file + '.mli') > filetime(file+'.cmi'):
+        buildall = 1
+        xqt(OCAMLC + ' -c '+file+ '.mli')
+
+    # STEP 5: Compile ocaml implementations
+    for implementation in IMPLEMENTATIONS + EXES:
+      file = 'src/'+implementation
+      if buildall or filetime(file+ '.ml') \
+          > filetime(file+OCAML_OBJECT_EXTENSION):
+        buildall = 1
+        xqt(OCAMLOPT + ' -c ' + file +'.ml')
+
+This of course is a weaker version of the logic make
+implements: it starts compilation at the first module
+which is out of date and compiles all the others
+after it in the list in order. That's enough for me for Felix.
+
+So there are multiple options .. as many as there are
+progammers?
+
+
+> * Typical "automake" actions: build, install, uninstall, etc - should be
+>   generated from metadata by "MagicScript" so I don't re-invent those wheels.
+
+Sure, if you want! You can always write these scripts yourself,
+and just include them. Alternatively, you can add them
+to the MagicScript standard distro.
+
+For an Ocaml-centric tool, you'd certainly want to have
+a library with Ocaml-centric functions, as well as
+generic ones.
+
+Here are some interesting functions:
+
+	let f = open_notouch(filename) in
+	writeline_notouch(f,data);
+	let changed = close_notouch(f) in ...
+
+what this does is: the file is opened for INPUT.
+Every writeline does a COMPARISON with the input
+by reading it. When a line compares not equal,
+the file is reopened for OUTPUT and positioned
+at the changed line, and each subsequent write
+actually writes to the file. The 'changed' flag
+determines if the file was touched.
+
+Using these functions whilst generating code
+avoids touching unchanged files. This not only
+allows 'make' to make the minimal set of things,
+it also allows you to determine if your
+build process has converged... if every file
+written is unchanged, you can stop an iterative
+rebuild because you've reached a fixpoint.
+
+If you tell MagicScript to do this:
+
+	ocamlc -c x.mli
+
+it will create a .cmi file. But what if you 
+do this instead:
+
+	success = ocamlc -c x.mli -o tmp
+	changed = tmp <> x.cmo | not success
+	if changed cp tmp x.cmo
+
+With that logic, you might do one extra recompile.
+What's the point? The answer is: you don't CARE
+what the dependencies are. Ocamlc knows already,
+just execute it, either the compile fails,
+it succeeds but the output is different to the old one,
+or that part of the process has reached a fixpoint.
+
+With that idea .. you can just compile every changed
+file in any order, until they're all fixed.
+
+Of course you DO try to optimise the order by trying
+to find out the dependencies.. but an unaccounted
+for dependency will not mess up the process (usually:
+false fixpoints are possible but rare, and of course
+cycles are also possible .. don't write the current
+date/time into generated output tracked as above!)
+
+Example: new verion of Ocaml installed .. we forgot
+that the cmo depends on ocamlc .. (has no effect
+on an already fixed system so you need to force
+a rebuild in that one case).
+
+Note that this 'build everything repeatedly until it 
+all fixes' idea is completely different from make.
+It assume a set of *executable build rules*,
+and you must track the outputs. But you do not
+build 'targets' and you don't need to specify
+'dependencies' to find subtargets. There is a single
+*universal* target: fixation.
+
+The theoretical underpinings are different to make:
+dependencies don't define build order,
+they optimise it. The consequences are profound:
+the system handles circularities. Make does not.
+Almost all non-trivial code generating systems
+have circular depenencies, because they invariably
+involve bootstrapping (by poetic licence I define
+'trivial' as 'not involving bootstrapping' :D
+
+Bottom line: no need to use interscript,
+but please lets not just copy existing tools
+such as make without doing some theoretical analysis.
+
+-- 
+John Skaller, mailto:skaller@users.sf.net
+voice: 061-2-9660-0850, 
+snail: PO BOX 401 Glebe NSW 2037 Australia
+Checkout the Felix programming language http://felix.sf.net
+
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

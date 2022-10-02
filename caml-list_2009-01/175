@@ -1,0 +1,145 @@
+Return-Path: <martin.jambon@ens-lyon.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail2-relais-roc.national.inria.fr (mail2-relais-roc.national.inria.fr [192.134.164.83])
+	by yquem.inria.fr (Postfix) with ESMTP id 10996BBAF
+	for <caml-list@yquem.inria.fr>; Tue, 20 Jan 2009 16:02:35 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtYAAMB1dUlCbwQZk2dsb2JhbACUBgEBAQEJCQoJEQS2G4Vz
+X-IronPort-AV: E=Sophos;i="4.37,295,1231110000"; 
+   d="scan'208";a="19901293"
+Received: from out1.smtp.messagingengine.com ([66.111.4.25])
+  by mail2-smtp-roc.national.inria.fr with ESMTP; 20 Jan 2009 16:02:34 +0100
+Received: from compute1.internal (compute1.internal [10.202.2.41])
+	by out1.messagingengine.com (Postfix) with ESMTP id 5779722F76C;
+	Tue, 20 Jan 2009 10:02:33 -0500 (EST)
+Received: from heartbeat1.messagingengine.com ([10.202.2.160])
+  by compute1.internal (MEProxy); Tue, 20 Jan 2009 10:02:33 -0500
+X-Sasl-enc: Reu21a9SwP6feH5ocKNifRio9e9VPE5B5xNi2kDBTv3R 1232463752
+Received: from [192.168.1.10] (ALyon-157-1-108-87.w90-41.abo.wanadoo.fr [90.41.99.87])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id 9746631F0C;
+	Tue, 20 Jan 2009 10:02:32 -0500 (EST)
+Message-ID: <4975E72C.8060709@ens-lyon.org>
+Date: Tue, 20 Jan 2009 16:01:00 +0100
+From: Martin Jambon <martin.jambon@ens-lyon.org>
+User-Agent: Thunderbird 2.0.0.17 (X11/20081008)
+MIME-Version: 1.0
+To: Hugo Ferreira <hmf@inescporto.pt>
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Making a polymorphic type non-polymorphic to comply
+ with original signature
+References: <4975AEA2.6050901@inescporto.pt>
+In-Reply-To: <4975AEA2.6050901@inescporto.pt>
+Content-Type: text/plain; charset=ISO-8859-15
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ens-lyon:01 sig:01 node:01 node:01 val:01 bool:01 val:01 hash:01 struct:01 hash:01 hashtbl:01 hashtbl:01 hashedtype:01 hashedtype:01 mli:01 
+
+Hugo Ferreira wrote:
+> Hello,
+> 
+> I have the following definition:
+> 
+> module rec H :
+>   sig
+>       type 'a node =
+>           | Node of 'a node J.t
+>           | Leaf of 'a
+> 
+>      type 'a t = 'a node
+>      val equal : 'a t -> 'a t -> bool
+>     val hash : 'a t -> int
+>   end =
+> struct
+>     type 'a node =
+>         | Node of 'a node J.t
+>         | Leaf of 'a
+> 
+>     type 'a t = 'a node
+>     let equa = (==)
+>     let hash = Hashtbl.hash
+> end
+> 
+> and J : Hashtbl.S with type 'a key = 'a H.node = Hashtbl.Make( H )
+> ;;
+> 
+> The data type 'a node is polymorphic. It is also a key used by the
+> hash-table. Note that H now does not comply with Hashtbl.HashedType
+> (because Hashtbl.HashedType is not polymorphic). By adding the
+> constraint "with type" also does not help.
+> 
+> Is it possible to make H comply with Hashtbl.HashedType i.e: make
+> J.Key = 'a H.node ?
+
+
+I just posted an implementation of polymorphic hash tables with physical
+comparison, using the Obj module:
+
+  http://martin.jambon.free.fr/phys.html
+
+It is the following code:
+
+(***** phys.mli *****)
+
+type ('a, 'b) t
+
+val add : ('a, 'b) t -> 'a -> 'b -> unit
+val clear : ('a, 'b) t -> unit
+val copy : ('a, 'b) t -> ('a, 'b) t
+val create : int -> ('a, 'b) t
+val find : ('a, 'b) t -> 'a -> 'b
+val find_all : ('a, 'b) t -> 'a -> 'b list
+val fold : ('a -> 'b -> 'c -> 'c) -> ('a, 'b) t -> 'c -> 'c
+val iter : ('a -> 'b -> unit) -> ('a, 'b) t -> unit
+val length : ('a, 'b) t -> int
+val mem : ('a, 'b) t -> 'a -> bool
+val remove : ('a, 'b) t -> 'a -> unit
+val replace : ('a, 'b) t -> 'a -> 'b -> unit
+
+
+
+(***** phys.ml *****)
+
+(*
+  This implementation uses the Obj module which allows to transgress
+  the type system. It is not regular OCaml.
+*)
+
+module Magic_key =
+struct
+  type t = Obj.t
+  let equal = ( == )
+  let hash = Hashtbl.hash
+end
+
+module Magic_table = Hashtbl.Make (Magic_key)
+
+
+type ('a, 'b) t = 'b Magic_table.t
+
+let add tbl k v = Magic_table.add tbl (Obj.repr k) v
+let clear tbl = Magic_table.clear tbl
+let copy tbl = Magic_table.copy tbl
+let create n = Magic_table.create n
+let find tbl k = Magic_table.find tbl (Obj.repr k)
+let find_all tbl k = Magic_table.find_all tbl (Obj.repr k)
+let fold f tbl accu = Magic_table.fold (Obj.magic f) (Obj.magic tbl) accu
+let iter f tbl = Magic_table.iter (Obj.magic f) (Obj.magic tbl)
+let length tbl = Magic_table.length tbl
+let mem tbl k = Magic_table.mem tbl (Obj.repr k)
+let remove tbl k = Magic_table.remove tbl (Obj.repr k)
+let replace tbl k v = Magic_table.replace tbl (Obj.repr k) v
+
+
+(*****************)
+
+
+
+Martin
+
+-- 
+http://mjambon.com/
+

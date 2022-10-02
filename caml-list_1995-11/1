@@ -1,0 +1,243 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id PAA24678 for caml-redistribution; Fri, 3 Nov 1995 15:03:04 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id NAA23517 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 1995 13:43:41 +0100
+Received: from animal.cs.chalmers.se (root@animal.cs.chalmers.se [129.16.225.30]) by concorde.inria.fr (8.7.1/8.6.9) with ESMTP id NAA00343 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 1995 13:43:38 +0100 (MET)
+Received: from lips.cs.chalmers.se (raffalli@lips-be0.cs.chalmers.se [129.16.233.25]) by animal.cs.chalmers.se (8.7.1/8.7.1) with ESMTP id NAA27997 for <caml-list@pauillac.inria.fr>; Fri, 3 Nov 1995 13:43:32 +0100 (MET)
+Received: (from raffalli@localhost) by lips.cs.chalmers.se (8.7.1/8.7.1) id NAA20888; Fri, 3 Nov 1995 13:43:46 +0100 (MET)
+Date: Fri, 3 Nov 1995 13:43:46 +0100 (MET)
+Message-Id: <199511031243.NAA20888@lips.cs.chalmers.se>
+From: Christophe Raffalli <raffalli@cs.chalmers.se>
+To: caml-list@pauillac.inria.fr
+Subject: A (slightly) better camllex
+Sender: weis
+Status: O
+
+
+
+Hello,
+
+Some applications spend most of their time in lexing. I improved a little bit
+the camllex program. You can hope up to 30% improvement in the lexing
+time. This is also useful for big lexer (from 100 to 200 states) because they
+can generate the fatal error "Phrase too long ...". The modified lexer can
+compile bigger lexer.
+
+The principle is to use arrays instead of pattern matching on chars. It is not
+good to do that systematically because 100 arrays of 256 functions is too big!
+The modified lexer provided an option "-t num" which allow you to give a
+maximum "complexity" for the matching. Any matching with a bigger complexity
+will use an array. The default value is 30 (that makes 9 arrays for the lexer
+analyser of the Caml-Light compiler).
+
+The number of arrays used is printed by the new camllex:
+
+camllex lexer.mll
+115 states, 49 actions, 1 arrays.
+(1 array is usually good)
+
+This modified camllex as successfully bootstrapped caml-light and should be
+fully compatible with the old one.
+
+Here is the patch to apply in the src directory of Caml-light 0.7 (I did not
+try it with caml-light 0.61 or csl). This patch only modifies the files
+lex/main.ml and lex/output.ml.
+
+---------------------- cut here -----------------------------
+*** lex/main.ml
+14c14
+<     prerr_endline "Usage: camllex <input file>";
+---
+>     prerr_endline "Usage: camllex -t num <input file>";
+17c17,25
+<   let source_name = command_line.(1) in
+---
+>   let source_name = 
+>     if command_line.(1) = "-t" then begin
+>       (try
+>         size_vect := int_of_string command_line.(2)
+>       with 
+>         Failure _ -> 
+>           prerr_endline "Usage: camllex -t num <input file>";
+>           io__exit 2);
+>       command_line.(3) end else command_line.(1) in
+*** lex/output.ml
+8a9,11
+> let size_vect = ref 30;;
+> let num_vect = ref 0;;
+> 
+33a37,38
+> type sc = One of int | Two of int * int;;
+> 
+34a40
+> let o_states = ref ([||] : (automata_move * sc list) list vect);;
+35a42,61
+> let sc_length l = 
+>   let rec fn acc = function
+>     [] -> acc
+>   | One _:: l -> fn (acc+1) l
+>   | Two _:: l -> fn (acc+2) l
+>   in fn 0 l
+> ;;
+> 
+> let optimize l = 
+>   let l = sort__sort (prefix <) l in
+>   let gn bg nd = if bg = (nd-1) then One bg else Two(bg,nd-1) in
+>   let rec fn acc prev cur = function
+>     [] -> gn prev cur :: acc
+>   | x::l -> if x = cur then fn acc prev (cur + 1) l
+>                        else fn (gn prev cur :: acc) x (x + 1) l
+>   in match l with 
+>     [] -> failwith "optimize"
+>   | x::l -> fn [] x (x + 1) l
+> ;;
+> 
+45,46c71,72
+<       (fun (e1, ref pl1) (e2, ref pl2) -> list_length pl1 >= list_length pl2)
+<       (enum [] 0)
+---
+>       (fun (e1, pl1) (e2, pl2) -> sc_length pl1 >= sc_length pl2)
+>       (map (fun (x, ref l) -> x, optimize l) (enum [] 0))
+49c75,89
+< let output_move = function
+---
+> let output_one_tbl_def i = 
+>   output_string !oc ("let tbl_" ^ string_of_int i ^ " = \n");
+>   output_string !oc "make_vect 256 (fun _ -> raise Exit);;\n";
+> ;;
+> 
+> let output_tbl_def i =
+>    let size = it_list (fun x (_, l) -> x + sc_length l) 0 in
+>    if size !o_states.(i) > !size_vect then begin
+>      incr num_vect;
+>      output_one_tbl_def i
+>    end
+> ;;
+> 
+> 
+> let output_move_case = function
+59a100,110
+> let output_move_vect = function
+>     Backtrack ->
+>       output_string !oc "backtrack"
+>   | Goto dest ->
+>       match !states.(dest) with
+>         Perform act_num ->
+>           output_string !oc ("action_" ^ string_of_int act_num)
+>       | _ ->
+>           output_string !oc ("state_" ^ string_of_int dest)
+> ;;
+> 
+81c132
+<   | [c] ->
+---
+>   | [One c] ->
+85c136
+<   | c::cl ->
+---
+>   | [Two (c,c')] ->
+87a139,144
+>       output_string !oc "`..`";
+>       output_string !oc (escape_char (char_of_int c'));
+>       output_string !oc "`"
+>   | (One c)::cl ->
+>       output_string !oc "`";
+>       output_string !oc (escape_char (char_of_int c));
+89a147,153
+>   | (Two (c,c'))::cl ->
+>       output_string !oc "`";
+>       output_string !oc (escape_char (char_of_int c));
+>       output_string !oc "`..`";
+>       output_string !oc (escape_char (char_of_int c'));
+>       output_string !oc "`|";
+>       output_chars cl
+93c157
+<   output_chars !chars;
+---
+>   output_chars chars;
+95c159
+<   output_move dest;
+---
+>   output_move_case dest;
+100c164
+< let output_all_trans trans =
+---
+> let output_all_trans_case i =
+102c166
+<   match enumerate_vect trans with
+---
+>   match !o_states.(i) with
+108c172
+<       output_move default;
+---
+>       output_move_case default;
+112a177,204
+> let output_all_trans_vect i =
+>   output_string !oc ("  tbl_" ^ string_of_int i ^
+>     ".(int_of_char (get_next_char lexbuf)) lexbuf");
+>   output_string !oc "\nand ";
+> ;;
+> 
+> let output_all_trans i =
+>   let size = it_list (fun x (_, l) -> x + sc_length l) 0 in
+>   if size !o_states.(i) > !size_vect
+>     then output_all_trans_vect i
+>     else output_all_trans_case i
+> ;;
+> 
+> let output_one_tbl_content i trans =
+>   for j = 0 to 255 do
+>     output_string !oc ("tbl_"^ string_of_int i ^".("
+>       ^ string_of_int j ^ ") <- ");
+>     output_move_vect trans.(j);
+>     output_string !oc ";;\n"
+>   done
+> ;;
+> 
+> let output_tbl_content i moves =
+>    let size = it_list (fun x (_, l) -> x + sc_length l) 0 in
+>    if size !o_states.(i) > !size_vect then output_one_tbl_content i moves
+> ;;
+> 
+> 
+126c218
+<       output_all_trans moves
+---
+>       output_all_trans state_num
+145,147d236
+<   print_int (vect_length st); print_string " states, ";
+<   print_int (list_length actions); print_string " actions.";
+<   print_newline();
+149a239,246
+>   o_states := make_vect (vect_length st) [];
+>   for i = 0 to vect_length st - 1 do
+>     match st.(i) with
+>       Perform i -> ()
+>     | Shift(what_to_do, moves) -> 
+>         !o_states.(i) <- enumerate_vect moves;
+>         output_tbl_def i
+>   done;
+156c253,262
+<   output_entries initial_st
+---
+>   output_entries initial_st;
+>   for i = 0 to vect_length st - 1 do
+>     match st.(i) with
+>       Perform i -> ()
+>     | Shift(what_to_do, moves) -> output_tbl_content i moves
+>   done;
+>   print_int (vect_length st); print_string " states, ";
+>   print_int (list_length actions); print_string " actions, ";
+>   print_int !num_vect; print_string " arrays.";
+>   print_newline();
+---------------------- cut here -----------------------------
+
+
+
+----
+Christophe Raffalli
+Dept. of Computer Sciences
+Chalmers University of Technology
+
+URL: http://www.logique.jussieu.fr/www.raffalli
+
+
+

@@ -1,0 +1,216 @@
+Return-Path: <diego.fernandez_pons@etu.upmc.fr>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 38425BC50
+	for <caml-list@yquem.inria.fr>; Fri,  6 Oct 2006 20:16:48 +0200 (CEST)
+Received: from shiva.jussieu.fr (shiva.jussieu.fr [134.157.0.129])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id k96IGlcB024220
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Fri, 6 Oct 2006 20:16:47 +0200
+Received: from courriel.upmc.fr (courriel3.reseau.jussieu.fr [134.157.0.194])
+          by shiva.jussieu.fr (8.13.7/jtpda-5.4) with ESMTP id k96IGlIb049006
+          for <caml-list@inria.fr>; Fri, 6 Oct 2006 20:16:47 +0200 (CEST)
+X-Ids: 164
+Received: from etu.upmc.fr (localhost [127.0.0.1])
+          by courriel.upmc.fr (8.13.6/jtpda-5.4) with ESMTP id k96IGlKu041641
+          for <caml-list@inria.fr>; Fri, 6 Oct 2006 20:16:47 +0200 (CEST)
+Received: from out-of.ilog.fr (out-of.ilog.fr [81.80.159.49]) by
+	webmail.etu.upmc.fr (Horde MIME library) with HTTP; Fri, 06 Oct 2006
+	20:16:47 +0200
+Message-ID: <20061006201647.1a88vj0tkockc4k8@webmail.etu.upmc.fr>
+Date: Fri, 06 Oct 2006 20:16:47 +0200
+From: Diego Olivier FERNANDEZ PONS <diego.fernandez_pons@etu.upmc.fr>
+To: caml-list@inria.fr
+Subject: Type inference inside exceptions ?
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset=ISO-8859-1;
+	DelSp="Yes";
+	format="flowed"
+Content-Disposition: inline
+Content-Transfer-Encoding: quoted-printable
+User-Agent: Internet Messaging Program (IMP) H3 (4.1.3)
+X-Greylist: Sender IP whitelisted, not delayed by milter-greylist-2.0.2 (shiva.jussieu.fr [134.157.0.164]); Fri, 06 Oct 2006 20:16:47 +0200 (CEST)
+X-Virus-Scanned: ClamAV 0.88.2/2000/Fri Oct  6 14:12:15 2006 on shiva.jussieu.fr
+X-Virus-Status: Clean
+X-Miltered: at concorde with ID 45269D8F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at shiva.jussieu.fr with ID 45269D8F.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; pons:01 pons:01 inference:01 type-checker:01 computes:01 val:01 mutable:01 mutable:01 val:01 coins:98 rec:01 rec:01 integer:01 exception:01 exception:01 
+
+     Bonjour,
+
+I would like the type-checker to infer the type inside exceptions (or =20
+at least to help me in the "guess a type and test" loop).
+
+More specifically, here is my problem:
+
+I have a program that computes the optimal solution of the minimal =20
+cardinality subset-sum problem with multiplicities. In simple words it =20
+gives the minimum number of coins you need to reach a given amount of =20
+money.
+
+val smc : int -> int list -> int list list * int =3D <fun>
+# smc 226 [198; 122; 90; 75; 64; 54; 53; 10; 5; 1];;
+- : int list list * int =3D
+([[75; 75; 75; 1]; [122; 64; 10; 10; 10; 10]; [198; 10; 10; 5; 1; 1; 1]],
+  198105)
+
+The programs gives all the solutions it found, the last one being the =20
+optimal (with the total number of backtracks). The best solution is =20
+kept by side-effects on a global variable.
+
+type environment =3D {
+     mutable solutions : int list list;
+     mutable backtracks : int;
+     mutable card : int
+   }
+
+exception Fail
+
+let rec min_card env =3D fun to_reach chosen candidates ->
+   if (to_reach =3D 0) then
+     match compare env.card (List.length chosen) with
+       | n when n <=3D 0 ->
+=09  env.backtracks <- env.backtracks + 1;
+=09  raise Fail
+       | _ ->
+=09  env.solutions <- chosen :: env.solutions;
+=09  env.card <- List.length chosen;
+=09  raise Fail
+   else
+     match candidates with
+       | [] ->
+=09  env.backtracks <- env.backtracks + 1;
+=09  raise Fail
+       | x :: tail when x > to_reach -> min_card env to_reach chosen tail
+       | x :: tail ->
+=09  try
+=09    min_card env (to_reach - x) (x :: chosen) candidates
+=09  with Fail ->
+=09    min_card env to_reach chosen tail
+
+let rec smc =3D fun to_reach list ->
+   let env =3D { solutions =3D []; backtracks =3D 0; card =3D max_int } in
+     try
+       min_card env to_reach [] (List.sort (fun x y -> compare y x) list)
+   with Fail -> (List.map List.rev env.solutions, env.backtracks)
+
+Now I want the program not to return all the solutions but only the =20
+first solution it found and a list of continuations that I can launch =20
+again if a better solution is required.
+
+Therefore I add a second exception
+type continuation =3D ...
+exception Solution of int * continuation list
+
+And I collect the continuations from the try ... catch when the left =20
+tree happens to contain a solution
+
+try
+    explore left subtree
+with
+   | Fail -> explore right subtree
+   | Solution (s, cont) ->
+     let c =3D function () -> explore right subtree in
+       raise Solution (s, c :: cont)
+
+Not knowing the type of the continuation, I just tried unit -> int
+
+Here is the detailed code
+
+type continuation =3D unit -> int
+exception Solution of int * continuation list
+
+let rec min_card env =3D fun to_reach chosen candidates ->
+   if (to_reach =3D 0) then
+     match compare env.card (List.length chosen) with
+       | n when n <=3D 0 ->
+=09  env.backtracks <- env.backtracks + 1;
+=09  raise Fail
+       | _ ->
+=09  env.solutions <- chosen :: env.solutions;
+=09  env.card <- List.length chosen;
+=09  raise (Solution (List.length chosen, []))
+   else
+     match candidates with
+       | [] ->
+=09  env.backtracks <- env.backtracks + 1;
+=09  raise Fail
+       | x :: tail when x > to_reach -> min_card env to_reach chosen tail
+       | x :: tail ->
+=09  try
+=09    min_card env (to_reach - x) (x :: chosen) candidates
+=09  with
+=09    | Fail -> min_card env to_reach chosen tail
+=09    | Solution (s, continuation) ->
+=09=09let c =3D fun () -> min_card env to_reach chosen tail in
+=09=09  raise (Solution (s, (c :: continuation)))
+
+I first wrap without catching the exceptions and test
+
+let smc =3D fun to_reach list ->
+   let env =3D { solutions =3D []; backtracks =3D 0; card =3D max_int } in
+       min_card env to_reach [] list
+
+# val smc : int -> int list -> int =3D <fun>
+# smc 226 [198; 122; 90; 75; 64; 54; 53; 10; 5; 1];;
+Exception: Solution (7, [<fun>; <fun>; <fun>; <fun>; <fun>; <fun>; <fun>]
+
+Seems correct.
+
+Now I try to extract the integer
+
+let smc =3D fun to_reach list ->
+   try
+     let env =3D { solutions =3D []; backtracks =3D 0; card =3D max_int } in
+       min_card env to_reach [] list
+   with Solution (c, l) -> c
+
+# val smc : int -> int list -> int =3D <fun>
+# smc 226 [198; 122; 90; 75; 64; 54; 53; 10; 5; 1];;
+- : int =3D 7
+
+Correct.
+
+Now I try to extract the continuation list
+
+let smc =3D fun to_reach list ->
+   let env =3D { solutions =3D []; backtracks =3D 0; card =3D max_int } in
+     try
+       min_card env to_reach [] list
+     with Solution (c, l) -> l
+
+This expression has type continuation list but is here used with type int
+
+Ok. I have to correct the type of continuation by hand
+
+lets try [type continuation =3D unit -> (unit -> int)]
+
+This expression has type continuation list but is here used with type
+   unit -> int
+
+lets try [type continuation =3D Cont of (unit -> continuation)]
+and [let c =3D Cont (fun () -> ... ) in raise Solution (s, c :: cont)]
+
+This expression has type continuation list but is here used with type
+   continuation
+
+lets try [type continuation =3D Cont of (unit -> continuation list)]
+
+# val smc : int -> int list -> continuation list =3D <fun>
+# smc 226 [198; 122; 90; 75; 64; 54; 53; 10; 5; 1];;
+- : continuation list =3D
+[Cont <fun>; Cont <fun>; Cont <fun>; Cont <fun>; Cont <fun>; Cont <fun>;
+  Cont <fun>]
+
+Great ! Now I want the solution, its cardinality and the continuation list
+
+lets try ...
+
+          Diego Olivier
+

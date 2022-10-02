@@ -1,0 +1,165 @@
+Received: by pauillac.inria.fr; Wed, 1 Feb 95 18:38:02 +0100
+Received: by pauillac.inria.fr; Wed, 1 Feb 95 18:35:41 +0100
+From: Pierre Weis <weis@pauillac.inria.fr>
+Message-Id: <9502011735.AA29829@pauillac.inria.fr>
+Subject: Re: cl7
+To: Emmanuel.Engel@lri.fr
+Date: Wed, 1 Feb 1995 18:35:41 +0100 (MET)
+Cc: caml-list@pauillac.inria.fr
+In-Reply-To: <9501251015.AA14578@newsun8.lri.fr> from "Emmanuel.Engel@lri.fr" at Jan 25, 95 11:15:45 am
+X-Mailer: ELM [version 2.4 PL21]
+Content-Type: text
+Content-Length: 5783      
+Sender: weis@pauillac.inria.fr
+Status: O
+
+There has been a lot of questions about the new type-checking
+algorithm for mutable values incorporated in the new 0.7 release of
+Caml Light. In this message, I try to explain the new type-checking
+rule. This rule is sound and in some cases allows more programs than
+the old one. However there exists programs that become ill-typed. This
+situation rarely happens: the 7000 lignes of the Caml Light compiler
+were type-checked without modifications by the new type-checker.
+
+I'll give some hints to translate problematic programs into typable ones.
+
+First, note that the scheme described here is the simplest known
+scheme to get a sound type system in a polymorphic langage with
+mutable variables.
+
+The problem and its solution:
+-----------------------------
+The scheme changes the polymorphism, since it relies on a modification
+of the generalisation rule for let bound identifiers. Let's recall
+this old rule. When typing
+
+let my-name = expr1 in expr2
+
+expr1 is type-checked first, and the identifier my-name gets a
+type-scheme (a polymorphic type) according to the type of expr1:
+namely, the type variables introduced when type-checking expr1 that remain
+unconstraint when expr1 is fully type-checked, are generalized, that is
+become parameters of the type scheme assigned to my-name. For instance in
+
+let id = function x -> x in ...
+
+id gets type scheme: for all 'a. 'a -> 'a, thus can be used with
+several incompatible types in the rest of the program. Fort instance,
+with type int -> int and bool -> bool if the in part is id 1; id true
+
+Unfortunately this rule is unsound when mutable data exist in the
+language (such as references, vectors, or records with mutable
+fields). In effect, consider
+
+let bad_ref = ref [] in ...
+
+with the old let-rule, bad_ref gets type scheme for all 'a. 'a list
+ref. It thus can be used with different types in the rest of the
+program, and this is boguous. For instance, if we can use bad_ref with
+type int list ref and bool list ref, we can write:
+
+let bad_ref = ref [] in
+    bad_ref := [1];
+    if hd (!bad_ref) then ...
+
+    (bad_ref := [1] is correctly typed, since bad_ref can be used with
+     type int list ref,
+     hd (!bad_ref) is correctly typed, since bad_ref can be used with
+     type bool list ref,)
+This program leads to a bus error since after the assignment, bad_ref
+contains a list of integers and not a list of booleans.
+
+The new rule for let-bound identifiers:
+---------------------------------------
+In short, to be safe a type system for Caml must prohibit the
+existence of polymorphic mutable values at runtime. This has been
+intensively studied in the ML community, and many complex type-systems
+have been proposed. Recently it appears that a very simple
+modification of the let-rule is sufficient: when typing
+
+let my-name = expr1 
+
+we use the same old let-rule only when expr1 is a function, an
+identifier, or a constant. Otherwise the identifier my-name is not
+polymorphic (type variables are not generalized).
+
+Which programs must change?
+---------------------------
+The main change with the old let-rule concerns definition of variables
+which are bound to an application:
+let bad_ref = ref [] in
+bad_ref is not polymorphic, and this is good.
+
+But some other programs are now monomorphic:
+
+let good_old = map (function x -> x) in ...
+
+since good_old is an application it is not generalized and cannot be
+used with different types. Thus
+let good_old = map (function x -> x) in good_old [1]; good_old [true]
+is now ill typed (good_old [1] imposes to good_old to be of type int
+list -> int list, and good_old [true] is ill-typed).
+
+How to recover?
+---------------
+In this case (the most common one) it is very easy to get an
+equivalent well-typed program: since good_old is in fact a function,
+you just have to make it explicit for the type-checker by adding a
+``function construct'' or an extra parameter (this transformation is
+technically known as eta-expansion):
+
+let good_old l = map (function x -> x) l in ...
+
+or 
+
+let good_old = function l -> map (function x -> x) l in ...
+
+Strange types and messages from the type-checker
+------------------------------------------------
+
+When identifiers are bound to non-polymorphic types with unknown type
+variables this type variables are instnaciated when the identifier is used.
+Consider
+
+let good_old = map (function x -> x) in
+good_old [1]
+
+After its definition good_old gets type 'a list -> 'a list (where 'a just
+stands for an unknown type, this is NOT the type scheme for all 'a. 'a
+list -> 'a list). Hence the type-checking of good_old [1] will resolve
+this unknown type to be int (and good_old gets type int list -> int
+list).
+
+Unknowns or non-polymorphic type variables:
+-------------------------------------------
+For clarity, an unknown type variable is denoted by '_a instead of 'a
+for a parameter of a type scheme.
+If we break the preceding program into 2 top-level phrases, we get:
+
+#let good_old = map (function x -> x);;
+good_old : '_a list -> '_a list = <fun>
+#good_old [1];;
+- : int list = [1]
+
+Once more the unknown type '_a is known to be int, and thus the type
+of good_old becomes completely determined:
+
+#good_old;;
+- : int list -> int list = <fun>
+
+For specialists only: why is this new rule correct?
+----------------------------------------------
+The new rule only generalizes identifiers bound to expressions that
+cannot create polymorphic values. Since mutable values are always
+monomorphic, it is not very difficult to prove that the type system is sound.
+
+Pierre Weis
+----------------------------------------------------------------------------
+Projet Cristal
+INRIA, BP 105, F-78153 Le Chesnay Cedex (France)
+E-mail: Pierre.Weis@inria.fr
+Telephone: +33 1 39 63 55 98
+----------------------------------------------------------------------------
+
+
+

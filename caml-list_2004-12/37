@@ -1,0 +1,129 @@
+Return-Path: <pierre.weis@inria.fr>
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id A7EB9BB81
+	for <caml-list@yquem.inria.fr>; Tue,  7 Dec 2004 08:55:10 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iB77tANT016860
+	for <caml-list@yquem.inria.fr>; Tue, 7 Dec 2004 08:55:10 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id IAA12387 for <caml-list@pauillac.inria.fr>; Tue, 7 Dec 2004 08:55:09 +0100 (MET)
+Received: from oceanite.ens-lyon.fr (oceanite.ens-lyon.fr [140.77.1.22])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id iB77t90p016853
+	for <caml-list@inria.fr>; Tue, 7 Dec 2004 08:55:09 +0100
+Received: from localhost (oceanite.ens-lyon.fr [127.0.0.1])
+	by oceanite.ens-lyon.fr (Postfix) with ESMTP
+	id A8173320114; Tue,  7 Dec 2004 08:48:51 +0100 (CET)
+Received: from oceanite.ens-lyon.fr ([127.0.0.1])
+	by localhost (oceanite [127.0.0.1]) (amavisd-new, port 10024)
+	with ESMTP id 29050-10; Tue, 7 Dec 2004 08:48:51 +0100 (CET)
+Received: from paille (unknown [140.77.13.92])
+	by oceanite.ens-lyon.fr (Postfix) with ESMTP
+	id 861833200D5; Tue,  7 Dec 2004 08:48:51 +0100 (CET)
+Received: from thirscho by paille with local (Exim 3.36 #1 (Debian))
+	id 1CbZId-0000gq-00; Tue, 07 Dec 2004 07:58:15 +0100
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <16821.21638.982534.207888@gargle.gargle.HOWL>
+Date: Tue, 7 Dec 2004 07:58:14 +0100
+To: Aaron Bohannon <bohannon@cis.upenn.edu>
+Cc: Caml List <caml-list@inria.fr>
+Subject: [Caml-list] exceptions in recursive modules
+In-Reply-To: <41B514EB.7030707@cis.upenn.edu>
+References: <41B514EB.7030707@cis.upenn.edu>
+X-Mailer: VM 7.19 under Emacs 21.3.1
+Reply-To: Tom.Hirschowitz@ens-lyon.fr
+From: Tom Hirschowitz <tom.hirschowitz@ens-lyon.fr>
+X-Virus-Scanned: by amavisd-new-20030616-p10 (Debian) at ens-lyon.fr
+X-Miltered: at concorde with ID 41B561DE.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 41B561DD.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; caml-list:01 recursive:01 ens-lyon:01 rec:01 sig:01 val:01 struct:01 rec:01 elt:01 val:01 abstr:01 recursive:01 ocaml:01 sig:01 struct:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.0 (2004-09-13) on yquem.inria.fr
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.0
+X-Spam-Level: 
+
+
+ > Here is the example.  This is essentially the example in the manual, but 
+ > I have added an exception to the module:
+ > 
+ > module rec A : sig
+ >    type t = Leaf of int | Node of ASet.t
+ >    exception Fail
+ >    val compare : t -> t -> int
+ > end = struct
+ >    type t = Leaf of int | Node of ASet.t
+ >    exception Fail
+ >    let rec compare = (* suitable definition *)
+ > end
+ > and ASet : Set.S with type elt = A.t = Set.Make(A)
+ > 
+ > Then we can try to use it:
+ > 
+ > # let x = A.Leaf(3);;
+ > val x : A.t = A.Leaf 3
+ > # let s = ASet.add x ASet.empty;;
+ > val s : ASet.t = <abstr>
+ > # let s' = ASet.add x s;;
+ > Exception: Undefined_recursive_module ("recmodtest.ml", 6, 6).
+ > 
+ > If we remove the "exception Fail" from the signature, everything works 
+ > just fine.  Is this behavior correct?  (I am using OCaml 3.08.1)
+
+I think this is due to the necessary coercion between your A and the
+OrderedType argument expected by Set.Make. Your code is compiled to
+something like
+
+module rec A : sig
+   type t = Leaf of int | Node of ASet.t
+   exception Fail
+   val compare : t -> t -> int
+end = struct
+   type t = Leaf of int | Node of ASet.t
+   exception Fail
+   let rec compare = (* suitable definition *)
+end
+and ASet : Set.S with type elt = A.t = Set.Make(
+  struct
+    type t = A.t
+    let compare = A.compare
+  end)
+
+According to the (brief) explanation in the manual, 
+
+"Evaluation of a recursive module definition proceeds by building
+initial values for the safe modules involved, binding all (functional)
+values to fun x -> raise Undefined_recursive_module. The defining
+module expressions are then evaluated, and the initial values for the
+safe modules are replaced by the values thus computed."
+
+Here, the argument passed to Set.Make is never replaced with a proper
+value. If you explicit the coercion with some A' as below, the code
+works. Is it all well this way, or did I miss something?
+
+module rec A : sig
+  type t = Leaf of int | Node of ASet.t
+  exception Fail
+  val compare: t -> t -> int
+end
+    = struct
+      type t = Leaf of int | Node of ASet.t
+      exception Fail
+      let compare t1 t2 =
+        match (t1, t2) with
+          (Leaf s1, Leaf s2) -> Pervasives.compare s1 s2
+        | (Leaf _, Node _) -> 1
+        | (Node _, Leaf _) -> -1
+        | (Node n1, Node n2) -> ASet.compare n1 n2
+    end
+and A' : Set.OrderedType with type t = A.t = struct 
+    type t = A.t
+    let compare = A.compare
+  end   
+and ASet : Set.S with type elt = A'.t
+      = Set.Make(A')
+
+let x = A.Leaf(3)
+let s = ASet.add x ASet.empty
+let s' = ASet.add x s
+

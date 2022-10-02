@@ -1,0 +1,101 @@
+Return-Path: <oleg@okmij.org>
+X-Original-To: caml-list@sympa.inria.fr
+Delivered-To: caml-list@sympa.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by sympa.inria.fr (Postfix) with ESMTPS id 7FCCC7EE4E
+	for <caml-list@sympa.inria.fr>; Sat,  9 Nov 2013 05:02:25 +0100 (CET)
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  oleg@okmij.org) identity=pra; client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible
+Received-SPF: Pass (mail3-smtp-sop.national.inria.fr: domain of
+  oleg@okmij.org designates 66.39.3.115 as permitted sender)
+  identity=mailfrom; client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org"; x-sender="oleg@okmij.org";
+  x-conformance=sidf_compatible; x-record-type="v=spf1"
+Received-SPF: None (mail3-smtp-sop.national.inria.fr: no sender
+  authenticity information available from domain of
+  postmaster@www1.g3.pair.com) identity=helo;
+  client-ip=66.39.3.115;
+  receiver=mail3-smtp-sop.national.inria.fr;
+  envelope-from="oleg@okmij.org";
+  x-sender="postmaster@www1.g3.pair.com";
+  x-conformance=sidf_compatible
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AsEDAIWzfVJCJwNzY2dsb2JhbABZgz+/a4FGAxgHDgg8giUBAQQBJ1IFFjRpFIgABg29FI9nBxaEGgOYDgGBL5QBPA
+X-IPAS-Result: AsEDAIWzfVJCJwNzY2dsb2JhbABZgz+/a4FGAxgHDgg8giUBAQQBJ1IFFjRpFIgABg29FI9nBxaEGgOYDgGBL5QBPA
+X-IronPort-AV: E=Sophos;i="4.93,665,1378850400"; 
+   d="scan'208";a="34570964"
+Received: from www1.g3.pair.com ([66.39.3.115])
+  by mail3-smtp-sop.national.inria.fr with SMTP; 09 Nov 2013 05:02:02 +0100
+Received: (qmail 50664 invoked by uid 9370); 9 Nov 2013 04:02:01 -0000
+Date: 9 Nov 2013 04:02:01 -0000
+Message-ID: <20131109040201.50663.qmail@www1.g3.pair.com>
+From: oleg@okmij.org
+To: bpientka@cs.mcgill.ca
+CC: caml-list@inria.fr
+In-reply-to: <527D452E.90701@cs.mcgill.ca>
+Subject: Re: [Caml-list] recursive records
+
+
+Brigitte Pientka wrote:
+
+> type 'a susp = Susp of (unit -> 'a)
+>
+> type 'a str = {hd: 'a  ; tl : ('a str) susp}
+>
+> let rec ones = {hd = 1 ; tl = Susp (fun () -> ones)}
+>
+> This works fine and many examples can be elegantly written this way.  However,
+> when I define the stream ones via the function delay, OCaml fails.
+>
+>   let delay f = Susp f
+>    let rec ones = {hd = 1 ; tl = delay (fun () -> ones)};;
+>                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+> Error: This kind of expression is not allowed as right-hand side of `let rec'
+>
+> Could someone explain why this fails?
+
+To be fair, OCaml already provides a few relaxations for let rec
+definitions, which are described in Sec 7.3 of
+        http://caml.inria.fr/pub/docs/manual-ocaml/extn.html
+Alain Frisch has demonstrated one such extension: lazy.
+
+I believe though there is a better way to represent your co-patterns
+in OCaml -- using objects. Objects are already have a fix-points in
+them, and objects are naturally coinductive: an object receives a
+message, changes its state and results in an object ready for more
+messages. The only think we can do with objects is to observe them,
+but sending them messages. This sounds just like the definition of
+co-induction. Here how it looks like:
+
+(* defining the class type is not necessary, but helpful.
+   It defines the type 'a str that is useful when writing signatures.
+   I like to write signatures
+*)
+class type ['a] str = object ('self)
+        method hd : 'a
+        method tl : 'self
+end;;
+
+class ones = object (self) 
+  method hd = 1
+  method tl = self
+end
+;;
+
+let ones = new ones;;
+
+let take : int -> 'a str -> 'a list = fun n str ->
+ let rec loop acc str = function
+   | n when n <= 0 -> List.rev acc
+   | n -> loop (str#hd :: acc) (str#tl) (n-1) (* Co-patterns! str#hd and str#tl *)
+ in loop [] str n
+;;
+
+take 5 ones;;
+   - : int list = [1; 1; 1; 1; 1]
+

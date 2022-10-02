@@ -1,0 +1,300 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA08981 for caml-red; Tue, 28 Nov 2000 22:26:13 +0100 (MET)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id NAA15904 for <caml-list@pauillac.inria.fr>; Tue, 28 Nov 2000 13:46:06 +0100 (MET)
+Received: from pop3.dassault-aviation.fr (pop3.dassault-aviation.fr [62.161.178.177])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id eASCk0j26488;
+	Tue, 28 Nov 2000 13:46:00 +0100 (MET)
+Received: from rnis.dassault-aviation.fr ([193.106.72.203])
+          by pop3.dassault-aviation.fr (Netscape Messaging Server 3.6)
+           with ESMTP id AAA28F0; Tue, 28 Nov 2000 13:50:35 +0100
+Received: from dassault-aviation.fr by rnis.dassault-aviation.fr (8.8.8+Sun/SMI-SVR4)
+	id NAA09141; Tue, 28 Nov 2000 13:42:34 +0100 (MET)
+Message-ID: <3A23AA7F.F3EEBC8@dassault-aviation.fr>
+Date: Tue, 28 Nov 2000 13:52:15 +0100
+From: "thierry BRAVIER" <thierry.bravier@dassault-aviation.fr>
+Organization: Dassault Aviation
+X-Mailer: Mozilla 4.08 [fr] (WinNT; I)
+MIME-Version: 1.0
+To: jim.rauser@sdm.de, caml-list@inria.fr, Pierre.Weis@inria.fr
+Subject: Re: AW: Format.sprintf and "%a"
+References: <C9A98ED35114D31197D000805FEA668E02650FA0@mucexch.muc.sdm.de>
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Sender: weis@pauillac.inria.fr
+
+Here is a small contribution to the printf and format chat between Pierre Weis
+and Jim Rauser.
+
+Listed files contain a simple extensible solution to pretty-print objects in
+the toplevel
+by getting out_channel and string printers from formatter printers.
+
+To get a printable object it is only necessary to inherit from
+Pretty.printable_base
+and over-ride method pprint : formatter -> unit.
+
+Then if x : foo implements printable, f#sprint : string for instance.
+
+Hope it helps.
+
+Thierry Bravier
+
+pretty.mli and pretty.ml follow ...
+
+(* =========================================================================
+ *        File: pretty.mli
+ *      Author: Thierry BRAVIER
+ *  Time-stamp: <00/11/27 16:06:58 tb>
+ * ====================================================================== *)
+
+(* ====================================================================== *)
+(* ocaml printf "%a" pretty printers types *)
+(* ---------------------------------------------------------------------- *)
+type 'a pprinter = Format.formatter -> 'a -> unit
+type 'a fprinter = out_channel      -> 'a -> unit
+type 'a sprinter = unit             -> 'a -> string
+
+(* ====================================================================== *)
+(* pprint to any output device *)
+(* ---------------------------------------------------------------------- *)
+val pprinter_of_pprinter : 'a pprinter -> 'a pprinter   (* pprint and flush *)
+
+val fprinter_of_pprinter : 'a pprinter -> 'a fprinter   (* pprint to channel
+*)
+val sprinter_of_pprinter : 'a pprinter -> 'a sprinter   (* pprint to string *)
+
+val printer_of_pprinter  : 'a pprinter -> 'a -> unit    (* pprint to stdout *)
+
+val eprinter_of_pprinter : 'a pprinter -> 'a -> unit    (* pprint to stderr *)
+
+(* ====================================================================== *)
+(* printable objects interface and stateless abstract base class *)
+(* ---------------------------------------------------------------------- *)
+class type printable =
+  object
+    method pprint : Format.formatter -> unit    (* over-ride,SHOULD NOT
+FLUSH*)
+    method fprint : out_channel      -> unit    (* DO NOT OVER-RIDE *)
+    method sprint : string                      (* DO NOT OVER-RIDE *)
+  end
+
+(* ---------------------------------------------------------------------- *)
+class virtual printable_base : printable
+
+(* ====================================================================== *)
+(* "%a" helpers *)
+(* ---------------------------------------------------------------------- *)
+val pprinter : #printable pprinter      (* useful with Format.fprintf "%a" *)
+val fprinter : #printable fprinter      (* useful with Printf.fprintf "%a" *)
+val sprinter : #printable sprinter      (* useful with Printf.sprintf "%a" *)
+
+(* ====================================================================== *)
+(* autonomous helpers *)
+(* ---------------------------------------------------------------------- *)
+val pprint : Format.formatter -> #printable -> unit     (* pprint and flush *)
+
+val fprint : out_channel      -> #printable -> unit     (* pprint to channel
+*)
+val sprint :                     #printable -> string   (* pprint to string *)
+
+val print  : #printable -> unit                         (* pprint to stdout *)
+
+val eprint : #printable -> unit                         (* pprint to stderr *)
+
+(* ====================================================================== *)
+
+(* ======================================================================
+ *        File: pretty.ml
+ *      Author: Thierry BRAVIER
+ *  Time-stamp: <00/11/27 16:12:44 tb>
+ * ====================================================================== *)
+open Format
+
+(* ====================================================================== *)
+type 'a pprinter = Format.formatter -> 'a -> unit
+type 'a fprinter = out_channel      -> 'a -> unit
+type 'a sprinter = unit             -> 'a -> string
+
+(* ====================================================================== *)
+let pprinter_of_pprinter pp f  x =                              (* flush *)
+  Format.fprintf f "@[%a@]@?" pp x
+let fprinter_of_pprinter pp o  x =                              (* flush *)
+  pprinter_of_pprinter pp (formatter_of_out_channel o)x
+let sprinter_of_pprinter pp () x =                              (* flush *)
+  let b = Buffer.create 16 in
+  (pprinter_of_pprinter pp (formatter_of_buffer b) x);
+  Buffer.contents b
+
+(* ---------------------------------------------------------------------- *)
+let printer_of_pprinter  pp x=pprinter_of_pprinter pp std_formatter x
+(*flush*)
+let eprinter_of_pprinter pp x=pprinter_of_pprinter pp err_formatter x
+(*flush*)
+
+(* ====================================================================== *)
+let pprinter f  x = x#pprint f                          (* SHOULD NOT FLUSH *)
+
+let fprinter o  x = fprinter_of_pprinter pprinter o  x  (* flush *)
+let sprinter () x = sprinter_of_pprinter pprinter () x  (* flush *)
+
+(* ====================================================================== *)
+let pprint   f  x = pprinter_of_pprinter pprinter f x   (* flush *)
+let fprint        = fprinter                            (* flush *)
+let sprint      x = sprinter () x                       (* flush *)
+
+(* ---------------------------------------------------------------------- *)
+let print       x = printer_of_pprinter  pprinter x     (* flush *)
+let eprint      x = eprinter_of_pprinter pprinter x     (* flush *)
+
+(* ====================================================================== *)
+class type printable = object
+  method pprint : formatter   -> unit
+  method fprint : out_channel -> unit
+  method sprint : string
+end
+
+(* ---------------------------------------------------------------------- *)
+class virtual printable_base = object (self)
+  method pprint f = Format.fprintf f "printable"        (* SHOULD NOT FLUSH *)
+
+  method fprint o = fprint o self
+  method sprint   = sprint   self
+end
+
+(* ====================================================================== *)
+(* Pretty demo in ocaml toplevel: *)
+(* ---------------------------------------------------------------------- *)
+(*
+#load "pretty.cmo";;                    (* or use ocamlmktop / .ocamlinit *)
+#install_printer Pretty.print;;         (* for all #Pretty.printable objects
+*)
+
+class foo i j = object
+  val mutable x = i
+  val y = j
+  method incr = x <- x + 1
+
+  (* could be selectively compiled or removed with camlp4 or cpp macros *)
+  inherit Pretty.printable_base
+  method pprint f =
+    Format.fprintf f "@[<hv 1>{foo:@ @[x = %d,@]@ @[y = \"%s\"@]}@]" x y
+end;;
+let trace x = Format.eprintf "TRACE: @[x = %a@]@\n@?" Pretty.pprinter x;;
+let demo x = trace x; x#incr; trace x;;
+let x = new foo 123456789 "tagada voila les daltons";;
+(* val x : foo = {foo: x = 123456789, y = "tagada voila les daltons"} *)
+demo x;;
+(*
+TRACE: x = {foo: x = 123456789, y = "tagada voila les daltons"}
+TRACE: x = {foo: x = 123456790, y = "tagada voila les daltons"}
+- : unit = ()
+*)
+*)
+(* ====================================================================== *)
+
+Pierre Weis answered to
+
+> Jim Rauser mailto:rauser@qcentic.de
+>
+> Have a look at the FAQ:
+> http://pauillac.inria.fr/caml/FAQ/FAQ_EXPERT-eng.html
+>
+> #fsprintf;;
+> - : ((Format.formatter -> string -> unit) -> string -> unit,
+>      Format.formatter, unit)
+>     format -> (Format.formatter -> string -> unit) -> string -> unit
+> = <fun>
+>
+> > What I don't understand is, why it *does* work with Format.fprintf,
+> > that is, how the compiler convinces itself that an argument list
+> > like ["%a" fmt_string "foo"] unifies with the type [('a,
+> > Format.formatter, unit) format]?  I don't recall seeing anything
+> > else in the manual that talks about functions with variable arity;
+> > is there some extra-linguistic magic going on here?
+>
+> Yes. Here are some hints about this magic.
+>
+> First of all, the typechecker has an extra rule for strings: the
+> auxiliary rule states that if the typechecking context needs to
+> consider a string constant as a value of type ('a, 'b, 'c) format then
+> this is not considered as an error.  Furthermore the typechecker
+> analyses the contents of the constant format strings to find out what
+> can be the types of the arguments of printf. For instance:
+>
+> # ("" : ('a, 'b, 'c) format);;
+> - : ('a, 'b, 'a) format = <abstr>
+>
+> # let fmt = ("print an int: %i" : ('a, 'b, 'c) format);;
+> val fmt : (int -> 'a, 'b, 'a) format = <abstr>
+>
+> In case of an application of printf the typechecker unifies the result
+> type of the application to the one specified by the given format
+> string (unit in the case of format for printf, string in the case of
+> format for sprintf).
+>
+> # let f i = Printf.fprintf stdout fmt i;;
+> val f : int -> unit = <fun>
+> # f 3;;
+> print an int: 3- : unit = ()
+>
+> You have to be careful with partial applications of printf-like
+> functions to format strings, since those applications are really
+> partial applications! (Meaning that side-effects may happen at each
+> new argument passed to the function)!
+>
+> For instance, the format "print an int: %i", is in some sense
+> equivalent to the functional expression:
+>
+>  print_string "print an int: "; function i -> print_int i
+>
+> Hence the following behaviours:
+>
+> # Printf.fprintf stdout fmt;;
+> print an int: - : int -> unit = <fun>
+>
+> and also:
+>
+> # let f = Printf.fprintf stdout fmt;;
+> print an int: val f : int -> unit = <fun>
+>
+> More generally, a ('a, 'b, 'c) format string value applied to a printf
+> like function means that:
+>
+> -- the resulting function will accept arguments with type 'a
+> -- embedded %a applications will accept values of type 'b as first
+>    argument
+> -- the resulting function will return values of type 'c
+>
+> # Printf.sprintf;;
+> - : ('a, unit, string) format -> 'a = <fun>
+>
+> # Printf.sprintf "%a";;
+> - : (unit -> '_a -> string) -> '_a -> string = <fun>
+>
+> # Printf.fprintf;;
+> - : out_channel -> ('a, out_channel, unit) format -> 'a = <fun>
+>
+> # Printf.fprintf stdout "%a";;
+> - : (out_channel -> '_a -> unit) -> '_a -> unit = <fun>
+>
+> As you can see, embedded function calls must have the same 'b and 'c
+> parameters as the format they are called from (meaning that since
+> Printf.fprintf stdout takes a ('a, out_channel, unit) format as format
+> string, it can only accept %a convertion specifications with functions
+> f having type out_channel -> 'a -> unit).
+>
+> PS: May be having format strings as lexical entities per se may help
+> to remove a bit of the magic. Also, format srings concatenation have
+> been discussed in this list some time ago ... (I remembered that safe
+> format concatenation is possible if we add of an extra fourth type
+> parameter to format strings ...)
+>
+> Pierre Weis
+
+--
+Thierry Bravier                      Dassault Aviation - DGT / DPR / ESA
+78, Quai Marcel Dassault              F-92214 Saint-Cloud Cedex - France
+Telephone : (33) 01 47 11 53 07          Telecopie : (33) 01 47 11 57 23
+E-Mail :                     mailto:thierry.bravier@dassault-aviation.fr
+
+
+

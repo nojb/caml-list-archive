@@ -1,0 +1,127 @@
+Return-Path: <garrigue@math.nagoya-u.ac.jp>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.4 required=5.0 tests=AWL,DNS_FROM_RFC_ABUSE 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 3A978BBAF
+	for <caml-list@yquem.inria.fr>; Thu, 22 Jan 2009 02:36:52 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApoEAMZcd0mCNhAB/2dsb2JhbADJZIVz
+X-IronPort-AV: E=Sophos;i="4.37,303,1231110000"; 
+   d="scan'208";a="34095477"
+Received: from kurims.kurims.kyoto-u.ac.jp ([130.54.16.1])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 22 Jan 2009 02:36:50 +0100
+Received: from localhost (orion [130.54.16.5])
+	by kurims.kurims.kyoto-u.ac.jp (8.13.8/8.13.8) with ESMTP id n0M1aiTS000219;
+	Thu, 22 Jan 2009 10:36:44 +0900 (JST)
+Date: Thu, 22 Jan 2009 10:36:34 +0900 (JST)
+Message-Id: <20090122.103634.205782806.garrigue@math.nagoya-u.ac.jp>
+To: darioteixeira@yahoo.com
+Cc: caml-list@yquem.inria.fr
+Subject: Re: [Caml-list] Private types in 3.11, again
+From: Jacques Garrigue <garrigue@math.nagoya-u.ac.jp>
+In-Reply-To: <361979.82701.qm@web111514.mail.gq1.yahoo.com>
+References: <20090121.222217.31602828.garrigue@math.nagoya-u.ac.jp>
+	<361979.82701.qm@web111514.mail.gq1.yahoo.com>
+X-Mailer: Mew version 4.2 on Emacs 22.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ocaml:01 abbreviation:01 variants:01 model:01 model:01 variants:01 subtyping:01 functors:01 node:01 non-trivial:01 node:01 instanciate:01 ocaml:01 encodings:01 existential:01 
+
+From: Dario Teixeira <darioteixeira@yahoo.com>
+
+> Thank you very much for your help, Jacques!  It's always enlightening to
+> see an Ocaml ninja in action, though I'm still digesting the finer points
+> of your message.  Anyway, I have implemented all three solutions you suggested:
+> 
+> a) Using a private row and PV
+> b) Using a private abbreviation and PV
+> c) Using the mapper + object system with regular variants
+> 
+> Solution a) is by far the most convenient, though I'm still having some trouble
+> with it (more below).  Which brings me to a crucial point where I'm still
+> fuzzy.  My initial model for the link-nodes-shall-not-be-ancestors-of-their-kin
+> problem did indeed rely on what I now realise are GADTs.  I ran into a
+> limitation of the type system and so I recast the model using phantom types
+> because I hoped they could provide a workaround.  So my question is whether it
+> is at all possible to emulate GADTs using only PV + phantom types, or if on the
+> contrary one needs to use the object system in these cases, as exemplified by
+> solution c).  In other words, is solution a) futile, or did you use the object
+> system in solution c) simply because you were also using regular variants?
+
+I should have been clearer that, for what you are trying to do, the
+different between regular variants and polymorphic variants is mostly
+irrelevant. This is because you are using a phantom type to refine
+your types, rather than subtyping the polymorphic variants themselves,
+so you can perfectly do a) with regular variant (i.e. a private
+variant type), or c) with polymorphic variants. For a), you would just
+have to write
+
+	type 'a t = private Text of string | Bold of 'a t list
+
+and everything should work fine.
+
+As I mentionned in my previous mail, I only use objects here for
+polymorphic methods (i.e. the ability to pass a polymorphic function
+as parameter to a function), so that records with polymorphic fields
+would have worked too. One might even try with functors.
+
+> As for the problem with solution a), it shows up when I implement outside
+> of module Node any non-trivial function operating on 'a Node.t.  Function
+> capitalise_node, for example:
+
+This is not surprising at all.
+The reason everything was simpler in your second example is that you
+were just decomposing a private type, not building a new value. Private
+types were specifically designed to do that, so they are the ideal
+tool in that case.
+
+In your first example, you want to simultaneously deconstruct a value,
+a reconstruct a new value with the same polymorphic type. For this,
+you need the expressive power of GADTs, i.e. the ability to
+instanciate type variables differently inside different branches of a
+pattern-matching. Since they are not available in ocaml, what I have
+done in c) is to define a skeleton of pattern-matching, such that you
+can simultaneously decompose a value and create a new value with the
+same type, polymorphically. Of course this is not as generic as GADTs,
+since only one specific form of pattern-matching is handled, where the
+return type should be exactly the same as the matched type, but this
+is generic enough that you can write many kinds of transformations.
+
+There are other known encodings of GADTs, relying on existential
+types. They are more generic, but since ocaml has only universal
+types, existentials have to be encoded in a kind of
+continuation-passing style, which makes using them rather heavy.
+
+Personally I would suggest you try to see how far you can go with (c).
+I'm repeating myself, but if you're just decomposing your input
+without creating a new polymorphic value, (c) lets you write functions
+with plain pattern matching. It is only when you need the extra
+expressive power that you have to use the mapper.
+For instance, here is your sprint function.
+
+let rec sprint = function
+  | Text str -> Printf.sprintf "(Text %s)" str
+  | Bold seq ->
+      Printf.sprintf "(Bold %s)" (List.fold_left (^) "" (List.map sprint seq))
+  | Href str -> Printf.sprintf "(Href %s)" str
+  | Mref (str, seq) ->
+      Printf.sprintf "(Mref %s %s)" str
+        (List.fold_left (^) ""
+           (List.map sprint (seq :> [`Link|`Nonlink] Node.t list)));;
+
+Here a coercion is needed to allow both `Link and `Nonlink in
+input. This would not be necessary if I had written
+"Mref of string * 'a t list" in the definition, rather than
+"Mref of string * [`Nonlink] t list" like I did. But being more
+specific also means that you have more information when you unwrap an
+Mref node.
+
+Cheers,
+
+Jacques Garrigue
+

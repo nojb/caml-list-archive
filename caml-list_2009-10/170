@@ -1,0 +1,125 @@
+Return-Path: <pad.aryx@gmail.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id C5583BC37
+	for <caml-list@yquem.inria.fr>; Mon, 26 Oct 2009 19:08:43 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AtQAACOC5UrRVd/BmGdsb2JhbACRXokbPwEBAQEBBgsMBxOtFIE7hUCIaAEDAwWEOgQ
+X-IronPort-AV: E=Sophos;i="4.44,627,1249250400"; 
+   d="scan'208";a="37032555"
+Received: from mail-iw0-f193.google.com ([209.85.223.193])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 26 Oct 2009 19:08:43 +0100
+Received: by iwn31 with SMTP id 31so6464739iwn.0
+        for <caml-list@inria.fr>; Mon, 26 Oct 2009 11:08:42 -0700 (PDT)
+DKIM-Signature: v=1; a=rsa-sha256; c=relaxed/relaxed;
+        d=gmail.com; s=gamma;
+        h=domainkey-signature:mime-version:received:date:message-id:subject
+         :from:to:content-type;
+        bh=ao9Om/NWnRwfPBVD4+DVSwDXtdgVFgQKEg4klAujFeY=;
+        b=f+t9Cg/HclCowFbvHfxhOTWo6zlXX4KssLCmuwL7qrquzKlafAmZEENYxMsTIEbv0Z
+         2g5BffKwCeensEy+YeY9e2aaRAHaXMuUDFfoN28D3OZbqWXZbJScbALcOt5UqlQ22hKi
+         HIG/m/VkQNbXWCZXnIvaWPydxdO3VIcmBcMJQ=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=gamma;
+        h=mime-version:date:message-id:subject:from:to:content-type;
+        b=OPNLxIJnjX5nPcy7FPK9Hii2bHTlvGAZ/+6jNZ20Ka2irLFfdEfE4gSy+urnPAlY5N
+         +5JiHkAUyBFuBMiR9FzjkPOpN4hLDq6+YIqDr4ds9COK/j54NM3JJL+2iEK9iu36CLfU
+         TpDotIM1IW5ZVDBdxUeejR2YAAZxFzQ9z9fmM=
+MIME-Version: 1.0
+Received: by 10.231.123.75 with SMTP id o11mr622774ibr.55.1256580521794; Mon, 
+	26 Oct 2009 11:08:41 -0700 (PDT)
+Date: Mon, 26 Oct 2009 11:08:41 -0700
+Message-ID: <c55bbbbc0910261108l5e59836j1508d69c664bdf8f@mail.gmail.com>
+Subject: threads, signals, and timeout
+From: yoann padioleau <pad.aryx@gmail.com>
+To: caml-list@inria.fr
+Content-Type: text/plain; charset=ISO-8859-1
+X-Spam: no; 0.00; mli:01 ocamlc:01 -thread:01 prerr:01 endline:01 printf:01 sprintf:01 printf:01 sprintf:01 uncaught:01 threads:01 threads:01 unix:01 unix:01 exception:01 
+
+Hi,
+
+I would like to create different threads where each thread do some
+computation and are subject to different
+timeout. Without threads I usually use Unix.alarm with a SIGALARM
+handler that just raise a Timeout exception
+and everything works fine, but when I try to do something similar with
+threads it does not work
+because apparently the Unix.alarm done in one thread override the
+Unix.alarm done in another
+thread. I had a look at thread.mli but was not able to find anything
+related to timeout.
+Is there a way to have multiple timeout and multiple threads at the same time ?
+
+Here is a program that unforunately get the first timeout, but not the second :(
+
+
+(*
+ocamlc -g -thread unix.cma threads.cma signals_and_threads.ml
+*)
+
+exception Timeout
+
+let mytid () =
+  let t = Thread.self () in
+  let i = Thread.id t in
+  i
+
+let set_timeout () =
+
+  Sys.set_signal Sys.sigalrm
+    (Sys.Signal_handle (fun _ ->
+      prerr_endline "Time is up!";
+      print_string (Printf.sprintf "id: %d\n" (mytid()));
+      raise Timeout
+    ));
+
+  ignore(Unix.alarm 1);
+  ()
+
+
+let main =
+  let t1 =
+    Thread.create (fun () ->
+      set_timeout ();
+      print_string (Printf.sprintf "t1 id: %d\n" (mytid()));
+
+      let xs = [1;2;3] in
+      while(true) do
+        let _ = List.map (fun x -> x + 1) xs in
+        ()
+      done;
+      ()
+    ) ()
+  in
+
+  let t2 =
+    Thread.create (fun () ->
+      set_timeout ();
+      print_string (Printf.sprintf "t2 id: %d\n" (mytid()));
+
+      let xs = [1;2;3] in
+      while(true) do
+        let _ = List.map (fun x -> x + 1) xs in
+        ()
+      done;
+      ()
+    ) ()
+  in
+  Thread.join t1;
+  Thread.join t2;
+  ()
+
+------------------
+
+
+
+
+Here is the output
+Time is up!
+t2 id: 2
+t1 id: 1
+id: 1
+Thread 1 killed on uncaught exception Signals_and_threads.Timeout
+.... <the program loops, meaning the second thread never received its timeout
+

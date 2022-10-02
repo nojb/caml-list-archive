@@ -1,0 +1,97 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id GAA22740; Wed, 4 Aug 2004 06:59:29 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA20532 for <caml-list@pauillac.inria.fr>; Wed, 4 Aug 2004 06:59:27 +0200 (MET DST)
+Received: from mproxy.gmail.com (rproxy.gmail.com [64.233.170.199])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i744xQRM004179
+	for <caml-list@inria.fr>; Wed, 4 Aug 2004 06:59:27 +0200
+Received: by mproxy.gmail.com with SMTP id 75so173035rnl
+        for <caml-list@inria.fr>; Tue, 03 Aug 2004 21:59:20 -0700 (PDT)
+Received: by 10.38.76.51 with SMTP id y51mr277264rna;
+        Tue, 03 Aug 2004 21:59:20 -0700 (PDT)
+Message-ID: <d849ad2a040803215967acd9ed@mail.gmail.com>
+Date: Wed, 4 Aug 2004 00:59:20 -0400
+From: John Prevost <j.prevost@gmail.com>
+To: "effbiae@ivorykite.com" <effbiae@ivorykite.com>
+Subject: Re: [Caml-list] c is 4 times faster than ocaml?
+Cc: caml-list@inria.fr
+In-Reply-To: <36002.60.246.254.84.1091587147.squirrel@www.ivorykite.com>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+References: <36002.60.246.254.84.1091587147.squirrel@www.ivorykite.com>
+X-Miltered: at concorde with ID 41106D2E.002 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; prevost:01 prevost:01 caml-list:01 -unsafe:01 word-aligned:01 gcc:01 gcc:01 cmpl:01 movl:01 $1,:01 movl:01 cmpl:01 punt:01 $1,:01 shove:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Just from a first look, I'd say that there are two likely reasons that
+this artificial (and incredibly hard to read) benchmark program
+performs poorly:
+
+First, even with -unsafe, bounds checking is performed on BigArray types.
+
+Second, working with single byte values is likely painful here--O'Caml
+always works with word-aligned values, so it's going to lose bigtime. 
+gcc, on the other hand, knows that the crazy intel instruction set can
+handle non-word-aligned values.  Here's the main setting loop from
+gcc:
+
+.L84:
+	movb	%al, (%eax,%ecx)
+	incl	%eax
+	cmpl	%edx, %eax
+	jl	.L84
+
+And here it is from O'Caml:
+
+.L109:
+	movl	%esi, %ecx            ;; grab our index into %ecx
+	sarl	$1, %ecx              ;; shift off the tag bit
+	movl	20(%eax), %edx        ;; get the array's length into %edx
+	cmpl	%ecx, %edx            ;; compare the two
+	jbe	.L111                 ;; if the index is too high, punt
+	movl	4(%eax), %edi         ;; ? probably figure which byte in word
+	movl	%esi, %edx            ;; load the loop value into %edx
+	sarl	$1, %edx              ;; shift off the low bit
+	movb	%dl, (%edi, %ecx)     ;; shove %edx's byte into the word
+	movl	%esi, %ecx            ;; store back into array
+	addl	$2, %esi              ;; add 1 to index
+	cmpl	%ebx, %ecx            ;; compare to target
+	jne	.L109                 ;; not equal?  loop
+
+That jbe .L111 is what happens if a bounds check fails, by the way! 
+Anyway, you can see that the bounds check takes a bunch of
+instructions.  THe main loop is also a bit more expensive.  One thing
+going on is those "sarl" instructions, which are shifting out the tag
+bit on the right end of O'Caml integers.  If you were working on
+integers instead, I think it might be less painful.  Especially if you
+could use int32s held in registers to index into things.
+
+Anyway, the main two things slowing stuff down here are the bounds
+check and the fact that O'Caml needs to do so much work turning caml
+integers into c integers.
+
+(Just as a note, I accidentally tweaked your file to make the loops
+not know the type of their arguments at one point while looking for
+this loop--you *always* want exact types known at a deep level for
+this kind of thing, as that made ocamlopt use C calls to access the
+array.)
+
+Oh--and ignore my old ramblings on mmap stuff.  That code was bad
+then, and is worse now.  :)
+
+As for your project, I suspect we could provide better suggestions on
+how to optimize if we were looking at real code.  My suspicion is that
+you might want to write one or two low-level routines in C, rather
+than using Bigarrays for this task.  (Just assuming, though--from the
+sound of it you're going to have larger structured data in the mmap'd
+areas.)
+
+Good luck!
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

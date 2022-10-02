@@ -1,0 +1,133 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id HAA05127; Thu, 8 Jul 2004 07:05:44 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id HAA04995 for <caml-list@pauillac.inria.fr>; Thu, 8 Jul 2004 07:05:43 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.12.10/8.12.10) with ESMTP id i6855eSH025857
+	for <caml-list@inria.fr>; Thu, 8 Jul 2004 07:05:41 +0200
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2-20030924/3.7W) with ESMTP id OAA05949;
+	Thu, 8 Jul 2004 14:05:27 +0900 (JST)
+Date: Thu, 08 Jul 2004 14:05:27 +0900 (JST)
+Message-Id: <20040708.140527.70987434.garrigue@kurims.kyoto-u.ac.jp>
+To: postmaster@jdh30.plus.com
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Does Caml have slow arithmetics ?
+From: Jacques GARRIGUE <garrigue@kurims.kyoto-u.ac.jp>
+In-Reply-To: <200407072226.36912.postmaster@jdh30.plus.com>
+References: <m31xjngbsp.fsf@jah.m12.ru>
+	<20040707145803.GB27498@yquem.inria.fr>
+	<200407072226.36912.postmaster@jdh30.plus.com>
+X-Mailer: Mew version 4.0.64 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 40ECD624.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 arithmetics:01 jacques:01 postmaster:99 low-level:01 terrible:01 ocamlopt:01 optimise:01 pivot:01 helper:01 pivot:01 helper:01 non-local:01 inlining:01 slower:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Jon Harrop <postmaster@jdh30.plus.com>
+
+> Funny you should say that. I've only recently been trying my hand at such 
+> low-level optimisations in OCaml and, to my surprise, I'm terrible at it (no 
+> comments, please!).
+> 
+> Specifically, I recalled a post that ocamlopt doesn't do CSE. On the basis of 
+> this I thought that I could optimise my original code:
+> 
+>       let pivot = (first + last)/2 in
+>       let sum1=helper (scale+1) (2*entry) first pivot in
+>       let sum2=helper (scale+1) (2*entry+1) pivot last in
+>       Array.unsafe_set data2 entry (sum1 -. sum2);
+>       sum1 +. sum2
+> 
+> by performing some CSE manually, for example:
+> 
+>       let pivot = (first + last)/2 in
+>       let (sum1, sum2) =
+>         let scale=scale+1 and entry=2*entry in
+>         (helper scale entry first pivot, helper scale (entry+1) pivot last)
+>       in
+>       Array.unsafe_set data2 entry (sum1 -. sum2);
+>       sum1 +. sum2
+
+Interesting.
+Actually, I suppose that this kind of situation could be optimized,
+by working at the Clambda level. This is a bit unfortunate, as most
+"non-local" optimizations are expected to be done at earlier stages,
+but would be necessary to cope with inlining too.
+
+Yet, in this example sharing the computation for scale and entry is
+useless: addition and multiplication by a power of 2 cost virtually
+nothing anyway.
+
+> I also tried applying part of the arguments to Array.set to avoid
+> the creation of a pair:
+> 
+>       let pivot = (first + last)/2 in
+>       let set=Array.unsafe_set data2 entry in
+>       let scale=scale+1 and entry=2*entry in
+>       let sum1=helper scale entry first pivot in
+>       let sum2=helper scale (entry+1) pivot last in
+>       set (sum1 -. sum2);
+>       sum1 +. sum2
+> 
+> Contrary to my expectations, these revised versions are 30 and 70%
+> slower than the original, respectively.
+
+This is a well-known behaviour, building the closure "set" is costly
+for two reasons: a data structure holding it must be allocated
+(causing eventually GC), and calls through a closure cost more than
+direct ones (particularly if the "helper" function is known.)
+In your case, there is even a 3rd reason: unsafe_set is not a real
+function, but a primitive, which just generates the operations to
+modify an array. By wrapping it in set, you make it a function.
+And for some reason, ocamlopt does not inline set, leaving you with a
+function call where there should have been none.
+
+You may look at an abstraction of the code generated with the -cmm
+option. For the above code it gives you:
+
+(data
+ int 3319
+ "camlPivot__2":
+ addr "caml_curry3"
+ int 7
+ addr "camlPivot__fun_75")
+
+(function camlPivot__fun_75 (prim/73: addr prim/72: addr prim/71: addr)
+ (if (!= (load unsigned int8 (+a prim/73 -4)) 254)
+   (extcall "caml_modify" (+a (+a prim/73 (<< prim/72 1)) -2) prim/71 unit)
+   (store float64u (+a (+a prim/73 (<< prim/72 2)) -4)
+     (load float64u prim/71)))
+ 1a)
+
+(function camlPivot__pivot_57
+     (first/58: addr last/59: addr data2/60: addr entry/61: addr
+      scale/62: addr helper/63: addr)
+ (let
+   (pivot/64 (+ (<< (/ (>>s (+ (+ first/58 last/59) -1) 1) 2) 1) 1)
+    set/65 (app "caml_apply2" data2/60 entry/61 "camlPivot__2" addr)
+    scale/66 (+ scale/62 2) entry/67 (+ (* 4 (>>s entry/61 1)) 1)
+    sum1/68
+      (app "caml_apply4" scale/66 entry/67 first/58 pivot/64 helper/63 addr)
+    sum2/69
+      (app "caml_apply4" scale/66 (+ entry/67 2) pivot/64 last/59 helper/63
+        addr))
+   (app (load set/65)
+     (alloc 2301 (-f (load float64u sum1/68) (load float64u sum2/69))) set/65
+     unit)
+   (alloc 2301 (+f (load float64u sum1/68) (load float64u sum2/69)))))
+
+You can even see another problem here: the function call to set requires
+wrapping your float into a heap value, which introduces yet another
+inneficiency.
+
+Jacques Garrigue
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,140 @@
+Return-Path: <weis@pauillac.inria.fr>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id 5154BBB81
+	for <caml-list@yquem.inria.fr>; Tue, 21 Mar 2006 05:03:33 +0100 (CET)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2L43WJg015311
+	for <caml-list@yquem.inria.fr>; Tue, 21 Mar 2006 05:03:32 +0100
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id FAA20518 for <caml-list@pauillac.inria.fr>; Tue, 21 Mar 2006 05:03:31 +0100 (MET)
+Received: from cenn.mc.mpls.visi.com (cenn.mc.mpls.visi.com [208.42.156.9])
+	by concorde.inria.fr (8.13.0/8.13.0) with ESMTP id k2L43Uxr015308
+	for <caml-list@inria.fr>; Tue, 21 Mar 2006 05:03:31 +0100
+Received: from [192.168.42.2] (bhurt.dsl.visi.com [208.42.141.66])
+	by cenn.mc.mpls.visi.com (Postfix) with ESMTP
+	id A3462816D; Mon, 20 Mar 2006 22:03:29 -0600 (CST)
+Date: Mon, 20 Mar 2006 22:04:14 -0600 (CST)
+From: Brian Hurt <bhurt@spnz.org>
+X-X-Sender: bhurt@localhost.localdomain
+To: Markus Mottl <markus.mottl@gmail.com>
+Cc: Robert Roessler <roessler@rftp.com>,
+	Caml-list <caml-list@inria.fr>
+Subject: Re: [Caml-list] Severe loss of performance due to new signal handling
+In-Reply-To: <f8560b80603201911s60ed2882md3e2e2f8f3ca004f@mail.gmail.com>
+Message-ID: <Pine.LNX.4.63.0603202127070.10435@localhost.localdomain>
+References: <f8560b80603171039o2a49a4du561a5726e34016bf@mail.gmail.com>
+ <441E760D.6010801@inria.fr> <441F57FD.90206@rftp.com>
+ <f8560b80603201911s60ed2882md3e2e2f8f3ca004f@mail.gmail.com>
+MIME-Version: 1.0
+Content-Type: TEXT/PLAIN; charset=US-ASCII; format=flowed
+X-Miltered: at concorde with ID 441F7B14.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Miltered: at concorde with ID 441F7B12.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; markus:01 mottl:01 assertion:01 os-dependent:01 byterun:01 byterun:01 gnuc:01 gcc:01 gnuc:01 typedef:01 sizeof:01 extern:01 nail:98 wrote:01 wrote:01 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=none autolearn=disabled 
+	version=3.0.3
+
+
+
+On Mon, 20 Mar 2006, Markus Mottl wrote:
+
+> On 3/20/06, Robert Roessler <roessler@rftp.com> wrote:
+>>
+>> At the risk of being "irrelevant", I wanted to nail down exactly what
+>> assertion is being made here: are we talking about directly executing
+>> in assembly code the relevant x86[-64]/ppc/whatever instructions for
+>> "read-and-clear", or going through OS-dependent access routines like
+>> Windows' InterlockedExchange()?
+>
+>
+> We are talking of the assembly code.  See file byterun/signals_machdep.h,
+> which contains the corresponding macros.
+
+OK, poking around a little bit in byterun, I'm seeing this peice of code:
+
+   for (signal_number = 0; signal_number < NSIG; signal_number++) {
+     Read_and_clear(signal_state, caml_pending_signals[signal_number]);
+     if (signal_state) caml_execute_signal(signal_number, 0);
+   }
+
+with Read_and_clear being defined as:
+
+#if defined(__GNUC__) && defined(__i386__)
+
+#define Read_and_clear(dst,src) \
+   asm("xorl %0, %0; xchgl %0, %1" \
+       : "=r" (dst), "=m" (src) \
+       : "m" (src))
+
+
+xchgl is the atomic operation (this is always atomic when referencing a 
+memory location, regardless of the presence or absence of a lock prefix).
+
+Appropos of nothing, a better definition of that macro would be:
+
+#define Read_and_clear(dst,src) \
+    asm volatile ("xchgl	%0, %1" \
+        : "=r" (dst), "+m" (src) \
+        : "0" (0))
+
+as this gives gcc the choice of how to move 0 into the register (using an 
+xor will still be a popular choice, but it'll occassionally do a movl 
+depending upon instruction scheduling choices).
+
+Some more poking around tells me that NSIG is defined on Linux to be 64.
+
+I think the problem is not doing an atomic operation, but doing 64 of 
+them.  I'd be inclined to move to a bitset implementation- allowing you 
+to replace 64 atomic instructions with 2.
+
+On the x86, you can use the lock bts instruction to set the bit.  Some 
+implementation like:
+
+#if defined(__GNUC__) && defined(__i386__)
+
+     typedef unsigned long sigword_t;
+
+#define Read_and_clear(dst,src) \
+    asm volatile ("xchgl	%0, %1" \
+        : "=r" (dst), "+m" (src) \
+        : "0" (0))
+
+#define Set_sigflag(sigflags, NR) \
+    asm volatile ("lock bts %1, %0" \
+        : "+m" (*sigflags) \
+        : "rN" (NR) \
+        : "cc")
+
+...
+
+#define SIGWORD_BITS (CHAR_BITS * sizeof(sigword_t))
+
+#define NR_SIGWORDS ((NSIG + SIGWORD_BITS - 1)/SIGWORD_BITS)
+
+   extern sigword_t caml_pending_signals[NR_SIGWORDS];
+
+   for (i = 0; i < NR_SIGWORDS; i++) {
+       sigword_t temp;
+       int j;
+
+       Read_and_clear(temp, caml_pending_signals[i]);
+       for (j = 0; temp != 0; j++) {
+           if ((temp & 1ul) != 0) {
+               caml_execute_signal((i * SIGWORD_BITS) + j, 0)
+           }
+           temp >>= 1;
+       }
+   }
+
+
+This is somewhat more code, but i, j, and temp would all end up in 
+registers, and it'd be two atomic instructions, not 64.
+
+The x86 assembly code I can dash off from the top of my head.  Similiar 
+bits of assembly can be written for other CPUs- I just have to go dig out 
+the right books.
+
+Brian
+

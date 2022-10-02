@@ -1,0 +1,81 @@
+Return-Path: <oleg@okmij.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.5 required=5.0 tests=AWL,NO_REAL_NAME,SPF_FAIL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id BBECCBC0C
+	for <caml-list@yquem.inria.fr>; Fri, 15 Dec 2006 06:29:50 +0100 (CET)
+Received: from selenite.metnet.navy.mil (selenite.metnet.navy.mil [192.16.167.32])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id kBF5TmYc018096
+	(version=TLSv1/SSLv3 cipher=DHE-RSA-AES256-SHA bits=256 verify=FAIL)
+	for <caml-list@inria.fr>; Fri, 15 Dec 2006 06:29:50 +0100
+Received: (qmail 5458 invoked by uid 107); 15 Dec 2006 05:29:40 -0000
+Received: from unknown (HELO Adric.metnet.fnmoc.navy.mil) (10.100.105.102)
+  by selenite.metnet.navy.mil with SMTP; 15 Dec 2006 05:29:40 -0000
+Received: by Adric.metnet.fnmoc.navy.mil (Postfix, from userid 760)
+	id 0C54AAB40; Thu, 14 Dec 2006 21:29:26 -0800 (PST)
+To: H.Tews@cs.ru.nl, rich@annexia.org
+Cc: caml-list@inria.fr
+Subject: compiling ocaml into a shared object
+Reply-To: oleg@pobox.com
+Errors-To: oleg@okmij.org
+From: oleg@pobox.com
+Message-Id: <20061215052926.0C54AAB40@Adric.metnet.fnmoc.navy.mil>
+Date: Thu, 14 Dec 2006 21:29:26 -0800 (PST)
+X-Miltered: at concorde with ID 458232CC.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; ocaml:01 oleg:01 hendrik:01 tews:01 ocaml:01 dlopen:01 metaocaml:01 ocamlopt:01 makefile:01 metaocaml:01 runtime:01 stack:01 bug:01 heap:01 invoke:01 
+
+
+
+Hendrik Tews wrote:
+> could somebody tell me how to compile ocaml sources into a shared
+> object that can be loaded with dlopen?
+
+It is possible: MetaOCaml in the native mode does exactly that. To be
+more precise, evaluating `.! .<code here>.', that is, `running' the
+code expression, is equivalent to invoking ocamlopt (as a library) to
+compile `code here', making a shared object, and loading it into the
+running program. 
+
+For more details (the code, a few tests and the Makefile), you might
+want to look into the directory `natdyn' of the MetaOCaml
+distribution.
+
+Yet it is awfully tricky -- perhaps trickier than one may realize. The
+problems may occur long after everything is deemed working. For one
+thing, Ocaml native runtime makes an assumption that the data segment
+of a program is contiguous. With the dynamically linked code this
+assumption is no longer true, and subtle bugs emerge (see below). 
+
+After you have loaded a shared object, chances are you'd like to
+invoke an OCaml function from there. That is also tricky: the stack
+frame has to be set up appropriately. If not -- everything works,
+until the major garbage collection. At which point, you get the
+segmentation fault.
+
+Here's an example of a subtle bug (which also may be present in the
+`Ancient' extension announced on this list some time ago). 
+
+	let v = Array.create 256 iv in
+	Array.length v
+
+where iv is a _float_ datum that is a literal in a loaded
+shared object, or had been evicted into the Ancient heap. Now, what is
+the reported length of the allocated float array of 256 elements? 128.
+Exactly half of what is allocated. Weird, eh?
+
+This problem has actually happened, please see the MetaOCaml list for
+discussion. It took a couple of days just to understand the problem.
+
+The natdyn part of MetaOCaml does work, I believe correctly. However,
+the implementation takes advantage of the fact that some code just
+cannot be part of MetaOCaml quotations. In particular, MetaOcaml
+quotations cannot contain any declarations (of data types, of
+exceptions) and any module expressions (in particular, modules
+requiring initialization). These limitations of natdyn can be remedied
+(OTH, since natdyn was needed quite urgently, one may be justified in
+taking advantage of the domain knowledge to simplify the problem).
+

@@ -1,0 +1,389 @@
+Return-Path: <ebourget@yahoo-inc.com>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78])
+	by yquem.inria.fr (Postfix) with ESMTP id 867B6BBBB
+	for <caml-list@yquem.inria.fr>; Wed, 25 Jan 2006 13:54:26 +0100 (CET)
+Received: from mrout1.yahoo.com (mrout1.yahoo.com [216.145.54.171])
+	by nez-perce.inria.fr (8.13.0/8.13.0) with ESMTP id k0PCsP0J006083
+	for <caml-list@yquem.inria.fr>; Wed, 25 Jan 2006 13:54:25 +0100
+Received: from localhost.localdomain (raptors.corp.yahoo.com [207.126.231.163])
+	by mrout1.yahoo.com (8.13.4/8.13.4/y.out) with ESMTP id k0PCrssq022876;
+	Wed, 25 Jan 2006 04:53:54 -0800 (PST)
+DomainKey-Signature: a=rsa-sha1; s=serpent; d=yahoo-inc.com; c=nofws; q=dns;
+	h=received:from:to:subject:x-eric-conspiracy:date:message-id:
+	user-agent:mime-version:content-type;
+	b=vhC9DyC0uViO1Rm5xnuDHmBleYLZM4REQ+0r7ibIvx9YG9HFY4++r6Uv8kADs9zC
+Received: from raptors.corp.yahoo.com..ebourget.net (localhost.localdomain [127.0.0.1])
+	by localhost.localdomain (Postfix) with ESMTP id 1794120F0DD;
+	Wed, 25 Jan 2006 04:52:10 -0800 (PST)
+From: Erik Bourget <ebourget@yahoo-inc.com>
+To: caml-list@yquem.inria.fr
+Subject: [patch] PIC on amd64
+X-Eric-Conspiracy: There Is No Conspiracy
+Date: Wed, 25 Jan 2006 04:52:09 -0800
+Message-ID: <87ek2w1nd2.fsf@raptors.corp.yahoo.com.>
+User-Agent: Gnus/5.110004 (No Gnus v0.4) Emacs/22.0.50 (gnu/linux)
+MIME-Version: 1.0
+Content-Type: multipart/mixed; boundary="=-=-="
+X-j-chkmail-Score: MSGID : 43D77501.000 on nez-perce : j-chkmail score : X : 0/20 1
+X-Miltered: at nez-perce with ID 43D77501.000 by Joe's j-chkmail (http://j-chkmail.ensmp.fr)!
+X-Spam: no; 0.00; clobbered:01 ocaml's:01 compiler:01 stack:01 -urn:01 ocaml-:01 asmcomp:01 ocaml-:01 asmcomp:01 command-line:01 -let:01 -fpic:01 -urn:01 mlp:01 mlp:01 
+X-Attachments: name="picattempt.diff" 
+X-Spam-Checker-Version: SpamAssassin 3.0.3 (2005-04-27) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.9 required=5.0 tests=DNS_FROM_RFC_ABUSE,
+	DNS_FROM_RFC_WHOIS,FORGED_RCVD_HELO autolearn=disabled version=3.0.3
+
+--=-=-=
+
+
+Attached is a patch that makes ocaml able to compile proper PIC code on amd64.
+This allows shared libraries to be created from ocaml code.
+
+This patch needs work - in addition to being rough around the edges, there is
+a fairly major issue where it will generate patters as such:
+
+some_label:
+     movq camlPcre@GOTPCREL(%rip), %r13
+     movq 248(%r13), %r10
+     call caml_apply8@PLT
+...
+caml_apply8:
+    call (%r10) # should call camlPcre+248
+
+This would be cool but %r10 is clobbered by the call in some circumstances as
+it's defined as a scratch register.  Ocaml's compiler seems to have logic to
+'spill' registers onto the stack but I haven't studied it hard enough to put
+it to use; maybe someone else is more familiar and will be able to mark
+registers as live when they are used in this way?  :)
+
+- Erik
+
+
+--=-=-=
+Content-Disposition: inline; filename=picattempt.diff
+
+diff -urN ocaml-3.09.1/asmcomp/amd64/arch.ml ocaml-3.09.1-amdpic/asmcomp/amd64/arch.ml
+--- ocaml-3.09.1/asmcomp/amd64/arch.ml	2006-01-13 22:34:05.000000000 +0000
++++ ocaml-3.09.1-amdpic/asmcomp/amd64/arch.ml	2006-01-25 12:30:16.000000000 +0000
+@@ -14,7 +14,7 @@
+ 
+ (* Machine-specific command-line options *)
+ 
+-let pic_code = ref false
++let pic_code = ref true
+ 
+ let command_line_options =
+   [ "-fPIC", Arg.Set pic_code,
+diff -urN ocaml-3.09.1/asmcomp/amd64/emit.mlp ocaml-3.09.1-amdpic/asmcomp/amd64/emit.mlp
+--- ocaml-3.09.1/asmcomp/amd64/emit.mlp	2006-01-13 00:51:11.000000000 +0000
++++ ocaml-3.09.1-amdpic/asmcomp/amd64/emit.mlp	2006-01-25 12:30:00.000000000 +0000
+@@ -85,13 +85,13 @@
+ 
+ let reg_low_8_name =
+   [| "%al"; "%bl"; "%dil"; "%sil"; "%dl"; "%cl"; "%r8b"; "%r9b"; 
+-     "%r10b"; "%r11b"; "%bpl"; "%r12b"; "%r13b" |]
++     "%r10b"; "%r11b"; "%bpl"; "%r12b" |]
+ let reg_low_16_name =
+   [| "%ax"; "%bx"; "%di"; "%si"; "%dx"; "%cx"; "%r8w"; "%r9w"; 
+-     "%r10w"; "%r11w"; "%bp"; "%r12w"; "%r13w" |]
++     "%r10w"; "%r11w"; "%bp"; "%r12w" |]
+ let reg_low_32_name =
+   [| "%eax"; "%ebx"; "%edi"; "%esi"; "%edx"; "%ecx"; "%r8d"; "%r9d"; 
+-     "%r10d"; "%r11d"; "%ebp"; "%r12d"; "%r13d" |]
++     "%r10d"; "%r11d"; "%ebp"; "%r12d" |]
+ 
+ let emit_subreg tbl r =
+   match r.loc with
+@@ -109,12 +109,26 @@
+ 
+ (* Output an addressing mode *)
+ 
++let emit_pic13 addr =
++  match addr with
++      Ibased(s, d) ->
++        `     movq {emit_symbol s}@GOTPCREL(%rip), %r13 /* PIC */\n`;
++(*        if d < 0 then `     subq ${emit_int(-d)}, %r13\n`;
++        if d > 0 then `     addq ${emit_int d}, %r13\n` *)
++    | _ -> 
++        ``
++let emit_pic13raw addr =
++  match addr with
++      Ibased(s, d) ->
++        `     movq {emit_symbol s}@GOTPCREL(%rip), %r13\n`;
++(*        `     movq {emit_symbol s}@GOTPCREL(%rip), %r13\n` *)
++    | _ ->
++        ``
++
+ let emit_addressing addr r n =
+   match addr with
+     Ibased(s, d) ->
+-      `{emit_symbol s}`;
+-      if d <> 0 then ` + {emit_int d}`;
+-      `(%rip)`
++      `ERROR\n\nERROR`;
+   | Iindexed d ->
+       if d <> 0 then emit_int d;
+       `({emit_reg r.(n)})`
+@@ -131,6 +145,25 @@
+       if d <> 0 then emit_int d;
+       `({emit_reg r.(n)}, {emit_reg r.(n+1)}, {emit_int scale})`
+ 
++let emit_addressing13 addr r n =
++  match addr with
++      Ibased(s, d) ->
++        if d <> 0 then `{emit_int d}`;
++        `(%r13)`
++    | _ ->
++        `{emit_addressing addr r n}`
++    
++let emit_addressing13raw addr r n =
++  if !pic_code then
++    match addr with
++        Ibased(s, d) ->
++          if d <> 0 then `{emit_int d}`;
++          `(%r13)`;
++      | _ ->
++          `{emit_addressing addr r n}`
++  else
++    `{emit_addressing addr r n}`
++    
+ (* Record live pointers at call points *)
+ 
+ type frame_descr =
+@@ -180,7 +213,7 @@
+ let call_gc_sites = ref ([] : gc_call list)
+ 
+ let emit_call_gc gc =
+-  `{emit_label gc.gc_lbl}:	call	{emit_symbol "caml_call_gc"}\n`;
++  `{emit_label gc.gc_lbl}:	call	{emit_symbol "caml_call_gc"}@PLT\n`;
+   `{emit_label gc.gc_frame}:	jmp	{emit_label gc.gc_return_lbl}\n`
+ 
+ (* Names for instructions *)
+@@ -312,15 +345,12 @@
+           `	movlpd	{emit_label lbl}(%rip), {emit_reg i.res.(0)}\n`
+         end
+     | Lop(Iconst_symbol s) ->
+-        if !pic_code then
+-          `	leaq	{emit_symbol s}(%rip), {emit_reg i.res.(0)}\n`
+-        else
+-          `	movq	${emit_symbol s}, {emit_reg i.res.(0)}\n`
++          `     movq {emit_symbol s}@GOTPCREL(%rip), {emit_reg i.res.(0)}\n`
+     | Lop(Icall_ind) ->
+-        `	call	*{emit_reg i.arg.(0)}\n`;
++        `	call	*{emit_reg i.arg.(0)} /* indirect */\n`;
+         record_frame i.live
+     | Lop(Icall_imm s) ->
+-        `	call	{emit_symbol s}\n`;
++        `	call	{emit_symbol s}@PLT\n`;
+         record_frame i.live
+     | Lop(Itailcall_ind) ->
+         output_epilogue();
+@@ -330,15 +360,15 @@
+           `	jmp	{emit_label !tailrec_entry_point}\n`
+         else begin
+           output_epilogue();
+-          `	jmp	{emit_symbol s}\n`
++          `	jmp	{emit_symbol s}@PLT\n`
+         end
+     | Lop(Iextcall(s, alloc)) ->
+         if alloc then begin
+-          `	leaq	{emit_symbol s}(%rip), %rax\n`;
+-          `	call	{emit_symbol "caml_c_call"}\n`;
++          `     movq    {emit_symbol s}@GOTPCREL(%rip), %rax\n`;
++          `	call	{emit_symbol "caml_c_call"}@PLT\n`;
+           record_frame i.live
+         end else begin
+-          `	call	{emit_symbol s}\n`
++          `	call	{emit_symbol s}@PLT\n`
+         end
+     | Lop(Istackoffset n) ->
+         if n < 0
+@@ -347,9 +377,10 @@
+         stack_offset := !stack_offset + n
+     | Lop(Iload(chunk, addr)) ->
+         let dest = i.res.(0) in
+-        begin match chunk with
++          begin match chunk with
+           | Word ->
+-              `	movq	{emit_addressing addr i.arg 0}, {emit_reg dest}\n`
++              `{emit_pic13 addr}`;
++              `	movq	{emit_addressing13 addr i.arg 0}, {emit_reg dest} /* srs */\n`;
+           | Byte_unsigned ->
+               `	movzbq	{emit_addressing addr i.arg 0}, {emit_reg dest}\n`
+           | Byte_signed ->
+@@ -370,7 +401,8 @@
+     | Lop(Istore(chunk, addr)) ->
+         begin match chunk with
+           | Word ->
+-            `	movq	{emit_reg i.arg.(0)}, {emit_addressing addr i.arg 1}\n`
++              `   {emit_pic13raw addr}`;
++              `	movq	{emit_reg i.arg.(0)}, {emit_addressing13raw addr i.arg 1}\n`;
+           | Byte_unsigned | Byte_signed ->
+             `	movb	{emit_reg8 i.arg.(0)}, {emit_addressing addr i.arg 1}\n`
+           | Sixteen_unsigned | Sixteen_signed ->
+@@ -386,8 +418,9 @@
+     | Lop(Ialloc n) ->
+         if !fastcode_flag then begin
+           let lbl_redo = new_label() in
+-          `{emit_label lbl_redo}:	subq	${emit_int n}, %r15\n`;
+-          `	cmpq	{emit_symbol "caml_young_limit"}(%rip), %r15\n`;
++            `{emit_label lbl_redo}:	subq	${emit_int n}, %r15\n`;
++            `   movq {emit_symbol "caml_young_limit"}@GOTPCREL(%rip), %r13\n`;
++            ` 	cmpq (%r13), %r15\n`;
+           let lbl_call_gc = new_label() in
+           let lbl_frame = record_frame_label i.live in
+           `	jb	{emit_label lbl_call_gc}\n`;
+@@ -398,11 +431,11 @@
+               gc_frame = lbl_frame } :: !call_gc_sites
+         end else begin
+           begin match n with
+-            16  -> `	call	{emit_symbol "caml_alloc1"}\n`
+-          | 24 -> `	call	{emit_symbol "caml_alloc2"}\n`
+-          | 32 -> `	call	{emit_symbol "caml_alloc3"}\n`
++            16  -> `	call	{emit_symbol "caml_alloc1"}@PLT\n`
++          | 24 -> `	call	{emit_symbol "caml_alloc2"}@PLT\n`
++          | 32 -> `	call	{emit_symbol "caml_alloc3"}@PLT\n`
+           | _  -> `	movq	${emit_int n}, %rax\n`;
+-                  `	call	{emit_symbol "caml_allocN"}\n`
++                  `	call	{emit_symbol "caml_allocN"}@PLT\n`
+           end;
+           `{record_frame i.live}	leaq	8(%r15), {emit_reg i.res.(0)}\n`
+         end
+@@ -469,16 +502,28 @@
+     | Lop(Iintoffloat) ->
+         `	cvttsd2siq	{emit_reg i.arg.(0)}, {emit_reg i.res.(0)}\n`
+     | Lop(Ispecific(Ilea addr)) ->
+-        `	leaq	{emit_addressing addr i.arg 0}, {emit_reg i.res.(0)}\n`
++        if !pic_code then
++          begin match addr with
++              Ibased(s, d) ->
++                `     movq {emit_symbol s}@GOTPCREL(%rip), {emit_reg i.res.(0)}\n`;
++                if d <> 0 then `     addq ${emit_int d}, {emit_reg i.res.(0)}\n`
++            | _ -> 
++                `	leaq	{emit_addressing addr i.arg 0}, {emit_reg i.res.(0)}\n`
++          end
++        else
++          `	leaq	{emit_addressing addr i.arg 0}, {emit_reg i.res.(0)}\n`
+     | Lop(Ispecific(Istore_int(n, addr))) ->
+-        `	movq	${emit_nativeint n}, {emit_addressing addr i.arg 0}\n`
++        if !pic_code then `    {emit_pic13raw  addr}\n`;
++        `	movq	${emit_nativeint n}, {emit_addressing13raw addr i.arg 0}\n`;
+     | Lop(Ispecific(Istore_symbol(s, addr))) ->
+         assert (not !pic_code);
+         `	movq	${emit_symbol s}, {emit_addressing addr i.arg 0}\n`
+     | Lop(Ispecific(Ioffset_loc(n, addr))) ->
+-        `	addq	${emit_int n}, {emit_addressing addr i.arg 0}\n`
++        if !pic_code then `{emit_pic13raw addr}\n`;
++        `	addq	${emit_int n}, {emit_addressing13raw addr i.arg 0}\n`
+     | Lop(Ispecific(Ifloatarithmem(op, addr))) ->
+-        `	{emit_string(instr_for_floatarithmem op)}	{emit_addressing addr i.arg 1}, {emit_reg i.res.(0)}\n`
++        if !pic_code then `{emit_pic13 addr}\n`;
++        `	{emit_string(instr_for_floatarithmem op)}	{emit_addressing13 addr i.arg 1}, {emit_reg i.res.(0)}\n`
+     | Lreloadretaddr ->
+         ()
+     | Lreturn ->
+@@ -535,7 +580,7 @@
+     | Lswitch jumptbl ->
+         let lbl = new_label() in
+         if !pic_code then begin
+-          `	leaq	{emit_label lbl}(%rip), %r11\n`;
++          `     movq    {emit_label lbl}@GOTPCREL(%rip), %r11\n`;
+           `	jmp	*(%r11, {emit_reg i.arg.(0)}, 8)\n`
+         end else begin
+           `	jmp	*{emit_label lbl}(, {emit_reg i.arg.(0)}, 8)\n`
+@@ -548,7 +593,7 @@
+         done;
+         `	.text\n`
+     | Lsetuptrap lbl ->
+-        `	call	{emit_label lbl}\n`
++        `	call	{emit_label lbl}@PLT\n`
+     | Lpushtrap ->
+         `	pushq	%r14\n`;
+         `	movq	%rsp, %r14\n`;
+@@ -586,7 +631,7 @@
+       `	pushq	%r10\n`;
+       `	movq	%rsp, %rbp\n`;
+       `	pushq	%r11\n`;
+-      `	call	{emit_symbol "mcount"}\n`;
++      `	call	{emit_symbol "mcount"}@PLT\n`;
+       `	popq	%r11\n`;
+       `	popq	%r10\n`
+   | _ ->
+@@ -615,7 +660,7 @@
+   emit_all true fundecl.fun_body;
+   List.iter emit_call_gc !call_gc_sites;
+   if !range_check_trap > 0 then
+-    `{emit_label !range_check_trap}:	call	{emit_symbol "caml_ml_array_bound_error"}\n`;
++    `{emit_label !range_check_trap}:	call	{emit_symbol "caml_ml_array_bound_error"}@PLT\n`;
+     (* Never returns, but useful to have retaddr on stack for debugging *)
+   if !float_constants <> [] then begin
+     `	.section	.rodata.cst8,\"a\",@progbits\n`;
+diff -urN ocaml-3.09.1/asmcomp/amd64/proc.ml ocaml-3.09.1-amdpic/asmcomp/amd64/proc.ml
+--- ocaml-3.09.1/asmcomp/amd64/proc.ml	2006-01-25 12:34:20.000000000 +0000
++++ ocaml-3.09.1-amdpic/asmcomp/amd64/proc.ml	2006-01-25 12:30:21.000000000 +0000
+@@ -35,7 +35,7 @@
+     r11		9
+     rbp         10
+     r12		11
+-    r13		12
++    r13		rip pointer
+     r14         trap pointer
+     r15         allocation pointer
+     
+@@ -45,7 +45,7 @@
+ 
+ let int_reg_name =
+   [| "%rax"; "%rbx"; "%rdi"; "%rsi"; "%rdx"; "%rcx"; "%r8"; "%r9"; 
+-     "%r10"; "%r11"; "%rbp"; "%r12"; "%r13" |]
++     "%r10"; "%r11"; "%rbp"; "%r12" |]
+ 
+ let float_reg_name =
+   [| "%xmm0"; "%xmm1"; "%xmm2"; "%xmm3"; "%xmm4"; "%xmm5"; "%xmm6"; "%xmm7"; 
+@@ -60,7 +60,7 @@
+   | Addr -> 0
+   | Float -> 1
+ 
+-let num_available_registers = [| 13; 16 |]
++let num_available_registers = [| 12; 16 |]
+ 
+ let first_available_register = [| 0; 100 |]
+ 
+@@ -74,8 +74,8 @@
+ (* Representation of hard registers by pseudo-registers *)
+ 
+ let hard_int_reg =
+-  let v = Array.create 13 Reg.dummy in
+-  for i = 0 to 12 do v.(i) <- Reg.at_location Int (Reg i) done;
++  let v = Array.create 12 Reg.dummy in
++  for i = 0 to 11 do v.(i) <- Reg.at_location Int (Reg i) done;
+   v
+ 
+ let hard_float_reg =
+@@ -179,15 +179,17 @@
+ 
+ let safe_register_pressure = function
+     Iextcall(_,_) -> 0
++  | Icall_imm(_) -> 0
+   | _ -> 11
+ 
+ let max_register_pressure = function
+-    Iextcall(_, _) -> [| 4; 0 |]
+-  | Iintop(Idiv | Imod) -> [| 11; 16 |]
++    Iextcall(_, _) -> [| 3; 0 |]
++  | Icall_imm(_) -> [| 3; 0 |]
++  | Iintop(Idiv | Imod) -> [| 10; 16 |]
+   | Ialloc _ | Iintop(Icomp _) | Iintop_imm((Idiv|Imod|Icomp _), _)
+-        -> [| 12; 16 |]
+-  | Istore(Single, _) -> [| 13; 15 |]
+-  | _ -> [| 13; 16 |]
++        -> [| 11; 16 |]
++  | Istore(Single, _) -> [| 12; 15 |]
++  | _ -> [| 12; 16 |]
+ 
+ (* Layout of the stack frame *)
+ 
+
+--=-=-=--
+

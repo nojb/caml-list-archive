@@ -1,0 +1,150 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.6.10/8.6.6) id MAA20354 for caml-redistribution; Mon, 7 Oct 1996 12:41:19 +0200
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.6.10/8.6.6) with ESMTP id KAA16488 for <caml-list@pauillac.inria.fr>; Mon, 7 Oct 1996 10:36:57 +0200
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1]) by concorde.inria.fr (8.7.6/8.7.1) with ESMTP id KAA26059 for <caml-list@pauillac.inria.fr>; Mon, 7 Oct 1996 10:34:13 +0200 (MET DST)
+Received: from orion.kurims.kyoto-u.ac.jp (orion.kurims.kyoto-u.ac.jp [130.54.16.5]) by kurims.kurims.kyoto-u.ac.jp (8.7.5/3.4W2) with SMTP id RAA04844 for <caml-list@pauillac.inria.fr>; Mon, 7 Oct 1996 17:34:03 +0900 (JST)
+Received: (from garrigue@localhost) by orion.kurims.kyoto-u.ac.jp (SMI-8.6/3.5Wbeta) id RAA07150; Mon, 7 Oct 1996 17:34:03 +0900
+Date: Mon, 7 Oct 1996 17:34:03 +0900
+From: Jacques GARRIGUE <garrigue@kurims.kyoto-u.ac.jp>
+Message-Id: <199610070834.RAA07150@orion.kurims.kyoto-u.ac.jp>
+To: caml-list@pauillac.inria.fr
+In-reply-to: <9610041532.AA02909@fnet-ia1.dassault-avion.fr> (bravier@dassault-avion.fr)
+Subject: Re: Functorized stdlib ???
+Sender: weis
+
+
+>>>>>  <bravier@dassault-avion.fr> writes:
+
+ > Here is a suggestion about the standard ocaml library Hashtbl.
+
+ > This module is very useful but it happens to uses the polymorphic
+ > equality ( = ) : 'a -> 'a -> bool.
+
+ > Unfortunately, there are cases where you want a hash-table with another
+ > equality predicate, for example you might want physical equality ( == ).
+
+ > This is precisely what functors are for !
+
+I have a doubt about the need for modifying specifically Hashtbl for
+that.  In fact, there is already a Map module for that. The fact you
+have to define a C function (to be efficient) limits the variants you
+may have with your functor anyway.
+
+But the general parameterizing problem you expose is interesting.
+
+ > It seems to me that functors and polymorphism might/should go together well.
+
+ > At any rate I would like a way to conceive modules and functors that
+ > do not forbid polymorphism because, if you look at the short example :
+
+ > module type ORDER =
+ > sig
+ >    type 'a t
+ >    val ( <= ) : 'a t -> 'a t -> bool
+ > end
+
+ > It is really conter-intuitive since I have to parameterize the type t
+ > with 'a before any use of type t.
+
+ > What I first wrote (which does not work in the end) was :
+
+ > module type ORDER_first =
+ > sig
+ >    type t
+ >    val ( <= ) : 'a t -> 'a t -> bool
+ > end
+
+ > this is what I meant but OrderPoly was not of module type ORDER_first,
+ > that's why I finally had to choose type 'a t.
+
+ > Unfortunately this is no real solution since a predicate over
+ > couples, say (fun (x1,y1) (x2, y2) -> y1 <= y2) : 'a * 'b -> 'a * 'b -> bool
+ > will not fit in module type ORDER whose type 'a t has only one parameter.
+
+ > Well, well, if somebody has clues ...
+
+A (partial solution) would be to use classes, and in my opinion this
+is more natural. You generally use only few hashtables/maps of the
+same type in the same program, and having to define a module for each
+type is a pain. With a class, you can either give the parameter when
+creating an object, or define specialized classes by inheritance (as
+you would do with a functor). The most interesting point is that you
+don't need to prefix your method names by a strange module name: this
+is taken from the object.
+
+Here is the interface for map (imperative style : there is an internal
+state and modifications return unit, but one could do it functional
+style):
+
+class ('a, 'b) map ('a -> 'a -> int) =
+  method clear : unit
+  method add : 'a -> 'b -> unit
+  method find : 'a -> 'b
+  method remove : 'a -> unit
+  method iter : ('a -> 'b -> unit) -> unit
+end
+
+The parameter is the comparison function which you usually give to the 
+functor.
+
+Either use it directly
+
+  # let m = new map compare;;
+  m : ('_a,'_b) map = <object>
+
+or create a specialized class, integer maps for instance
+
+  # class 'a imap () =
+      inherit (int,'a) map (-)
+    end
+
+There is still the problem that, at the moment, all polymorphic
+variables in methods have to be bound at the class level.
+Here this means that we cannot define fold:
+
+  method fold : ('c -> 'a -> 'b -> 'c) -> 'c -> 'c
+
+is not allowed : 'c should be bound at the class level, but then this
+is meaningless. You can still simulate it with iter, so this is not
+that bad.
+
+Remark also that since functors bind type constructors rather then
+types themselves, the map class cannot be defined using the functor,
+and the source code has to be modified.
+
+ > By the way, this technique of using paramerized types can also be used
+ > to modify the Set module of stdlib to get a polymorphic set type
+ > (just change type t into type 'obj t and type elt into type 'obj elt !)
+
+Again I can define a set class, and avoid the problem with multiple
+parameters. (I shall distribute this class library soon.)
+
+ > This does not seem much but it enables the user to share code (as I do not
+ > know whether applying functors duplicates code or not) and most of all, to
+ > use only one module (no need to create modules all over the code ...)
+
+Code is not duplicated, so the reason is mostly making program clearer 
+by avoiding the multiplication of modules. We have the same concern.
+
+ > Please, feel free to be controversial :-)
+
+I think I've been :-)
+
+In fact there is here a choice to be done between using
+object-oriented features or not. In my opinion object-oriented style
+is easier to understand, but modules and functors may be more
+"functional". Not only Map and Set, but also Genlex, Hashtbl, Queue,
+Stack and Stream can be turned OO with some profit.
+
+In the current version Objective Caml allows both styles, but only
+provides support for the first one: there are no predefined classes.
+A concern is efficiency, but well implemented there is no reason that
+it should be slower than Smalltalk, which is widely used.
+
+On this point, it would be nice to have a clearer view of what
+Objective Caml is going to be, if somebody knows.
+
+	Jacques Garrigue
+
+
+
+

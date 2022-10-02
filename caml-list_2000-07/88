@@ -1,0 +1,175 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA12610 for caml-red; Mon, 24 Jul 2000 23:42:23 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id LAA27148 for <caml-list@pauillac.inria.fr>; Mon, 24 Jul 2000 11:28:40 +0200 (MET DST)
+Received: from mail.cs.uu.nl (sunset.cs.uu.nl [131.211.80.32])
+	by concorde.inria.fr (8.10.0/8.10.0) with ESMTP id e6O9Sdj00642
+	for <caml-list@inria.fr>; Mon, 24 Jul 2000 11:28:39 +0200 (MET DST)
+Received: from silvester.cs.uu.nl.cs.uu.nl (silvester.cs.uu.nl [131.211.80.119])
+	by mail.cs.uu.nl (Postfix) with ESMTP
+	id ED1C44539; Mon, 24 Jul 2000 11:28:38 +0200 (MET DST)
+From: Frank Atanassow <franka@cs.uu.nl>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <14716.3142.811473.125684@silvester.cs.uu.nl>
+Date: Mon, 24 Jul 2000 11:28:38 +0200 (MET DST)
+To: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Cc: Frank Atanassow <franka@cs.uu.nl>, John Gerard Malecki <johnm@artisan.com>,
+        OCAML <caml-list@inria.fr>
+Subject: Re: [newbie] Define and use records in sum types
+In-Reply-To: <20000723172048.A32338@miss.wu-wien.ac.at>
+References: <wd8d7kkewbr.fsf@parate.irisa.fr>
+	<20000717120151.A32148@miss.wu-wien.ac.at>
+	<14709.63462.792269.194367@ish.artisan.com>
+	<20000719221048.B23676@miss.wu-wien.ac.at>
+	<14712.16572.925353.202223@silvester.cs.uu.nl>
+	<20000721220058.A29053@miss.wu-wien.ac.at>
+	<14713.41688.558933.239829@silvester.cs.uu.nl>
+	<20000722203116.A8157@miss.wu-wien.ac.at>
+	<14714.63823.257355.941516@silvester.cs.uu.nl>
+	<20000723172048.A32338@miss.wu-wien.ac.at>
+X-Mailer: VM 6.75 under Emacs 20.4.1
+Sender: weis@pauillac.inria.fr
+
+Markus Mottl writes:
+ > On Sun, 23 Jul 2000, Frank Atanassow wrote:
+ > > So the type-theoretic role of the signature restriction is to do
+ > > existential quantification (or something close to it), and delimit the
+ > > scope of the quantification on types and values.
+ > 
+ > The abstract type refers to a specific representation (you can't mix
+ > different ones - quantification on type), but also does not allow you to
+ > use datastructures of the same representation that were not created by the
+ > "right" functions (= quantification on values). That's at least what I
+ > think you mean - I am not a type-theorist.
+ > 
+ > > However, there is no reason why it needed to hide, e.g.,
+ > > ListSet.removeDup. It could have also added removeDup to Set also,
+ > > without breaking abstraction, as long as it weren't included in the scope
+ > > of the quantification. Then Set.removeDup would have type 'a list -> 'a
+ > > list, so you couldn't apply it to sets, so there is no problem.
+ > 
+ > Right: you can make *some* functions available this way, but not all! There
+ > may be functions that are not defined (crash, loop, whatever) for all
+ > values, only for ones for which some semantic property holds.
+
+I guess you mean a situation like this:
+
+  module type FLAG =
+    sig
+      type t
+      val from : bool -> t
+      val to : t -> bool
+    end
+
+  module Flag3 =
+   struct
+     type t = On | Off | Undecided
+     let from = function true -> On | false -> Off
+     let to = function On -> true | Off -> false
+   end
+
+  module Flag : FLAG = Flag3    
+
+The thinking would be, then, that with the concrete representation I could
+construct a value Flag3.Undecided : Flag3.t which would cause Flag3.to to
+fail, whereas with Flag I cannot ever construct an Undecided variant, so
+Flag.to is effectively total. Correct?
+
+But while Flag3.Undecided is admittedly special (being a constructor), it is
+nevertheless an ordinary function. Hence it can be included in the scope of
+the quantification or not. If I quantify over it, then Flag = Flag3. If I
+don't quantify over it, but still include it in the signature, then
+Flag.Undecided : Flag3.t, so Flag.t only exposes two variants.
+
+Do you still think there is a situation where name-hiding is necessary in
+addition to type abstraction?
+
+ > However, it
+ > may not even be the case that it holds for the abstract type itself, but
+ > only for the specific way in which the function is called internally, i.e.
+ > the precondition for the function to work correctly is stronger. You
+ > therefore still need means to hide such functions.
+
+I'm not sure I understand, but I think you are imagining a partial, auxiliary
+function which is only used internally. In that case, you can always define it
+locally, in the scope of a let-expression, say.
+
+However, if you have to use this function (call it aux) multiple times in
+different top-level definitions, you will end up convoluting your code.
+E.g.,
+
+  module M =
+    struct
+      let aux = ...
+      let f1 = ... aux ...
+      let f2 = ... aux ...
+    end
+
+becomes
+
+  module M =
+    struct
+      let (f1,f2) =
+        let aux = ...
+        in  let f1 = ... aux ... in
+            let f2 = ... aux ... in
+            (f1, f2)
+    end
+
+which is admittedly unsavory.
+
+ > In fact, I use your "trick of revelation" in some projects to export the
+ > internal representation of the abstract types safely and without
+ > computational costs.  E.g. with the set-example
+ > 
+ >   val list_of_set : 'a set -> 'a list
+ > 
+ > This could be the identity function internally. If I change the
+ > representation, I'd only have to write a conversion function. Of course,
+ > one shouldn't do such things with mutable values...
+
+OK, this is a situation that doesn't fit my model. If you include a function
+in the scope of the quantification, you have to substitute all the occurrences
+in its type signature of the concrete type with the new abstract type.
+
+BTW, this discussion is no longer relevant to the discussion on field label
+syntax, so let's take it to e-mail from now on, OK?
+
+ > >  > Then it might be a bit more convenient to have an initial declaration that
+ > >  > tells the compiler what kind of record you are talking about instead of
+ > >  > inventing new names for records. A rather statistical question...
+ > > 
+ > > What sort of declaration?
+ > 
+ > I don't want to write
+ > 
+ >   { t1.v1 = x; t1.v2 = y; ... }
+ > 
+ > but something similar to:
+ > 
+ >   { t1 | v1 = x; v2 = y; ... }
+
+I see. You mean a "declaration" within the record-building syntax. Yeah, it is
+better to avoid repetition, and avoid making the programmer remember which
+labels are used in multiple record types.
+
+BTW, here is the URL of a previous discussion on this subject in the archives:
+
+  http://pauillac.inria.fr/caml/caml-list/1136.html
+  http://pauillac.inria.fr/caml/caml-list/1203.html (follow the thread)
+
+(There is also a long post somewhere by Xavier on the type inference problem
+with records, but I couldn't find it.)
+
+A solution suggested in the archives is to allow type declarations like:
+
+  type point = Pt of { x: float; y: float }
+
+(Incidentally, this is how it is done currently in Haskell.)
+
+-- 
+Frank Atanassow, Dept. of Computer Science, Utrecht University
+Padualaan 14, PO Box 80.089, 3508 TB Utrecht, Netherlands
+Tel +31 (030) 253-1012, Fax +31 (030) 251-3791
+
+

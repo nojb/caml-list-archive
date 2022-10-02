@@ -1,0 +1,165 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id CAA24158; Thu, 21 Aug 2003 02:27:56 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id CAA26958 for <caml-list@pauillac.inria.fr>; Thu, 21 Aug 2003 02:27:54 +0200 (MET DST)
+Received: from kurims.kurims.kyoto-u.ac.jp (kurims.kurims.kyoto-u.ac.jp [130.54.16.1])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id h7L0Rqf06515
+	for <caml-list@inria.fr>; Thu, 21 Aug 2003 02:27:53 +0200 (MET DST)
+Received: from localhost (suiren.kurims.kyoto-u.ac.jp [130.54.16.25])
+	by kurims.kurims.kyoto-u.ac.jp (8.9.3p2/3.7W) with ESMTP id JAA11720;
+	Thu, 21 Aug 2003 09:27:47 +0900 (JST)
+To: ben@socialtools.net
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] does class polymorphism need to be so complicated?
+In-Reply-To: <3F43E250.1040903@socialtools.net>
+References: <Pine.LNX.4.44.0308201312120.7047-100000@grace.speakeasy.net>
+	<3F43E250.1040903@socialtools.net>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20030821092849B.garrigue@kurims.kyoto-u.ac.jp>
+Date: Thu, 21 Aug 2003 09:28:49 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 130
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; jacques:01 caml-list:01 brogoff:01 inference:01 subtyping:01 outermost:01 unification:01 infer:01 incompatible:01 workarounds:01 avoids:01 val:01 recursion:01 explicitely:01 ocaml:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Benjamin Geer <ben@socialtools.net>
+
+> brogoff@speakeasy.net wrote:
+> > If you want to solve your problem, you'll need to coerce,
+>  > [...]
+> > A solution using polymorphic methods is sketched next,
+> 
+> These are the two options I described in my original post.  Both are 
+> inconvenient.  My original questions remain:
+> 
+> Why is upcasting necessary, given that inheritance relationships are 
+> known at compile time?  Could Caml be modified to correct this problem? 
+>   Is any work currently being done on this?
+
+Upcasting is needed because type inference in ocaml does not include
+subtyping. There is work on type inference with subtyping, but it
+would create much more complicated types, even for usual functions
+which do not involve objects. Personally I don't think there is a
+strong hope of combining full ML type inference with subtyping in a
+practical programming language.
+
+Now, ocaml tries to avoid the problem by providing something similar
+to subtyping, but through ML polymorphism. This is the #printable
+types. This is not exactly subtyping (in some cases an instance of
+#printable is not a subtype of printable) but it is actually sometimes
+closer to the notion of "usable in place of".
+
+When using functions, this approach using "open rows" works well.
+However there is a problem with methods.
+
+> Why can't methods be polymorphic in the way that functions can be?
+
+Methods are part of an object. In normal ML this means that the
+polymorphism can only appear at the level of the object, not at the
+level of the method (ML only allows outermost polymorphism).
+As an additional twist, since in ocaml a class definition also defines
+a type, all polymorphic variables must be explicitely declared as
+parameters to the class, otherwise you get the dreaded
+  Some type variables are unbound in this type
+
+Anyway, what you want in many cases is not the object, but the method
+to be polymorphic: you want to be able to apply the same method of the
+same object to values of different types.
+
+This is now possible with the introduction of polymorphic methods, but
+only with a rather heavy syntax.
+There are several reasons to that:
+* since the "normal" behaviour would be to restrict the polymorphism
+  to the object level, choosing to apply it automatically at the
+  method level would be an arbitrary decision.
+* contrary to functions, whose types are instantiated before
+  unification, object method types have to be unified with their
+  polymorphic variables not instantiated (because an object with a
+  polymorphic method can be passed around, while only an instance of a
+  polymorphic function would be passed around). This means that the
+  "most general type" we would infer for a method would give rise to an
+  object type incompatible with less general types. Not a good
+  property for inference.
+* last, by explicitely declaring a polymorphic type we make it
+  possible to call it polymorphically from other methods in the same
+  object. This seems to be a nice property to have between methods.
+  You cannot do that with functions defined in the same "let rec"
+  statement.
+
+> At the very least, would it be possible to add some syntactic sugar,
+> so we could write:
+> 
+> method process (obj : #thing) -> (* ... *)
+> 
+> instead of:
+> 
+> method process : 'a . (#thing as 'a ) -> unit =
+>    fun obj -> (* ... *)
+
+To speak truly, the current syntax is based on the assumption that you
+won't define often polymorphic methods, and that defining them is a
+work for library designers, not for the average end user.
+
+This also means that you have a number of workarounds hiding this
+heavy syntax to the end user, even when he has to define such a
+method.
+
+For instance you could be provided a virtual class printer:
+
+class virtual printer : object
+  method virtual print : #printable -> unit
+  method ...
+end
+
+Then you would use it as
+
+class my_printer () = object
+  inherit printer
+  method print obj = ...
+end
+
+There is no need to write type information on the inheriting side.
+You will get an error message if your method is not polymorphic
+enough.
+
+Another remark is that, when the only goal of the polymorphism is to
+allow subtyping of the argument, the workaround of using an auxiliary
+function as suggested by Brian Rogoff makes perfectly sense, and
+avoids getting involved in the details of the object system.
+
+class printer () = object
+  method print (obj : printable) = ...
+end
+
+let print ~(printer : #printer) obj =
+  printer#print (obj : #printable :> printable)
+val print : printer:#printer -> #printable -> unit
+
+Now the print function has a type polymorphic enough, and using it
+makes clear you are using the print method of a printer, not of an
+arbitrary object (which might have a completely unrelated print
+method). This is more precise, and does the work in the traditional ML
+way.
+
+Cheers,
+
+Jacques Garrigue
+
+P.S. Having a lighter syntax for polymorphic methods might be a good
+idea. But since we must keep it explicit enough, the improvement would
+be quite limited. The best I can think of is something like:
+   method 'a. print (obj : #printable as 'a) = ...
+Maybe a bit better, but also more complicated to handle.
+An advantage of such a syntax is that it could also be used in normal
+"let rec" to provide polymorphic recursion.
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

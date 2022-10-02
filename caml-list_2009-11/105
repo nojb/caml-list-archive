@@ -1,0 +1,144 @@
+Return-Path: <goswin-v-b@web.de>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by yquem.inria.fr (Postfix) with ESMTP id 43D4BBC37
+	for <caml-list@yquem.inria.fr>; Fri, 13 Nov 2009 06:10:05 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AuQCAH54/ErZSMDqi2dsb2JhbACBTZpLAQEBCgsKBxEFuRSEPAQ
+X-IronPort-AV: E=Sophos;i="4.44,733,1249250400"; 
+   d="scan'208";a="50262822"
+Received: from fmmailgate03.web.de ([217.72.192.234])
+  by mail4-smtp-sop.national.inria.fr with ESMTP; 13 Nov 2009 06:10:04 +0100
+Received: from smtp06.web.de (fmsmtp06.dlan.cinetic.de [172.20.5.172])
+	by fmmailgate03.web.de (Postfix) with ESMTP id D8E0F13270953
+	for <caml-list@inria.fr>; Fri, 13 Nov 2009 06:10:03 +0100 (CET)
+Received: from [95.208.117.111] (helo=frosties.localdomain)
+	by smtp06.web.de with asmtp (TLSv1:AES256-SHA:256)
+	(WEB.DE 4.110 #314)
+	id 1N8oQ7-0007Gi-00
+	for caml-list@inria.fr; Fri, 13 Nov 2009 06:10:03 +0100
+Received: from mrvn by frosties.localdomain with local (Exim 4.69)
+	(envelope-from <goswin-v-b@web.de>)
+	id 1N8oQ7-0000Jh-3v
+	for caml-list@inria.fr; Fri, 13 Nov 2009 06:10:03 +0100
+From: Goswin von Brederlow <goswin-v-b@web.de>
+To: caml-list@inria.fr
+Subject: How to write a GC for size > memory
+Date: Fri, 13 Nov 2009 06:10:03 +0100
+Message-ID: <87vdhfxb6c.fsf@frosties.localdomain>
+User-Agent: Gnus/5.110006 (No Gnus v0.6) XEmacs/21.4.22 (linux)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Sender: goswin-v-b@web.de
+X-Sender: goswin-v-b@web.de
+X-Provags-ID: V01U2FsdGVkX1/pFI6m/4XKi6muZL5l1JiJXAW4LI7EdVjFPdqW
+	ll8txX7QauprY50K+ouzBjxYot6GyLvIXyWZw/QFXT4myKgb1w
+	EZU+MMVpY=
+X-Spam: no; 0.00; bindings:01 ocaml:01 pointer:01 pointer:01 node:01 node:01 mutable:01 chunks:01 chunks:01 locality:01 nodes:01 nodes:01 readdir:01 compaction:01 bitmap:01 
+
+Hi,
+
+as I might have mentioned in the past I'm writing C bindings for
+libaio and libfuse to write a filesystem in ocaml.
+
+The problem I'm now facing is freeing blocks on the filesystem when
+they are no longer used. The filesystem has a huge B-Tree containing
+inodes, file attributes, directory entries (lets call them simple
+values as none of them are pointer like) or references to data blocks
+of a file (lets call them pointer). The filesystem is purely
+copy-on-write except for the root of the B-Tree, which is stored
+round-robin in a select few blocks at the begining of the drive.
+
+Simplified I have
+
+type key = int
+type block_t = int (* pointer to block *)
+type entry = Data of int | Block of block_t
+type leaf = (key * entry) array
+type node = (key * block_t) array
+type tree = Leaf of leaf | Node of node
+type roots = tree array
+
+To free unused blocks and to defragment the filesystem I though I
+would implement a moving GC. This seems actualy is perfect for a GC as
+I have no mutable structures (except the roots which I can watch).
+
+But here are my problems:
+
+1) I can't put a bit into every (data) block.
+   a) there is no space. A block has 4k of data
+   b) i can't modify the block anyway without risking damage in a
+      crash
+
+2) I have a lot of blocks, 1-2 billion of them. Keeping even a single
+   bit per block in memory exceeds what I can spare.
+
+3) The B-tree exceeds the spare memory too so it needs to be swaped in
+   and out with a minimum of trashing the disk.
+
+
+I'm thinking of using GC mixed with reference counting for this. The
+available space is split into chunks of 65536 blocks. For each chunks
+I add an entry in the B-Tree counting the number of blocks allocated
+(0-65536 and monoton rising) and the number of references to blocks in
+that chunks. The number of references gives me a metric how urgend a
+GC run over the chunk is. Overall there will be 16k-64k chunks, which
+doesn't cost much space (and therefore can fit in memory). To optimize
+locality a chunk can only contain B-Tree nodes (few chunks) or data
+(many many chunks) but never both.
+
+The GC then has 3 modes:
+
+1) defrag mode, lots of free space left
+
+Go through the B-Tree and copy blocks from anywhere into a new chunk
+so that data (or B-Tree nodes) becomes sequential. Keeping the B-Tree
+nodes sequential will improve sequential access to keys fast (sweeps
+in the GC and certain FS operations: readdir(), unlink() mostly)
+
+2) freeing chunk mode, space is not abundant or chunks with large drop count
+
+Pick a worthy chunk. Sweep the B-Tree completly and copy used blocks
+from that chunk somewhere else. After the sweep there can't be any
+references to that chunk so set the allocated and droped counts to
+0. The chunk is now free again. Since I sweep the B-Tree I can
+calculate the used count for each chunk here so the next run can pick
+a worthy chunk.
+
+3) emergency compaction mode, space is running out
+
+Declare an emergency and suspend filesystem operations. This can't be
+concurrent as the FS would run out of space.
+
+Pick a worth chunk and allocate a bitmap in memory for it. Sweep the
+B-Tree completely and mark all used blocks in the bitmap. Compact the
+chunk and update the B-Tree (another sweep). Set the allocated count
+to the number of used blocks and used to the number of references. The
+chunk is then partialy allocated again. Since space it tight don't
+regenerate the other used counts to avoid B-Tree updates eating
+space. Idealy this should only use free blocks in the chunk it
+compacts to record the changes to the B-Tree.
+
+
+Normaly the GC would switch between defrag and freeing chunk
+mode. Both would be concurrent to normal filesystem
+operations. Possibly only run when the filesystem is idle. The
+compation mode would only happen in situations where the FS would
+otherwise have to return ENOSPC.
+
+
+To further improve this I would like to add a generational component
+into the GC. I have no mutables (except the roots) so an old chunk (or
+an old B-Tree node) can hold no references to a newer chunk. Also new
+files are far more likely to be deleted again than old files and new
+B-Tree nodes more likely to be modified again than old B-Tree
+nodes. Seems to screem for a generational approach. A generational
+approach should allow the GC to only scan a fraction of the B-Tree for
+its sweep. But I'm not quite sure how to go about that.
+
+Comments, Ideas, Improvements, Urls welcome.
+
+MfG
+        Goswin
+

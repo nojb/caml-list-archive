@@ -1,0 +1,125 @@
+Return-Path: <jon@ffconsultancy.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 8F5F7BC6C
+	for <caml-list@yquem.inria.fr>; Mon,  4 Feb 2008 00:24:12 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ah4FAHnbpUfUnw7Xi2dsb2JhbACCNo1yAQEBCAQGBwgamhI
+X-IronPort-AV: E=Sophos;i="4.25,299,1199660400"; 
+   d="scan'208";a="8684417"
+Received: from fhw-relay07.plus.net ([212.159.14.215])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 04 Feb 2008 00:24:11 +0100
+Received: from [80.229.56.224] (helo=beast.local)
+	 by fhw-relay07.plus.net with esmtp (Exim) id 1JLoBp-0003eX-Tw; Sun, 03 Feb 2008 23:23:58 +0000
+From: Jon Harrop <jon@ffconsultancy.com>
+Organization: Flying Frog Consultancy Ltd.
+To: Alain Frisch <alain@frisch.fr>
+Subject: Re: [Caml-list] Using OCaml's run-time from LLVM-generated native code
+Date: Sun, 3 Feb 2008 23:19:15 +0000
+User-Agent: KMail/1.9.7
+Cc: caml-list <caml-list@yquem.inria.fr>
+References: <200802012124.56835.jon@ffconsultancy.com> <47A630FC.9000803@frisch.fr>
+In-Reply-To: <47A630FC.9000803@frisch.fr>
+MIME-Version: 1.0
+Content-Type: text/plain;
+  charset="iso-8859-1"
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+Message-Id: <200802032319.15846.jon@ffconsultancy.com>
+X-Plusnet-Relay: 53130399d2e1301b4685e487c427a74d
+X-Spam: no; 0.00; ocaml's:01 run-time:01 frisch:01 cpp:01 ocaml's:01 runtime:01 pointer:01 printf:01 printf:01 stdout:01 stdio:01 mlvalues:01 alloc:01 intext:01 camlprim:01 
+
+On Sunday 03 February 2008 21:24:12 Alain Frisch wrote:
+> Jon Harrop wrote:
+> > This raises several questions for me:
+> >
+> > . Is this even possible?
+>
+> Yes. How could it not be possible? Run your example through cpp, you'll
+> get a ``self-contained'' C program that uses only functions exported
+> from OCaml's runtime.
+
+How does OCaml's stack walker work with C code, for example? In particular, 
+how does it know what is a pointer into the heap from a C stack frame? Must 
+it be explicitly disabled?
+
+I assume local variables must be explicitly registered as global roots upon 
+entry to each function and unregistered upon exit. If so, what are the 
+performance implications of this?
+
+I tried and failed to write such an example myself. Here's "forstr.ml":
+
+let print_stat() =
+  let stat = Gc.stat() in
+  Printf.printf "%d minor collections\n%!" stat.Gc.minor_collections;
+  Printf.printf "%d major collections\n%!" stat.Gc.major_collections;
+  Gc.print_stat stdout
+let _ = Callback.register "gc_print_stat" print_stat
+let _ = Callback.register "gc_full_major" Gc.full_major
+
+Here's "str.c":
+
+#include <stdio.h>
+#include <string.h>
+#include <caml/mlvalues.h>
+#include <caml/alloc.h>
+#include <caml/memory.h>
+#include <caml/fail.h>
+#include <caml/callback.h>
+#include <caml/custom.h>
+#include <caml/intext.h>
+
+value *full_major, *print_stat;
+
+CAMLprim value fib(value nv) {
+  int64 n = Int64_val(nv);
+  return (n < 2 ? nv : copy_int64(Int64_val(fib(copy_int64(n-1))) +
+                                  Int64_val(fib(copy_int64(n-2)))));
+}
+
+int apply(int n) {
+  return Int64_val(fib(copy_int64(n)));
+}
+
+int main(int argc, char* argv[]) {
+  caml_main(argv);
+  print_stat = caml_named_value("gc_print_stat");
+  full_major = caml_named_value("full_major");
+  printf("%d\n", apply(argc == 2 ? atoi(argv[1]) : 10));
+  callback(*print_stat, 0);
+  callback(*full_major, 0);
+  callback(*print_stat, 0);
+  return 0;
+}
+
+Compile and run with:
+
+$ ocamlopt -dtypes -output-obj forstr.ml -o forstring.o && gcc -Wall -o test 
+forstring.o str.c -L/usr/lib/ocaml/3.10.0 -lasmrun -ldl -lm && time ./test 30
+832040
+369 minor collections
+0 major collections
+Segmentation fault
+
+real    0m0.361s
+user    0m0.344s
+sys     0m0.004s
+
+So this is several times slower than native ocamlopt-generated code, as you 
+might expect, but it doesn't work correctly because it segfaults when 
+full_major is called to invoke the GC. How can I fix this example?
+
+If I can get simple examples like this working as C code then it should be 
+trivial to generate them using LLVM at which point you've got a mediocre 
+compiler than can be built upon. I think a lot of people would be interested 
+in that...
+
+-- 
+Dr Jon D Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com/products/?e
+

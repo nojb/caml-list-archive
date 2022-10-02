@@ -1,0 +1,136 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA15274 for caml-redistribution; Tue, 1 Jun 1999 17:19:03 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA07690 for <caml-list@pauillac.inria.fr>; Mon, 31 May 1999 21:18:02 +0200 (MET DST)
+Received: from miss.wu-wien.ac.at (miss.wu-wien.ac.at [137.208.107.17])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id VAA05346
+	for <caml-list@inria.fr>; Mon, 31 May 1999 21:18:01 +0200 (MET DST)
+Received: (from mottl@localhost)
+	by miss.wu-wien.ac.at (8.9.0/8.9.0) id VAA04030;
+	Mon, 31 May 1999 21:17:47 +0200 (MET DST)
+From: Markus Mottl <mottl@miss.wu-wien.ac.at>
+Message-Id: <199905311917.VAA04030@miss.wu-wien.ac.at>
+Subject: Re: Events, method iterator
+To: u009731@alpcom.it (Ubik)
+Date: Mon, 31 May 1999 21:17:46 +0100 (MET DST)
+Cc: caml-list@inria.fr (OCAML)
+In-Reply-To: <4.1.19990531191134.00939130@email.alpcom.it> from "Ubik" at May 31, 99 07:20:10 pm
+X-Mailer: ELM [version 2.4 PL21]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 8bit
+Sender: weis
+
+> >> There's no way to define an
+> >>     explicit function to send messages to objects ?
+> >
+> >Yes, there is: just use unbound (=lambda-) functions. E.g.:
+> >
+> >  List.iter (fun obj -> obj#paint) _objs
+> 
+> Yeah, this is a step in the direction I intended, thanks, but I think i
+> can't write a sort of
+> 
+> let send msg obj = obj#msg	(* I know this won't work *)
+
+Yes, this won't work, because OCAML relies on static type checking only
+(I think this is good). It is impossible to decide at compile time
+whether all objects "obj" passed to "send" really implement message "msg".
+
+> to be used like this :
+> ...
+> List.iter (send paint) _objs
+> 
+> ...
+> List.iter (send (moveRel 20 20)) _objs
+
+Two possibilities:
+
+You can define an algebraic data type of messages. E.g.
+
+  type action = Paint
+              | MoveRel of int * int
+
+  let send action obj = match action with
+    | Paint -> obj#paint
+    | MoveRel (x,y) -> obj#move_rel x y
+
+  class graph_obj name = object
+    method paint = Printf.printf "%s#paint\n" name
+    method move_rel x y = Printf.printf "%s#move_rel %d %d\n" name x y
+  end
+
+  let _ =
+    List.iter (send (MoveRel(20,20)))
+      [new graph_obj "first"; new graph_obj "second"]
+
+But I prefer the version, where you have to define the functions (shorter
+and clearer):
+
+  let paint obj = obj#paint
+  let move_rel x y obj = obj#move_rel x y
+
+  class graph_obj name = object
+    method paint = Printf.printf "%s#paint\n" name
+    method move_rel x y = Printf.printf "%s#move_rel %d %d\n" name x y
+  end
+
+  let _ =
+    List.iter (move_rel 20 20) [new graph_obj "first"; new graph_obj "second"]
+
+This is hardly any effort and works just fine.
+
+Don't forget that functions are first class values in OCAML!! You can
+pass them around easily (including functions that encapsulate method
+calls)! E.g.:
+
+  let paint obj = obj#paint
+  let move_rel x y obj = obj#move_rel x y
+
+  class graph_obj name = object
+    val mutable x = 0
+    val mutable y = 0
+    method paint = Printf.printf "%s#paint\n" name
+    method move_rel dx dy =
+      x <- x + dx; y <- y + dy;
+      Printf.printf "%s#move_rel %d %d -> x:%d y:%d\n" name dx dy x y
+  end
+
+  let _ =
+    let obj_lst = [new graph_obj "first"; new graph_obj "second"]
+    and msg_lst = [move_rel 42 10; move_rel (-5) 7; paint] in
+    List.iter (fun msg -> List.iter msg obj_lst) msg_lst
+
+Syntactically convenient enough? :-)
+
+Well, I could imagine a slightly more convenient version if there were
+some kind of operator which automatically creates a function that applies
+a method to an object. Maybe something like:
+
+  List.iter (#move_rel 10 20) obj_lst
+
+Another use:
+
+  let msg_lst = [#move_rel 42 10; #move_rel (-5) 7; #paint]
+
+Thus, the encapsulating function does not have to be necessarily bound
+(keeps the namespace tidy) and the programmer can see from the syntax
+that it is methods that get invoked.
+
+I don't know whether the implementors want to add such a kind of syntactic
+sugar... any suggestions?
+
+> I know the result is the same, but I prefer a solution like this,
+> I like sintactic-clean code ...
+
+Me, too. But I like semantically correct code even more - and thus I
+don't want to have my programs crash, just because a message is passed
+to an object, which can't handle it. But as you can see, the present
+concept is just fine...
+
+Best regards,
+Markus
+
+-- 
+Markus Mottl, mottl@miss.wu-wien.ac.at, http://miss.wu-wien.ac.at/~mottl
+
+
+

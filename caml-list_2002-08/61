@@ -1,0 +1,80 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id BAA23801; Sun, 4 Aug 2002 01:48:14 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id BAA23905 for <caml-list@pauillac.inria.fr>; Sun, 4 Aug 2002 01:48:13 +0200 (MET DST)
+Received: from favie.faith.gr.jp (favie.faith.gr.jp [61.127.175.250])
+	by concorde.inria.fr (8.11.1/8.11.1) with ESMTP id g73NSc513757
+	for <caml-list@inria.fr>; Sun, 4 Aug 2002 01:28:43 +0200 (MET DST)
+Received: from localhost (dhcp7.faith.gr.jp [192.168.1.17])
+	by favie.faith.gr.jp (8.9.3/8.9.3) with ESMTP id IAA13936;
+	Sun, 4 Aug 2002 08:28:18 +0900
+To: ohl@physik.uni-wuerzburg.de
+Cc: caml-list@inria.fr
+Subject: Re: [Caml-list] Creating mutually dependent objects?
+In-Reply-To: <15690.48916.704957.774489@wptx47.physik.uni-wuerzburg.de>
+References: <15690.48916.704957.774489@wptx47.physik.uni-wuerzburg.de>
+X-Mailer: Mew version 1.94.2 on Emacs 21.2 / Mule 5.0 (SAKAKI)
+Mime-Version: 1.0
+Content-Type: Text/Plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-Id: <20020804082812N.garrigue@kurims.kyoto-u.ac.jp>
+Date: Sun, 04 Aug 2002 08:28:12 +0900
+From: Jacques Garrigue <garrigue@kurims.kyoto-u.ac.jp>
+X-Dispatcher: imput version 20000228(IM140)
+Lines: 49
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+From: Thorsten Ohl <ohl@physik.uni-wuerzburg.de>
+
+> I need to create tuples of mutually dependent objects.  A working
+> implementation adds a mutable instance variable that is updated after
+> all objects in a tuple have been created.  With a little bit of work,
+> this variable can then be hidden.  However, this is a bit tedious.
+> Why is the much more elegant approach using `let rec' forbidden?
+> 
+> Is there a chance that this restriction will be lifted or would such
+> permissiveness undermine type safety?
+
+Sure it would: the type system cannot ensure that o1 and o2 will be
+initialized at the right time. That is, you could end up with null
+pointer errors, which from ocaml point of view are holes in the type
+safety. By not allowing them, ocaml also avoids the cost of
+dynamically checking for null pointer, as Java does for instance.
+
+A generic answer to that is to use lazy variables (they are more
+clever in 3.05).
+
+# class o n o' =
+  object (_ : 'a)
+    method o' : 'a =     Lazy.force o'
+    method n : int = n
+  end;;    
+class o : int -> 'a Lazy.t -> object ('a) method n : int method o' : 'a end
+# let rec o1 = lazy (new o 1 o2) and o2 = lazy (new o 2 o1);;
+val o1 : o Lazy.t = <lazy>
+val o2 : o Lazy.t = <lazy>
+# let o1 = Lazy.force o1 and o2 = Lazy.force o2;;
+val o1 : o = <obj>
+val o2 : o = <obj>
+
+Note that it will not protect you against null pointer errors, it will
+just allow you to detect them at runtime. You can see this with:
+
+# class o n o' =
+  let o' = Lazy.force o' in
+  object (_ : 'a)   
+    method o' : 'a = o'
+    method n : int = n
+  end;;    
+class o : int -> 'a Lazy.t -> object ('a) method n : int method o' : 'a end
+[..]
+# let o1 = Lazy.force o1 and o2 = Lazy.force o2;;
+Exception: Lazy.Undefined.
+(Stack overflow with previous versions)
+
+Jacques Garrigue
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

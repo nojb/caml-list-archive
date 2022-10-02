@@ -1,0 +1,126 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA21191; Sat, 27 Apr 2002 23:42:13 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id XAA21167 for caml-list@pauillac.inria.fr; Sat, 27 Apr 2002 23:42:12 +0200 (MET DST)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id VAA20306 for <caml-list@pauillac.inria.fr>; Sat, 27 Apr 2002 21:53:06 +0200 (MET DST)
+Received: from porsta.cs.Helsinki.FI (porsta.cs.Helsinki.FI [128.214.48.124])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g3RJr5T24853
+	for <caml-list@inria.fr>; Sat, 27 Apr 2002 21:53:05 +0200 (MET DST)
+Received: from alkokrunni.cs.Helsinki.FI (sslwrap@localhost [127.0.0.1])
+	by porsta.cs.Helsinki.FI (8.11.6/8.11.6) with ESMTP id g3RJr4B12433
+	for <caml-list@inria.fr>; Sat, 27 Apr 2002 22:53:04 +0300
+Received: from localhost (lealanko@localhost)
+	by alkokrunni.cs.Helsinki.FI (8.11.6/8.11.2) with SMTP id g3RJr6L26075
+	for <caml-list@inria.fr>; Sat, 27 Apr 2002 22:53:07 +0300
+X-Authentication-Warning: alkokrunni.cs.Helsinki.FI: lealanko owned process doing -bs
+Received: from la by la.iki.fi with local (Exim 3.33 #1 (Debian))
+	id 171UeJ-0000JL-00
+	for <caml-list@inria.fr>; Sat, 27 Apr 2002 19:02:11 +0300
+Date: Sat, 27 Apr 2002 19:02:09 +0300
+From: Lauri Alanko <la@iki.fi>
+To: caml-list@inria.fr
+Subject: [Caml-list] input_line (Re: pervasives)
+Message-ID: <20020427160209.GB675@la.iki.fi>
+References: <4.3.2.7.2.20020424222749.02d10a90@mail.d6.com> <15557.14957.358556.545541@absurd.mimuw.edu.pl> <15557.14957.358556.545541@absurd.mimuw.edu.pl> <4.3.2.7.2.20020424222749.02d10a90@mail.d6.com> <4.3.2.7.2.20020425104214.02e42a90@mail.d6.com> <3CCA2C6E.5020007@ozemail.com.au>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Disposition: inline
+In-Reply-To: <3CCA2C6E.5020007@ozemail.com.au>
+User-Agent: Mutt/1.3.25i
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sat, Apr 27, 2002 at 02:43:26PM +1000, John Max Skaller wrote:
+> I have a philosophy .. a bit extreme perhaps .. I NEVER read anything
+> other than lines (or whole files).
+
+Vaguely related to this, I have some minor gripes about input_line.
+Here's the implementation in 3.04:
+
+
+let rec input_line chan =
+  let n = input_scan_line chan in
+  if n = 0 then                         (* n = 0: we are at EOF *)
+    raise End_of_file
+  else if n > 0 then begin              (* n > 0: newline found in buffer *)
+    let res = string_create (n-1) in
+    ignore (unsafe_input chan res 0 (n-1));
+    ignore (input_char chan);           (* skip the newline *)
+    res
+  end else begin                        (* n < 0: newline not found *)
+    let beg = string_create (-n) in
+    ignore(unsafe_input chan beg 0 (-n));
+    try
+      beg ^ input_line chan
+    with End_of_file ->
+      beg
+  end
+
+
+It's obvious that this doesn't handle obnoxiously large newlineless
+inputs very gracefully. Its complexity is quadratic and it's not tail
+recursive. And worst of all, there are no limits on the size of string
+to be created. So a maliciously designed huge input could blow either
+the stack or the heap. I wouldn't want to use input_line in a network
+application.
+
+(All right, on 32-bit architectures input_line will terminate at ~16M
+when string_create fails, but I wouldn't call that a solution.)
+
+So here's an alternative implementation. It's tail recursive, its
+amortized cpu usage is linear, and the space usage can be bounded:
+
+
+exception Buffer_overflow of string
+
+let expand_buf buf old_size expand =
+  if old_size == 0 then
+    string_create expand
+  else
+    let new_buf = string_create (old_size + expand) in
+      string_blit buf 0 new_buf 0 old_size;
+      new_buf
+
+let rec input_bounded_line_to_buf chan buf offset maxlen =
+  let n = input_scan_line chan in
+    if n > maxlen + 1 || n < (-maxlen) then
+      let err_buf = expand_buf buf offset maxlen in
+	ignore (unsafe_input chan err_buf offset maxlen);
+	raise (Buffer_overflow err_buf)
+    else if n > 0 then
+      let ret_buf = expand_buf buf offset (n - 1) in
+	ignore (unsafe_input chan ret_buf offset (n - 1));
+	ignore (input_char chan);
+	ret_buf
+    else if n < 0 then
+      let m = (-n) in
+      let new_offset = offset + m in
+      let old_len = string_length buf in
+      let new_buf = 
+	if new_offset > old_len then
+	  expand_buf buf offset (new_offset + old_len * 2)
+	else
+	  buf
+      in
+	ignore (unsafe_input chan new_buf offset m);
+	input_bounded_line_to_buf chan new_buf new_offset (maxlen - m)
+    else if offset = 0 then
+      raise End_of_file
+    else 
+      expand_buf buf offset 0
+
+let input_bounded_line chan maxlen = 
+  input_bounded_line_to_buf chan "" 0 maxlen
+
+let input_line chan = input_bounded_line chan max_int
+
+
+I hope that something similar to this could be included in Pervasives in
+the future.
+
+
+Lauri Alanko
+la@iki.fi
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

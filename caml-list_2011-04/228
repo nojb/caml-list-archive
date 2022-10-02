@@ -1,0 +1,119 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id p3ONWdF4018449
+	for <caml-list@sympa-roc.inria.fr>; Mon, 25 Apr 2011 01:32:39 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: Ar4BABCytE3UnwdkkGdsb2JhbAClNxQBAQEBCQkNBxQEIcNChXYEkj0
+X-IronPort-AV: E=Sophos;i="4.64,264,1301868000"; 
+   d="scan'208";a="93703966"
+Received: from relay.pcl-ipout02.plus.net ([212.159.7.100])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/RC4-SHA; 25 Apr 2011 01:32:33 +0200
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AvsEABCytE1UXebj/2dsb2JhbAClN3fDQoV2BJI9
+Received: from outmx01.plus.net ([84.93.230.227])
+  by relay.pcl-ipout02.plus.net with ESMTP; 25 Apr 2011 00:32:33 +0100
+Received: from [80.229.123.248] (helo=WinEight)
+	 by outmx01.plus.net with esmtp (Exim) id 1QE8n2-0004zA-Ji
+	for caml-list@inria.fr; Mon, 25 Apr 2011 00:32:32 +0100
+From: "Jon Harrop" <jon@ffconsultancy.com>
+To: "Caml List" <caml-list@inria.fr>
+Date: Mon, 25 Apr 2011 00:32:31 +0100
+Message-ID: <013e01cc02d7$e23b8f00$a6b2ad00$@ffconsultancy.com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="US-ASCII"
+Content-Transfer-Encoding: 7bit
+X-Mailer: Microsoft Outlook 14.0
+Thread-Index: AcwC07BTUVGH+1i5QAKeGW7jFUZyoQ==
+Content-Language: en-gb
+Subject: [Caml-list] Parallel n-queens solver
+
+Gerd recently posted this article about parallelizing an n-queens solver in
+OCaml:
+
+  http://blog.camlcity.org/blog/multicore3.html
+
+The idea is to reuse the same basic definitions and parallelize the program
+simply by changing the "run" function. I have tried to translate this OCaml
+to F# without benefit of being able to run the original OCaml code but I
+have checked the results against the known solutions to this problem.
+
+Here is Gerd's sequential OCaml:
+
+module Sequential = struct
+  let run n =
+    let t0 = Unix.gettimeofday() in
+    let ht = Hashtbl.create 91 in
+    for k = 0 to n-1 do
+      solve k n
+	(fun b ->
+	   if not (Hashtbl.mem ht b) then (
+	     let b = Array.copy b in
+	     List.iter
+	       (fun b' ->
+		  Hashtbl.add ht b' ()
+	       )
+	       (transformations b);
+	     print b
+	   )
+	)
+    done;
+    let t1 = Unix.gettimeofday() in
+    printf "Number solutions: %n\n%!" (Hashtbl.length ht / 8);
+    printf "Time: %.3f\n%!" (t1-.t0)
+end
+
+My equivalent F#:
+
+module Sequential =
+  let run n =
+    let timer = System.Diagnostics.Stopwatch.StartNew()
+    let solve k =
+      let sols = ResizeArray()
+      solve k n (transformations >> Seq.min >> sols.Add)
+      sols.ToArray()
+    let sols =
+      Array.init n solve
+      |> Seq.concat
+      |> Seq.distinct
+      |> Seq.length
+    printfn "Number solutions: %n" sols
+    printfn "Time: %.3f" timer.Elapsed.TotalSeconds
+
+Gerd's sequential OCaml run on his 4-core Opteron and my sequential F# run
+on a 4-core W3520 have very similar performance characteristics.
+
+Now for parallelization. Gerd's fastest parallel OCaml solution (aka MP2) is
+287 lines long. In contrast, the F# can be parallelized by adding just 12
+characters to the source code of the sequential implementation:
+
+module Parallel =
+  let run n =
+    let timer = System.Diagnostics.Stopwatch.StartNew()
+    let solve k =
+      let sols = ResizeArray()
+      solve k n (transformations >> Seq.min >> sols.Add)
+      sols.ToArray()
+    let sols =
+      Array.Parallel.init n solve
+      |> PSeq.concat
+      |> PSeq.distinct
+      |> PSeq.length
+    printfn "Number solutions: %n" sols
+    printfn "Time: %.3f" timer.Elapsed.TotalSeconds
+
+I just replaced Array.init with Array.Parallel.init and Seq with PSeq.
+
+Moreover, this trivially parallelized F# implementation also achieves
+performance on this machine comparable to Gerd's parallel OCaml on his
+machine. In particular, the absolute performance results for my parallel F#
+are better in every single case. However, it is not clear how scalable these
+parallel solutions are. On an 8-core E5405 Xeon I get only 5x speedup
+compared to 3.8x speedup on 4 cores.
+
+There can be little doubt that this solution is vastly more readable and
+maintainable though.
+
+-- 
+Dr Jon Harrop, Flying Frog Consultancy Ltd.
+http://www.ffconsultancy.com
+

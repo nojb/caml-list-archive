@@ -1,0 +1,156 @@
+Return-Path: <ogasawara@itpl.co.jp>
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 44DAABC57
+	for <caml-list@yquem.inria.fr>; Tue, 20 Jul 2010 06:54:47 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: ApoCAD/JREzY5v4vmWdsb2JhbACfbhUBAQEBAQgLCgcRIogXuhCFIgSDfYRZ
+X-IronPort-AV: E=Sophos;i="4.55,230,1278280800"; 
+   d="scan'208";a="64102139"
+Received: from amout07.alpha-mail.net ([216.230.254.47])
+  by mail1-smtp-roc.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 20 Jul 2010 06:54:46 +0200
+Received: from webarc05.alpha-mail.jp (webarc05 [216.230.254.85])
+	by amout07.alpha-mail.net  with ESMTP id o6K4sd0E002878;
+	Tue, 20 Jul 2010 13:54:39 +0900
+X-Virus-Scanned: amavisd-new at Alpha-Mail Out
+Received: from ltsub.alpha-mail.net (ltsub.alpha-mail.net [216.230.254.26])
+	by webarc05.alpha-mail.jp (Postfix) with ESMTP id 97214A4804F;
+	Tue, 20 Jul 2010 13:54:36 +0900 (JST)
+Received: from [192.168.0.101] (196.62.205.61.west.global.alpha-net.ne.jp [61.205.62.196])
+	by ltsub.alpha-mail.net (Alpha-mail) with ESMTP id 3598E3B807C;
+	Tue, 20 Jul 2010 13:54:38 +0900 (JST)
+Subject: Re: [Caml-list] Smart ways to implement worker threads
+Mime-Version: 1.0 (Apple Message framework v1081)
+Content-Type: text/plain; charset=us-ascii
+From: Satoshi Ogasawara <ogasawara@itpl.co.jp>
+In-Reply-To: <87630fbmvb.fsf@frosties.localdomain>
+Date: Tue, 20 Jul 2010 13:54:37 +0900
+Cc: Rich Neswold <rich.neswold@gmail.com>, caml-list@yquem.inria.fr
+Content-Transfer-Encoding: quoted-printable
+Message-Id: <72D959B7-6AD0-4CA6-9D93-73467E64C5FC@itpl.co.jp>
+References: <87sk3mcaeq.fsf@frosties.localdomain> <AANLkTilJUmUCQx2DiomhBNZdWEUinjnLeu2rFMMwcZ02@mail.gmail.com> <87zkxsfvsg.fsf@frosties.localdomain> <AANLkTik3C58pheUssb8LDtvj3gkcA3qoKT0YsaQ65B6N@mail.gmail.com> <87hbk0vzut.fsf@frosties.localdomain> <AANLkTik4KwrOX4TvxtLtwjoL0y7GLcsSCdRaanmqH6o_@mail.gmail.com> <87630fbmvb.fsf@frosties.localdomain>
+To: Goswin von Brederlow <goswin-v-b@web.de>
+X-Mailer: Apple Mail (2.1081)
+X-Spam: no; 0.00; synchronous:01 mli:01 printf:01 printf:01 ocamlc:01 -thread:01 site-lib:01 async:01 ocamlc:01 -thread:01 site-lib:01 scm:98 threads:01 threads:01 wrote:01 
+
+
+On 2010/07/16, at 22:02, Goswin von Brederlow wrote:
+> Urgs, so what happens if I call "sync (send ...)" twice without the
+> other end calling recieve? Lets test:
+>=20
+> let ch =3D Event.new_channel ()
+> ...
+
+That's not good use of synchronous channels. If you want to =
+asynchronous,
+try Mbox module in concurrent cell.
+=
+https://forge.ocamlcore.org/scm/viewvc.php/trunk/mbox.mli?view=3Dmarkup&ro=
+ot=3Dccell
+
+open Printf
+open Ccell
+open Event
+
+let mbox =3D Mbox.make ()
+
+let receiver () =3D
+  for i =3D 0 to 10 do
+    printf "received %d\n%!" (sync (Mbox.pop mbox));
+    Thread.delay 2.;
+  done
+   =20
+let _ =3D
+  ignore (Thread.create receiver ());
+  for i =3D 0 to 10 do
+    printf "sending %d\n%!" i;
+    sync (Mbox.push mbox i);
+    Thread.delay 1.;
+  done
+
+wednesday:tmp osiire$ ocamlc -thread unix.cma threads.cma -I =
++site-lib/ccell ccell.cma async.ml && ./a.out
+sending 0
+received 0
+sending 1
+received 1
+sending 2
+sending 3
+received 2
+sending 4
+sending 5
+received 3
+sending 6
+sending 7
+received 4
+sending 8
+sending 9
+received 5
+sending 10
+
+   =20
+With Mbox module, you can also wait and select long calculation results =
+like this.
+
+open Printf
+open Ccell
+open Event
+
+let rec forever f x =3D=20
+  let v =3D f x in forever f v
+
+let spawn_loop f x =3D
+  ignore (Thread.create (forever f) x)
+
+let make_worker f =3D
+  let input, output =3D Mbox.make (), Mbox.make () in
+  let work () =3D
+    sync (Mbox.push output (f (sync (Mbox.pop input))));
+  in
+  spawn_loop work ();
+  input, output
+
+let request (input, _) p =3D
+  sync (Mbox.push input p)
+
+let response (_, output) =3D
+  Mbox.pop output
+
+let worker1 =3D make_worker (printf "action worker1 %d\n%!")
+let worker2 =3D make_worker (printf "action worker2 %d\n%!")
+   =20
+let after_long_calc (e1, e2) =3D
+  select [
+    wrap e1 (fun _ -> printf "after work1\n%!"; (response worker1, e2));
+    wrap e2 (fun _ -> printf "after work2\n%!"; (e1, response worker2));
+  ]
+
+let _ =3D
+  spawn_loop after_long_calc (response worker1, response worker2);
+  request worker1 1;
+  Thread.delay 1.;
+  request worker2 2;
+  Thread.delay 1.;
+  request worker2 3;
+  Thread.delay 1.;
+  request worker1 4;
+  Thread.delay 2.
+
+wednesday:tmp osiire$ ocamlc -thread unix.cma threads.cma -I =
++site-lib/ccell ccell.cma worker.ml && ./a.out
+action worker1 1
+after work1
+action worker2 2
+after work2
+action worker2 3
+after work2
+action worker1 4
+after work1
+
+
+I hope this will be helpful for you.
+ =20
+---
+  satoshi ogasawara
+

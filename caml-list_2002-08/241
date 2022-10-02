@@ -1,0 +1,386 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id JAA08905; Wed, 14 Aug 2002 09:49:53 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id JAA08887 for <caml-list@pauillac.inria.fr>; Wed, 14 Aug 2002 09:49:52 +0200 (MET DST)
+Received: from mel-rto2.wanadoo.fr (smtp-out-2.wanadoo.fr [193.252.19.254])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id g7E7nq124887
+	for <caml-list@inria.fr>; Wed, 14 Aug 2002 09:49:52 +0200 (MET DST)
+Received: from mel-rta10.wanadoo.fr (193.252.19.193) by mel-rto2.wanadoo.fr (6.5.007)
+        id 3D5392B6001C176E for caml-list@inria.fr; Wed, 14 Aug 2002 09:49:52 +0200
+Received: from AlphaSystem.dnsalias.net (80.11.74.121) by mel-rta10.wanadoo.fr (6.5.007)
+        id 3D49FFDD00485FBA for caml-list@inria.fr; Wed, 14 Aug 2002 09:49:52 +0200
+Received: from localhost ([127.0.0.1] helo=alphasystem.dnsalias.net)
+	by AlphaSystem.dnsalias.net with esmtp (Exim 3.36 #1 (Debian))
+	id 17esuc-0006us-00
+	for <caml-list@inria.fr>; Wed, 14 Aug 2002 09:49:50 +0200
+From: "Johan Baltié" <johan.baltie@wanadoo.fr>
+To: caml-list@inria.fr
+Subject: Fw: Re: [Caml-list] Module/Functor modelisation
+Date: Wed, 14 Aug 2002 08:49:50 +0100
+Message-Id: <20020814074950.M92721@wanadoo.fr>
+In-Reply-To: <20020814074844.M48926@epita.fr>
+References: <20020814070753.M11217@wanadoo.fr> <20020814074250.GA6002@barcelona.lrde.epita.fr> <20020814074844.M48926@epita.fr>
+X-Mailer: Open WebMail 1.61 20020204
+X-OriginatingIP: 192.6.2.192 (baltie_j)
+MIME-Version: 1.0
+Content-Type: text/plain; charset=iso-8859-1
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+Uh..
+My code was not caml compliant :)
+But no that's not my main problem.
+
+I thing i cannot go without giving my real code:
+
+Here is it: 
+
+--------
+
+module type Visitor =
+sig
+ type output
+
+ val behavior : behavior -> output -> output
+ val pattern_action : pattern_action -> output -> output
+ val pattern : pattern -> output -> output
+ val action : action -> output -> output
+ val ident_regex : ident_regex -> output -> output
+ val message :  message -> output -> output
+ val message_body: message_body -> output -> output
+ val declaration :  declaration -> output -> output
+ val types : types -> output -> output
+ val ident : ident -> output -> output
+ val expression : expression -> output -> output
+ val litteral : litteral -> output -> output
+end
+
+(* Traverser type *)
+module type Traverse =
+ functor (Av : Visitor) ->
+sig
+ val behavior : behavior -> Av.output -> Av.output
+ val pattern_action : pattern_action -> Av.output -> Av.output
+ val pattern : pattern -> Av.output -> Av.output
+ val action : action -> Av.output -> Av.output
+ val ident_regex : ident_regex -> Av.output -> Av.output
+ val message :  message -> Av.output -> Av.output
+ val message_body: message_body -> Av.output -> Av.output
+ val declaration :  declaration -> Av.output -> Av.output
+ val types : types -> Av.output -> Av.output
+ val ident : ident -> Av.output -> Av.output
+ val expression : expression -> Av.output -> Av.output
+ val litteral : litteral -> Av.output -> Av.output
+end
+
+(* Traverser implementation *)
+module PrefixTraverse =
+ functor (Av : Visitor) ->
+struct
+
+ let ident i data =
+  Av.ident i data
+
+ let rec types t data =
+  let output = Av.types t data
+  in
+   match t with
+    | SimpleType(id) ->
+       ident id output
+    | TypesList(t1, t2) ->
+       types t2 (types t1 output)
+
+ let rec ident_regex i data =
+  let output = Av.ident_regex i data
+  in
+   match i with
+    | Underscore -> 
+       output
+    | Ident(id) ->
+       ident id output
+    | IdentRegexList(id1, id2) ->
+       ident_regex id2 (ident_regex id1 output)
+
+ let rec declaration d data =
+  let output = Av.declaration d data
+  in
+   match d with
+    | DeclarationConstant(l) ->
+       litteral l output
+    | DeclarationVariable(t, id) ->
+       ident_regex id (types t output)
+    | DeclarationList(d1, d2) ->
+       declaration d2 (declaration d1 output)
+
+ and pattern p data =
+  let output = Av.pattern p data
+  and (id1, id2, decl) = p
+  in
+   declaration decl (ident_regex id2 (ident_regex id1 output))
+
+ and  message m data =
+  let output = Av.message m data
+  in
+   match m with
+    | UnansweredMessage(mb) ->
+       message_body mb output
+    | AnsweredMessage(mb, id) ->
+       ident id (message_body mb output)
+    | MessageList (m1, m2) ->
+       message m2 (message m1 output)
+
+ and message_body m data =
+  let output = Av.message_body m data
+  in
+   match m with
+    | NamedMessage(id, e) ->
+       expression e (ident id output)
+    | AnonymousMessage(e) ->
+       expression e output
+
+ and litteral l data =
+  let output = Av.litteral l data
+  in
+   match l with
+    | Message(m) ->
+       message m output
+    | _ ->
+       output
+
+ and expression e data =
+  let output = Av.expression e data
+  in
+   match e with
+    | ExpressionConstant(l) ->
+       litteral l output
+    | ExpressionVariable(i) ->
+       ident i output
+    | ExpressionList(e1, e2) ->
+       expression e2 (expression e1 output)
+
+ let action a data =
+  let output = Av.action a data
+  and (m, e) = a
+  in
+   expression e (message m output)
+
+ let rec pattern_action p data =
+  let output = Av.pattern_action p data
+  in 
+   match p with
+    | PatternAction(pat, act) ->
+       action act (pattern pat output)
+    | PatternActionList(pa1, pa2) ->
+       pattern_action pa2 (pattern_action pa1 output)
+
+ let behavior b data =
+  let output = Av.behavior b data
+  in
+   match b with
+    | InheritedBehavior(name, inherited, pas) ->
+       pattern_action pas (ident inherited (ident name output))
+    | RootedBehavior(name, pas) ->
+       pattern_action pas (ident name output)
+       
+end
+
+(* Traverser implementation *)
+module PostfixTraverse =
+ functor (Av : Visitor) ->
+struct
+
+ let ident i data =
+  Av.ident i data
+
+ let rec types t data =
+  let output =
+   match t with
+    | SimpleType(id) ->
+       ident id data
+    | TypesList(t1, t2) ->
+       types t2 (types t1 data)
+  in
+   Av.types t output
+
+ let rec ident_regex i data =
+  let output = 
+   match i with
+    | Underscore -> 
+       data
+    | Ident(id) ->
+       ident id data
+    | IdentRegexList(id1, id2) ->
+       ident_regex id2 (ident_regex id1 data)
+  in
+   Av.ident_regex i output
+
+ let rec declaration d data =
+  let output = Av.declaration d data
+  in
+   match d with
+    | DeclarationConstant(l) ->
+       litteral l output
+    | DeclarationVariable(t, id) ->
+       ident_regex id (types t output)
+    | DeclarationList(d1, d2) ->
+       declaration d2 (declaration d1 output)
+
+ and pattern p data =
+  let output = Av.pattern p data
+  and (id1, id2, decl) = p
+  in
+   declaration decl (ident_regex id2 (ident_regex id1 output))
+
+ and  message m data =
+  let output = Av.message m data
+  in
+   match m with
+    | UnansweredMessage(mb) ->
+       message_body mb output
+    | AnsweredMessage(mb, id) ->
+       ident id (message_body mb output)
+    | MessageList (m1, m2) ->
+       message m2 (message m1 output)
+
+ and message_body m data =
+  let output = Av.message_body m data
+  in
+   match m with
+    | NamedMessage(id, e) ->
+       expression e (ident id output)
+    | AnonymousMessage(e) ->
+       expression e output
+
+ and litteral l data =
+  let output = Av.litteral l data
+  in
+   match l with
+    | Message(m) ->
+       message m output
+    | _ ->
+       output
+
+ and expression e data =
+  let output = Av.expression e data
+  in
+   match e with
+    | ExpressionConstant(l) ->
+       litteral l output
+    | ExpressionVariable(i) ->
+       ident i output
+    | ExpressionList(e1, e2) ->
+       expression e2 (expression e1 output)
+
+ let action a data =
+  let output = Av.action a data
+  and (m, e) = a
+  in
+   expression e (message m output)
+
+ let rec pattern_action p data =
+  let output = Av.pattern_action p data
+  in 
+   match p with
+    | PatternAction(pat, act) ->
+       action act (pattern pat output)
+    | PatternActionList(pa1, pa2) ->
+       pattern_action pa2 (pattern_action pa1 output)
+
+ let behavior b data =
+  let output = Av.behavior b data
+  in
+   match b with
+    | InheritedBehavior(name, inherited, pas) ->
+       pattern_action pas (ident inherited (ident name output))
+    | RootedBehavior(name, pas) ->
+       pattern_action pas (ident name output)
+       
+end
+
+--------
+
+As I said, my problem is that I'm doing the same job once in a prefix way and
+once in a postfix way.
+In pattern_action i'd like to have:
+
+"match p with
+    | PatternAction(pat, act) ->
+       action act (pattern pat output)
+    | PatternActionList(pa1, pa2) ->
+       pattern_action pa2 (pattern_action pa1 output)"
+
+Factorized from Prefix and Postfix.
+
+Does it enlight my dark explanation ?
+
+> On Wed, Aug 14, 2002 at 08:07:53AM +0100, Johan Baltié wrote:
+> > Hi !
+> > 
+> > I have a simple functor:
+> > [..]
+> 
+> 	I do not know if I have understood your problem but try
+> something like that:
+> 
+>  module type Used =
+>  sig
+>   type output
+> 
+>   val toto : int -> output -> output
+>   val tutu : float -> output -> output
+>  end
+> 
+>  module type User =
+>   functor (U : Used) ->
+>  sig
+> 
+>   val toto : int -> U.output -> U.output
+>   val tutu : float -> U.output -> U.output
+>  end
+> 
+>   module User1: User =
+>     functor (U : Used) ->
+>   struct
+>     let rec toto i output =
+>       let v = U.tutu 12.0 output
+>       in
+>        tutu 12.0 v
+>      and tutu d output =
+>         if (d = 11.0) then
+>            output
+>         else
+>            tutu (d -. 1.0) (U.toto 1 output)
+>   end
+> 
+>   module User2: User =
+>     functor (U : Used) ->
+>   struct
+>     let rec toto i output =
+>       let v = tutu 12.0 output
+>       in
+>        U.tutu 12.0 v
+>      and tutu d output =
+>         if (d = 11.0) then
+>            output
+>         else
+>            let v = tutu (d -. 1.0) output
+>             in
+>                 U.toto 1 v
+>   end
+> 
+> -- 
+> Yann Régis-Gianas.
+
+Ciao
+
+Jo
+------- End of Forwarded Message -------
+
+
+Ciao
+
+Jo
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

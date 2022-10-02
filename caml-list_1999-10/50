@@ -1,0 +1,143 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA14125 for caml-redistribution; Thu, 7 Oct 1999 14:20:24 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id OAA26385 for <caml-list@pauillac.inria.fr>; Thu, 7 Oct 1999 14:10:47 +0200 (MET DST)
+Received: from pauillac.inria.fr (pauillac.inria.fr [128.93.11.35])
+	by concorde.inria.fr (8.8.7/8.8.7) with ESMTP id OAA01323;
+	Thu, 7 Oct 1999 14:10:38 +0200 (MET DST)
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id OAA29673; Thu, 7 Oct 1999 14:10:39 +0200 (MET DST)
+From: Pierre Weis <Pierre.Weis@inria.fr>
+Message-Id: <199910071210.OAA29673@pauillac.inria.fr>
+Subject: Re: Data structures in ocaml
+To: skaller@maxtal.com.au (skaller)
+Date: Thu, 7 Oct 1999 14:10:39 +0200 (MET DST)
+Cc: caml-list@inria.fr
+In-Reply-To: <37FB9A06.C89E6CD1@maxtal.com.au> from "skaller" at Oct 7, 99 04:50:46 am
+X-Mailer: ELM [version 2.4 PL24 ME8]
+MIME-Version: 1.0
+Content-Type: text/plain; charset=US-ASCII
+Content-Transfer-Encoding: 7bit
+Sender: weis
+
+> Some comments on data structures.
+> Please let me know if I miss something, which is possible.
+> 
+> 1. It should be possible to create an uninitialised array.
+> [It can be done for string]
+
+No, it should not.
+
+This is an easy consequence of the main theorem of Caml type-checking:
+no well-typed Caml program can ever go wrong.
+
+(Informal proof: there is no ill-typed Caml program; hence no Caml
+program can manipulate a value whose type is different from the type
+statically assigned to the value by the Caml type-checker; hence there
+is no value with an unknown or invalid type; hence there is no
+``invalid or impossible value'' in Caml (since this value will not
+have a valid type); hence it is impossible to create an unitialised
+array.)
+
+This is also due to:
+
+-- a design decision: no uninitialized entities exist in Caml. This is
+consistent to the fact that in Caml you DEFINE identifiers instead of
+DECLARING them.
+-- an implementation necessity, since the garbage collector cannot be
+faced with some unknown ill-formed data.
+
+A way to mimick uninitialised array inside the Caml language framework
+could be to systematically use option encapsulation, initialising the
+array with None values, and storing Some x instead of x
+afterward. This is not acceptable in practice since array accesses
+would systematically need destructuring the result.
+
+There are other possibilities that cannot be written into the
+language, since they locally violates the correct memory management,
+but that an implementation may provide. For instance, the run-time
+system may define a special ``null'' (allocated) value that is used by
+an external primitive to fill uninitialised arrays; then, the array
+access primitive would test at each access if the value read is
+identical (==) to ``null'' or not; if so, then the array access fails
+and an error is raised, otherwise the value fetched is returned. This
+means a loss of efficiency due to a spurious test for each array
+access, and this is not desirable. This means also that you may have
+random exceptions raised, due to the presence of random uninitialised
+elements into arrays, and this is not desirable as well.
+
+> 2. Arrays are mutable, but not variable length.
+
+This would require an extra indirection for each vector access, which
+is undesirable. Furthermore, variable length vectors can be defined
+by an easy abstraction based on the basic static length vectors.
+
+type 'a evect = ('a array) ref;;
+
+let make n x = ref (Array.make n x);;
+
+let give_room v n =
+ let s = !v in
+ let l = Array.length s in
+ if n >= l then
+  let new_s = Array.make n s.(0) in
+  Array.blit s 0 new_s 0 l;
+  v := new_s;;
+
+let check_bound v n =
+ if n < 0 || n >= Array.length !v then invalid_arg "evect";;
+
+let get v n = check_bound v n; !v.(n);;
+let set v n x = check_bound v n; !v.(n) <- x;;
+
+> 3. It isn't clear to me how fast concatenation
+> of sub arrays (or substrings) is. If I write
+> 
+> 	Array.append 
+> 		(Array.sub x xfirst xlen) 
+> 		(Array.sub y yfirst ylen)
+> 
+> it isn't clear if the intermediate subarrays are
+> needlessly constructed or not. 
+
+Remember a simple rule found in the FAQ: in Caml, there is no implicit
+copy of data, to get a copy you must explicitely call a copying function. On
+the other hand, if you call such a function you get what you ask for
+and a copy is done.
+
+Hence your question is: is there a copying function called in the body
+of Array.sub ? The answer is yes, since we find in Array.sub:
+ let r = create len ... in
+ ...
+ r
+
+So yes, intermediate subarrays are constructed, since you explicitely
+asked for their construction (however, in this case the storage they
+use will be reclaimed by the next minor collection). You can imagine a
+fancy optimizing compiler that can avoid their construction by
+analyzing the code of Array.append (this is named ``deforestation'' in
+the context of cons celles and lists append), but this analysis
+remains to be invented for arrays.
+
+Anyway, if you want to append two chunks of arrays with no
+intermediate allocation, you just have to write a special purpose
+function, something like:
+
+let append_two_chunks v1 start1 end1 v2 start2 end2 =
+ let result = Array.make ...
+ Array.blit v1 start1 result 0 ...
+ Array.blit v2 start2 result start1 ...
+ result;;
+
+(SMOP: you can also generalize the previous function to an arbitrary
+list of chunks...)
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+Pierre Weis
+
+INRIA, Projet Cristal, Pierre.Weis@inria.fr, http://cristal.inria.fr/~weis/
+
+
+
+

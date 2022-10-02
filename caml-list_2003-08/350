@@ -1,0 +1,852 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id WAA05117; Fri, 29 Aug 2003 22:17:22 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id WAA19009 for <caml-list@pauillac.inria.fr>; Fri, 29 Aug 2003 22:17:21 +0200 (MET DST)
+Received: from badenpowell.cs.ubc.ca (badenpowell.cs.ubc.ca [142.103.6.71])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h7TKHJT06502
+	for <caml-list@inria.fr>; Fri, 29 Aug 2003 22:17:19 +0200 (MET DST)
+Received: from cypress (cypress.cs.ubc.ca [142.103.11.23])
+	by badenpowell.cs.ubc.ca (8.12.8/8.12.9) with ESMTP id h7TKHHAV027504
+	for <caml-list@inria.fr>; Fri, 29 Aug 2003 13:17:17 -0700
+From: "Christopher Dutchyn" <cdutchyn@cs.ubc.ca>
+To: "CAML List" <caml-list@inria.fr>
+Subject: [Caml-list] Recursive Modules
+Date: Fri, 29 Aug 2003 13:17:17 -0700
+Message-ID: <009e01c36e6a$8b2d81f0$170b678e@cs.ubc.ca>
+MIME-Version: 1.0
+Content-Type: multipart/alternative;
+	boundary="----=_NextPart_000_009F_01C36E2F.DECEA9F0"
+X-Priority: 3 (Normal)
+X-MSMail-Priority: Normal
+X-Mailer: Microsoft Outlook, Build 10.0.4510
+X-MimeOLE: Produced By Microsoft MimeOLE V6.00.2800.1165
+Importance: Normal
+X-Spam-Score: -0.8 BAYES_30,HTML_60_70
+X-Scanned-By: MIMEDefang 2.35
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; ubc:99 104,:01 val:01 val:01 functor:01 struct:01 functor:01 struct:01 char:01 char:01 recursion:01 104,:01 W9:99 W11:99 W11:99 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+This is a multi-part message in MIME format.
+
+------=_NextPart_000_009F_01C36E2F.DECEA9F0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+
+I think the recursive modules definitions do not completely propagate safe
+definitions: I get
+
+Exception: Undefined_recursive_module ("SimpleLayer.ml", 104, 23)
+
+with the attached code.
+
+ 
+
+Chris D.
+
+ 
+
+module type LAYER =
+
+  sig
+
+    type topT
+
+    type topV
+
+    val topInj : string -> topT
+
+    val topOp  : topT -> topV
+
+    val topExt : topV -> string
+
+ 
+
+    type t
+
+    type v
+
+ 
+
+    val inj : string -> t
+
+    val op : t -> v
+
+    val ext : v -> string
+
+  end
+
+ 
+
+ 
+
+(* base module -- no lower layer present, empty types, all operations are
+errors *)
+
+(* *** ``safe'' module (section 7.8 of refman) *** *)
+
+module MakeBase =
+
+  functor (Above : LAYER) ->
+
+  struct
+
+    type topT = Above.topT
+
+    type topV = Above.topV
+
+    let topInj = fun x -> Above.topInj x(*safe*)
+
+    let topOp  = fun x -> Above.topOp x (*safe*)
+
+    let topExt = fun x -> Above.topExt x(*safe*)
+
+ 
+
+    type t = EmptyT              (* wouldn't revised syntax be nice *)
+
+    type v = EmptyV
+
+          
+
+    let inj = fun _ -> raise (Failure "inj")
+
+    let op  = fun _ -> raise (Failure "op")
+
+    let ext = fun _ -> raise (Failure "ext")
+
+  end
+
+ 
+
+(* an intermediate level *)
+
+module MakeMiddle =
+
+  functor (Below : LAYER) ->
+
+    functor (Above : LAYER) ->
+
+  struct
+
+    type topT = Above.topT
+
+    type topV = Above.topV
+
+    let topInj = Above.topInj
+
+    let topOp  = Above.topOp
+
+    let topExt = Above.topExt
+
+ 
+
+    type t =
+
+      | BelowT of Below.t
+
+      | OneT of char
+
+      | TwoT of char * topT
+
+            
+
+    type v =
+
+      | BelowV of Below.v
+
+      | StringV of string
+
+            
+
+    let inj = fun s ->           (* <T> ::= 1_ [OneT _] | 2_? [TwoT _ ?] |
+<Below.T> *)
+
+      match (String.get s 0) with
+
+      | '1' -> OneT (String.get s 1)
+
+      | '2' -> TwoT(String.get s 1, topInj (String.sub s 2 ((String.length
+s)-2)))
+
+      | _ ->   BelowT (Below.inj s)
+
+          
+
+    let op =
+
+      function
+
+        | BelowT t -> BelowV (Below.op t)
+
+        | OneT(c) -> StringV ("1" ^ (String.make 1 c))
+
+        | TwoT(c,t) -> StringV ("2" ^ (String.make 1 c) ^ (topExt (topOp
+t)))
+
+              
+
+    let ext =
+
+      function
+
+        | BelowV v -> Below.ext v
+
+        | StringV s -> s
+
+  end
+
+ 
+
+(* imagine there were more levels -- maybe even tree/graph structured *)
+
+ 
+
+(* top level -- close the open recursion of topInj and topExt *)
+
+(* *** ``safe'' module (section 7.8 of refman) *** *)
+
+module MakeTop =
+
+  functor (Below : LAYER) ->
+
+  struct
+
+    type t = Below.t
+
+    type v = Below.v
+
+          
+
+    let inj = fun x -> Below.inj x      (*safe*)
+
+    let op  = fun x -> Below.op x       (*safe*)
+
+    let ext = fun x -> Below.ext x      (*safe*)
+
+ 
+
+    type topT = t
+
+    type topV = v
+
+    let topInj = fun x -> inj x         (*safe*)
+
+    let topOp  = fun x -> op x          (*safe*)
+
+    let topExt = fun x -> ext x         (*safe*)
+
+  end
+
+ 
+
+(* simplest test *)
+
+module rec B : LAYER = MakeBase(T)
+
+       and T : LAYER = MakeTop(B)
+
+ 
+
+(* simple test *)
+
+module rec B : LAYER = MakeBase(M)
+
+       and M : LAYER = MakeMiddle(B)(T)
+
+      (* imagine there were more levels *)
+
+       and T : LAYER = MakeTop(M);;
+
+ 
+
+T.topOp (T.topInj "2x1x");;
+
+T.topExt (T.topOp (T.topInj "2x1x"))
+
+ 
+
+
+------=_NextPart_000_009F_01C36E2F.DECEA9F0
+Content-Type: text/html;
+	charset="us-ascii"
+Content-Transfer-Encoding: quoted-printable
+
+<html>
+
+<head>
+<META HTTP-EQUIV=3D"Content-Type" CONTENT=3D"text/html; =
+charset=3Dus-ascii">
+
+
+<meta name=3DGenerator content=3D"Microsoft Word 10 (filtered)">
+
+<style>
+<!--
+ /* Style Definitions */
+ p.MsoNormal, li.MsoNormal, div.MsoNormal
+	{margin:0cm;
+	margin-bottom:.0001pt;
+	font-size:12.0pt;
+	font-family:"Times New Roman";}
+a:link, span.MsoHyperlink
+	{color:blue;
+	text-decoration:underline;}
+a:visited, span.MsoHyperlinkFollowed
+	{color:purple;
+	text-decoration:underline;}
+span.EmailStyle17
+	{font-family:Arial;
+	color:windowtext;}
+@page Section1
+	{size:612.0pt 792.0pt;
+	margin:72.0pt 90.0pt 72.0pt 90.0pt;}
+div.Section1
+	{page:Section1;}
+-->
+</style>
+
+</head>
+
+<body lang=3DEN-US link=3Dblue vlink=3Dpurple>
+
+<div class=3DSection1>
+
+<p class=3DMsoNormal><font size=3D2 face=3DArial><span =
+style=3D'font-size:10.0pt;
+font-family:Arial'>I think the recursive modules definitions do not =
+completely propagate
+safe definitions: I get</span></font></p>
+
+<p class=3DMsoNormal style=3D'text-indent:36.0pt'><font size=3D2 =
+face=3DArial><span
+style=3D'font-size:10.0pt;font-family:Arial'>Exception: =
+Undefined_recursive_module
+(&quot;SimpleLayer.ml&quot;, 104, 23)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D2 face=3DArial><span =
+style=3D'font-size:10.0pt;
+font-family:Arial'>with the attached code.</span></font></p>
+
+<p class=3DMsoNormal><font size=3D2 face=3DArial><span =
+style=3D'font-size:10.0pt;
+font-family:Arial'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D2 face=3DArial><span =
+style=3D'font-size:10.0pt;
+font-family:Arial'>Chris D.</span></font></p>
+
+<p class=3DMsoNormal><font size=3D2 face=3DArial><span =
+style=3D'font-size:10.0pt;
+font-family:Arial'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>module type LAYER =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; sig</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topT</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topV</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; val topInj : string -&gt; =
+topT</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; val topOp&nbsp; : topT -&gt; =
+topV</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; val topExt : topV -&gt; =
+string</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type t</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type v</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; val inj : string -&gt; t</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; val op : t -&gt; v</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; val ext : v -&gt; string</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; end</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* base module -- no lower layer present, empty types, all =
+operations
+are errors *)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* *** ``safe'' module (section 7.8 of refman) *** =
+*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>module MakeBase =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; functor (Above : LAYER) -&gt;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; struct</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topT =3D Above.topT</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topV =3D Above.topV</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topInj =3D fun x -&gt; Above.topInj =
+x(*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topOp&nbsp; =3D fun x -&gt; Above.topOp x =
+(*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topExt =3D fun x -&gt; Above.topExt =
+x(*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type t =3D =
+EmptyT&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&=
+nbsp;&nbsp;
+(* wouldn't revised syntax be nice *)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type v =3D EmptyV</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =
+</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let inj =3D fun _ -&gt; raise (Failure =
+&quot;inj&quot;)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let op&nbsp; =3D fun _ -&gt; raise (Failure
+&quot;op&quot;)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let ext =3D fun _ -&gt; raise (Failure
+&quot;ext&quot;)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; end</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* an intermediate level *)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>module MakeMiddle =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; functor (Below : LAYER) -&gt;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; functor (Above : LAYER) =
+-&gt;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; struct</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topT =3D Above.topT</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topV =3D Above.topV</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topInj =3D Above.topInj</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topOp&nbsp; =3D =
+Above.topOp</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topExt =3D Above.topExt</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type t =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | BelowT of =
+Below.t</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | OneT of char</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | TwoT of char * =
+topT</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp=
+; </span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type v =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | BelowV of =
+Below.v</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | StringV of =
+string</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp=
+; </span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let inj =3D fun s
+-&gt;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (* =
+&lt;T&gt;
+::=3D 1_ [OneT _] | 2_? [TwoT _ ?] | &lt;Below.T&gt; =
+*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; match (String.get s 0) =
+with</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | '1' -&gt; OneT (String.get s =
+1)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | '2' -&gt; TwoT(String.get s 1, =
+topInj
+(String.sub s 2 ((String.length s)-2)))</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | _ -&gt;&nbsp;&nbsp; BelowT =
+(Below.inj
+s)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =
+</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let op =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; function</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | BelowT t -&gt; =
+BelowV (Below.op
+t)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | OneT(c) -&gt; =
+StringV
+(&quot;1&quot; ^ (String.make 1 c))</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | TwoT(c,t) -&gt; =
+StringV
+(&quot;2&quot; ^ (String.make 1 c) ^ (topExt (topOp =
+t)))</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp=
+;&nbsp;&nbsp;
+</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let ext =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; function</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | BelowV v -&gt; =
+Below.ext v</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; | StringV s -&gt; =
+s</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; end</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* imagine there were more levels -- maybe even tree/graph =
+structured
+*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* top level -- close the open recursion of topInj and topExt =
+*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* *** ``safe'' module (section 7.8 of refman) *** =
+*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>module MakeTop =3D</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; functor (Below : LAYER) -&gt;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; struct</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type t =3D Below.t</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type v =3D Below.v</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =
+</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let inj =3D fun x -&gt; Below.inj
+x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let op&nbsp; =3D fun x -&gt; Below.op
+x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let ext =3D fun x -&gt; Below.ext
+x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topT =3D t</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; type topV =3D v</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topInj =3D fun x -&gt; inj
+x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =
+(*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topOp&nbsp; =3D fun x -&gt; op
+x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =
+(*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp; let topExt =3D fun x -&gt; ext
+x&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; =
+(*safe*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp; end</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* simplest test *)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>module rec B : LAYER =3D MakeBase(T)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; and T : LAYER =3D =
+MakeTop(B)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>(* simple test *)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>module rec B : LAYER =3D MakeBase(M)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; and M : LAYER =3D =
+MakeMiddle(B)(T)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; (* imagine there were more levels =
+*)</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp; and T : LAYER =3D =
+MakeTop(M);;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>T.topOp (T.topInj &quot;2x1x&quot;);;</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>T.topExt (T.topOp (T.topInj &quot;2x1x&quot;))</span></font></p>
+
+<p class=3DMsoNormal><font size=3D3 face=3D"Times New Roman"><span =
+style=3D'font-size:
+12.0pt'>&nbsp;</span></font></p>
+
+</div>
+
+</body>
+
+</html>
+
+------=_NextPart_000_009F_01C36E2F.DECEA9F0--
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

@@ -1,0 +1,115 @@
+Return-Path: <till.varoquaux@gmail.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: *
+X-Spam-Status: No, score=1.1 required=5.0 tests=AWL,SPF_NEUTRAL 
+	autolearn=disabled version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from discorde.inria.fr (discorde.inria.fr [192.93.2.38])
+	by yquem.inria.fr (Postfix) with ESMTP id D4534BC6B
+	for <caml-list@yquem.inria.fr>; Mon, 27 Aug 2007 02:18:29 +0200 (CEST)
+Received: from nz-out-0506.google.com (nz-out-0506.google.com [64.233.162.227])
+	by discorde.inria.fr (8.13.6/8.13.6) with ESMTP id l7R0ISKg008996
+	for <caml-list@yquem.inria.fr>; Mon, 27 Aug 2007 02:18:29 +0200
+Received: by nz-out-0506.google.com with SMTP id x7so866063nzc
+        for <caml-list@yquem.inria.fr>; Sun, 26 Aug 2007 17:18:28 -0700 (PDT)
+DKIM-Signature: a=rsa-sha1; c=relaxed/relaxed;
+        d=gmail.com; s=beta;
+        h=domainkey-signature:received:received:message-id:date:from:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=kt+d/+qLITNZcMsp9ZJafwB5+62ASW5nekQCtLzJjVJNfZzEP6BahBkBJ1Qb2Xy/Fmfoe8ELcOwNERFjPrL3jfkbbt8IdW9TA3gm/m/15CQF2+sAklRa6PHYwuaRqXD56UM/CNptSkz65XR4Fm6x8MXWFtDhuJENNXp/SWTT9zM=
+DomainKey-Signature: a=rsa-sha1; c=nofws;
+        d=gmail.com; s=beta;
+        h=received:message-id:date:from:to:subject:cc:in-reply-to:mime-version:content-type:content-transfer-encoding:content-disposition:references;
+        b=IlXRZVepep32D5yGUVDUB4aypTVKuqqoCGalISBnTb8KlX3/W8kFtBXu7+x1skNKAcFxnZkaYCzFcU41ASiyf6KqvN6g4Tf9lv5y7p8+NztmVK5VVgIqGQpzz5FopNQe4nVJjXqN6QjzzvFjTIhPfhB/NfyFbcH+4Q9+CydQ4VU=
+Received: by 10.142.229.4 with SMTP id b4mr291804wfh.1188173907851;
+        Sun, 26 Aug 2007 17:18:27 -0700 (PDT)
+Received: by 10.143.168.5 with HTTP; Sun, 26 Aug 2007 17:18:27 -0700 (PDT)
+Message-ID: <9d3ec8300708261718x7b62395cm70fdce72a47c592@mail.gmail.com>
+Date: Mon, 27 Aug 2007 02:18:27 +0200
+From: "Till Varoquaux" <till.varoquaux@gmail.com>
+To: "=?ISO-8859-1?Q?Daniel_B=FCnzli?=" <daniel.buenzli@epfl.ch>
+Subject: Re: [Caml-list] Has the thread cancellation problem evolved ?
+Cc: caml-list@yquem.inria.fr
+In-Reply-To: <D6A4296A-A9A2-4621-A6F7-7AD58E8764EB@epfl.ch>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: quoted-printable
+Content-Disposition: inline
+References: <9FA25C33-04DD-46BD-8959-873DDD2FFF82@epfl.ch>
+	 <1188055755.10796.37.camel@rosella.wigram>
+	 <D6A4296A-A9A2-4621-A6F7-7AD58E8764EB@epfl.ch>
+X-j-chkmail-Score: MSGID : 46D21854.000 on discorde : j-chkmail score : X : 0/20 1 0.000 -> 1
+X-Miltered: at discorde with ID 46D21854.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; bunzli:01 buenzli:01 ocaml:01 runtime:01 computations:01 computations:01 runtime:01 beginner's:01 ocaml:01 bug:01 1.5:98 denying:98 misused:98 invoke:01 threads:01 
+
+Hmm,
+
+I have a very partial answer. I had to implement timeouts on blocking
+calls recently I had to resort to alarms. You seem to be well
+documented so I don't think this will be new to you. It might however
+be useful to less seasoned hackers.
+
+Here is the sample code:
+
+exception Timeout
+let timeout timeout f arg=3D
+ let resChan=3DEvent.new_channel () in
+ let res=3DEvent.receive resChan in
+ let _=3D Thread.create begin
+  fun () ->
+   Unix.alarm timeout;
+   Sys.signal Sys.sigalrm (Sys.Signal_handle begin
+                            fun _ ->
+                             Event.sync(Event.send resChan None);
+                             Thread.exit ()
+                           end);
+   let computation=3DEvent.send resChan (Some (f arg)) in
+   Event.sync(computation)
+ end ()
+ in
+ match Event.sync(res) with
+  | Some e -> e
+  | None -> raise Timeout
+
+let _ =3D
+ let r=3Dtimeout 1 (fun a -> Thread.delay 1.5; a) "arg" in
+ print_string r
+
+
+As a side note I thinks Threads.raise_in would be awesome, it might be
+hard to add in the language though...
+
+Till
+On 8/27/07, Daniel B=FCnzli <daniel.buenzli@epfl.ch> wrote:
+>
+> Le 25 ao=FBt 07 =E0 17:29, skaller a =E9crit :
+>
+> > There is something I don't understand here.
+>
+> What you don't understand is that ocaml has a runtime system which
+> leaves some room for designing around what exists at the os level.
+>
+> > If the source of the problem is a blocking operation, the solution
+> > is simple: don't use blocking operations!
+>
+> This is not the source of the problem. What I want is to allow users
+> to initiate and cancel computations whenever they want. Computations
+> can be lengthy even tough they do not invoke a blocking operation.
+>
+> The problem is that libraries are not -- and should not -- be
+> designed with cancellation in mind, say every function has an
+> optional parameter that allows to stop the computation. Cancellation
+> should be a service of the runtime system, and denying its usefulness
+> because it could be misused makes no sense, I can also open a file
+> and never close it, it is a matter of programming discipline.
+>
+> Daniel
+>
+> _______________________________________________
+> Caml-list mailing list. Subscription management:
+> http://yquem.inria.fr/cgi-bin/mailman/listinfo/caml-list
+> Archives: http://caml.inria.fr
+> Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+> Bug reports: http://caml.inria.fr/bin/caml-bugs
+>
+

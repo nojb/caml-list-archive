@@ -1,0 +1,166 @@
+Received: (from majordomo@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id GAA10542; Sun, 14 Sep 2003 06:13:05 +0200 (MET DST)
+X-Authentication-Warning: pauillac.inria.fr: majordomo set sender to owner-caml-list@pauillac.inria.fr using -f
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id GAA02447 for <caml-list@pauillac.inria.fr>; Sun, 14 Sep 2003 06:13:04 +0200 (MET DST)
+Received: from mail3.tpgi.com.au (mail.tpgi.com.au [203.12.160.59])
+	by nez-perce.inria.fr (8.11.1/8.11.1) with ESMTP id h8E4D1T11602
+	for <caml-list@inria.fr>; Sun, 14 Sep 2003 06:13:02 +0200 (MET DST)
+Received: from 203-213-82-41-syd-ts14-2600.tpgi.com.au (203-213-82-41-syd-ts14-2600.tpgi.com.au [203.213.82.41])
+	by mail3.tpgi.com.au (8.11.6/8.11.6) with ESMTP id h8E4Cr608383;
+	Sun, 14 Sep 2003 14:12:54 +1000
+Subject: Re: [Caml-list] inference engine
+From: skaller <skaller@ozemail.com.au>
+Reply-To: skaller@ozemail.com.au
+To: David Baelde <David.Baelde@ens-lyon.fr>
+Cc: caml-list@inria.fr
+In-Reply-To: <20030913120100.281d9363.David.Baelde@ens-lyon.fr>
+References: <1063436331.12717.11.camel@pelican>
+	 <20030913120100.281d9363.David.Baelde@ens-lyon.fr>
+Content-Type: text/plain
+Message-Id: <1063512749.23073.28.camel@pelican>
+Mime-Version: 1.0
+X-Mailer: Ximian Evolution 1.2.2 (1.2.2-4) 
+Date: 14 Sep 2003 14:12:30 +1000
+Content-Transfer-Encoding: 7bit
+X-Loop: caml-list@inria.fr
+X-Spam: no; 0.00; caml-list:01 inference:01 ozemail:01 inference:01 incompatible:01 annotations:01 int':01 recursion:01 annotations:01 reorder:01 lied:01 intermodule:01 recursion:01 logically:01 partitioned:01 
+Sender: owner-caml-list@pauillac.inria.fr
+Precedence: bulk
+
+On Sat, 2003-09-13 at 20:01, David Baelde wrote:
+>  
+>  What would mean [> int] & 'a ? Which types belong to this one ?
+
+At least int belongs. The idea is that
+
+	[> int] & float
+
+is an error, since it is at least int, and exactly float;
+but int is not in the type float.
+
+>  For me, the [<> ...] notion has a only meaning for objects.
+> 
+>  Actually, I don't understand very well your example, since
+>  the constraint on x is not a good thing in ocaml (not necessary)
+>  and if you remove it, "f x = x" allows polymorphism.
+> 
+>  Could you explain us again your idea ?
+
+I'll try. At present, with
+
+	let f (x:int) = x +. 1.0  
+
+the inference engine goes:
+
+	let f (x:int) * = x .+ 1.0 --> x is 'a
+	let f (x:int) = x .+ * 1.0 --> 'a is restricted to float
+	let f (x:int*) = x +. 1.0 --> float is restricted to int ERROR
+
+where the * marks the position in the analysis: the constraint of
+x to int is applied *after* the type is already deduced.
+
+If ocaml had 'madatory typing' then the engine would go:
+
+	let f (x:int*) = x .+ 1.0 -> x is int
+	let f (x:int) = x .+ * 1.0 -> x is restriced to float ERRIR
+
+Detecting the error here is desirable, because that's where it occurs.
+Reporting, in the first case, that the constraint to int is incompatible
+with the type infered (float) is not very useful, since there is no
+indication HOW the inference was made, or where the error is:
+the assumption is that the annotation is correct and the code
+is wrong -- but the inference engine assumes the code is
+correct and the annotation is wrong.
+
+So with mandatory typing we get much better error diagnostics.
+BUt Ocaml doesn't have mandatory typing: type annotations
+are constraints applied *after* inference. My suggestion
+is to carry the constraint into the analysis of the function
+body, and diagnose a conflict as soon as possible.
+
+To do that I'm suggesting to give x the type 'at least an int',
+meaning any subsequent typing of x in the function body
+must be constrainable to int -- and that is checked every time
+additional information is obtained by the inference engine
+to refine the type.
+
+For another example:
+
+	let f (x:int) = match x with | (a,b) -> ..
+
+should give an error saying:
+
+	let f (x:int) = match x with | (a,b) -> ..
+	-------------------------------*****
+
+	"Here x is used with type 'a * 'b,
+	which is not compatible with the constraint int"
+
+
+instead of
+
+	let f(x:int) = match x with | (a,b) ->
+	--------***
+
+	"Here x is constrained to type int which
+	is not compatible with type 'a * 'b"
+
+YOu can see the second message isn't very helpful.
+I KNOW it's an int. I said so. How did the compiler
+decide it had type 'a * 'b?
+
+I have to search through not only the function
+body .. but also any functions that it calls.
+
+in particular, in the case like:
+
+	let rec f1 (x1:t1):r1 = ..
+	and f2 (x2:t2):r2 = ...
+	and f3 (x2:t3):r3 = ..
+	...
+	and f999 (x999:t999):r999 = ...
+
+the fact the the constraints t1, r1, t2, t2, ..
+are not applied until after the whole recursion
+is typed, makes it almost impossible to
+find a typing error, even by adding type
+annotations: I'm not sure this is the case exactly,
+but certainly if you forward call from
+say f1 into f999, and f2 into f999, you can
+get a type infered for f999 before the body
+is seen, and even an error before the body,
+and hence the annotation, is seen.
+
+So the idea is simply to carry some information
+into the inference process from  the annotation,
+to get earlier "more precisely located" error
+diagnostics.
+
+In some circumstances, I have had to physically
+reorder the functions to try to find where
+the compiler got its weird typing idea from
+(sure, I made an error, but it lied about
+where the error was ..:)
+
+I have a very large file which has about 30 mutually
+mutually recursive functions in them that do rather nasty
+lookup calculations .. its possible that the new intermodule
+recursion will help here -- my functions can be fairly
+logically partitioned, but they're still mutually recursive.
+
+[Passing one to another to break the recursion is out
+of the question .. they have too many arguments, it would
+be too fragile]
+
+As stated I'm not a type theorist, it's just an idea
+to get some of the benefits mandatory typing would
+provide, without actually having mandatory typing
+(mandatory typing meaning that type annotations specify
+the type, not just a constraint) -- pass the anotation
+into the inference engine as a constraint not a type.
+
+
+-------------------
+To unsubscribe, mail caml-list-request@inria.fr Archives: http://caml.inria.fr
+Bug reports: http://caml.inria.fr/bin/caml-bugs FAQ: http://caml.inria.fr/FAQ/
+Beginner's list: http://groups.yahoo.com/group/ocaml_beginners
+

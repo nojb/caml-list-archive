@@ -1,0 +1,132 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id RAA16580 for caml-red; Tue, 17 Oct 2000 17:58:02 +0200 (MET DST)
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id KAA07747 for <caml-list@pauillac.inria.fr>; Tue, 17 Oct 2000 10:05:00 +0200 (MET DST)
+Received: from morgon.inria.fr (morgon.inria.fr [128.93.8.33])
+	by concorde.inria.fr (8.11.1/8.10.0) with ESMTP id e9H84xX17157;
+	Tue, 17 Oct 2000 10:04:59 +0200 (MET DST)
+Received: (from remy@localhost)
+	by morgon.inria.fr (8.9.3/8.9.3) id KAA18261;
+	Tue, 17 Oct 2000 10:11:55 +0200
+Date: Tue, 17 Oct 2000 10:11:55 +0200
+From: Didier Remy <Didier.Remy@inria.fr>
+To: David Monniaux <David.Monniaux@ens.fr>
+Cc: Liste CAML <caml-list@inria.fr>
+Subject: Re: generalization in tuples
+Message-ID: <20001017101155.A16955@morgon.inria.fr>
+Reply-To: Didier.Remy@inria.fr
+References: <Pine.GSO.4.03.10010161015350.24630-100000@basilic.ens.fr>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+X-Mailer: Mutt 1.0pre3us
+In-Reply-To: <Pine.GSO.4.03.10010161015350.24630-100000@basilic.ens.fr>
+Organization: INRIA, BP 105, F-78153 Le Chesnay Cedex
+Phone: (33) 1 3963 5317 -- Sec: (33) 1 3963 5570 -- Fax: (33) 1 3963 5684
+Web: http://cristal.inria.fr/~remy
+Sender: weis@pauillac.inria.fr
+
+On Mon, Oct 16, 2000 at 02:42:11PM +0200, David Monniaux wrote:
+> 1/ Is it possible to do what I want to do, even if it means using a
+> kludge? The above code, using multiple let's, is not good: it's not
+> useable in the middle of an expression (this is for CamlP4-generated
+> code).
+> 
+> (acceptable kludges include the use of Obj.magic)
+
+In principle, Obj.magic should do the job, but it does not:
+
+        Obj.magic (fun x -> x)
+
+is treated as an application and returns a weak type ;-(
+The problem is that  "Obj.magic" is defined as a primitive and the above is 
+typed as any other application, but I don't see any reason except technical 
+to treat Obj.magic as a constructor. Anyway, I don't think Obj.magic is 
+a good fix...
+
+> 2/ Is there a finer notion of a "generalizable" expression that
+> encompasses the above code, and could the "let generalization" procedure
+> in the compiler be improved so that the above code gets a polymorphic
+> type?
+
+Yes, there is a very simple generalization of the value-only polymorphism
+restriction. 
+
+Expressions need to be partitioned into two sets: expansive and
+non-expansive expressions, such that the evaluation of non-expansive is
+guaranteed not to create any storage. 
+
+For instance, non-expansive expressions may include variables, values (hence
+functions), as well as constructors applied to non-expansive expressions.
+
+Note that subexpressions of non-expansive expression are often expansive
+(e.g. typically when the expression is under lambda-abstraction).
+
+Given an expression e, we are only interested in outer expansive
+sub-expressions of e, i.e. those that are not sub-expressions of a
+non-expansive sub-expression of e (in which case, they are protected from
+evaluation). 
+
+When typing an expression e, all type variables appearing in at least one
+outer expansive sub-expression of e may also be the type of a store cell
+allocation and should not be generalized. All other type variables can be
+generalized.
+
+For instance, in (a simpler version of) your example:
+
+        let x = (ref [], fun x -> x);;
+
+The expression (ref [], fun x -> x) has type 'a ref * ('b -> 'b); 
+here, "ref []" is an application, hence an (outer) expansive expression and
+'a appearing in its type cannot be generalized.  Conversely, "fun x -> x" is
+non-expansive and since variable "'b" only appear in the type of this
+non-expansive subexpression, it can be generalized.
+
+A few more examples: 
+---------------------
+
+        let x = (let y = fun x -> x in ref y, y)
+                 : ('a -> 'a) ref * ('a -> 'a)
+
+Here 'a appears both in an outer expansive expansive expression and in a
+non-expansive expressions. Hence it is dangerous can cannot be generalized. 
+
+        let x = fun x -> ref x
+                 : ('a -> 'a ref)
+
+The expression is protected, i.e. non-expansive and "'a" can be
+generalized. 
+
+(Note that this is a strict generalization of the actual solution.()
+
+The implementation 
+-------------------
+
+This is actually quite simple: while typeckecking an expression, just keep
+track of whether the expression is the outermost non-expansive part of a
+let-bound expression, and if not, make its variable non-generalizable.
+
+In fact, I experimented this in MLART a while ago:
+
+    #morgon:~/caml/camlart/src$ ./camlrun ./camltop -I lib
+    >       Caml Light version 0.5 (modified with extensible records)
+
+    #(ref 1, fun x -> x);;
+    - : int ref * ('a -> 'a) = ref 1, <fun>
+
+or, using extensible records :-)
+
+    #{!a = fun x -> x};;
+    > Toplevel input:
+    >{!a = fun x -> x};;
+    >^^^^^^^^^^^^^^^^^^^
+    > Cannot generalize 'a in {a : mut. 'a -> 'a; abs. 'b}
+    #{!a =1; b = fun x -> x};;
+    - : {a : mut. int; b : pre. 'a -> 'a; abs. 'b} = {!a = 1; b = <fun>}
+    #
+
+-Didier
+
+PS: 
+This has never been implemented in Ocaml, probably because, besides me,
+you are one of first persons to complain about the drastic implementation of
+value-only polymorphism restriction.
+
+

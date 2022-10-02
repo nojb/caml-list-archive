@@ -1,0 +1,120 @@
+Return-Path: <martin.jambon@ens-lyon.org>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.1 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail1-relais-roc.national.inria.fr (mail1-relais-roc.national.inria.fr [192.134.164.82])
+	by yquem.inria.fr (Postfix) with ESMTP id 40850BBC4;
+	Fri, 20 Feb 2009 22:40:26 +0100 (CET)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AlYBADuynklCbwQZkGdsb2JhbACUWAEBAQEJCQwHEQS/E4QPBoYk
+X-IronPort-AV: E=Sophos;i="4.38,243,1233529200"; 
+   d="scan'208";a="24456037"
+Received: from out1.smtp.messagingengine.com ([66.111.4.25])
+  by mail1-smtp-roc.national.inria.fr with ESMTP; 20 Feb 2009 22:40:15 +0100
+Received: from compute2.internal (compute2.internal [10.202.2.42])
+	by out1.messagingengine.com (Postfix) with ESMTP id 73A492A1B22;
+	Fri, 20 Feb 2009 16:40:13 -0500 (EST)
+Received: from heartbeat1.messagingengine.com ([10.202.2.160])
+  by compute2.internal (MEProxy); Fri, 20 Feb 2009 16:40:13 -0500
+X-Sasl-enc: rFGbye/ocP5qe+PoCYDMNeIqcwrbDmKkeGICLx/jH8Sd 1235166012
+Received: from [192.168.1.10] (ALyon-157-1-95-120.w90-41.abo.wanadoo.fr [90.41.78.120])
+	by mail.messagingengine.com (Postfix) with ESMTPSA id 7CAAF1BE90;
+	Fri, 20 Feb 2009 16:40:12 -0500 (EST)
+Message-ID: <499F22B1.6040600@ens-lyon.org>
+Date: Fri, 20 Feb 2009 22:37:53 +0100
+From: Martin Jambon <martin.jambon@ens-lyon.org>
+User-Agent: Thunderbird 2.0.0.17 (X11/20081008)
+MIME-Version: 1.0
+To: Erick Matsen <matsen@berkeley.edu>
+Cc: Xavier Leroy <Xavier.Leroy@inria.fr>, caml-list@inria.fr
+Subject: Re: [Caml-list] speeding up matrix multiplication (newbie question)
+References: <243054520902200740j1d1874adib27645f6e090b073@mail.gmail.com>	<499EFA7E.7010400@inria.fr> <243054520902201153q4efbe1f0j686bd7212b515c03@mail.gmail.com>
+In-Reply-To: <243054520902201153q4efbe1f0j686bd7212b515c03@mail.gmail.com>
+Content-Type: text/plain; charset=ISO-8859-1
+Content-Transfer-Encoding: 7bit
+X-Spam: no; 0.00; ens-lyon:01 model:01 matrices:01 model:01 multiplying:01 vectors:01 matrices:01 node:01 vectors:01 nodes:01 failwith:01 ocaml:01 functor:01 bigarrays:01 vitality:98 
+
+Erick Matsen wrote:
+> Wow, once again I am amazed by the vitality of this list. Thank you
+> for your suggestions.
+> 
+> Here is the context: we are interested in calculating the likelihood
+> of taxonomic placement of short "metagenomics" sequence fragments from
+> unknown organisms in the ocean. We start by assuming a model of
+> sequence evolution, which is a reversible Markov chain. The taxonomy
+> is represented as a tree, and the sequence information is a collection
+> of likelihoods of sequence identities. As we move up the tree, these
+> sequences "evolve" by getting multiplied by the exponentiated
+> instantaneous Markov matrix.
+> 
+> The matrices are of the size of the sequence model: 4x4 when looking
+> at nucleotides, and 20x20 when looking at proteins.
+> 
+> The bottleneck is (I mis-spoke before) that we are multiplying many
+> length-4 or length-20 vectors by a collection of matrices which
+> represent the time evolution of those sequences as follows.
+> 
+> Outer loop:
+>   modify the amount of time each markov process runs
+>   exponentiate the rate matrices to get transition matrices
+> 
+>   Recur over the tree, starting at the leaves:
+>     at a node, multiply all of the daughter likelihood vectors together
+>     return the multiplication of that product by the trasition matrix
+> (bottleneck!)
+> 
+> The trees are on the order of 50 leaves, and there are about 500
+> likelihood vectors done at once.
+> 
+> All of this gets run on a big cluster of Xeons. It's not worth
+> parallelizing because we are running many instances of this process
+> already, which fills up the cluster nodes.
+> 
+> So far I have been doing the simplest thing possible, which is just to
+> multiply the matrices out like \sum_j a_ij v_j. Um, this is a bit
+> embarassing.
+> 
+> let mul_vec m v =
+>     if Array.length v <> n_cols m then
+>       failwith "mul_vec: matrix size and vector size don't match!";
+>     let result = Array.create (n_rows m) N.zero in
+>     for i=0 to (n_rows m)-1 do
+>       for j=0 to (n_cols m)-1 do
+> 	result.(i) <- N.add result.(i) (N.mul (get m i j) v.(j))
+>       done;
+>     done;
+>     result
+> 
+> I have implemented it in a functorial way for flexibility. N is the
+> number class. How much improvement might I hope for if I make a
+> dedicated float vector multiplication function? I'm sorry, I know
+> nothing about "boxing." Where can I read about that?
+
+Depending on the savings, you can afford to spend more or less time optimizing
+this. Here are some simple things to consider:
+
+In the OCaml land, try first getting rid of the functor (or use a
+defunctorizer; ocamldefun?).
+
+Limit memory accesses, by doing something like:
+
+for i = 0 to m - 1 do
+  let a_i = m.(i) in
+  for j = 0 to n - 1 do
+    let a_ij = a_i.(j) in (* instead of a.(i).(j) *)
+    ...
+  done
+done
+
+Also you can use Array.unsafe_get where it really matters.
+
+
+You can also use bigarrays and implement the loop in C. It could be fun. I'm
+not sure how much it saves.
+
+
+Martin
+

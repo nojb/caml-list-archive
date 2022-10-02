@@ -1,0 +1,130 @@
+Received: from mail4-relais-sop.national.inria.fr (mail4-relais-sop.national.inria.fr [192.134.164.105])
+	by walapai.inria.fr (8.13.6/8.13.6) with ESMTP id oBSE36ue021554
+	for <caml-list@sympa-roc.inria.fr>; Tue, 28 Dec 2010 15:03:06 +0100
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AmEBAB99GU2A1gkBe2dsb2JhbACWFY4vAQEWIgUfvzaFSgQ
+X-IronPort-AV: E=Sophos;i="4.60,239,1291590000"; 
+   d="scan'208";a="83529864"
+Received: from courier.cs.helsinki.fi (HELO mail.cs.helsinki.fi) ([128.214.9.1])
+  by mail4-smtp-sop.national.inria.fr with ESMTP/TLS/DHE-RSA-AES256-SHA; 28 Dec 2010 15:02:49 +0100
+Received: from melkinpaasi.cs.helsinki.fi (melkinpaasi.cs.helsinki.fi [128.214.9.14])
+  (AUTH: PLAIN cs-relay, TLS: TLSv1/SSLv3,256bits,AES256-SHA)
+  by mail.cs.helsinki.fi with esmtp; Tue, 28 Dec 2010 16:02:48 +0200
+  id 00093E5E.4D19EE08.0000552C
+Received: by melkinpaasi.cs.helsinki.fi (Postfix, from userid 37211)
+	id A18BE821F3; Tue, 28 Dec 2010 16:02:47 +0200 (EET)
+Date: Tue, 28 Dec 2010 16:02:47 +0200
+From: Lauri Alanko <la@iki.fi>
+To: caml-list@inria.fr
+Message-ID: <20101228140247.GB12021@melkinpaasi.cs.helsinki.fi>
+Mime-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Content-Disposition: inline
+User-Agent: Mutt/1.5.20 (2009-06-14)
+Subject: [Caml-list] Avoiding ml/mli code duplication
+
+A common grievance with ML-style module systems is duplication of code
+between the interface and the implementation of a module. In
+particular, transparent type and signature definitions must be present
+in both. This is annoying because of the extra work required to keep
+both copies in sync.
+
+To an extent, this can be avoided. Consider the following:
+
+
+(*** Foo.mli ***)
+(* Transparent definitions *)
+type t = ...
+module type S = sig ... end
+(* Opaque definitions depending on the above *)
+val x : ... t ...
+module M : ... S ... t ...
+
+(*** Foo.ml ***)
+(* Transparent definitions duplicated *)
+type t = ...
+module type S = sig ... end
+(* Definitions for the opaques *)
+let x = ...
+module M = ...
+
+
+Here the common transparent definitions can be moved into a separate
+wholly transparent module:
+
+
+(*** FooDefs.ml ***)
+type t = ...
+module type S = sig ... end
+
+(*** Foo.ml ***)
+include module type of FooDefs (* or open FooDefs *)
+val x : ... t ...
+module M : ... S ... t ...
+
+(*** Foo.mli ***)
+include FooDefs (* or open FooDefs *)
+let x = ...
+module M = ...
+
+
+So far so good. But in the real world, the situation is often more
+complicated: we have transparent definitions that depend on opaque
+definitions. Like this:
+
+
+(*** Bar.mli ***)
+(* Opaque *)
+type t
+(* Transparent depending on above *)
+type u = ... t ...
+(* Opaque depending on above *)
+val x : ... u ...
+
+(*** Bar.ml ***)
+type t = ...
+type u = ... t ...
+let x = ...
+
+
+Keep in mind that in actuality the "type u" line can represent huge
+amounts of type and signature definitions, so there is real need to
+avoid duplication.
+
+In this situation, I'm not quite sure what's the best way to
+proceed. Here's what I have currently:
+
+(*** BarDefs.ml ***)
+module type CORE = sig
+  (* Primitive opaque definitions that the transparents depend on *)
+  type t
+end
+module Make(Core : CORE) = struct
+  include Core
+  (* Transparent definitions *)
+  type u = ... t ...
+end
+
+(*** Bar.mli ***)
+module Core : BarDefs.CORE
+include module type of BarDefs.Make(Core)
+val x : ... u ...
+
+(*** Bar.ml ***)
+module Core = struct
+  type t = ...
+end
+include BarDefs.Make(Core)
+let x = ...
+
+
+This does the job, but I'm not quite satisfied. It feels wrong that I
+have to define a functor when I will only ever apply it once. Also,
+the "include module type of" is a recent feature, and it's hard to
+believe there's no solution to this problem before OCaml 3.12.
+
+I'd appreciate any suggestions for better solutions.
+
+
+Lauri

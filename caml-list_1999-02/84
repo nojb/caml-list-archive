@@ -1,0 +1,415 @@
+Received: (from weis@localhost) by pauillac.inria.fr (8.7.6/8.7.3) id NAA18024 for caml-redistribution; Mon, 22 Feb 1999 13:21:21 +0100 (MET)
+Received: from nez-perce.inria.fr (nez-perce.inria.fr [192.93.2.78]) by pauillac.inria.fr (8.7.6/8.7.3) with ESMTP id XAA06088 for <caml-list@pauillac.inria.fr>; Fri, 19 Feb 1999 23:55:47 +0100 (MET)
+Received: from wanadoo.fr (smtp-out-002.wanadoo.fr [193.252.19.69])
+	by nez-perce.inria.fr (8.8.7/8.8.7) with ESMTP id XAA14972
+	for <caml-list@inria.fr>; Fri, 19 Feb 1999 23:55:46 +0100 (MET)
+Received: from root@tamaya.wanadoo.fr [193.252.19.31] by wanadoo.fr
+          for 
+          Paris Fri, 19 Feb 1999 23:52:56 +0100 (MET)
+Received: from tntrasp18-78.abo.wanadoo.fr [193.252.202.78] by smtp.wanadoo.fr
+          for 
+          Paris Fri, 19 Feb 1999 23:52:51 +0100 (MET)
+Received: (from basile@localhost)
+	by amadeus.lesours.fr (8.9.1/8.9.2) id XAA02017;
+	Fri, 19 Feb 1999 23:53:44 +0100
+X-Authentication-Warning: amadeus.lesours.fr: basile set sender to Basile.Starynkevitch@wanadoo.fr using -f
+From: Basile STARYNKEVITCH <Basile.Starynkevitch@wanadoo.fr>
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+Message-ID: <14029.60279.635622.205882@amadeus.lesours.fr>
+Date: Fri, 19 Feb 1999 23:53:43 +0100 (CET)
+To: caml-list@inria.fr
+Subject: About adding embedded user types into Ocaml bytecode runtime
+X-Mailer: VM 6.62 under Emacs 20.3.1
+Sender: weis
+
+
+[[posted to the CAML list]]
+
+         Time-stamp: <1999-Feb-19 23:50:06 Basile STARYNKEVITCH>
+
+                 Some thoughts and suggestions about 
+                    adding embedded user types 
+              into the Ocaml 2.01 byte-code runtime system
+
+                      Basile STARYNKEVITCH
+
+               home: <basile.starynkevitch@wanadoo.fr>
+                 work: <basile.starynkevitch@cea.fr>
+________________________________________________________________________
+
+
+Ocaml can be used to drive or embed existing applications or routines
+(such as numerical computations, image processing, databases, ...)
+coded or interfaced to C.  We assume in the sequel that this is a
+legitimate (even if unexpected or unusual) usage for Ocaml. Other
+existing embedding languages (e.g. Python, Tcl, Perl, ...) were designed
+for easy embedding, but lack Ocaml's features that we consider very
+important (such as the functional and object paradigms, the Ocaml type
+safety, and performance of the implementation). We are dealing only
+with the byte-code interpreter and compiler (i.e. ocaml, ocamlc,
+ocamlrun, ocamlmktop) and not with the native compiler (ocamlopt). We
+refer to the ocaml-2.01 byte-code implementation (released in December
+1998, see "http://caml.inria.fr/ocaml/" for details).
+
+
+We assume the reader does know very well how to interface C with
+Objective Caml and vice versa. See the Ocaml 2.01 reference manual,
+chapter 14 for many details. We also assume some familiarity with
+byte-code interpreter and garbage collection implementation
+techniques, since the suggestions given below are aimed towards the
+Ocaml developpers or runtime-system hackers.
+
+
+Several ideas expressed here are inspired (or copied) from Mathias
+Blume's vscm (see "http://www.kurims.kyoto-u.ac.jp/~blume/vscm/" for
+details) Scheme implementation. I did start to implement them, but
+lack of time and political issues (I failed to get from inside my
+organization written permission to publish substantial patches to the
+ocaml runtime system) made me abort this work. I won't be able to
+continue it, since I'm taking a new job. I'm publishing this on this
+list in case someone becomes interested.... (and a disk crash wiped
+out the small stuff I did actually begin to implement, so even if I
+wanted and was permitted to, I can't give any code, since I lost it;
+however design ideas are still fresh in my head...)
+
+An important issue about embedding existing applications into Ocaml is
+supporting existing (although perhaps patch-able) user data types,
+whose representation is already somehow fixed (e.g., as a C
+structure). For instance, an hypothetical geometrical package might
+expect to deals with 3d points like
+
+       struct point3d_st {
+          float p3_x,p3_y,p3_z;
+       }
+
+of course, this can be declared in Ocaml as
+
+      type point3d_t = { p3x: float; p3y: float; p3z: float }
+
+but this is represented very differently in Ocaml (which uses boxed
+double-precision numbers) - in an incompatible way with the previous C
+declaration (which uses unboxed native single precision floats).
+
+The previous struct point3d_st could partly be used in the existing
+ocaml-2.01 implementation: just box it as an abstract value,
+alloc()-ated with Abstract_tag. Doing so works fine for the garbage
+collector, but we have to give up the very useful serialization
+facilities (ie the Marshal module from the ocaml standard library). We
+could also just allocate such point3d_st structures outside the Ocaml
+heap (this is possible since ocaml permits as values but ignores any
+pointer outside its heap) but we then loose the garbage collector.
+
+Another example would be a numerical package. Suppose we want to have
+single precision matrices, each belonging to a numerical mesh and
+grid. In an hypothetical numerical code, the high level computation
+could be coded in (interpreted byte-coded) Ocaml while the low level
+numerical engine is coded in C (or even Fortran77 glued thru C). So,
+meshes and grids are completely represented by Ocaml values, but
+matrices would be something like
+
+       struct matrix_st {
+       /* the mesh owning this matrix */
+          value mesh; /* an Ocaml value */
+       /* matrix dimensions */
+	  int width, height;
+       /* the grid related to this matrix */	
+          value grid; /* an Ocaml value */
+       /* the matrix proper, actually width*height doubles */
+	  double mat[0];
+       }
+
+Alternatively, the mat field could be a (separately) malloc()-ed array
+(to overcome the 8Mbyte ocaml limitation on 32 bits machines), then
+the last field would just be
+
+      /* the matrix pointer, should be malloc()-ed & free()-d */
+          double* mat;
+
+This struct matrix_st is *not* usable in the current ocaml-2.01
+runtime, which assumes that every ocaml value is either made only of
+ocaml values (ie ocaml allocated pointers or tagged integers) or only
+of non pointer data.
+
+Our aim is just to be able to deal with such simple data types as
+given above, with minimal changes to the existing ocaml-2 runtime
+machinery. We do not pretend to handle more complex stuff (such as C++
+virtual classes mixing ocaml values with Xlib windows!). So the main
+assumption is that user data types can [pretend to] be represented in
+a contiguous memory zone (as all ocaml values are), and contain a
+fixed number of ocaml values at fixed offsets; also, it has sense to
+move or copy (word by word) such user data. We do assume that the user
+might need several (say a few dozens, perhaps a hundred) distinct user
+types. We also suppose that such user data values won't be common, and
+so need not to be efficiently handled.
+
+User types could be assigned a new User_tag, and the ocaml runtime
+could be patched to handle it appropriately. This involve changes to
+the allocator, garbage collector, and serializer. Assigning a separate
+tag to each different user type would be another option, but the tag
+space is very tight on 32 bits machines (only one byte for tags), so I
+believe this is not practical.
+
+As always, user data would start with a one word header containing
+User_tag and the allocated size in words. After the header, a pointer
+to a user data descriptor (which we'll define later) will give the
+necessary meta-information. Each user data type has its own user
+supplied data descriptor. So the matrix structure is actually
+
+       struct matrix_st {
+            /* all user data start with _header & _descr */
+       /* the header word */
+          header_t _header;
+       /* the data descriptor */
+	  struct userdatadescr_st *_descr;
+       /* the mesh owning this matrix */
+          value mesh; /* an Ocaml value */
+       /* matrix dimensions */
+	  int width, height;
+       /* the grid related to this matrix */	
+          value grid; /* an Ocaml value */
+      /* the matrix pointer, unique [=unshared], should be malloc()-ed */
+          double* mat;
+       }
+
+All such matrices share a common descriptor:
+
+       struct userdatadescr_st matrix_desc;
+
+This descriptor have a unique (human and machine readable) name (a
+string), say "matrixd"
+
+The Ocaml runtime cares about user data thru the memory management
+(allocation & garbage collection) and the serialization. The garbage
+collector is generational copying -hence with moving data & pointers.
+
+I consider that the user data has a scalar and a composite part. The
+atomic part contains all non pointer, this means all non value fields
+(ie width, height, mat for our matrix_st structure). The composite
+part contains all value fields (ie mesh and grid for our matrix_st).
+
+Memory management (ie GC) cares mostly about pointers, so is mostly
+concerned with the composite part. Serialization also deals with the
+atomic part (which can be safely copied by the GC moving routines).
+
+I suppose that the composite part is made of a fixed number of values
+having fixed offsets. This could be described by some data, but I
+borrowed M.Blume's idea of defining an iterator for them. This means
+that the user should provide (in the data descriptor) a routine
+which calls a function f on all the values field addresses. In our
+matrix case, the iterator is just
+
+      void matrix_iterator(value mat_v, void (*f)(), void* data)
+      {
+         struct matrix_st *m = mat_v;
+	 f(&m->mesh, data);
+	 f(&m->grid, data);
+      }
+
+Notice that the iterator applies the function f to each pointer
+address (and not to each value). So f takes a value* first argument
+and a void* second (generic) argument. In particular, the garbage
+collector calls the iterator to move pointers (this involves a bit of
+trickery: some parts of the GC will use the iterator on old objects to
+compute offset of values, and copy them in the new object at the same
+offset)!
+
+  
+I did check that this is sufficient in all ocaml-2.01's runtime to
+handle inside value pointers. (Some examples below).
+
+Serialization of user data can be done as follow (see files
+ocaml-2.01/byterun/intern.c & ocaml-2.01/byterun/extern.c which should
+both be significantly patched and enhanced) :
+
+  * Every user data has a descriptor (such as matrixdesc). This
+    descriptor has a unique name. We could always output after a code
+    for user data the full descriptor name, but this might take a lot
+    of space if a given user data type is used a lot in a single
+    serialization operation (for instance, if we marshal an array of
+    our matrices, it would be stupid to output a lot of times the
+    "matrixd" string). It is better to output this name the first time
+    (and register it in a dictionnary with a unique index) and to just
+    output an index the other times. So we need to handle a set of
+    already used data descriptors in extern.c.  If a user data
+    (e.g. one of our matrices) is to be externed a first time (see in
+    file extern.c:205 the extern_rec routine) we output CODE_USERDATA
+    then its new index (eg 3 if we had seen three other user type
+    descriptors before) then the descriptor name (here the null
+    terminated string "matrixd") . When another of our matrices is to
+    be externed, we output CODE_SEENUSERDATA followed with its index
+    number -ie 3 again-.
+
+  * since extern.c needs both the size_32 (size in words on a 32 bits
+    machine) and the size_64 (size in words on a 64 bits machine), the
+    user should provide in the descriptor a routine computing the
+    size_32 and another routine computing the size_64. Here they are
+    for our matrices (the size that count is only the zone allocated
+    by ocaml; the malloc-ed matrix doesn't count; here the size is 7
+    words on both 32 & 64 bits architectures):
+
+    /* value of matrix_desc.desc_sizer32 */
+    unsigned matrix_size_32(value mat_v) {
+         struct matrix_st *m = mat_v;
+	 return 7;
+    }
+
+    /* value of matrix_desc.desc_sizer64 */
+    unsigned matrix_size_64(value mat_v) {
+         struct matrix_st *m = mat_v;
+	 return 7;
+    }
+
+  the extern_rec routine should be patched to compute and output the
+  allocated size32 and size64 (in words) of the user data.
+
+  * After that, in all cases, we call a user provided
+    externalization routine to output the atomic part. This routine
+    uses a small set of tiny externalization primitives (to be coded
+    once for all in extern.c and given public names such as
+    camlextern_*) for primitive C types (ints, floats, doubles,
+    strings...). For our matrices the externalizer is therefore :
+
+      /* externalize the atomic part of matrices */
+    /* value of matrix_desc.desc_externalizer */
+      void matrix_externalizer(value mat_v) {
+         struct matrix_st *m = mat_v;
+	 int ix, dim;
+	 camlextern_int(m->width);
+	 camlextern_int(m->height);
+	 dim=m->width*m->height;
+	 assert(dim==0 || m->mat!=(float*)0);
+	 for (ix=0; ix<dim; ix++)
+	    camlextern_float(m->mat[i]);
+      }
+
+   * of course, dual to the externalizer, the user should provide an
+     internalizer (see in intern.c:109 the intern_rec routine), like:
+
+      /* internalize the atomic part of matrices - return 0 iff ok */
+    /* value of matrix_desc.desc_internalizer */
+      int matrix_internalizer(value mat_v) {
+         struct matrix_st *m = mat_v;
+	 int ix, dim;
+	 camlintern_int(m->width);
+	 camlintern_int(m->height);
+	 dim=m->width*m->height;
+	 if (dim>0) {
+	    m->mat=malloc(sizeof(m[0])*dim);
+	    if (!m->mat) 
+	       return 1;
+	    for (ix=0; ix<dim; ix++)	
+	       camlintern_float(&m->mat[i]);
+         } else 
+           m->mat=0;
+	 return 0;
+      }
+      
+To support our claim that an iterator on all values adresses' is
+enough, here is the case to add to extern_rec (in extern.c:310) 
+for user data:
+
+     case User_tag:
+        { struct userdatadescr_st *desc=Userdata_descr(v);
+          int id, ln, sz32, sz64;
+          id=seendescrindex(desc); /* seen index of descriptor or -1 */
+          if (id>=0) {
+	    writecode16(CODE_SEENUSERDATA, id);
+          } else { /* new descriptor */
+	    id=registerdescr(desc); /* register this descriptor */
+	    writecode16(CODE_USERDATA, id);
+	    ln=strlen(desc->descr_name);
+	    /* write the name length and the name string */
+	    Write(ln);
+	    writeblock(desc->descr_name, ln);
+         };
+	 /* compute and write the 32 & 64 bits sizes, so allocation on
+            interning is easy */
+	 sz32=(desc->descr_sizer32)(v);
+	 sz64=(desc->descr_sizer64)(v);
+	 write32(sz32);
+	 write32(sz64);
+         /* externalize the atomic part */
+         (desc->descr_externalizer)(v);   
+         /* iterate on the composite part */
+	 (desc->descr_iterator)(v,extern_rec_wrapper,(void*)0);
+        };
+        break;
+
+   Of course we need the obvious:
+
+        static void extern_rec_wrapper(value *v, void* d) {
+	   extern_rec(*v);
+        }
+
+
+
+The garbage collector should support finalization of user data (with
+the same restrictions as for Final_tag). When destroyed by the GC, our
+matrices should free the malloc-ed float array:
+
+   /*  finalizer of matrices */
+    /* value of matrix_desc.desc_finalizer */
+      void matrix_finalizer(value mat_v) {
+         struct matrix_st *m = mat_v;
+         if (m->mat) free(m->mat);
+	 m->mat = (double*)0;
+	 m->width = m->height = 0;
+     }
+
+Now we can give the data descriptor declaration (to be added into the
+ocaml runtime, which should also expose now some previously static
+routines, like extern_rec and so on...):
+
+   struct userdatadescr_st {
+     unsigned descr_magic; /* always 0xbad570f */
+     char *descr_name;
+     void (*desc_iterator)(value v, void (*f)(), void *data);
+     unsigned (*desc_sizer32)(value v);
+     unsigned (*desc_sizer64)(value v);
+     void (*desc_externalizer)(value v);
+     int (*desc_internalizer)(value v);
+     void (*desc_finalizer)(value v);
+   }
+
+
+Dealing with named data descriptors is very similar to dealing with
+named external primitives. The runtime should be patched accordingly
+(this involve changing the format of bytecode executables)
+
+Of course, the user data should be allocated by user supplied
+primitives calling alloc with User_tag.
+
+The garbage collector can be patched to accomodate such user
+data. However, on some 32 bits machines (those, like old Sparcs, which
+requires doubleword aligned double precision floats) the user data
+objects should either always be allocated at a doubleword (this is
+probably tricky, but useful) or their double fields should be accessed
+with a special routine (similar to Store_double_val)
+
+Implementing this ideas and submitting a patch to Ocaml developpers at
+INRIA is leaved as an exercice to the intrepid and clever reader. I am
+pretty sure it can be done. However, I would suggest first to the
+eventual implementor to check before that he or she will be permitted
+to submit patches to INRIA. Good luck!
+
+Please let me know if you actually do use these (or similar) ideas to
+enhance Ocaml (interpreted bytecode) runtime [[I'll even be very
+pleased & honored if you cite my name in the source code in that
+case; but this is up to you]].
+
+If anyone want some more precision, please email me at work
+<basile.starynkevitch@cea.fr> and at home
+<basile.starynkevitch@wanadoo.fr>.
+
+
+Thanks for reading.
+
+-- 
+
+Basile STARYNKEVITCH - 8 rue de la Faiencerie, 92340 BOURG LA REINE (France)
+tel 01.46.65.45.53. email = basile point starynkevitch at wanadoo point fr
+
+
+

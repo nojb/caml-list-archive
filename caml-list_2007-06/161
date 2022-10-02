@@ -1,0 +1,140 @@
+Return-Path: <jeremy.yallop@ed.ac.uk>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from concorde.inria.fr (concorde.inria.fr [192.93.2.39])
+	by yquem.inria.fr (Postfix) with ESMTP id B6FB4BC0A
+	for <caml-list@yquem.inria.fr>; Fri,  8 Jun 2007 01:55:44 +0200 (CEST)
+Received: from bdmail1.accesst.com (pop.bulldoghome.com [83.245.1.230])
+	by concorde.inria.fr (8.13.6/8.13.6) with ESMTP id l57NtiKa007110
+	(version=TLSv1/SSLv3 cipher=AES256-SHA bits=256 verify=NO)
+	for <caml-list@inria.fr>; Fri, 8 Jun 2007 01:55:44 +0200
+Received: from host-84-9-232-186.bulldogdsl.com ([84.9.232.186] helo=[192.168.123.191])
+	by bdmail1.accesst.com with esmtpa (Exim 4.50)
+	id 1HwRla-0005Dy-QH
+	for caml-list@inria.fr; Fri, 08 Jun 2007 00:51:46 +0100
+Message-ID: <4668995B.4090706@ed.ac.uk>
+Date: Fri, 08 Jun 2007 00:48:43 +0100
+From: Jeremy Yallop <jeremy.yallop@ed.ac.uk>
+User-Agent: Mozilla-Thunderbird 2.0.0.0 (X11/20070601)
+MIME-Version: 1.0
+To: caml-list@inria.fr
+Subject: Re: [Caml-list] Labelling trees
+References: <1181158983.9266.12.camel@Blefuscu>
+In-Reply-To: <1181158983.9266.12.camel@Blefuscu>
+Content-Type: text/plain; charset=ISO-8859-1; format=flowed
+Content-Transfer-Encoding: 7bit
+X-Miltered: at concorde with ID 46689B00.000 by Joe's j-chkmail (http://j-chkmail . ensmp . fr)!
+X-Spam: no; 0.00; checker:01 syntax:01 annotations:01 recursive:01 variants:01 annotations:01 recursion:01 recursive:01 recursion:01 sml:01 annotation:01 sig:01 datatype:01 functor:01 sig:01 
+
+David Teller wrote:
+ > I'm currently in the very first stages of writing down a prototype
+ > implementation of a type checker. At the moment, I'm looking for "the
+ > nicest" way of labelling my abstract syntax tree with type annotations
+ > -- without corrupting the AST at all, if possible.
+
+My favourite encoding of annotated ASTs uses recursive modules and
+polymorphic variants.  Instead of supplying type parameters for the
+annotations and open recursion you can tie the knot using a recursive
+module and some `with'-constraints on the signature.  Closing the
+recursion twice (with different constraints) gives you annotated and
+unannotated trees.
+
+Here's an example from an implementation of the core of SML.  There
+are 7 mutually-recursive types and three annotation types.  I hope
+it's clear enough how it'd scale up to a more complicated data
+structure.  Also, there are some type definitions missing, but you
+should be able to fill them in easily enough.
+
+First, a module type definition, listing all of the types involved.
+This will be used in lieu of the type parameters that you'd normally
+use for encoding open recursion.
+
+    module type ExpSig =
+    sig
+      type atexp
+      type exprow
+      type exp
+      type valdec
+      type match_
+      type mrule
+      type valbind
+      type pat
+    end
+
+Now the actual datatype definitions.  Notice that we use `T.t' instead
+of 't' at each recursive point.  The type `pat' is a parameter
+although it's not defined here because we'll want to use annotated and
+unannotated patterns inside annotated and unannotated expressions.
+The module component (T) here is analagous to a functor argument of a
+module.
+
+    module type Exp =
+    sig
+      module T : ExpSig
+
+      type atexp = [
+        `scon     of scon
+      | `vid      of vid
+      | `record   of T.exprow option
+      | `let_     of T.valdec * T.exp
+      | `paren    of T.exp ]
+      and exp = [
+        `atexp    of T.atexp
+      | `apply    of T.exp * T.atexp
+      | `typed    of T.exp * ty
+      | `fn       of T.match_ ]
+      and mrule = T.pat * T.exp
+      and valdec = [
+        `val_     of tyvarseq * T.valbind
+      | `local    of T.valdec * T.valdec
+      | `empty
+      | `valdecs  of T.valdec * T.valdec ]
+      and valbind = [
+        `bindings of (T.pat * T.exp * T.valbind option)
+      | `rec_     of T.valbind ]
+      and match_ = [`match_ of T.mrule * T.match_ option]
+      and exprow = [`exprow of (label * T.exp * T.exprow option)]
+      type pat = T.pat
+    end
+
+Finally, we tie the knot, first directly (to obtain unannotated
+trees):
+
+    module rec UntypedExp : ExpSig
+      with type atexp   = UntypedExp'.atexp
+       and type exprow  = UntypedExp'.exprow
+       and type exp     = UntypedExp'.exp
+       and type match_  = UntypedExp'.match_
+       and type mrule   = UntypedExp'.mrule
+       and type valdec  = UntypedExp'.valdec
+       and type valbind = UntypedExp'.valbind
+       and type pat     = UntypedPat.pat
+    = UntypedExp
+    and UntypedExp' : Exp with module T = UntypedExp = UntypedExp'
+
+and then adding annotations for each node type
+
+    module rec TypedExp : ExpSig
+      with type atexp   = TypedExp'.atexp   * type_
+       and type exprow  = TypedExp'.exprow  * rowtype
+       and type exp     = TypedExp'.exp     * type_
+       and type valdec  = TypedExp'.valdec  * valenv
+       and type match_  = TypedExp'.match_  * type_
+       and type mrule   = TypedExp'.mrule   * type_
+       and type valbind = TypedExp'.valbind * valenv
+       and type pat     = TypedPat.pat
+    = TypedExp
+    and TypedExp' : Exp with module T = TypedExp = TypedExp'
+
+Using modules to collect the definitions together has various other
+advantages; for example, it's easy(ish) to write an evaluator that
+works for both annotated and unannotated expressions using functors.
+
+Hope this helps,
+
+Jeremy.
+

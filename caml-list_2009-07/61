@@ -1,0 +1,129 @@
+Return-Path: <dra-news@metastack.com>
+X-Spam-Checker-Version: SpamAssassin 3.1.3 (2006-06-01) on yquem.inria.fr
+X-Spam-Level: 
+X-Spam-Status: No, score=0.0 required=5.0 tests=AWL autolearn=disabled 
+	version=3.1.3
+X-Original-To: caml-list@yquem.inria.fr
+Delivered-To: caml-list@yquem.inria.fr
+Received: from mail3-relais-sop.national.inria.fr (mail3-relais-sop.national.inria.fr [192.134.164.104])
+	by yquem.inria.fr (Postfix) with ESMTP id 4CE73BBAF
+	for <caml-list@yquem.inria.fr>; Fri, 10 Jul 2009 13:16:45 +0200 (CEST)
+X-IronPort-Anti-Spam-Filtered: true
+X-IronPort-Anti-Spam-Result: AhICAAvAVkpRZ90wkWdsb2JhbACQAokeAQEBAQkLCgcTA7YpgjiBUAWBOg
+X-IronPort-AV: E=Sophos;i="4.42,378,1243807200"; 
+   d="scan'208";a="30988960"
+Received: from mtaout02-winn.ispmail.ntl.com ([81.103.221.48])
+  by mail3-smtp-sop.national.inria.fr with ESMTP; 10 Jul 2009 13:16:44 +0200
+Received: from aamtaout02-winn.ispmail.ntl.com ([81.103.221.35])
+          by mtaout02-winn.ispmail.ntl.com
+          (InterMail vM.7.08.04.00 201-2186-134-20080326) with ESMTP
+          id <20090710111644.VLPI6611.mtaout02-winn.ispmail.ntl.com@aamtaout02-winn.ispmail.ntl.com>
+          for <caml-list@yquem.inria.fr>; Fri, 10 Jul 2009 12:16:44 +0100
+Received: from romulus.metastack.com ([81.102.132.77])
+          by aamtaout02-winn.ispmail.ntl.com
+          (InterMail vG.2.02.00.01 201-2161-120-102-20060912) with ESMTP
+          id <20090710111644.IQSB21638.aamtaout02-winn.ispmail.ntl.com@romulus.metastack.com>
+          for <caml-list@yquem.inria.fr>; Fri, 10 Jul 2009 12:16:44 +0100
+Received: from Tenor ([212.183.134.211])
+	(authenticated bits=0)
+	by romulus.metastack.com (8.14.2/8.14.2) with ESMTP id n6ABGN47017969
+	(version=TLSv1/SSLv3 cipher=AES128-SHA bits=128 verify=NO)
+	for <caml-list@yquem.inria.fr>; Fri, 10 Jul 2009 12:16:35 +0100
+From: "David Allsopp" <dra-news@metastack.com>
+To: "OCaml List" <caml-list@yquem.inria.fr>
+Subject: Callbacks from C to OCaml
+Date: Fri, 10 Jul 2009 12:16:17 +0100
+Organization: MetaStack Solutions Ltd.
+Message-ID: <000d01ca014f$e119a980$a34cfc80$@com>
+MIME-Version: 1.0
+Content-Type: text/plain;
+	charset="us-ascii"
+Content-Transfer-Encoding: 7bit
+X-Mailer: Microsoft Office Outlook 12.0
+Thread-Index: AcoBT7Paviatz+GsQHKXvj9+7RBDnA==
+Content-Language: en-gb
+X-Scanned-By: MIMEDefang 2.65 on 81.102.132.77
+X-Cloudmark-Analysis: v=1.0 c=1 a=5HH5pPIC_yF1gWCGbo0A:9 a=iIaWdO6IzNGOhMMKjVkA:7 a=FbjeyvG6qKa6tci0PINvjW_KUoAA:4
+X-Spam: no; 0.00; callbacks:01 ocaml:01 pitfalls:01 callbacks:01 ocaml:01 invokes:01 pointer:01 pointer:01 initialise:01 ocaml's:01 threading:01 opcode:01 camlparam:01 alloc:01 camlreturn:01 
+
+I'm having some trouble with a library wrapping Windows Services - I'm
+wondering if anyone can shed some light on possible pitfalls with the
+mechanism for C callbacks while I continue to scratch my head! Although my
+problem is with a Windows-based solution my overall question is about
+C-callbacks interacting with OCaml so please don't be put off by the Win32
+aspect of it :o)
+
+The overall layout is this: the main program is OCaml (i.e. it's an OCaml
+program using C-stubs rather than a C-program calling OCaml). The flow of
+execution is as follows:
+
+The OCaml program invokes a C-stub which calls the Win32 API function
+StartServiceCtrlDespatcher which, amongst other things, takes a pointer to a
+C function called ServiceMain. This pointer will be invoked during
+StartServiceCtrlDespatcher (synchronously - StartServiceCtrlDespatcher does
+not return until the service is stopped) and carries out the following
+tasks:
+
+1. It registers a C function with the Windows Service Control Manager (SCM)
+called ServiceCtrlHandler which the SCM may callback to *at any time*
+2. It does some housekeeping to initialise the service which includes a
+call-back to an OCaml function registered by the initial C-stub
+3. Assuming success, a call-back is made to another OCaml function. This may
+block or it may return immediately.
+4. ServiceMain then waits on an event which will only be signalled when the
+SCM instructs the service to stop (because ServiceMain is not supposed to
+terminate until instructed to). The call to this code is wrapped with
+caml_enter_blocking_section and caml_leave_blocking_section (but note that a
+particular service may choose to block in the OCaml-land function called in
+step 3 instead - the event is just in place to ensure that this is the case)
+
+Now, at any time, the SCM may invoke the ServiceCtrlHandler function
+registered with it. This also needs to callback to an OCaml function to work
+out what to do (the closure was registered in the initial call).
+
+What happens at this point with regard to OCaml's global lock and being in
+the correct threading context? I must confess that I don't fully understand
+how the callback works at all in the single-threaded context - presumably
+when SCM calls the function, it simply executes code in its own thread
+context (so it can presumably introduce a form of multi-threading to a
+program which isn't expecting it?).
+
+Should ServiceCtrlHandler (which is only ever invoked from Windows - i.e.
+from C-land) be wrapped in the reverse of a blocking construct... i.e.
+
+void WINAPI ServiceCtrlHandler(DWORD Opcode) {
+  CAMLparam0(); // The function does allocate...
+
+  caml_leave_blocking_section();
+
+  /* code including caml_callback and caml_alloc_tuple calls */
+
+  caml_enter_blocking_section();
+
+  CAMLreturn0();
+}
+
+Can the *_blocking_section functions be used in this way or is there
+something else which should be done? My current implementation is flaky - it
+works for some services and not for others (and it's very unreliable when
+compiled with threading enabled - my current implementation actually cheats
+and provides a single-threaded stub application which communicates with a
+threaded application via standard input and output to avoid this problem)
+which leads to me think that the services which work are probably lucky on
+the allocation front and so get away with it and the others essentially
+corrupt the runtime and segfault.
+
+Any pointers much appreciated - the manual on C stubs doesn't even mention
+the caml_enter_blocking_section/caml_leave_blocking_section functions so
+it's sort of a difficult area on which to get information. I'm at this stage
+definitely more convinced that it's an error somewhere in my code rather
+than the OCaml runtime :o)
+
+Are there any other libraries which contains C stubs handling callbacks in a
+similar fashion which I could look at?
+
+Many thanks,
+
+
+David
+
